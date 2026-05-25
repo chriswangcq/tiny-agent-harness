@@ -113,7 +113,11 @@ export class BashSessionManager {
     command: string,
     timeoutMs?: number,
   ): Promise<BashObservation> {
-    if (!this.sessions.has(sessionId)) {
+    const existing = this.sessions.get(sessionId);
+    if (!existing || existing.state === "terminated") {
+      if (existing) {
+        this.sessions.delete(sessionId);
+      }
       this.createSession(sessionId, { cwd: this.defaultCwd });
     }
     return this.executeCommand(sessionId, command, timeoutMs);

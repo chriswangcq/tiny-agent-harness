@@ -151,8 +151,24 @@ describe("DeepSeekFimAdapter", () => {
     }
   });
 
-  it("returns invalid_output when the native tool separator is missing", async () => {
-    stubFimResponses("Thinking", "bash {\"session\":\"default\"}");
+  it("parses bash tool call via fallback when native separator is missing", async () => {
+    stubFimResponses("Thinking", "bash {\"session\":\"default\",\"command\":\"pwd\"}");
+
+    const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
+      bashTool: BASH_TOOL_DEFINITION,
+    });
+
+    expect(output.turn.kind).toBe("tool_call");
+    if (output.turn.kind === "tool_call") {
+      expect(output.turn.toolCall.arguments).toEqual({
+        session: "default",
+        command: "pwd",
+      });
+    }
+  });
+
+  it("returns invalid_output when no JSON is found in decision", async () => {
+    stubFimResponses("Thinking", "I should run a command");
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
       bashTool: BASH_TOOL_DEFINITION,
@@ -188,6 +204,37 @@ describe("DeepSeekFimAdapter", () => {
       kind: "invalid_output",
       message: "Unsupported FIM native decision function: python",
     });
+  });
+
+  it("rejects literal function_name placeholder from format instructions", async () => {
+    stubFimResponses("Thinking", 'function_name<｜tool▁sep｜>{"command":"ls"}');
+
+    const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
+      bashTool: BASH_TOOL_DEFINITION,
+    });
+
+    expect(output.turn).toMatchObject({
+      kind: "invalid_output",
+      message: "FIM decision did not contain a valid function name.",
+    });
+  });
+
+  it("strips malformed boundary tokens with </ prefix", async () => {
+    stubFimResponses(
+      "Thinking",
+      '</end▁of▁sentence｜>bash<｜tool▁sep｜>{"session":"default","command":"ls"}',
+    );
+
+    const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
+      bashTool: BASH_TOOL_DEFINITION,
+    });
+
+    expect(output.turn.kind).toBe("tool_call");
+    if (output.turn.kind === "tool_call") {
+      expect(output.turn.toolCall.arguments).toMatchObject({
+        command: "ls",
+      });
+    }
   });
 
   it("throws with response body when the FIM request fails", async () => {

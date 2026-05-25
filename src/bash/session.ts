@@ -48,6 +48,7 @@ export class BashSession {
   private outputBuffer = "";
   private totalBytes = 0;
   private lastObservationOffset = 0;
+  private markerSearchStart = 0;
   private truncatedCount = 0;
 
   state: BashSessionState = "idle";
@@ -212,6 +213,7 @@ export class BashSession {
 
     const effectiveTimeout = timeoutMs ?? this.defaultTimeoutMs;
     const startOffset = this.totalBytes;
+    this.markerSearchStart = this.outputBuffer.length;
 
     // Record current command
     this.currentCommand = {
@@ -344,21 +346,23 @@ export class BashSession {
   private checkForMarker(): void {
     if (!this.markerResolve) return;
 
-    const markerIndex = this.outputBuffer.lastIndexOf(COMPLETION_MARKER);
+    // Only search for markers in output produced after the current command started
+    const searchRegion = this.outputBuffer.substring(this.markerSearchStart);
+    const markerIndex = searchRegion.lastIndexOf(COMPLETION_MARKER);
     if (markerIndex === -1) return;
 
-    // Find the full marker line
     const lineStart = markerIndex;
-    const lineEnd = this.outputBuffer.indexOf("\n", lineStart);
-    if (lineEnd === -1) return; // Marker line not complete yet
+    const lineEnd = searchRegion.indexOf("\n", lineStart);
+    if (lineEnd === -1) return;
 
-    const markerLine = this.outputBuffer.substring(lineStart, lineEnd);
+    const markerLine = searchRegion.substring(lineStart, lineEnd);
 
-    // Parse: __TAH_COMMAND_DONE__ rc=<code> cwd=<path>
+    // Require rc=<number> to distinguish real marker output from PTY echo
     const rcMatch = markerLine.match(/rc=(-?\d+)/);
-    const cwdMatch = markerLine.match(/cwd=(.+)$/);
+    if (!rcMatch) return;
 
-    const returnCode = rcMatch ? parseInt(rcMatch[1], 10) : -1;
+    const cwdMatch = markerLine.match(/cwd=(.+)$/);
+    const returnCode = parseInt(rcMatch[1], 10);
     const cwd = cwdMatch ? cwdMatch[1].trim() : this.cwd;
 
     this.markerResolve({ returnCode, cwd });
@@ -369,19 +373,23 @@ export class BashSession {
     timeoutMs: number,
   ): Promise<{ timedOut: boolean; returnCode: number; cwd: string }> {
     return new Promise((resolve) => {
-      // Check if marker already in buffer
-      const markerIndex = this.outputBuffer.lastIndexOf(COMPLETION_MARKER);
+      // Check if marker already in buffer (only in the current command's region)
+      const searchRegion = this.outputBuffer.substring(this.markerSearchStart);
+      const markerIndex = searchRegion.lastIndexOf(COMPLETION_MARKER);
       if (markerIndex !== -1) {
         const lineStart = markerIndex;
-        const lineEnd = this.outputBuffer.indexOf("\n", lineStart);
+        const lineEnd = searchRegion.indexOf("\n", lineStart);
         if (lineEnd !== -1) {
-          const markerLine = this.outputBuffer.substring(lineStart, lineEnd);
+          const markerLine = searchRegion.substring(lineStart, lineEnd);
           const rcMatch = markerLine.match(/rc=(-?\d+)/);
-          const cwdMatch = markerLine.match(/cwd=(.+)$/);
-          const returnCode = rcMatch ? parseInt(rcMatch[1], 10) : -1;
-          const cwd = cwdMatch ? cwdMatch[1].trim() : this.cwd;
-          resolve({ timedOut: false, returnCode, cwd });
-          return;
+          // Only resolve if this is a real marker (not just an echo)
+          if (rcMatch) {
+            const cwdMatch = markerLine.match(/cwd=(.+)$/);
+            const returnCode = parseInt(rcMatch[1], 10);
+            const cwd = cwdMatch ? cwdMatch[1].trim() : this.cwd;
+            resolve({ timedOut: false, returnCode, cwd });
+            return;
+          }
         }
       }
 

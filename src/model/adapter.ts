@@ -256,17 +256,34 @@ type ParseDecisionResult =
 
 function parseNativeToolDecision(rawDecision: string): ParseDecisionResult {
   const normalized = stripNativeToolBoundaries(rawDecision.trim());
-  const separatorIndex = normalized.indexOf(TOOL_SEP);
+  let separatorIndex = normalized.indexOf(TOOL_SEP);
 
-  if (separatorIndex === -1) {
-    return {
-      status: "invalid",
-      message: "FIM decision did not contain DeepSeek native tool separator.",
-    };
+  let name: string;
+  let rawArguments: string;
+
+  if (separatorIndex !== -1) {
+    name = normalized.slice(0, separatorIndex).trim();
+    rawArguments = normalized.slice(separatorIndex + TOOL_SEP.length).trim();
+  } else {
+    // Fallback: split on the first '{' to separate function name from JSON
+    const braceIndex = normalized.indexOf("{");
+    if (braceIndex === -1) {
+      return {
+        status: "invalid",
+        message: "FIM decision did not contain DeepSeek native tool separator.",
+      };
+    }
+    name = normalized.slice(0, braceIndex).trim();
+    rawArguments = normalized.slice(braceIndex).trim();
   }
 
-  const name = normalized.slice(0, separatorIndex).trim();
-  const rawArguments = normalized.slice(separatorIndex + TOOL_SEP.length).trim();
+  // Filter out literal placeholder names from format instructions
+  if (name === "function_name" || name === "") {
+    return {
+      status: "invalid",
+      message: "FIM decision did not contain a valid function name.",
+    };
+  }
 
   let parsedArguments: unknown;
   try {
@@ -335,13 +352,23 @@ function parseNativeToolDecision(rawDecision: string): ParseDecisionResult {
 function stripNativeToolBoundaries(text: string): string {
   let value = text.trim();
 
-  for (const prefix of [TOOL_CALLS_BEGIN, TOOL_CALL_BEGIN]) {
+  // Strip known boundary tokens and their malformed variants (</...｜> instead of <｜...｜>)
+  const boundaryPrefixes = [
+    TOOL_CALLS_BEGIN, TOOL_CALL_BEGIN,
+    "</tool▁calls▁begin｜>", "</tool▁call▁begin｜>",
+    "</end▁of▁sentence｜>",
+  ];
+  for (const prefix of boundaryPrefixes) {
     if (value.startsWith(prefix)) {
       value = value.slice(prefix.length).trim();
     }
   }
 
-  const endIndexes = [TOOL_CALL_END, TOOL_CALLS_END, END_OF_SENTENCE]
+  const endTokens = [
+    TOOL_CALL_END, TOOL_CALLS_END, END_OF_SENTENCE,
+    "</tool▁call▁end｜>", "</tool▁calls▁end｜>", "</end▁of▁sentence｜>",
+  ];
+  const endIndexes = endTokens
     .map((token) => value.indexOf(token))
     .filter((index) => index >= 0);
 
