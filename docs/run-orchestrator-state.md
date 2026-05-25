@@ -1,0 +1,523 @@
+# Run Orchestrator And Agent Run State Design
+
+本文记录 tiny-agent-harness 第一版 run loop、agent run state、effect 和 event 协议。
+
+## Design Principles
+
+1. Run orchestrator 本质是一个 `for` / `while` loop。
+2. Agent run state 是该 loop 的显式状态机，负责判断下一步要产生什么 effect。
+3. Orchestrator 负责执行副作用：调用模型、审核工具、执行 bash、写 transcript。
+4. State transition 尽量保持纯逻辑：`state + event -> next state`。
+5. 不用一堆局部变量隐式保存 pending model output、pending action、pending review。
+6. Run state 必须能落盘，后续才方便 debug、resume、eval 和 self-improve。
+
+## Module Responsibilities
+
+```text
+RunOrchestrator
+  owns: loop, side effects, IO boundaries
+  calls: ModelClient, ToolReviewer, BashSessionManager, TranscriptStore
+
+AgentRunState
+  owns: status, step index, transcript pointers, pending action/review, stop conditions
+  exposes: nextEffect(), apply(event)
+
+ModelClient
+  owns: LLM API request/response
+
+PromptBuilder
+  owns: prompt construction from task, config, transcript, session summaries
+
+ActionParser
+  owns: strict JSON parsing into final/action/parse error
+
+ToolReviewer
+  owns: approve/reject decision before execution
+
+BashSessionManager
+  owns: bash sessions and observations
+
+TranscriptStore
+  owns: append-only run events on disk
+```
+
+The important split:
+
+```text
+AgentRunState decides what should happen next.
+RunOrchestrator makes it happen.
+```
+
+## Agent Run State
+
+```ts
+type AgentRunStatus =
+  | "created"
+  | "running"
+  | "waiting_for_model"
+  | "waiting_for_review"
+  | "waiting_for_tool"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+type AgentRunState = {
+  runId: string;
+  status: AgentRunStatus;
+
+  task: string;
+  cwd: string;
+  createdAt: string;
+  updatedAt: string;
+
+  stepIndex: number;
+  maxSteps: number;
+
+  transcriptPath: string;
+  lastEventId?: string;
+
+  pendingModelOutput?: ModelOutput;
+  pendingParsedOutput?: ParsedAgentOutput;
+  pendingToolRequest?: ToolRequest;
+  pendingReview?: ToolReviewDecision;
+
+  final?: string;
+  error?: RunError;
+};
+```
+
+`status` 是互斥生命周期状态，不用 `isRunning`、`isDone`、`hasError` 这类并列布尔值。
+
+`stepIndex` 表示已完成的 agent step 数。一次 step 通常包含：
+
+```text
+model output -> optional tool review -> optional tool execution -> observation
+```
+
+如果模型直接返回 final，则该 run 完成，不再增加新的 tool step。
+
+## Parsed Agent Output
+
+模型原始输出必须经过 parser，run state 不直接信任模型文本。
+
+```ts
+type ParsedAgentOutput =
+  | {
+      kind: "final";
+      thought?: string;
+      final: string;
+    }
+  | {
+      kind: "action";
+      thought?: string;
+      action: BashCommandRequest | BashControlRequest;
+    }
+  | {
+      kind: "parse_error";
+      rawOutput: string;
+      message: string;
+    };
+```
+
+`parse_error` 不一定让 run 失败。第一版可以把 parse error 转成 observation，让 Agent 下一轮自我修正。
+
+## Next Effect
+
+`nextEffect(state)` 是 AgentRunState 对 orchestrator 的唯一指令出口。
+
+```ts
+type NextEffect =
+  | {
+      type: "call_model";
+      prompt: ModelPrompt;
+    }
+  | {
+      type: "review_tool";
+      request: ToolRequest;
+    }
+  | {
+      type: "execute_tool";
+      request: ToolRequest;
+      review: ToolReviewDecision;
+    }
+  | {
+      type: "append_observation";
+      observation: AgentObservation;
+    }
+  | {
+      type: "stop";
+      reason: "final" | "max_steps" | "failed" | "cancelled";
+    };
+```
+
+Notes:
+
+- `call_model` is created when the run needs the next model decision.
+- `review_tool` is created after a valid tool request is parsed.
+- `execute_tool` is created only after review approves.
+- `append_observation` is useful for synthetic observations, such as parse errors or review rejections.
+- `stop` is terminal.
+
+## Run Events
+
+Run state changes are driven by events. Events should also be appended to transcript JSONL.
+
+```ts
+type RunEvent =
+  | {
+      type: "run_started";
+      runId: string;
+      task: string;
+      cwd: string;
+      maxSteps: number;
+      timestamp: string;
+    }
+  | {
+      type: "model_requested";
+      stepIndex: number;
+      timestamp: string;
+    }
+  | {
+      type: "model_output_received";
+      stepIndex: number;
+      output: ModelOutput;
+      parsed: ParsedAgentOutput;
+      timestamp: string;
+    }
+  | {
+      type: "tool_review_requested";
+      stepIndex: number;
+      request: ToolRequest;
+      timestamp: string;
+    }
+  | {
+      type: "tool_reviewed";
+      stepIndex: number;
+      request: ToolRequest;
+      decision: ToolReviewDecision;
+      timestamp: string;
+    }
+  | {
+      type: "tool_execution_started";
+      stepIndex: number;
+      request: ToolRequest;
+      timestamp: string;
+    }
+  | {
+      type: "tool_execution_finished";
+      stepIndex: number;
+      request: ToolRequest;
+      observation: BashObservation;
+      timestamp: string;
+    }
+  | {
+      type: "observation_appended";
+      stepIndex: number;
+      observation: AgentObservation;
+      timestamp: string;
+    }
+  | {
+      type: "run_finished";
+      status: "completed" | "failed" | "cancelled";
+      final?: string;
+      error?: RunError;
+      timestamp: string;
+    };
+```
+
+## Orchestrator Loop
+
+The orchestrator is deliberately simple.
+
+```ts
+async function runAgent(initialState: AgentRunState, ports: RunPorts) {
+  let state = initialState;
+
+  async function record(event: RunEvent) {
+    await ports.transcript.append(event);
+    state = state.apply(event);
+    await ports.stateStore.save(state);
+  }
+
+  await record({
+    type: "run_started",
+    runId: state.runId,
+    task: state.task,
+    cwd: state.cwd,
+    maxSteps: state.maxSteps,
+    timestamp: ports.clock.now()
+  });
+
+  while (true) {
+    const effect = state.nextEffect();
+
+    if (effect.type === "call_model") {
+      await record({
+        type: "model_requested",
+        stepIndex: state.stepIndex,
+        timestamp: ports.clock.now()
+      });
+
+      const output = await ports.model.complete(effect.prompt);
+      const parsed = ports.parser.parse(output.text);
+
+      await record({
+        type: "model_output_received",
+        stepIndex: state.stepIndex,
+        output,
+        parsed,
+        timestamp: ports.clock.now()
+      });
+      continue;
+    }
+
+    if (effect.type === "review_tool") {
+      await record({
+        type: "tool_review_requested",
+        stepIndex: state.stepIndex,
+        request: effect.request,
+        timestamp: ports.clock.now()
+      });
+
+      const decision = await ports.reviewer.review(effect.request);
+
+      await record({
+        type: "tool_reviewed",
+        stepIndex: state.stepIndex,
+        request: effect.request,
+        decision,
+        timestamp: ports.clock.now()
+      });
+      continue;
+    }
+
+    if (effect.type === "execute_tool") {
+      await record({
+        type: "tool_execution_started",
+        stepIndex: state.stepIndex,
+        request: effect.request,
+        timestamp: ports.clock.now()
+      });
+
+      const observation = await ports.bash.execute(effect.request);
+
+      await record({
+        type: "tool_execution_finished",
+        stepIndex: state.stepIndex,
+        request: effect.request,
+        observation,
+        timestamp: ports.clock.now()
+      });
+      continue;
+    }
+
+    if (effect.type === "append_observation") {
+      await record({
+        type: "observation_appended",
+        stepIndex: state.stepIndex,
+        observation: effect.observation,
+        timestamp: ports.clock.now()
+      });
+      continue;
+    }
+
+    if (effect.type === "stop") {
+      await record({
+        type: "run_finished",
+        status: state.status === "completed" ? "completed" : state.status === "cancelled" ? "cancelled" : "failed",
+        final: state.final,
+        error: state.error,
+        timestamp: ports.clock.now()
+      });
+      break;
+    }
+  }
+
+  return state;
+}
+```
+
+Every event goes through `record(event)`, so transcript append and state snapshot update cannot drift apart. The transcript remains append-only; the latest state can be reconstructed or cached as a snapshot.
+
+## Transition Rules
+
+```text
+created + run_started
+  -> running
+
+running + model_requested
+  -> waiting_for_model
+
+waiting_for_model + model_output_received(final)
+  -> completed
+
+waiting_for_model + model_output_received(action)
+  -> running with pending parsed action
+
+waiting_for_model + model_output_received(parse_error)
+  -> running with synthetic parse-error observation queued
+
+running + tool_review_requested
+  -> waiting_for_review
+
+waiting_for_review + tool_reviewed(approved)
+  -> running with pending approved tool request
+
+waiting_for_review + tool_reviewed(rejected)
+  -> running with synthetic review-rejection observation queued
+
+running + tool_execution_started
+  -> waiting_for_tool
+
+waiting_for_tool + tool_execution_finished
+  -> running, stepIndex += 1
+
+running + stepIndex >= maxSteps
+  -> failed with max-steps error
+
+any non-terminal + cancel
+  -> cancelled
+
+any non-terminal + unrecoverable error
+  -> failed
+```
+
+Invalid transitions should fail loudly in development. For example:
+
+```text
+completed + model_output_received -> invalid
+waiting_for_tool + model_output_received -> invalid
+running + tool_execution_finished with no pending request -> invalid
+```
+
+`nextEffect()` itself does not mutate state. It only reads the current state and chooses the next effect:
+
+```text
+created
+  -> stop(failed) unless run_started has been recorded by the orchestrator
+
+running + pending synthetic observation
+  -> append_observation
+
+running + pending parsed action
+  -> review_tool
+
+running + pending approved tool request
+  -> execute_tool
+
+running + no pending work + stepIndex < maxSteps
+  -> call_model
+
+running + stepIndex >= maxSteps
+  -> stop(max_steps)
+
+completed / failed / cancelled
+  -> stop(...)
+```
+
+## Synthetic Observations
+
+Some failures should go back to the Agent instead of ending the run immediately.
+
+Parse error observation:
+
+```json
+{
+  "kind": "parser",
+  "message": "Model output was not valid JSON. Return either {\"action\": ...} or {\"final\": ...}.",
+  "recoverable": true
+}
+```
+
+Review rejection observation:
+
+```json
+{
+  "kind": "tool_review",
+  "message": "Tool request was rejected by reviewer.",
+  "recoverable": true,
+  "decision": {
+    "status": "rejected",
+    "reason": "Command requires approval."
+  }
+}
+```
+
+These observations enter the transcript exactly like bash observations, so the next prompt can include them.
+
+## Step Counting
+
+`stepIndex` increments after one complete action cycle:
+
+```text
+model action -> review -> execute/pseudo-observe -> observation appended
+```
+
+Final answers do not increment `stepIndex`.
+
+Parse errors and review rejections do increment `stepIndex` after the synthetic observation is appended. This prevents an Agent from looping forever on invalid JSON or rejected commands without spending budget.
+
+## Persistence
+
+Suggested run directory:
+
+```text
+.tiny-agent/
+  runs/
+    run-2026-05-25T20-00-00Z/
+      state.json
+      transcript.jsonl
+      prompts/
+        step-000.md
+        step-001.md
+  sessions/
+    default.log
+    server.log
+```
+
+`state.json` is the latest snapshot.
+
+`transcript.jsonl` is append-only and is the audit source.
+
+Prompt files are optional but useful for debugging model behavior without stuffing huge prompt text into every JSONL event.
+
+## Resume Semantics
+
+First version can skip full resume, but the design should not block it.
+
+Resume should:
+
+1. Load `state.json`.
+2. Normalize any persisted `waiting_*` state into a recoverable state.
+3. Reconnect or recreate bash sessions.
+4. Read session log paths from state/session metadata.
+5. Continue from `nextEffect()`.
+
+`waiting_for_model`, `waiting_for_review`, and `waiting_for_tool` mean a side effect was in flight. If the previous process died there, resume should not blindly assume the side effect completed.
+
+Suggested recovery:
+
+- `waiting_for_model`: append a recoverable observation that the model request was interrupted, then call the model again.
+- `waiting_for_review`: re-run review for the pending tool request.
+- `waiting_for_tool`: mark the pending execution as unknown and ask the session manager for `status` / `poll` before continuing.
+
+## Minimal First Implementation
+
+Build only the current path:
+
+1. `AgentRunState.nextEffect()`
+2. `AgentRunState.apply(event)`
+3. `RunOrchestrator.run()`
+4. JSONL transcript append
+5. Latest `state.json` snapshot
+6. Table-driven tests for transition rules
+
+Defer:
+
+- full process crash resume
+- parallel tool execution
+- branching plans
+- multi-agent scheduling
+- web UI
+
+The first implementation should stay boring: one task, one run, one loop, one pending effect at a time.
