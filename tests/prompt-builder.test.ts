@@ -81,4 +81,41 @@ describe("PromptBuilder", () => {
       }),
     });
   });
+
+  it("buildNextPrompt renders user_message entries as user role messages in chronological position", () => {
+    const history: HistoryEntry[] = [
+      {
+        role: "assistant_tool_call",
+        toolCallId: "call-1",
+        name: "bash",
+        arguments: { session: "default", command: "pwd" },
+      },
+      {
+        role: "tool_result",
+        toolCallId: "call-1",
+        observation: {
+          session: "default",
+          returnCode: 0,
+          output: "/repo\n",
+          outputTruncated: false,
+        },
+      },
+      {
+        role: "user_message",
+        text: "你好",
+        channel: "default",
+      },
+    ];
+
+    const prompt = new PromptBuilder().buildNextPrompt("do stuff", history);
+
+    expect(prompt.messages.map((m) => m.role)).toEqual([
+      "system",
+      "user",
+      "assistant",
+      "observation",
+      "user",
+    ]);
+    expect(prompt.messages[4]!.content).toBe("[IM default] 你好");
+  });
 });

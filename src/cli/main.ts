@@ -80,11 +80,17 @@ function convertHistoryItems(items: HistoryItem[]): HistoryEntry[] {
         name: item.toolCall.name,
         arguments: item.toolCall.arguments,
       });
-    } else {
+    } else if (item.type === "observation") {
       entries.push({
         role: "tool_result",
         toolCallId: "",
         observation: item.observation,
+      });
+    } else if (item.type === "user_message") {
+      entries.push({
+        role: "user_message",
+        text: item.text,
+        channel: item.channel,
       });
     }
   }
@@ -538,7 +544,10 @@ async function main(): Promise<void> {
     prompt: {
       buildMessages(task: string, history: HistoryItem[]): ModelPromptMessage[] {
         const entries = convertHistoryItems(history);
-        if (entries.length === 0) {
+        const hasToolHistory = entries.some(
+          (e) => e.role === "assistant_tool_call" || e.role === "tool_result",
+        );
+        if (!hasToolHistory && entries.length === 0) {
           return promptBuilder.buildInitialPrompt(task).messages;
         }
         return promptBuilder.buildNextPrompt(task, entries).messages;

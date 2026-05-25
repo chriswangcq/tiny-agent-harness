@@ -405,4 +405,45 @@ describe("RunOrchestrator", () => {
       ]),
     );
   });
+
+  it("persists user_message_received environment events into history for subsequent model calls", async () => {
+    const toolCall: InternalToolCall = {
+      id: "call-1",
+      name: "bash",
+      arguments: { session: "default", command: "echo hi" },
+    };
+    const userEvent: EnvironmentEvent = {
+      id: "env-im-001",
+      kind: "user_message_received",
+      source: "im",
+      timestamp: "2026-05-25T12:01:00.000Z",
+      message: {
+        id: "msg-001",
+        channel: "default",
+        role: "user",
+        text: "请帮我看一下文件",
+        createdAt: "2026-05-25T12:01:00.000Z",
+      },
+    };
+
+    const { orchestrator, histories } = makeRun({
+      outputs: [toolOutput(toolCall), finalOutput("done")],
+      envEvents: [userEvent],
+    });
+
+    await orchestrator.run();
+
+    // First call: envEvents consumed, history should include user_message
+    // Second call: history should still contain the user_message alongside tool history
+    expect(histories).toHaveLength(2);
+    expect(histories[1]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "user_message",
+          text: "请帮我看一下文件",
+          channel: "default",
+        }),
+      ]),
+    );
+  });
 });

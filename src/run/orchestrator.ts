@@ -31,7 +31,8 @@ export interface PromptPort {
 
 export type HistoryItem =
   | { type: "tool_call"; toolCall: InternalToolCall }
-  | { type: "observation"; observation: BashObservation | AgentObservation };
+  | { type: "observation"; observation: BashObservation | AgentObservation }
+  | { type: "user_message"; text: string; channel: string; timestamp: string };
 
 export interface RunPorts {
   model: ModelPort;
@@ -97,6 +98,17 @@ export class RunOrchestrator {
             eventIds: envEvents.map((e) => e.id),
             timestamp: this.now(),
           });
+
+          for (const evt of envEvents) {
+            if (evt.kind === "user_message_received") {
+              this.history.push({
+                type: "user_message",
+                text: evt.message.text,
+                channel: evt.message.channel,
+                timestamp: evt.timestamp,
+              });
+            }
+          }
         }
 
         const messages = this.ports.prompt.buildMessages(

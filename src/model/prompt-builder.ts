@@ -20,6 +20,11 @@ export type HistoryEntry =
       role: "tool_result";
       toolCallId: string;
       observation: BashObservation | AgentObservation;
+    }
+  | {
+      role: "user_message";
+      text: string;
+      channel: string;
     };
 
 // ---------------------------------------------------------------------------
@@ -28,6 +33,7 @@ export type HistoryEntry =
 
 const SYSTEM_MESSAGE =
   "All external actions must use the provided tools. The only available tool is bash. Return final content when the task is complete. " +
+  "If the user's task is unclear, too short, or ambiguous, use io_wait to ask for clarification instead of returning final immediately. " +
   "The tiny-agent CLI is available in bash sessions via `npx tiny-agent` or `node dist/cli/main.js`. " +
   "Run `npx tiny-agent --help` for all subcommands including im (messaging) and skill (skill management).";
 
@@ -68,10 +74,15 @@ export class PromptBuilder {
             arguments: entry.arguments,
           }),
         });
-      } else {
+      } else if (entry.role === "tool_result") {
         messages.push({
           role: "observation",
           content: JSON.stringify(entry.observation),
+        });
+      } else if (entry.role === "user_message") {
+        messages.push({
+          role: "user",
+          content: `[IM ${entry.channel}] ${entry.text}`,
         });
       }
     }
