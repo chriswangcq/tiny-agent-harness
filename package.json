@@ -1,0 +1,23 @@
+{
+  "name": "tiny-agent-harness",
+  "version": "0.1.0",
+  "description": "An open coding agent harness where all external actions converge to bash tool calls.",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "start": "node --loader ts-node/esm src/cli/main.ts"
+  },
+  "dependencies": {
+    "node-pty": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}
