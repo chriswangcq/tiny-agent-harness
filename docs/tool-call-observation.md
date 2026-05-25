@@ -59,7 +59,7 @@ type BashCommandRequest = {
   tool: "bash";
   session: string;
   command: string;
-  timeoutMs?: number;
+  timeoutMs?: number; // default: 30000
 };
 ```
 
@@ -73,6 +73,16 @@ type BashCommandRequest = {
   "timeoutMs": 10000
 }
 ```
+
+`timeoutMs` 表示 harness 聚焦等待该命令完成的最长时间，默认 `30000` 毫秒。
+
+普通 bash command 的默认语义：
+
+1. Harness 向指定 session 写入命令。
+2. Harness 聚焦等待命令完成。
+3. 如果命令在 `timeoutMs` 内完成，observation 返回 `returnCode` 和新增输出，session 回到 `idle`。
+4. 如果超过 `timeoutMs` 仍未完成，harness 退出聚焦，把控制权还给 Agent，observation 提示命令仍在运行。
+5. 超时退出聚焦不等于 kill。Agent 后续可用 `poll` 读取新增输出，或用 `interrupt` / `terminate` / `restart` 处理该 session。
 
 ## Bash Session Controls
 
@@ -243,6 +253,8 @@ type BashObservation = {
   session: string | null;
   state?: "idle" | "running" | "blocked" | "terminated";
   returnCode: number | null;
+  timedOut?: boolean;
+  focusReleased?: boolean;
 
   output: string;
   outputTruncated: boolean;
@@ -287,6 +299,8 @@ type BashSessionSummary = {
   "session": "server",
   "state": "running",
   "returnCode": null,
+  "timedOut": true,
+  "focusReleased": true,
   "output": "Vite dev server running at http://localhost:5173\n",
   "outputTruncated": false,
   "outputLogPath": ".tiny-agent/sessions/server.log",
@@ -294,6 +308,8 @@ type BashSessionSummary = {
   "outputEndOffset": 52
 }
 ```
+
+这里的 `timedOut: true` 表示 harness 已经停止等待该命令，不表示命令失败或被杀死。`focusReleased: true` 表示 Agent 可以继续下一步决策，但该 session 仍处于 `running`，不能直接接收新的普通 command。
 
 输出被截断示例：
 
@@ -334,10 +350,13 @@ printf '\n__TAH_COMMAND_DONE__ rc=%s cwd=%s\n' "$?" "$PWD"
 4. `ToolRequest` 进入 review。
 5. 如果 rejected，返回 rejection observation 给 Agent。
 6. 如果 approved，bash session manager 执行 command 或 control。
-7. Session output append 到 `output.logPath`。
-8. Observation 只返回自 `lastObservationOffset` 之后的新增输出窗口。
-9. 如果新增输出超过 `maxObservationBytes`，截断并设置 `outputTruncated: true`。
-10. Agent 需要更多上下文时，通过 bash 命令读取 session log 或项目文件。
+7. 普通 command 默认聚焦等待完成，等待上限为 `timeoutMs`，默认 30 秒。
+8. 如果命令在等待窗口内完成，解析 return code，session 回到 `idle`。
+9. 如果命令超过等待窗口仍未完成，返回 `timedOut: true` 和 `focusReleased: true`，session 保持 `running`。
+10. Session output append 到 `output.logPath`。
+11. Observation 只返回自 `lastObservationOffset` 之后的新增输出窗口。
+12. 如果新增输出超过 `maxObservationBytes`，截断并设置 `outputTruncated: true`。
+13. Agent 需要更多上下文时，通过 bash 命令读取 session log 或项目文件。
 
 ## Prompt Guidance For Agent
 
@@ -346,6 +365,8 @@ Agent system prompt 应明确：
 ```text
 You can only use bash.
 Every bash command must specify a session.
+Commands wait for completion by default, with timeoutMs defaulting to 30000.
+If a command times out, the session may still be running; use poll, interrupt, terminate, or restart.
 Avoid interactive commands when possible.
 Use create/list/status/poll/sendInput/interrupt/terminate/restart to manage sessions.
 Long-running services should run in named sessions.
