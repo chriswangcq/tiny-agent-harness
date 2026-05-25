@@ -16,7 +16,7 @@
 ```text
 RunOrchestrator
   owns: loop, side effects, IO boundaries
-  calls: DeepSeekFimAdapter, ToolReviewer, BashSessionManager, ImCliTransport, TranscriptStore
+  calls: DeepSeekFimAdapter, Environment, ToolReviewer, BashSessionManager, ImCliTransport, TranscriptStore
 
 AgentRunState
   owns: status, step index, transcript pointers, pending tool call/review, stop conditions
@@ -30,6 +30,9 @@ FimPromptBuilder
 
 ImCliTransport
   owns: user message receive/send through im CLI
+
+Environment
+  owns: latest external events and consumed-event cursors
 
 ToolCallValidator
   owns: schema validation and conversion from InternalToolCall to ToolRequest
@@ -60,6 +63,7 @@ type AgentRunStatus =
   | "waiting_for_model"
   | "waiting_for_review"
   | "waiting_for_tool"
+  | "waiting_for_io"
   | "completed"
   | "failed"
   | "cancelled";
@@ -84,6 +88,7 @@ type AgentRunState = {
   pendingToolCall?: InternalToolCall;
   pendingToolRequest?: ToolRequest;
   pendingReview?: ToolReviewDecision;
+  pendingIoWait?: IoWaitRequest;
 
   final?: string;
   error?: RunError;
@@ -121,6 +126,13 @@ type ModelTurn =
       raw?: unknown;
     }
   | {
+      kind: "io_wait";
+      wait: IoWaitRequest;
+      thinking: AgentThinking;
+      rawDecision: string;
+      raw?: unknown;
+    }
+  | {
       kind: "invalid_output";
       message: string;
       thinking?: AgentThinking;
@@ -130,6 +142,27 @@ type ModelTurn =
 ```
 
 `invalid_output` 不一定让 run 失败。第一版可以把 invalid output 转成 observation，让 Agent 下一轮自我修正。
+
+`io_wait` 是 Agent 向自己的 run state machine 提交等待请求。它不是 bash tool，也不执行外部业务动作；orchestrator 会等待 Environment 中出现满足条件的事件，满足后才允许下一轮 model step。
+
+First version supports only new user message wait:
+
+```ts
+type IoWaitRequest = {
+  reason?: string;
+  condition:
+    | {
+        kind: "new_user_message";
+        channel: string;
+        cursor?: string;
+      }
+    | {
+        kind: "event";
+        eventKind: EnvironmentEvent["kind"];
+        source?: EnvironmentEvent["source"];
+      };
+};
+```
 
 ```ts
 type FimStepOutput = {
@@ -182,6 +215,10 @@ type NextEffect =
       observation: AgentObservation;
     }
   | {
+      type: "wait_io";
+      wait: IoWaitRequest;
+    }
+  | {
       type: "stop";
       reason: "final" | "max_steps" | "failed" | "cancelled";
     };
@@ -194,6 +231,7 @@ Notes:
 - `review_tool` is created after a tool call is validated and converted to a ToolRequest.
 - `execute_tool` is created only after review approves.
 - `append_observation` is useful for synthetic observations, such as invalid outputs, validation errors, or review rejections.
+- `wait_io` is created after the model asks the run state machine to wait for external IO.
 - `stop` is terminal.
 
 ## Run Events
@@ -232,6 +270,30 @@ type RunEvent =
       type: "agent_message_sent";
       runId: string;
       message: AgentMessage;
+      timestamp: string;
+    }
+  | {
+      type: "io_wait_started";
+      stepIndex: number;
+      wait: IoWaitRequest;
+      timestamp: string;
+    }
+  | {
+      type: "io_wait_satisfied";
+      stepIndex: number;
+      wait: IoWaitRequest;
+      event: EnvironmentEvent;
+      timestamp: string;
+    }
+  | {
+      type: "environment_event_recorded";
+      event: EnvironmentEvent;
+      timestamp: string;
+    }
+  | {
+      type: "environment_events_consumed";
+      runId: string;
+      eventIds: string[];
       timestamp: string;
     }
   | {
@@ -393,6 +455,29 @@ async function runAgent(initialState: AgentRunState, ports: RunPorts) {
       continue;
     }
 
+    if (effect.type === "wait_io") {
+      await record({
+        type: "io_wait_started",
+        stepIndex: state.stepIndex,
+        wait: effect.wait,
+        timestamp: ports.clock.now()
+      });
+
+      const event = await ports.environment.waitFor({
+        runId: state.runId,
+        wait: effect.wait
+      });
+
+      await record({
+        type: "io_wait_satisfied",
+        stepIndex: state.stepIndex,
+        wait: effect.wait,
+        event,
+        timestamp: ports.clock.now()
+      });
+      continue;
+    }
+
     if (effect.type === "stop") {
       await record({
         type: "run_finished",
@@ -426,6 +511,9 @@ waiting_for_model + model_output_received(final)
 waiting_for_model + model_output_received(tool_call)
   -> running with pending tool call
 
+waiting_for_model + model_output_received(io_wait)
+  -> running with pending IO wait
+
 waiting_for_model + model_output_received(invalid_output)
   -> running with synthetic invalid-output observation queued
 
@@ -450,6 +538,12 @@ running + tool_execution_started
 waiting_for_tool + tool_execution_finished
   -> running, stepIndex += 1
 
+running + io_wait_started
+  -> waiting_for_io
+
+waiting_for_io + io_wait_satisfied
+  -> running with synthetic user-message observation queued, stepIndex += 1
+
 running + stepIndex >= maxSteps
   -> failed with max-steps error
 
@@ -465,6 +559,7 @@ Invalid transitions should fail loudly in development. For example:
 ```text
 completed + model_output_received -> invalid
 waiting_for_tool + model_output_received -> invalid
+waiting_for_io + model_output_received -> invalid
 running + tool_execution_finished with no pending request -> invalid
 ```
 
@@ -485,6 +580,9 @@ running + pending valid tool request
 
 running + pending approved tool request
   -> execute_tool
+
+running + pending IO wait
+  -> wait_io
 
 running + no pending work + stepIndex < maxSteps
   -> call_model
@@ -534,7 +632,22 @@ Review rejection observation:
 }
 ```
 
-These observations enter the transcript exactly like bash observations, so the next FIM step context can include them.
+IO wait satisfied observation:
+
+```json
+{
+  "kind": "io_wait",
+  "message": "Environment event satisfied IO wait.",
+  "recoverable": true,
+  "event": {
+    "id": "env-123",
+    "kind": "user_message_received",
+    "source": "im"
+  }
+}
+```
+
+These observations enter the transcript exactly like bash observations, while the full EnvironmentEvent is also consumed into the next FIM step as a system reminder.
 
 ## Step Counting
 
@@ -542,11 +655,12 @@ These observations enter the transcript exactly like bash observations, so the n
 
 ```text
 model tool_call -> validate -> review -> execute/pseudo-observe -> observation appended
+model io_wait -> wait until condition satisfied -> observation appended
 ```
 
 Final answers do not increment `stepIndex`.
 
-Invalid model outputs, tool validation errors, and review rejections do increment `stepIndex` after the synthetic observation is appended. This prevents an Agent from looping forever on invalid outputs or rejected commands without spending budget.
+Invalid model outputs, tool validation errors, review rejections, and satisfied IO waits do increment `stepIndex` after the synthetic observation is appended. This prevents an Agent from looping forever on invalid outputs, rejected commands, or repeated waits without spending budget.
 
 ## Persistence
 

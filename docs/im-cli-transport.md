@@ -111,6 +111,12 @@ type UserMessageTransport = {
     channel: string;
     messageId: string;
   }): Promise<void>;
+
+  pollNewMessages(options: {
+    channel: string;
+    cursor?: string;
+    waitMs?: number;
+  }): Promise<UserMessage[]>;
 };
 
 type ReceivedUserMessages = {
@@ -162,6 +168,9 @@ These events go into `transcript.jsonl` with the rest of the run events.
 First version:
 
 - read one initial user task
+- allow the Agent to submit `io_wait` for a new user message
+- while in `waiting_for_io`, do not call the model or execute bash
+- resume the Agent loop when the wait condition is satisfied
 - run until final / failed / cancelled
 - send final or error
 
@@ -175,6 +184,37 @@ after each observation
   -> if cancel message: cancel run
   -> if follow-up message: append to run context
 ```
+
+## IO Wait
+
+`io_wait` is an internal AgentRunState decision, not a bash tool. IM is one event source for Environment.
+
+First version supports only this condition:
+
+```ts
+type IoWaitRequest = {
+  reason?: string;
+  condition: {
+    kind: "new_user_message";
+    channel: string;
+    cursor?: string;
+  };
+};
+```
+
+Suggested CLI behavior:
+
+```bash
+im recv --channel default --cursor <cursor> --json --wait
+```
+
+When a new message arrives:
+
+1. `ImCliTransport` returns `UserMessage`.
+2. Orchestrator appends `EnvironmentEvent { kind: "user_message_received", source: "im" }`.
+3. `Environment.waitFor(...)` resolves the pending IO wait.
+4. Run state records `io_wait_satisfied`.
+5. The next FIM step consumes the environment event as a system reminder.
 
 ## Local Mock Storage
 

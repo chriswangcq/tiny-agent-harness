@@ -161,6 +161,18 @@ The filled middle must be one JSON object matching one of these shapes:
 }
 ```
 
+```json
+{
+  "type": "io_wait",
+  "reason": "Waiting for the user's next message before continuing.",
+  "condition": {
+    "kind": "event",
+    "eventKind": "user_message_received",
+    "source": "im"
+  }
+}
+```
+
 This is a harness decision grammar. It is not provider-native tool calling.
 
 ## Model Turn
@@ -180,11 +192,36 @@ type ModelTurn =
       rawDecision: string;
     }
   | {
+      kind: "io_wait";
+      wait: IoWaitRequest;
+      thinking: AgentThinking;
+      rawDecision: string;
+    }
+  | {
       kind: "invalid_output";
       message: string;
       thinking?: AgentThinking;
       rawDecision?: string;
-    };
+};
+```
+
+First version supports only one wait condition:
+
+```ts
+type IoWaitRequest = {
+  reason?: string;
+  condition:
+    | {
+        kind: "event";
+        eventKind: EnvironmentEvent["kind"];
+        source?: EnvironmentEvent["source"];
+      }
+    | {
+        kind: "new_user_message";
+        channel: string;
+        cursor?: string;
+      };
+};
 ```
 
 Because FIM does not provide provider-generated tool call ids, the harness creates them:
