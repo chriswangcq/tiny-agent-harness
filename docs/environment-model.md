@@ -115,6 +115,90 @@ context.messages.push({ role: "system", content: reminder })
 
 The reminder can also be wrapped as a user-context message if the provider path prefers that shape.
 
+Consumption rules:
+
+1. Consume only events after the run's last consumed environment cursor.
+2. Do not repeat already consumed events in later model steps.
+3. If no new events exist, do not add an empty reminder.
+4. Update `consumedByRun[runId]` only after the reminder is appended to the model context and the corresponding transcript event is written.
+5. `io_wait_satisfied` events are not special-cased; the matching EnvironmentEvent is consumed by the next model step like every other environment event.
+
+This keeps Environment as the source of facts and prevents duplicated reminders.
+
+## Event Cropping Rules
+
+Environment events can grow without bound, but FIM context cannot.
+
+First version uses a compact event budget:
+
+```ts
+type EnvironmentReminderPolicy = {
+  maxEventsPerStep: number;       // default: 20
+  maxCharsPerEvent: number;       // default: 500
+  maxReminderChars: number;       // default: 4000
+  overflowStrategy: "oldest_summary_newest_detail";
+};
+```
+
+Recommended defaults:
+
+```json
+{
+  "maxEventsPerStep": 20,
+  "maxCharsPerEvent": 500,
+  "maxReminderChars": 4000,
+  "overflowStrategy": "oldest_summary_newest_detail"
+}
+```
+
+Cropping order:
+
+1. Sort events by environment order, oldest to newest.
+2. Keep the newest `maxEventsPerStep` events.
+3. Render each event with `maxCharsPerEvent`.
+4. If the full reminder still exceeds `maxReminderChars`, keep detailed newest events and summarize older events by count and kind.
+5. Always preserve identifiers, session ids, return codes, log paths, channel names, and timestamps when present.
+6. Never include large bash output bodies in the reminder. Include log paths and offsets instead.
+
+Example overflow line:
+
+```text
+- 12 older environment events omitted: 8 session_state_changed, 3 command_finished, 1 user_message_received.
+```
+
+Full event details remain in transcript / environment storage. The reminder is only a compact view.
+
+## Reminder Render Rules
+
+The reminder is concise, factual, and explicitly labeled as environment state.
+
+Format:
+
+```text
+Environment reminder:
+- [env-001] 2026-05-25T12:00:00Z im user_message_received channel=default text="continue with option B"
+- [env-002] 2026-05-25T12:00:03Z bash session_state_changed session=server running -> idle
+- [env-003] 2026-05-25T12:00:04Z bash command_finished session=test command=cmd-123 rc=1 log=.tiny-agent/sessions/test.log
+```
+
+Rendering by event kind:
+
+```text
+user_message_received:
+  im user_message_received channel=<channel> text="<truncated text>"
+
+session_state_changed:
+  bash session_state_changed session=<session> <previousState> -> <nextState>
+
+command_finished:
+  bash command_finished session=<session> command=<commandId> rc=<returnCode> log=<outputLogPath>
+
+command_timed_out:
+  bash command_timed_out session=<session> command=<commandId> log=<outputLogPath>
+```
+
+The reminder should not contain instructions, guesses, or policy. It is environment facts only.
+
 Example:
 
 ```text

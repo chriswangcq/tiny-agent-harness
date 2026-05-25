@@ -594,6 +594,18 @@ completed / failed / cancelled
   -> stop(...)
 ```
 
+At the boundary before `call_model`, the orchestrator consumes environment events:
+
+```text
+events = environment.consumeSince(runId)
+if events not empty:
+  reminder = renderEnvironmentReminder(events)
+  context.messages.push({ role: "system", content: reminder })
+  record(environment_events_consumed)
+```
+
+Reminder rendering follows the policy in `docs/environment-model.md`: newest events win, large outputs are represented by log paths, and consumed event ids advance the run's environment cursor.
+
 ## Synthetic Observations
 
 Some failures should go back to the Agent instead of ending the run immediately.
