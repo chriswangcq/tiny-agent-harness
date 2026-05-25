@@ -4,6 +4,7 @@
 // The first version has exactly one tool: bash.
 
 import type { BashObservation } from "./bash.js";
+import type { EnvironmentEvent } from "./environment.js";
 
 // ─── Tool Catalog ───────────────────────────────────────────────────
 
@@ -84,11 +85,12 @@ export type ToolCallValidation =
 // (invalid output, validation errors, review rejections).
 
 export type AgentObservation = {
-  kind: "model_output" | "tool_validation" | "tool_review";
+  kind: "model_output" | "tool_validation" | "tool_review" | "io_wait";
   message: string;
   recoverable: boolean;
   decision?: {
     status: "approved" | "rejected";
     reason: string;
   };
+  event?: EnvironmentEvent;
 };

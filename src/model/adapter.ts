@@ -7,6 +7,7 @@ import type {
   ModelTurn,
   ToolDefinition,
 } from "../types/index.js";
+import type { IoWaitRequest } from "../types/environment.js";
 
 export type DeepSeekFimConfig = {
   apiKey: string;
@@ -25,6 +26,11 @@ type Decision =
   | {
       type: "final";
       content: string;
+    }
+  | {
+      type: "io_wait";
+      reason?: string;
+      condition: IoWaitRequest["condition"];
     };
 
 export class DeepSeekFimAdapter {
@@ -148,6 +154,16 @@ export class DeepSeekFimAdapter {
       };
     }
 
+    if (parsed.type === "io_wait") {
+      return {
+        kind: "io_wait",
+        wait: { reason: parsed.reason, condition: parsed.condition },
+        thinking,
+        rawDecision,
+        raw: parsed,
+      };
+    }
+
     const toolCall: InternalToolCall = {
       id: `fim-call-${context.runId}-${context.stepIndex}`,
       name: "bash",
@@ -221,6 +237,10 @@ function isDecision(value: unknown): value is Decision {
 
   if (record.type === "tool_call") {
     return record.name === "bash" && typeof record.arguments === "object";
+  }
+
+  if (record.type === "io_wait") {
+    return typeof record.condition === "object" && record.condition !== null;
   }
 
   return false;

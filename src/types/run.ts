@@ -15,6 +15,12 @@ import type {
   AgentObservation,
 } from "./tools.js";
 import type { BashObservation } from "./bash.js";
+import type {
+  EnvironmentEvent,
+  IoWaitRequest,
+  UserMessage,
+  AgentMessage,
+} from "./environment.js";
 
 // ─── Agent Run Status ───────────────────────────────────────────────
 
@@ -24,6 +30,7 @@ export type AgentRunStatus =
   | "waiting_for_model"
   | "waiting_for_review"
   | "waiting_for_tool"
+  | "waiting_for_io"
   | "completed"
   | "failed"
   | "cancelled";
@@ -50,6 +57,7 @@ export interface AgentRunStateData {
   pendingToolCall?: InternalToolCall;
   pendingToolRequest?: ToolRequest;
   pendingReview?: ToolReviewDecision;
+  pendingIoWait?: IoWaitRequest;
 
   final?: string;
   error?: RunError;
@@ -83,21 +91,13 @@ export type NextEffect =
       observation: AgentObservation;
     }
   | {
+      type: "wait_io";
+      wait: IoWaitRequest;
+    }
+  | {
       type: "stop";
       reason: "final" | "max_steps" | "failed" | "cancelled";
     };
-
-// ─── IM transport message types ─────────────────────────────────────
-
-export type UserMessage = {
-  content: string;
-  timestamp: string;
-};
-
-export type AgentMessage = {
-  content: string;
-  timestamp: string;
-};
 
 // ─── Run Events ─────────────────────────────────────────────────────
 //
@@ -135,6 +135,30 @@ export type RunEvent =
       type: "agent_message_sent";
       runId: string;
       message: AgentMessage;
+      timestamp: string;
+    }
+  | {
+      type: "io_wait_started";
+      stepIndex: number;
+      wait: IoWaitRequest;
+      timestamp: string;
+    }
+  | {
+      type: "io_wait_satisfied";
+      stepIndex: number;
+      wait: IoWaitRequest;
+      event: EnvironmentEvent;
+      timestamp: string;
+    }
+  | {
+      type: "environment_event_recorded";
+      event: EnvironmentEvent;
+      timestamp: string;
+    }
+  | {
+      type: "environment_events_consumed";
+      runId: string;
+      eventIds: string[];
       timestamp: string;
     }
   | {

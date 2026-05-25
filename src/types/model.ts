@@ -4,6 +4,7 @@
 // tool calling. The model adapter normalizes FIM decisions into ModelTurn.
 
 import type { BashToolInput } from "./bash.js";
+import type { IoWaitRequest } from "./environment.js";
 
 /**
  * Raw model output placeholder. Will be refined as the FIM adapter
@@ -52,6 +53,13 @@ export type ModelTurn =
   | {
       kind: "tool_call";
       toolCall: InternalToolCall;
+      thinking: AgentThinking;
+      rawDecision: string;
+      raw?: unknown;
+    }
+  | {
+      kind: "io_wait";
+      wait: IoWaitRequest;
       thinking: AgentThinking;
       rawDecision: string;
       raw?: unknown;
