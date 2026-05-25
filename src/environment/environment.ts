@@ -164,6 +164,18 @@ export class Environment implements EnvironmentPort {
 
         case "command_timed_out":
           return `${prefix} bash command_timed_out session=${event.session} command=${event.commandId} log=${event.outputLogPath}`;
+
+        case "skill_run_started":
+          return `${prefix} skill skill_run_started skillRun=${event.skillRunId} skill=${event.skill} state=${event.statePath} log=${event.executionLogPath ?? ""}`;
+
+        case "skill_run_closed":
+          return `${prefix} skill skill_run_closed skillRun=${event.skillRunId} skill=${event.skill} state=${event.statePath}`;
+
+        case "skill_review_pending":
+          return `${prefix} skill skill_review_pending skillRun=${event.skillRunId} skill=${event.skill} state=${event.statePath} task=${event.reviewTaskPath ?? ""}`;
+
+        case "skill_review_completed":
+          return `${prefix} skill skill_review_completed skillRun=${event.skillRunId} skill=${event.skill} state=${event.statePath} lessons=${event.lessonsPath ?? ""}`;
       }
     });
 
@@ -182,7 +194,9 @@ export class Environment implements EnvironmentPort {
 
     if (condition.kind === "new_user_message") {
       return (
-        event.kind === "user_message_received" && event.source === "im"
+        event.kind === "user_message_received" &&
+        event.source === "im" &&
+        event.message.channel === condition.channel
       );
     }
 

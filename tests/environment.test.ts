@@ -6,28 +6,34 @@ import type { EnvironmentEvent } from "../src/types/environment.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeUserMessageEvent(id: string, text: string): EnvironmentEvent {
+function makeUserMessageEvent(
+  id: string,
+  text: string,
+  channel = "default",
+): EnvironmentEvent {
+  const timestamp = "2026-05-25T12:00:00.000Z";
   return {
     id,
     kind: "user_message_received",
     source: "im",
-    timestamp: new Date().toISOString(),
+    timestamp,
     message: {
       id: `msg-${id}`,
-      channel: "default",
+      channel,
       role: "user",
       text,
-      createdAt: new Date().toISOString(),
+      createdAt: timestamp,
     },
   };
 }
 
 function makeCommandFinishedEvent(id: string, session: string): EnvironmentEvent {
+  const timestamp = "2026-05-25T12:00:00.000Z";
   return {
     id,
     kind: "command_finished",
     source: "bash",
-    timestamp: new Date().toISOString(),
+    timestamp,
     session,
     commandId: `cmd-${id}`,
     returnCode: 0,
@@ -107,6 +113,34 @@ describe("Environment", () => {
     expect(resolved).toEqual(event);
   });
 
+  it("waitFor new_user_message waits for the requested channel", async () => {
+    const env = new Environment();
+
+    let resolved: EnvironmentEvent | undefined;
+    const promise = env
+      .waitFor({
+        runId: "run-1",
+        wait: {
+          reason: "waiting for user on default",
+          condition: { kind: "new_user_message", channel: "default" },
+        },
+      })
+      .then((event) => {
+        resolved = event;
+        return event;
+      });
+
+    env.appendEvent(makeUserMessageEvent("e-other", "wrong channel", "other"));
+    await Promise.resolve();
+
+    expect(resolved).toBeUndefined();
+
+    const matching = makeUserMessageEvent("e-default", "right channel", "default");
+    env.appendEvent(matching);
+
+    await expect(promise).resolves.toEqual(matching);
+  });
+
   it("waitFor resolves immediately if matching event exists", async () => {
     const env = new Environment();
 
@@ -163,6 +197,50 @@ describe("Environment", () => {
     expect(reminder).toContain("command_finished");
     expect(reminder).toContain("rc=1");
     expect(reminder).toContain("cmd-123");
+  });
+
+  it("renderReminder formats skill events without undefined lines", () => {
+    const ts = "2026-05-25T12:00:00Z";
+    const events: EnvironmentEvent[] = [
+      {
+        id: "skill-001",
+        kind: "skill_run_started",
+        source: "skill",
+        timestamp: ts,
+        skillRunId: "skillrun-001",
+        skill: "coding-review",
+        statePath: ".tiny-agent/skill-runs/skillrun-001/state.json",
+        executionLogPath: ".tiny-agent/skill-runs/skillrun-001/execution.txt",
+      },
+      {
+        id: "skill-002",
+        kind: "skill_review_pending",
+        source: "skill",
+        timestamp: ts,
+        skillRunId: "skillrun-001",
+        skill: "coding-review",
+        statePath: ".tiny-agent/skill-runs/skillrun-001/state.json",
+        reviewTaskPath: ".tiny-agent/skill-runs/skillrun-001/review-task.txt",
+      },
+      {
+        id: "skill-003",
+        kind: "skill_review_completed",
+        source: "skill",
+        timestamp: ts,
+        skillRunId: "skillrun-001",
+        skill: "coding-review",
+        statePath: ".tiny-agent/skill-runs/skillrun-001/state.json",
+        lessonsPath: ".tiny-agent/skills/coding-review/attachments/lessons.md",
+      },
+    ];
+
+    const reminder = Environment.renderReminder(events);
+
+    expect(reminder).toContain("skill_run_started");
+    expect(reminder).toContain("skill_review_pending");
+    expect(reminder).toContain("skill_review_completed");
+    expect(reminder).toContain("skillrun-001");
+    expect(reminder).not.toContain("undefined");
   });
 
   it("renderReminder returns empty string for no events", () => {
