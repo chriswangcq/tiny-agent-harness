@@ -324,10 +324,51 @@ async function waitForFirstMessage(
 // Main
 // ---------------------------------------------------------------------------
 
-async function main(): Promise<void> {
-  // --- Route subcommands ---
-  const firstArg = process.argv[2];
+const HELP_TEXT = `tiny-agent — AI agent harness with bash tool calling
 
+Usage:
+  tiny-agent <task>                                   Run with inline task
+  tiny-agent run --channel <ch> [--task <task>]       Run, optionally wait for IM
+  tiny-agent ui  --channel <ch> [--task <task>]       Run + TUI in one command
+  tiny-agent tui --run <runId|latest>                 Attach TUI to existing run
+  tiny-agent im  <subcommand> [options]               IM message operations
+  tiny-agent skill <subcommand> [options]             Skill management
+  tiny-agent --help                                   Show this help
+
+IM subcommands:
+  post   --channel <ch> --text <text>          Post user message to inbox
+  recv   --channel <ch> [--cursor <id>]        Receive user messages from inbox
+  send   --channel <ch> --text <t> --kind <k>  Send agent message to outbox
+  ack    --channel <ch> --message-id <id>      Acknowledge (advance cursor)
+  listen --channel <ch> [--cursor <id>]        Poll for new messages
+
+Skill subcommands:
+  list                          List available skills
+  show   <name>                 Show skill details
+  run    <name>                 Execute a skill
+  status [<runId>]              Check skill run status
+  close  <runId>                Close a skill run
+  review-complete <runId>       Complete skill review
+  validate <name>               Validate skill structure
+
+Environment variables:
+  DEEPSEEK_API_KEY   (required) API key for DeepSeek
+  DEEPSEEK_BASE_URL  Base URL (default: https://api.deepseek.com/beta)
+  MODEL_NAME         Model name (default: deepseek-v4-pro)
+  TAH_IM_CHANNEL     Default IM channel (default: "default")
+
+All flags accept --json for machine-readable output and --state-dir to override .tiny-agent location.
+`;
+
+async function main(): Promise<void> {
+  // --- Help ---
+  const firstArg = process.argv[2];
+  if (firstArg === "--help" || firstArg === "-h") {
+    process.stdout.write(HELP_TEXT);
+    return;
+  }
+
+  // --- Route subcommands ---
   if (firstArg === "tui") {
     const { runTui } = await import("./tui.js");
     runTui(process.argv.slice(3));

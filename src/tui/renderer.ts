@@ -1,7 +1,8 @@
 // ─── BlessedRenderer ────────────────────────────────────────────────
 //
 // Implements TuiRenderer using neo-blessed (maintained fork of blessed).
-// Renders the three-pane TUI layout: header, conversation pane, loop player.
+// Renders the three-pane TUI layout: header, conversation pane, loop player,
+// and a persistent input bar at the bottom.
 
 import blessed from "neo-blessed";
 import type {
@@ -19,12 +20,13 @@ export class BlessedRenderer implements TuiRenderer {
   private conversationList: blessed.Widgets.ListElement;
   private loopList: blessed.Widgets.ListElement;
   private helpBox: blessed.Widgets.BoxElement;
-  private focusedPane: "conversation" | "loop" = "loop";
+  private inputBar: blessed.Widgets.BoxElement;
+  private focusedPane: "conversation" | "loop" | "input" = "input";
   private followMode = true;
   private expandedFrames = new Set<string>();
   private keyHandler?: (key: TuiKey) => void;
   private messageHandler?: (text: string) => void;
-  private inputBox: blessed.Widgets.TextboxElement;
+  private inputBuffer = "";
 
   constructor() {
     this.screen = blessed.screen({
@@ -62,12 +64,12 @@ export class BlessedRenderer implements TuiRenderer {
       mouse: false,
     });
 
-    // Loop player - lower portion
+    // Loop player - lower portion (leave 3 rows for input bar)
     this.loopList = blessed.list({
       top: "50%",
       left: 0,
       width: "100%",
-      height: "50%",
+      height: "50%-3",
       border: { type: "line" },
       label: " Agent Loop ",
       scrollable: true,
@@ -75,7 +77,7 @@ export class BlessedRenderer implements TuiRenderer {
       scrollbar: { ch: "│", style: { fg: "cyan" } },
       tags: true,
       style: {
-        border: { fg: "white" },
+        border: { fg: "gray" },
         selected: { bg: "blue" },
       },
       keys: false,
@@ -96,41 +98,40 @@ export class BlessedRenderer implements TuiRenderer {
       content: [
         "{bold}Keyboard Shortcuts{/bold}",
         "",
-        "Tab        switch pane focus",
-        "j / Down   scroll down",
+        "Tab        switch pane (input/loop/conversation)",
+        "j / Down   scroll down (loop/conversation pane)",
         "k / Up     scroll up",
         "g          jump to top",
         "G          jump to bottom",
         "f          toggle follow mode",
-        "Enter      expand/collapse frame",
-        "m          compose user message",
-        "q          quit TUI",
-        "?          toggle help",
-        "Esc        close help / cancel",
+        "Enter      send message (input) / expand frame (loop)",
+        "q          quit TUI (not in input pane)",
+        "Ctrl+C     quit TUI (always)",
+        "?          toggle help (not in input pane)",
+        "Esc        close help",
       ].join("\n"),
     });
 
-    // Message input box (hidden by default, shown on 'm' key)
-    this.inputBox = blessed.textbox({
+    // Input bar (always visible at bottom)
+    this.inputBar = blessed.box({
       bottom: 0,
       left: 0,
       width: "100%",
       height: 3,
       border: { type: "line" },
       label: " message> ",
-      hidden: true,
-      inputOnFocus: true,
+      tags: true,
       style: {
         fg: "white",
         border: { fg: "cyan" },
       },
-    }) as unknown as blessed.Widgets.TextboxElement;
+    });
 
     this.screen.append(this.headerBox);
     this.screen.append(this.conversationList);
     this.screen.append(this.loopList);
     this.screen.append(this.helpBox);
-    this.screen.append(this.inputBox);
+    this.screen.append(this.inputBar);
 
     this.setupKeys();
     this.updateFocusStyle();
@@ -173,7 +174,6 @@ export class BlessedRenderer implements TuiRenderer {
     this.screen.destroy();
   }
 
-  /** Toggle expand/collapse state for a loop frame by id. */
   toggleFrameExpand(frameId: string): void {
     if (this.expandedFrames.has(frameId)) {
       this.expandedFrames.delete(frameId);
@@ -248,7 +248,6 @@ export class BlessedRenderer implements TuiRenderer {
 
       lines.push(line);
 
-      // Show detail if expanded
       if (this.expandedFrames.has(frame.id) && frame.detail) {
         const detailLines = frame.detail.slice(0, 2000).split("\n");
         for (const dl of detailLines) {
@@ -256,7 +255,6 @@ export class BlessedRenderer implements TuiRenderer {
         }
       }
 
-      // Show log path if present and expanded
       if (this.expandedFrames.has(frame.id) && frame.logPath) {
         lines.push(`    {cyan-fg}log: ${frame.logPath}{/cyan-fg}`);
       }
@@ -288,10 +286,79 @@ export class BlessedRenderer implements TuiRenderer {
     return text.replace(/\{/g, "\\{").replace(/\}/g, "\\}");
   }
 
+  private refreshInputBar(): void {
+    const cursor = this.focusedPane === "input" ? "_" : "";
+    this.inputBar.setContent(this.escapeMarkup(this.inputBuffer) + cursor);
+    this.screen.render();
+  }
+
+  private submitInput(): void {
+    const text = this.inputBuffer.trim();
+    this.inputBuffer = "";
+    this.refreshInputBar();
+    if (text) {
+      this.messageHandler?.(text);
+    }
+  }
+
   private setupKeys(): void {
     this.screen.on(
       "keypress",
-      (_ch: string, key: blessed.Widgets.Events.IKeyEventArg) => {
+      (ch: string, key: blessed.Widgets.Events.IKeyEventArg) => {
+        // Ctrl+C always quits
+        if (key.ctrl && key.name === "c") {
+          this.keyHandler?.({ name: "q" });
+          return;
+        }
+
+        // Help overlay: Esc closes it from any pane
+        if (key.name === "escape" && !this.helpBox.hidden) {
+          this.helpBox.hide();
+          this.screen.render();
+          return;
+        }
+
+        // Tab always cycles panes: input → loop → conversation → input
+        if (key.name === "tab") {
+          if (this.focusedPane === "input") {
+            this.focusedPane = "loop";
+          } else if (this.focusedPane === "loop") {
+            this.focusedPane = "conversation";
+          } else {
+            this.focusedPane = "input";
+          }
+          this.updateFocusStyle();
+          this.refreshInputBar();
+          return;
+        }
+
+        // ── Input pane: capture typing ──
+        if (this.focusedPane === "input") {
+          if (key.name === "return" || key.name === "enter") {
+            this.submitInput();
+            return;
+          }
+          if (key.name === "backspace") {
+            this.inputBuffer = this.inputBuffer.slice(0, -1);
+            this.refreshInputBar();
+            return;
+          }
+          if (key.name === "escape") {
+            this.focusedPane = "loop";
+            this.updateFocusStyle();
+            this.refreshInputBar();
+            return;
+          }
+          // Printable character
+          if (ch && ch.length === 1 && !key.ctrl && !key.meta) {
+            this.inputBuffer += ch;
+            this.refreshInputBar();
+            return;
+          }
+          return;
+        }
+
+        // ── Loop / Conversation pane navigation ──
         const tuiKey: TuiKey = {
           name: key.name ?? "",
           ctrl: key.ctrl,
@@ -300,7 +367,6 @@ export class BlessedRenderer implements TuiRenderer {
           sequence: key.sequence,
         };
 
-        // Handle built-in navigation
         const activeList =
           this.focusedPane === "conversation"
             ? this.conversationList
@@ -309,12 +375,6 @@ export class BlessedRenderer implements TuiRenderer {
         switch (key.name) {
           case "q":
             this.keyHandler?.({ name: "q" });
-            return;
-          case "tab":
-            this.focusedPane =
-              this.focusedPane === "conversation" ? "loop" : "conversation";
-            this.updateFocusStyle();
-            this.screen.render();
             return;
           case "j":
           case "down":
@@ -335,7 +395,6 @@ export class BlessedRenderer implements TuiRenderer {
               this.screen.render();
               return;
             }
-            // G (shift+g) = jump to bottom
             activeList.setScrollPerc(100);
             this.followMode = true;
             this.screen.render();
@@ -347,58 +406,40 @@ export class BlessedRenderer implements TuiRenderer {
             }
             this.screen.render();
             return;
+          case "return":
           case "enter":
-            // Toggle expand for loop frames - delegated to key handler
             this.keyHandler?.(tuiKey);
             return;
-          case "m":
-            this.showComposeInput();
-            return;
           case "escape":
-            if (!this.helpBox.hidden) {
-              this.helpBox.hide();
-              this.screen.render();
-              return;
-            }
             return;
         }
 
-        // "?" key — blessed may report the name as "?" for Shift+/
         if (key.sequence === "?") {
           this.helpBox.toggle();
           this.screen.render();
           return;
         }
 
-        // Forward unhandled keys to external handler
         this.keyHandler?.(tuiKey);
       },
     );
   }
 
-  private showComposeInput(): void {
-    this.inputBox.show();
-    this.inputBox.focus();
-    this.inputBox.readInput((_err: Error | null, value?: string) => {
-      this.inputBox.hide();
-      this.inputBox.clearValue();
-      this.screen.render();
-      if (value && value.trim()) {
-        this.messageHandler?.(value.trim());
-      }
-    });
-    this.screen.render();
-  }
-
   private updateFocusStyle(): void {
-    if (this.focusedPane === "conversation") {
-      (this.conversationList.style.border as Record<string, string>).fg =
-        "white";
-      (this.loopList.style.border as Record<string, string>).fg = "gray";
-    } else {
-      (this.conversationList.style.border as Record<string, string>).fg =
-        "gray";
-      (this.loopList.style.border as Record<string, string>).fg = "white";
-    }
+    const convBorder = this.conversationList.style.border as Record<string, string>;
+    const loopBorder = this.loopList.style.border as Record<string, string>;
+    const inputBorder = this.inputBar.style.border as Record<string, string>;
+
+    convBorder.fg = this.focusedPane === "conversation" ? "white" : "gray";
+    loopBorder.fg = this.focusedPane === "loop" ? "white" : "gray";
+    inputBorder.fg = this.focusedPane === "input" ? "cyan" : "gray";
+
+    this.inputBar.setLabel(
+      this.focusedPane === "input"
+        ? " message> (Enter=send, Esc=back, Tab=switch) "
+        : " message> (Tab to focus) ",
+    );
+
+    this.screen.render();
   }
 }

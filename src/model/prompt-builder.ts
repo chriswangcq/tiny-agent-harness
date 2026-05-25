@@ -27,7 +27,9 @@ export type HistoryEntry =
 // ---------------------------------------------------------------------------
 
 const SYSTEM_MESSAGE =
-  "All external actions must use the provided tools. The only available tool is bash. Return final content when the task is complete.";
+  "All external actions must use the provided tools. The only available tool is bash. Return final content when the task is complete. " +
+  "The tiny-agent CLI is available in bash sessions via `npx tiny-agent` or `node dist/cli/main.js`. " +
+  "Run `npx tiny-agent --help` for all subcommands including im (messaging) and skill (skill management).";
 
 // ---------------------------------------------------------------------------
 // PromptBuilder
