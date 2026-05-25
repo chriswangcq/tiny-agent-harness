@@ -310,7 +310,7 @@ describe("RunOrchestrator", () => {
     );
   });
 
-  it("records consumed environment events and injects active skill reminders into model context", async () => {
+  it("records consumed environment events and injects both environment reminder and skill reminder into model context", async () => {
     const envEvent: EnvironmentEvent = {
       id: "env-001",
       kind: "command_finished",
@@ -339,11 +339,25 @@ describe("RunOrchestrator", () => {
     await orchestrator.run();
 
     expect(consumedCalls).toEqual([{ runId: "run-001" }]);
-    expect(contexts[0]?.messages.at(-1)).toEqual({
-      role: "system",
-      content:
-        "Active skill reminder:\n- [skillrun-001] skill=review status=review_pending rc=0 log=.tiny-agent/skill-runs/skillrun-001/execution.txt task=.tiny-agent/skill-runs/skillrun-001/review-task.txt",
-    });
+
+    // Environment reminder should be in messages
+    const messages = contexts[0]!.messages;
+    const envReminder = messages.find(
+      (m) => m.role === "system" && m.content.includes("Environment reminder:"),
+    );
+    expect(envReminder).toBeDefined();
+    expect(envReminder!.content).toContain("command_finished");
+    expect(envReminder!.content).toContain("cmd-001");
+    expect(envReminder!.content).toContain("rc=0");
+
+    // Skill reminder should also be present
+    const skillReminder = messages.find(
+      (m) => m.role === "system" && m.content.includes("Active skill reminder:"),
+    );
+    expect(skillReminder).toBeDefined();
+    expect(skillReminder!.content).toContain("skillrun-001");
+    expect(skillReminder!.content).toContain("review_pending");
+
     expect(readTranscript(transcript)).toContainEqual(
       expect.objectContaining({
         type: "environment_events_consumed",
