@@ -8,7 +8,7 @@
 2. Agent run state 是该 loop 的显式状态机，负责判断下一步要产生什么 effect。
 3. Orchestrator 负责执行副作用：调用模型、审核工具、执行 bash、写 transcript。
 4. State transition 尽量保持纯逻辑：`state + event -> next state`。
-5. 不用一堆局部变量隐式保存 pending model output、pending action、pending review。
+5. 不用一堆局部变量隐式保存 pending model output、pending tool call、pending review。
 6. Run state 必须能落盘，后续才方便 debug、resume、eval 和 self-improve。
 
 ## Module Responsibilities
@@ -19,7 +19,7 @@ RunOrchestrator
   calls: ModelClient, ToolReviewer, BashSessionManager, TranscriptStore
 
 AgentRunState
-  owns: status, step index, transcript pointers, pending action/review, stop conditions
+  owns: status, step index, transcript pointers, pending tool call/review, stop conditions
   exposes: nextEffect(), apply(event)
 
 ModelClient
@@ -28,8 +28,11 @@ ModelClient
 PromptBuilder
   owns: prompt construction from task, config, transcript, session summaries
 
-ActionParser
-  owns: strict JSON parsing into final/action/parse error
+ModelProviderAdapter
+  owns: provider-native tool calling conversion into ModelTurn
+
+ToolCallValidator
+  owns: schema validation and conversion from InternalToolCall to ToolRequest
 
 ToolReviewer
   owns: approve/reject decision before execution
@@ -77,7 +80,8 @@ type AgentRunState = {
   lastEventId?: string;
 
   pendingModelOutput?: ModelOutput;
-  pendingParsedOutput?: ParsedAgentOutput;
+  pendingModelTurn?: ModelTurn;
+  pendingToolCall?: InternalToolCall;
   pendingToolRequest?: ToolRequest;
   pendingReview?: ToolReviewDecision;
 
@@ -91,35 +95,49 @@ type AgentRunState = {
 `stepIndex` 表示已完成的 agent step 数。一次 step 通常包含：
 
 ```text
-model output -> optional tool review -> optional tool execution -> observation
+model output -> optional tool validation -> optional tool review -> optional tool execution -> observation
 ```
 
 如果模型直接返回 final，则该 run 完成，不再增加新的 tool step。
 
-## Parsed Agent Output
+## Model Turn
 
-模型原始输出必须经过 parser，run state 不直接信任模型文本。
+模型原始响应必须经过 provider adapter，run state 不直接消费 provider 原始格式。
 
 ```ts
-type ParsedAgentOutput =
+type ModelTurn =
   | {
       kind: "final";
-      thought?: string;
-      final: string;
+      content: string;
+      raw?: unknown;
     }
   | {
-      kind: "action";
-      thought?: string;
-      action: BashCommandRequest | BashControlRequest;
+      kind: "tool_call";
+      toolCall: InternalToolCall;
+      raw?: unknown;
     }
   | {
-      kind: "parse_error";
-      rawOutput: string;
+      kind: "invalid_output";
       message: string;
+      raw?: unknown;
     };
 ```
 
-`parse_error` 不一定让 run 失败。第一版可以把 parse error 转成 observation，让 Agent 下一轮自我修正。
+`invalid_output` 不一定让 run 失败。第一版可以把 invalid output 转成 observation，让 Agent 下一轮自我修正。
+
+Tool call validation produces either a reviewable request or a recoverable observation.
+
+```ts
+type ToolCallValidation =
+  | {
+      status: "valid";
+      request: ToolRequest;
+    }
+  | {
+      status: "invalid";
+      observation: AgentObservation;
+    };
+```
 
 ## Next Effect
 
@@ -130,6 +148,10 @@ type NextEffect =
   | {
       type: "call_model";
       prompt: ModelPrompt;
+    }
+  | {
+      type: "validate_tool_call";
+      toolCall: InternalToolCall;
     }
   | {
       type: "review_tool";
@@ -153,9 +175,10 @@ type NextEffect =
 Notes:
 
 - `call_model` is created when the run needs the next model decision.
-- `review_tool` is created after a valid tool request is parsed.
+- `validate_tool_call` is created after the model returns a tool call.
+- `review_tool` is created after a tool call is validated and converted to a ToolRequest.
 - `execute_tool` is created only after review approves.
-- `append_observation` is useful for synthetic observations, such as parse errors or review rejections.
+- `append_observation` is useful for synthetic observations, such as invalid outputs, validation errors, or review rejections.
 - `stop` is terminal.
 
 ## Run Events
@@ -181,7 +204,14 @@ type RunEvent =
       type: "model_output_received";
       stepIndex: number;
       output: ModelOutput;
-      parsed: ParsedAgentOutput;
+      turn: ModelTurn;
+      timestamp: string;
+    }
+  | {
+      type: "tool_call_validated";
+      stepIndex: number;
+      toolCall: InternalToolCall;
+      result: ToolCallValidation;
       timestamp: string;
     }
   | {
@@ -258,14 +288,29 @@ async function runAgent(initialState: AgentRunState, ports: RunPorts) {
         timestamp: ports.clock.now()
       });
 
-      const output = await ports.model.complete(effect.prompt);
-      const parsed = ports.parser.parse(output.text);
+      const output = await ports.model.complete(effect.prompt, {
+        tools: ports.tools.staticCatalog
+      });
+      const turn = ports.modelAdapter.normalize(output);
 
       await record({
         type: "model_output_received",
         stepIndex: state.stepIndex,
         output,
-        parsed,
+        turn,
+        timestamp: ports.clock.now()
+      });
+      continue;
+    }
+
+    if (effect.type === "validate_tool_call") {
+      const result = ports.toolCallValidator.validate(effect.toolCall);
+
+      await record({
+        type: "tool_call_validated",
+        stepIndex: state.stepIndex,
+        toolCall: effect.toolCall,
+        result,
         timestamp: ports.clock.now()
       });
       continue;
@@ -351,11 +396,17 @@ running + model_requested
 waiting_for_model + model_output_received(final)
   -> completed
 
-waiting_for_model + model_output_received(action)
-  -> running with pending parsed action
+waiting_for_model + model_output_received(tool_call)
+  -> running with pending tool call
 
-waiting_for_model + model_output_received(parse_error)
-  -> running with synthetic parse-error observation queued
+waiting_for_model + model_output_received(invalid_output)
+  -> running with synthetic invalid-output observation queued
+
+running + tool_call_validated(valid)
+  -> running with pending valid tool request
+
+running + tool_call_validated(invalid)
+  -> running with synthetic tool-validation observation queued
 
 running + tool_review_requested
   -> waiting_for_review
@@ -399,7 +450,10 @@ created
 running + pending synthetic observation
   -> append_observation
 
-running + pending parsed action
+running + pending tool call
+  -> validate_tool_call
+
+running + pending valid tool request
   -> review_tool
 
 running + pending approved tool request
@@ -419,12 +473,22 @@ completed / failed / cancelled
 
 Some failures should go back to the Agent instead of ending the run immediately.
 
-Parse error observation:
+Invalid output observation:
 
 ```json
 {
-  "kind": "parser",
-  "message": "Model output was not valid JSON. Return either {\"action\": ...} or {\"final\": ...}.",
+  "kind": "model_output",
+  "message": "Model response did not contain final content or a valid tool call.",
+  "recoverable": true
+}
+```
+
+Tool validation observation:
+
+```json
+{
+  "kind": "tool_validation",
+  "message": "Invalid bash tool arguments: command input requires session and command.",
   "recoverable": true
 }
 ```
@@ -450,12 +514,12 @@ These observations enter the transcript exactly like bash observations, so the n
 `stepIndex` increments after one complete action cycle:
 
 ```text
-model action -> review -> execute/pseudo-observe -> observation appended
+model tool_call -> validate -> review -> execute/pseudo-observe -> observation appended
 ```
 
 Final answers do not increment `stepIndex`.
 
-Parse errors and review rejections do increment `stepIndex` after the synthetic observation is appended. This prevents an Agent from looping forever on invalid JSON or rejected commands without spending budget.
+Invalid model outputs, tool validation errors, and review rejections do increment `stepIndex` after the synthetic observation is appended. This prevents an Agent from looping forever on invalid outputs or rejected commands without spending budget.
 
 ## Persistence
 

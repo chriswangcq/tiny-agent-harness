@@ -10,53 +10,55 @@
 4. Tool review 位于 bash 执行之前。demo 模式下所有请求都 approve。
 5. Observation 只返回本次新增输出窗口和 return code。完整输出持久化到 session log，Agent 通过 bash 原生命令自行翻页查看。
 
-## Agent Output Protocol
+## Model Tool Call Protocol
 
-模型每轮只能输出 JSON。一次输出要么请求 action，要么给出 final。
+模型通过 provider 原生 tool calling 请求工具，或返回 final。Harness 不把大段工具使用说明塞进 prompt，也不要求主路径靠模型手写 JSON。
 
-请求执行 bash 命令：
+模型适配层把 provider 原生响应归一化为：
+
+```ts
+type ModelTurn =
+  | { kind: "final"; content: string; raw?: unknown }
+  | { kind: "tool_call"; toolCall: InternalToolCall; raw?: unknown }
+  | { kind: "invalid_output"; message: string; raw?: unknown };
+
+type InternalToolCall = {
+  id: string;
+  name: "bash";
+  arguments: BashToolInput;
+  raw?: unknown;
+};
+```
+
+请求执行 bash 命令时，tool call name 是 `bash`，arguments 是：
 
 ```json
 {
-  "thought": "I need to inspect the repository.",
-  "action": {
-    "tool": "bash",
-    "session": "default",
-    "command": "find . -maxdepth 2 -type f | sort",
-    "timeoutMs": 10000
-  }
+  "session": "default",
+  "command": "find . -maxdepth 2 -type f | sort",
+  "timeoutMs": 10000
 }
 ```
 
-请求 session control：
+请求 session control 时，tool call name 仍然是 `bash`，arguments 是：
 
 ```json
 {
-  "thought": "The dev server may still be starting, so I will poll the session.",
-  "action": {
-    "tool": "bash",
-    "control": "poll",
-    "session": "server"
-  }
+  "control": "poll",
+  "session": "server"
 }
 ```
 
-任务完成：
+如果 provider 不支持原生 tool calling，可以由兼容 adapter 把模型 JSON 输出转换成同样的 `InternalToolCall`。这是兼容层，不是主协议。
 
-```json
-{
-  "thought": "The requested change is complete.",
-  "final": "Implemented the feature and verified the tests pass."
-}
-```
-
-## Bash Tool Request
+## Bash Tool Input
 
 所有 command request 必须显式指定 `session`。
 
 ```ts
-type BashCommandRequest = {
-  tool: "bash";
+type BashToolInput = BashCommandInput | BashControlInput;
+
+type BashCommandInput = {
   session: string;
   command: string;
   timeoutMs?: number; // default: 30000
@@ -67,7 +69,6 @@ type BashCommandRequest = {
 
 ```json
 {
-  "tool": "bash",
   "session": "default",
   "command": "pwd && ls -la",
   "timeoutMs": 10000
@@ -86,16 +87,14 @@ type BashCommandRequest = {
 
 ## Bash Session Controls
 
-Session lifecycle 是 harness 原生控制面。它仍然走 `bash` action，但不是普通 bash command。
+Session lifecycle 是 harness 原生控制面。它仍然走 `bash` tool call，但不是普通 bash command。
 
 ```ts
-type BashControlRequest =
+type BashControlInput =
   | {
-      tool: "bash";
       control: "list";
     }
   | {
-      tool: "bash";
       control: "create";
       session: string;
       cwd?: string;
@@ -105,12 +104,10 @@ type BashControlRequest =
       maxObservationBytes?: number;
     }
   | {
-      tool: "bash";
       control: "status" | "poll" | "interrupt" | "terminate" | "restart";
       session: string;
     }
   | {
-      tool: "bash";
       control: "sendInput";
       session: string;
       input: string;
@@ -207,14 +204,16 @@ rg "Error" .tiny-agent/sessions/test.log
 type ToolRequest =
   | {
       kind: "command";
-      tool: "bash";
+      toolName: "bash";
+      toolCallId: string;
       session: string;
       command: string;
       timeoutMs: number;
     }
   | {
       kind: "control";
-      tool: "bash";
+      toolName: "bash";
+      toolCallId: string;
       session?: string;
       control: "list" | "create" | "status" | "poll" | "sendInput" | "interrupt" | "terminate" | "restart";
       input?: string;
@@ -344,33 +343,29 @@ printf '\n__TAH_COMMAND_DONE__ rc=%s cwd=%s\n' "$?" "$PWD"
 
 ## Execution Semantics
 
-1. Harness 接收 Agent JSON。
+1. Model adapter 接收 provider 原生响应。
 2. 如果是 final，结束 run。
-3. 如果是 action，构造 `ToolRequest`。
-4. `ToolRequest` 进入 review。
-5. 如果 rejected，返回 rejection observation 给 Agent。
-6. 如果 approved，bash session manager 执行 command 或 control。
-7. 普通 command 默认聚焦等待完成，等待上限为 `timeoutMs`，默认 30 秒。
-8. 如果命令在等待窗口内完成，解析 return code，session 回到 `idle`。
-9. 如果命令超过等待窗口仍未完成，返回 `timedOut: true` 和 `focusReleased: true`，session 保持 `running`。
-10. Session output append 到 `output.logPath`。
-11. Observation 只返回自 `lastObservationOffset` 之后的新增输出窗口。
-12. 如果新增输出超过 `maxObservationBytes`，截断并设置 `outputTruncated: true`。
-13. Agent 需要更多上下文时，通过 bash 命令读取 session log 或项目文件。
+3. 如果是 `bash` tool call，校验 arguments。
+4. 校验通过后构造 `ToolRequest`。
+5. `ToolRequest` 进入 review。
+6. 如果 rejected，返回 rejection observation 给 Agent。
+7. 如果 approved，bash session manager 执行 command 或 control。
+8. 普通 command 默认聚焦等待完成，等待上限为 `timeoutMs`，默认 30 秒。
+9. 如果命令在等待窗口内完成，解析 return code，session 回到 `idle`。
+10. 如果命令超过等待窗口仍未完成，返回 `timedOut: true` 和 `focusReleased: true`，session 保持 `running`。
+11. Session output append 到 `output.logPath`。
+12. Observation 只返回自 `lastObservationOffset` 之后的新增输出窗口。
+13. 如果新增输出超过 `maxObservationBytes`，截断并设置 `outputTruncated: true`。
+14. Agent 需要更多上下文时，通过 bash 命令读取 session log 或项目文件。
 
-## Prompt Guidance For Agent
+## Tool Description Guidance
 
-Agent system prompt 应明确：
+工具使用方法主要放在 `bash` tool definition 的 description 和 input schema 里，而不是塞进一大段 system prompt。
+
+System prompt 只保留高层约束，例如：
 
 ```text
-You can only use bash.
-Every bash command must specify a session.
-Commands wait for completion by default, with timeoutMs defaulting to 30000.
-If a command times out, the session may still be running; use poll, interrupt, terminate, or restart.
-Avoid interactive commands when possible.
-Use create/list/status/poll/sendInput/interrupt/terminate/restart to manage sessions.
-Long-running services should run in named sessions.
-Bash output is incremental and may be truncated.
-For large outputs, redirect to files or inspect session logs with sed, tail, rg, awk, or similar shell tools.
-MCP, memory, skills, tests, code edits, and sub-agents are all invoked through bash commands.
+All external actions must use the provided tools.
+The only available tool is bash.
+Return final content when the task is complete.
 ```

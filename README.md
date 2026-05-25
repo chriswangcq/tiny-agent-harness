@@ -14,3 +14,4 @@
 
 - [Tool Call And Observation](docs/tool-call-observation.md)
 - [Run Orchestrator And Agent Run State](docs/run-orchestrator-state.md)
+- [Static Bash Tool Definition](docs/static-bash-tool-definition.md)
