@@ -4,6 +4,63 @@
 
 它的目标不是再做一层“大而全”的 agent SDK，而是把 coding agent 的 loop、工具执行、外部事件、日志和可恢复状态拆成清楚的边界，让每一步都能被审阅、回放、恢复和替换。
 
+## 快速启动
+
+先安装依赖并构建：
+
+```bash
+npm install
+npm run build
+```
+
+推荐直接用一个命令启动前台 TUI。它会自动在后台启动 agent run，并把 run 日志写到 `.tiny-agent/launcher/`：
+
+```bash
+cd ~/Documents/DeepSeek
+export DEEPSEEK_API_KEY=your-key-here
+node dist/cli/main.js ui --channel default
+```
+
+进入 TUI 后按 `m` 输入第一条真实任务，agent 会从同一个 `default` channel 收到消息并开始执行。不需要先 `im post hello`。
+
+如果已经执行过 `npm link`，也可以写成短命令：
+
+```bash
+tiny-agent ui --channel default
+```
+
+如果想跳过 IM 等待，启动时直接给任务：
+
+```bash
+node dist/cli/main.js ui --channel default --task "fix the failing tests"
+```
+
+也可以用两个终端分开调试。第一个终端启动 run：
+
+```bash
+node dist/cli/main.js run --channel default
+```
+
+第二个终端打开 TUI：
+
+```bash
+node dist/cli/main.js tui --run latest --channel default
+```
+
+如果想使用 `tiny-agent`、`im`、`skill`、`codeq` 这些短命令，需要先在本仓库执行一次：
+
+```bash
+npm link
+```
+
+之后可以写成：
+
+```bash
+tiny-agent ui --channel default
+```
+
+本地 API key 文件不要提交。如果你自己把 key 放在本机忽略文件里，可以自行 export 到 `DEEPSEEK_API_KEY` 后再运行。
+
 ## 核心设计理念
 
 - **小内核、统一动作面**：模型可见的外部动作只有 `bash`。MCP、memory、skills、sub-agent、测试、git 和项目脚本都先作为 CLI 存在，再通过 bash 进入 harness。这样外部能力不会把内核变成一组不断膨胀的业务工具。

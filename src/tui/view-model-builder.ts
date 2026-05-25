@@ -5,6 +5,7 @@
 // then call getViewModel() to snapshot the current state.
 
 import type { RunEvent, AgentRunStateData } from "../types/run.js";
+import type { UserMessage, AgentMessage } from "../types/environment.js";
 import type {
   TuiViewModel,
   RunHeaderView,
@@ -277,6 +278,33 @@ export class ViewModelBuilder {
         // Low-level event, no LoopFrame needed
         break;
     }
+  }
+
+  private seenImUserIds = new Set<string>();
+  private seenImOutboxTimestamps = new Set<string>();
+
+  addImUserMessage(msg: UserMessage): void {
+    if (this.seenImUserIds.has(msg.id)) return;
+    this.seenImUserIds.add(msg.id);
+    this.conversation.push({
+      kind: "user",
+      timestamp: msg.createdAt,
+      channel: msg.channel,
+      text: msg.text,
+      sourceEventId: msg.id,
+    });
+  }
+
+  addImAgentMessage(msg: AgentMessage): void {
+    const key = `${msg.createdAt}-${msg.text.slice(0, 50)}`;
+    if (this.seenImOutboxTimestamps.has(key)) return;
+    this.seenImOutboxTimestamps.add(key);
+    this.conversation.push({
+      kind: "agent",
+      timestamp: msg.createdAt,
+      text: msg.text,
+      messageKind: msg.kind,
+    });
   }
 
   applyState(state: AgentRunStateData): void {

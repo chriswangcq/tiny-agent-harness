@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "neo-blessed": "^0.2.0",
-    "node-pty": "^1.0.0"
+    "node-pty": "^1.2.0-beta.13"
   },
   "devDependencies": {
     "@types/blessed": "^0.1.27",

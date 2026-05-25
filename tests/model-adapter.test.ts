@@ -92,9 +92,11 @@ describe("DeepSeekFimAdapter", () => {
       suffix: "<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>",
       max_tokens: 45,
     });
-    expect(String(requestBody(fetchMock, 1).prompt)).toContain(
-      "</think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>",
-    );
+    const decisionPrompt = String(requestBody(fetchMock, 1).prompt);
+    expect(decisionPrompt).toContain("</think>");
+    expect(decisionPrompt).toContain("<｜tool▁calls▁begin｜>");
+    expect(decisionPrompt).toContain("<｜tool▁call▁begin｜>");
+    expect(decisionPrompt).toContain("Decision output format: function_name<｜tool▁sep｜>");
 
     expect(output.thinking.content).toBe("Need inspect cwd");
     expect(output.turn.kind).toBe("tool_call");

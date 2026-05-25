@@ -203,7 +203,7 @@ export class DeepSeekFimAdapter {
       "",
       "<｜Assistant｜><think>",
       thinking.content,
-      `</think>${TOOL_CALLS_BEGIN}${TOOL_CALL_BEGIN}`,
+      `</think>\n${TOOL_CALLS_BEGIN}\n${TOOL_CALL_BEGIN}`,
     ].join("\n");
   }
 
@@ -230,12 +230,14 @@ export class DeepSeekFimAdapter {
       `Step: ${context.stepIndex}`,
       ...nonSystemMessages,
       "",
-      "Decision functions:",
-      "- bash: perform the only external action through bash.",
-      "- io_wait: wait for an environment event.",
-      "- final: complete the task.",
+      `Decision output format: function_name${TOOL_SEP}{json_arguments}`,
       "",
-      `Bash tool: ${bashTool.name}`,
+      "Decision functions:",
+      `- bash${TOOL_SEP}{"session":"default","command":"..."}`,
+      `- io_wait${TOOL_SEP}{"reason":"...","condition":{"kind":"new_user_message","channel":"default"}}`,
+      `- final${TOOL_SEP}{"content":"your final answer here"}`,
+      "",
+      `Bash tool schema: ${bashTool.name}`,
       bashTool.description,
       JSON.stringify(bashTool.inputSchema),
     ].join("\n");

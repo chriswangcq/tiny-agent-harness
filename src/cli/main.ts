@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { spawn, type ChildProcess } from "node:child_process";
 
 import { RunOrchestrator } from "../run/orchestrator.js";
 import type { RunPorts, HistoryItem, BashPort } from "../run/orchestrator.js";
@@ -26,6 +27,24 @@ import type { ModelPromptMessage } from "../types/model.js";
 function die(message: string): never {
   console.error(`[tiny-agent] ERROR: ${message}`);
   process.exit(1);
+}
+
+function parseCliOptions(args: string[]): {
+  channel?: string;
+  task?: string;
+} {
+  let channel: string | undefined;
+  let task: string | undefined;
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--channel" && i + 1 < args.length) {
+      channel = args[++i];
+    } else if (args[i] === "--task" && i + 1 < args.length) {
+      task = args[++i];
+    }
+  }
+
+  return { channel, task };
 }
 
 function convertHistoryItems(items: HistoryItem[]): HistoryEntry[] {
@@ -99,6 +118,187 @@ function adaptBashPort(manager: BashSessionManager): BashPort {
   };
 }
 
+function publishLatestRun(runsDir: string, runId: string, runDir: string): void {
+  fs.mkdirSync(runsDir, { recursive: true });
+
+  fs.writeFileSync(
+    path.join(runsDir, "latest.json"),
+    JSON.stringify(
+      {
+        runId,
+        runDir: path.relative(process.cwd(), runDir),
+        updatedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+
+  const latestLink = path.join(runsDir, "latest");
+  try {
+    const stat = fs.lstatSync(latestLink);
+    if (stat.isSymbolicLink() || stat.isFile()) {
+      fs.unlinkSync(latestLink);
+    }
+  } catch {
+    // No existing latest pointer.
+  }
+
+  try {
+    fs.symlinkSync(runId, latestLink, "dir");
+  } catch {
+    // latest.json is the portable fallback.
+  }
+}
+
+function readLatestRunId(runsDir: string): string | undefined {
+  const latestJsonPath = path.join(runsDir, "latest.json");
+  if (!fs.existsSync(latestJsonPath)) {
+    return undefined;
+  }
+
+  try {
+    const data = JSON.parse(fs.readFileSync(latestJsonPath, "utf-8")) as {
+      runId?: string;
+    };
+    return data.runId;
+  } catch {
+    return undefined;
+  }
+}
+
+async function waitForNewLatestRun(options: {
+  runsDir: string;
+  previousRunId?: string;
+  child: ChildProcess;
+  timeoutMs: number;
+}): Promise<string> {
+  let childExit:
+    | {
+        code: number | null;
+        signal: NodeJS.Signals | null;
+      }
+    | undefined;
+
+  options.child.once("exit", (code, signal) => {
+    childExit = { code, signal };
+  });
+
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < options.timeoutMs) {
+    const runId = readLatestRunId(options.runsDir);
+    if (runId && runId !== options.previousRunId) {
+      return runId;
+    }
+
+    if (childExit) {
+      throw new Error(
+        `agent run exited before creating a run (code=${childExit.code}, signal=${childExit.signal})`,
+      );
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  throw new Error("timed out waiting for agent run to create latest run");
+}
+
+async function runUnifiedUi(args: string[]): Promise<void> {
+  const { channel: parsedChannel, task } = parseCliOptions(args);
+  const channel = parsedChannel ?? process.env.TAH_IM_CHANNEL ?? "default";
+
+  if (!process.env.DEEPSEEK_API_KEY) {
+    die(
+      "DEEPSEEK_API_KEY environment variable is required.\n" +
+        "  export DEEPSEEK_API_KEY=your-key-here",
+    );
+  }
+
+  const baseDir = path.resolve(".tiny-agent");
+  const runsDir = path.join(baseDir, "runs");
+  const launcherDir = path.join(baseDir, "launcher");
+  fs.mkdirSync(launcherDir, { recursive: true });
+
+  const previousRunId = readLatestRunId(runsDir);
+  const logPath = path.join(launcherDir, `ui-${Date.now()}.log`);
+  const logStream = fs.createWriteStream(logPath, { flags: "a" });
+
+  const runArgs = [
+    ...process.execArgv,
+    process.argv[1]!,
+    "run",
+    "--channel",
+    channel,
+  ];
+  if (task) {
+    runArgs.push("--task", task);
+  }
+
+  const child = spawn(process.execPath, runArgs, {
+    cwd: process.cwd(),
+    env: process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  child.stdout?.pipe(logStream, { end: false });
+  child.stderr?.pipe(logStream, { end: false });
+  child.once("exit", () => {
+    logStream.end();
+  });
+
+  const stopChild = () => {
+    if (!child.killed && child.exitCode === null) {
+      child.kill("SIGTERM");
+    }
+  };
+  process.once("exit", stopChild);
+  process.once("SIGINT", () => {
+    stopChild();
+    process.exit(130);
+  });
+  process.once("SIGTERM", () => {
+    stopChild();
+    process.exit(143);
+  });
+
+  const runId = await waitForNewLatestRun({
+    runsDir,
+    previousRunId,
+    child,
+    timeoutMs: 5_000,
+  });
+
+  console.log(`[tiny-agent] Started background run: ${runId}`);
+  console.log(`[tiny-agent] Agent log: ${logPath}`);
+  console.log("[tiny-agent] Opening TUI. Press m to send the first task.");
+
+  const { runTui } = await import("./tui.js");
+  runTui(["--run", runId, "--channel", channel]);
+}
+
+async function waitForFirstMessage(
+  transport: ImCliTransport,
+  environment: Environment,
+  channel: string,
+): Promise<string> {
+  while (true) {
+    const result = await transport.receive({ channel });
+    if (result.messages.length > 0) {
+      const msg = result.messages[0]!;
+      environment.appendEvent({
+        id: `env-im-${msg.id}`,
+        kind: "user_message_received",
+        source: "im",
+        timestamp: msg.createdAt,
+        message: msg,
+      });
+      return msg.text;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -110,6 +310,11 @@ async function main(): Promise<void> {
   if (firstArg === "tui") {
     const { runTui } = await import("./tui.js");
     runTui(process.argv.slice(3));
+    return;
+  }
+
+  if (firstArg === "ui") {
+    await runUnifiedUi(process.argv.slice(3));
     return;
   }
 
@@ -125,10 +330,31 @@ async function main(): Promise<void> {
     return;
   }
 
-  // --- Read task from argv ---
-  const task = firstArg;
-  if (!task) {
-    die("Usage: tiny-agent <task>\n  Provide the task as the first argument.");
+  // --- Parse run arguments ---
+  // Supported forms:
+  //   tiny-agent "fix the tests"                     (legacy positional)
+  //   tiny-agent run --channel default                (wait for IM message)
+  //   tiny-agent run --channel default --task "fix"   (task + channel)
+  const args = process.argv.slice(2);
+  let channel: string | undefined;
+  let taskArg: string | undefined;
+
+  if (args[0] === "run") {
+    const parsed = parseCliOptions(args.slice(1));
+    channel = parsed.channel;
+    taskArg = parsed.task;
+    if (!channel) {
+      die("Usage: tiny-agent run --channel <channel> [--task <task>]");
+    }
+  } else if (args[0]) {
+    taskArg = args[0];
+  } else {
+    die(
+        "Usage:\n" +
+        "  tiny-agent <task>\n" +
+        "  tiny-agent run --channel <channel> [--task <task>]\n" +
+        "  tiny-agent ui --channel <channel> [--task <task>]",
+    );
   }
 
   // --- Read env vars ---
@@ -142,6 +368,9 @@ async function main(): Promise<void> {
 
   const baseUrl = process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com/beta";
   const modelName = process.env.MODEL_NAME ?? "deepseek-v4-pro";
+  if (!channel) {
+    channel = process.env.TAH_IM_CHANNEL ?? "default";
+  }
 
   // --- Create directory structure ---
   const baseDir = path.resolve(".tiny-agent");
@@ -158,9 +387,31 @@ async function main(): Promise<void> {
   const runId = `run-${Date.now()}`;
   const runDir = path.join(runsDir, runId);
   const transcriptPath = path.join(runDir, "transcript.jsonl");
+  const maxSteps = 50;
+  const transcript = new TranscriptStore(runDir);
+  const initialDisplayTask =
+    taskArg ?? `Waiting for first user message on channel "${channel}"`;
+
+  // Make the run visible to TUI immediately, even before the first IM message.
+  // The real run_started event is still recorded by RunOrchestrator once a
+  // task exists; this snapshot is only the attachable waiting-room state.
+  transcript.ensureDir();
+  fs.closeSync(fs.openSync(transcriptPath, "a"));
+  transcript.saveState({
+    ...AgentRunState.create({
+      runId,
+      task: initialDisplayTask,
+      cwd: process.cwd(),
+      maxSteps,
+      transcriptPath,
+    }).data,
+    status: taskArg ? "created" : "waiting_for_io",
+    updatedAt: new Date().toISOString(),
+  });
+  publishLatestRun(runsDir, runId, runDir);
 
   // --- Wire up modules ---
-  const bashManager = new BashSessionManager({ logDir: sessionsDir });
+  const bashManager = new BashSessionManager({ logDir: sessionsDir, defaultCwd: process.cwd() });
 
   const model = new DeepSeekFimAdapter({
     apiKey,
@@ -178,10 +429,25 @@ async function main(): Promise<void> {
   const imTransport = new ImCliTransport({ baseDir: imDir });
   const skillRunStore = new SkillRunStore({ skillRunsDir, skillsDir });
 
-  const channel = process.env.TAH_IM_CHANNEL ?? "default";
+  // --- Wait for first IM message if no --task ---
+  let task: string;
+  if (taskArg) {
+    task = taskArg;
+  } else {
+    console.log(`[tiny-agent] Waiting for user message on channel: ${channel}`);
+    task = await waitForFirstMessage(imTransport, environment, channel);
+    console.log(`[tiny-agent] Received task: ${task}`);
+  }
 
   // --- IM → Environment bridge: poll inbox for new user messages ---
   let imCursor: string | undefined;
+  // If we already consumed the first message, set cursor past it
+  {
+    const initial = await imTransport.receive({ channel });
+    if (initial.nextCursor) {
+      imCursor = initial.nextCursor;
+    }
+  }
   let imPollingActive = true;
   const imPollInterval = setInterval(async () => {
     if (!imPollingActive) return;
@@ -225,7 +491,6 @@ async function main(): Promise<void> {
   };
 
   // --- Create initial state ---
-  const maxSteps = 50;
   const initialState = AgentRunState.create({
     runId,
     task,
@@ -235,7 +500,6 @@ async function main(): Promise<void> {
   });
 
   // --- Create transcript store and orchestrator ---
-  const transcript = new TranscriptStore(runDir);
   const orchestrator = new RunOrchestrator(initialState, transcript, ports);
 
   // --- Run ---

@@ -98,6 +98,76 @@ export class ImCliTransport implements UserMessageTransport {
   }
 
   // -----------------------------------------------------------------------
+  // receiveSync — synchronous version for TUI polling
+  // -----------------------------------------------------------------------
+
+  receiveSync(options: {
+    channel: string;
+    cursor?: string;
+  }): { messages: UserMessage[]; nextCursor?: string } {
+    const inboxPath = this.inboxPath(options.channel);
+    const messages = this.readJsonlMessages(inboxPath);
+
+    let startIndex = 0;
+    if (options.cursor) {
+      const cursorIndex = messages.findIndex((m) => m.id === options.cursor);
+      if (cursorIndex !== -1) {
+        startIndex = cursorIndex + 1;
+      }
+    }
+
+    const filtered = messages.slice(startIndex);
+    const nextCursor =
+      filtered.length > 0 ? filtered[filtered.length - 1]!.id : options.cursor;
+
+    return { messages: filtered, nextCursor };
+  }
+
+  // -----------------------------------------------------------------------
+  // readOutboxSync — read agent messages from outbox (for TUI display)
+  // -----------------------------------------------------------------------
+
+  readOutboxSync(options: {
+    channel: string;
+    cursor?: string;
+  }): { messages: AgentMessage[]; nextCursor?: string } {
+    const outboxPath = this.outboxPath(options.channel);
+    if (!fs.existsSync(outboxPath)) {
+      return { messages: [], nextCursor: options.cursor };
+    }
+
+    const content = fs.readFileSync(outboxPath, "utf-8");
+    const lines = content.split("\n").filter((line) => line.trim() !== "");
+    const allMessages: AgentMessage[] = [];
+
+    for (const line of lines) {
+      try {
+        allMessages.push(JSON.parse(line) as AgentMessage);
+      } catch {
+        // Skip malformed
+      }
+    }
+
+    let startIndex = 0;
+    if (options.cursor) {
+      const cursorIndex = allMessages.findIndex(
+        (m) => m.createdAt === options.cursor,
+      );
+      if (cursorIndex !== -1) {
+        startIndex = cursorIndex + 1;
+      }
+    }
+
+    const filtered = allMessages.slice(startIndex);
+    const nextCursor =
+      filtered.length > 0
+        ? filtered[filtered.length - 1]!.createdAt
+        : options.cursor;
+
+    return { messages: filtered, nextCursor };
+  }
+
+  // -----------------------------------------------------------------------
   // Path helpers
   // -----------------------------------------------------------------------
 

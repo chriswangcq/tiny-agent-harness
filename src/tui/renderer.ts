@@ -23,6 +23,8 @@ export class BlessedRenderer implements TuiRenderer {
   private followMode = true;
   private expandedFrames = new Set<string>();
   private keyHandler?: (key: TuiKey) => void;
+  private messageHandler?: (text: string) => void;
+  private inputBox: blessed.Widgets.TextboxElement;
 
   constructor() {
     this.screen = blessed.screen({
@@ -101,16 +103,34 @@ export class BlessedRenderer implements TuiRenderer {
         "G          jump to bottom",
         "f          toggle follow mode",
         "Enter      expand/collapse frame",
+        "m          compose user message",
         "q          quit TUI",
         "?          toggle help",
-        "Esc        close help",
+        "Esc        close help / cancel",
       ].join("\n"),
     });
+
+    // Message input box (hidden by default, shown on 'm' key)
+    this.inputBox = blessed.textbox({
+      bottom: 0,
+      left: 0,
+      width: "100%",
+      height: 3,
+      border: { type: "line" },
+      label: " message> ",
+      hidden: true,
+      inputOnFocus: true,
+      style: {
+        fg: "white",
+        border: { fg: "cyan" },
+      },
+    }) as unknown as blessed.Widgets.TextboxElement;
 
     this.screen.append(this.headerBox);
     this.screen.append(this.conversationList);
     this.screen.append(this.loopList);
     this.screen.append(this.helpBox);
+    this.screen.append(this.inputBox);
 
     this.setupKeys();
     this.updateFocusStyle();
@@ -143,6 +163,10 @@ export class BlessedRenderer implements TuiRenderer {
 
   onKey(handler: (key: TuiKey) => void): void {
     this.keyHandler = handler;
+  }
+
+  onMessage(handler: (text: string) => void): void {
+    this.messageHandler = handler;
   }
 
   close(): void {
@@ -327,6 +351,9 @@ export class BlessedRenderer implements TuiRenderer {
             // Toggle expand for loop frames - delegated to key handler
             this.keyHandler?.(tuiKey);
             return;
+          case "m":
+            this.showComposeInput();
+            return;
           case "escape":
             if (!this.helpBox.hidden) {
               this.helpBox.hide();
@@ -347,6 +374,20 @@ export class BlessedRenderer implements TuiRenderer {
         this.keyHandler?.(tuiKey);
       },
     );
+  }
+
+  private showComposeInput(): void {
+    this.inputBox.show();
+    this.inputBox.focus();
+    this.inputBox.readInput((_err: Error | null, value?: string) => {
+      this.inputBox.hide();
+      this.inputBox.clearValue();
+      this.screen.render();
+      if (value && value.trim()) {
+        this.messageHandler?.(value.trim());
+      }
+    });
+    this.screen.render();
   }
 
   private updateFocusStyle(): void {

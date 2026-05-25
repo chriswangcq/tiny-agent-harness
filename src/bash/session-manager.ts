@@ -13,11 +13,13 @@ import { BashSession } from "./session.js";
 export class BashSessionManager {
   private sessions = new Map<string, BashSession>();
   private readonly logDir: string;
+  private readonly defaultCwd: string;
 
-  constructor(options?: { logDir?: string }) {
+  constructor(options?: { logDir?: string; defaultCwd?: string }) {
     this.logDir =
       options?.logDir ??
       `${process.cwd()}/.tiny-agent/sessions`;
+    this.defaultCwd = options?.defaultCwd ?? process.cwd();
   }
 
   // -----------------------------------------------------------------------
@@ -112,7 +114,7 @@ export class BashSessionManager {
     timeoutMs?: number,
   ): Promise<BashObservation> {
     if (!this.sessions.has(sessionId)) {
-      this.createSession(sessionId);
+      this.createSession(sessionId, { cwd: this.defaultCwd });
     }
     return this.executeCommand(sessionId, command, timeoutMs);
   }

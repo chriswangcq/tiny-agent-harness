@@ -5,15 +5,17 @@ import { TuiController } from "../tui/controller.js";
 export function runTui(args: string[]): void {
   // Parse --run flag
   let runId: string | undefined;
+  let channel: string | undefined;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--run" && i + 1 < args.length) {
       runId = args[i + 1];
-      break;
+    } else if (args[i] === "--channel" && i + 1 < args.length) {
+      channel = args[i + 1];
     }
   }
 
   if (!runId) {
-    console.error("[tiny-agent] Usage: tiny-agent tui --run <runId|latest>");
+    console.error("[tiny-agent] Usage: tiny-agent tui --run <runId|latest> [--channel <channel>]");
     process.exit(1);
   }
 
@@ -44,7 +46,11 @@ export function runTui(args: string[]): void {
   }
 
   console.log(`[tiny-agent] Opening TUI for run: ${resolvedRunId}`);
-  const controller = new TuiController({ runDir });
+  const controller = new TuiController({
+    runDir,
+    imBaseDir: path.join(baseDir, "im"),
+    channel: channel ?? process.env.TAH_IM_CHANNEL ?? "default",
+  });
   controller.start();
 }
 
