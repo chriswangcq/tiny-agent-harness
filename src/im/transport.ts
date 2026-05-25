@@ -19,6 +19,16 @@ export class ImCliTransport implements UserMessageTransport {
   }
 
   // -----------------------------------------------------------------------
+  // post — append a user message to the inbox (demo / CLI helper)
+  // -----------------------------------------------------------------------
+
+  async post(message: UserMessage): Promise<void> {
+    const inboxPath = this.inboxPath(message.channel);
+    this.ensureDir(path.dirname(inboxPath));
+    fs.appendFileSync(inboxPath, JSON.stringify(message) + "\n", "utf-8");
+  }
+
+  // -----------------------------------------------------------------------
   // receive — read inbox JSONL, filter by cursor, return messages + nextCursor
   // -----------------------------------------------------------------------
 

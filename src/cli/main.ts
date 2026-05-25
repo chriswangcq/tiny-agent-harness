@@ -12,10 +12,12 @@ import { BashSessionManager } from "../bash/session-manager.js";
 import { ToolCallValidator } from "../tools/validator.js";
 import { AlwaysApproveReviewer } from "../tools/reviewer.js";
 import { BASH_TOOL_DEFINITION } from "../tools/catalog.js";
+import { Environment } from "../environment/environment.js";
+import { ImCliTransport } from "../im/transport.js";
+import { SkillRunStore } from "../skill/store.js";
 import type { ToolRequest } from "../types/tools.js";
 import type { BashObservation } from "../types/bash.js";
 import type { ModelPromptMessage } from "../types/model.js";
-import type { EnvironmentPort } from "../types/environment.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -111,6 +113,18 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (firstArg === "im") {
+    const { runIm } = await import("./im.js");
+    await runIm(process.argv.slice(3));
+    return;
+  }
+
+  if (firstArg === "skill") {
+    const { runSkill } = await import("./skill.js");
+    await runSkill(process.argv.slice(3));
+    return;
+  }
+
   // --- Read task from argv ---
   const task = firstArg;
   if (!task) {
@@ -133,8 +147,12 @@ async function main(): Promise<void> {
   const baseDir = path.resolve(".tiny-agent");
   const runsDir = path.join(baseDir, "runs");
   const sessionsDir = path.join(baseDir, "sessions");
-  fs.mkdirSync(runsDir, { recursive: true });
-  fs.mkdirSync(sessionsDir, { recursive: true });
+  const skillsDir = path.join(baseDir, "skills");
+  const skillRunsDir = path.join(baseDir, "skill-runs");
+  const imDir = path.join(baseDir, "im");
+  for (const dir of [runsDir, sessionsDir, skillsDir, skillRunsDir, imDir]) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
 
   // --- Create run ID and transcript path ---
   const runId = `run-${Date.now()}`;
@@ -156,6 +174,36 @@ async function main(): Promise<void> {
   const validator = new ToolCallValidator();
   const reviewer = new AlwaysApproveReviewer();
 
+  const environment = new Environment();
+  const imTransport = new ImCliTransport({ baseDir: imDir });
+  const skillRunStore = new SkillRunStore({ skillRunsDir, skillsDir });
+
+  const channel = process.env.TAH_IM_CHANNEL ?? "default";
+
+  // --- IM → Environment bridge: poll inbox for new user messages ---
+  let imCursor: string | undefined;
+  let imPollingActive = true;
+  const imPollInterval = setInterval(async () => {
+    if (!imPollingActive) return;
+    try {
+      const result = await imTransport.receive({ channel, cursor: imCursor });
+      for (const msg of result.messages) {
+        environment.appendEvent({
+          id: `env-im-${msg.id}`,
+          kind: "user_message_received",
+          source: "im",
+          timestamp: msg.createdAt,
+          message: msg,
+        });
+      }
+      if (result.nextCursor) {
+        imCursor = result.nextCursor;
+      }
+    } catch {
+      // Best-effort polling
+    }
+  }, 500);
+
   // --- Build RunPorts ---
   const ports: RunPorts = {
     model,
@@ -172,12 +220,8 @@ async function main(): Promise<void> {
       },
     },
     bashTool: BASH_TOOL_DEFINITION,
-    environment: {
-      appendEvent() {},
-      consumeSince() { return []; },
-      waitFor() { return new Promise(() => {}); },
-    },
-    listActiveSkillRuns: () => [],
+    environment,
+    listActiveSkillRuns: () => skillRunStore.listActive(),
   };
 
   // --- Create initial state ---
@@ -221,6 +265,8 @@ async function main(): Promise<void> {
     console.log();
     console.log(`[tiny-agent] Transcript: ${transcriptPath}`);
   } finally {
+    imPollingActive = false;
+    clearInterval(imPollInterval);
     bashManager.terminateAll();
   }
 }

@@ -4,6 +4,7 @@ import type { ToolDefinition, ToolRequest, ToolReviewDecision, ToolCallValidatio
 import type { BashObservation } from "../types/bash.js";
 import type { InternalToolCall } from "../types/model.js";
 import type { EnvironmentPort, EnvironmentEvent, IoWaitRequest } from "../types/environment.js";
+import { Environment } from "../environment/environment.js";
 import type { ActiveSkillRunSummary } from "../types/skill.js";
 import { AgentRunState } from "./state.js";
 import { TranscriptStore } from "../transcript/store.js";
@@ -103,6 +104,15 @@ export class RunOrchestrator {
           this.history,
         );
 
+        // Render consumed environment events as system reminder
+        if (envEvents.length > 0) {
+          const envReminder = Environment.renderReminder(envEvents);
+          if (envReminder) {
+            messages.push({ role: "system", content: envReminder });
+          }
+        }
+
+        // Render active skill runs as persistent reminder
         const activeSkillRuns = this.ports.listActiveSkillRuns();
         if (activeSkillRuns.length > 0) {
           const reminder = renderActiveSkillReminder(activeSkillRuns);
@@ -177,11 +187,16 @@ export class RunOrchestrator {
         });
 
         const observation = await this.ports.bash.execute(effect.request);
+        const toolCall =
+          this.state.data.pendingToolCall ??
+          (this.state.data.pendingModelTurn?.kind === "tool_call"
+            ? this.state.data.pendingModelTurn.toolCall
+            : undefined);
 
-        this.history.push(
-          { type: "tool_call", toolCall: this.state.data.pendingToolCall! },
-          { type: "observation", observation },
-        );
+        if (toolCall) {
+          this.history.push({ type: "tool_call", toolCall });
+        }
+        this.history.push({ type: "observation", observation });
 
         await this.record({
           type: "tool_execution_finished",
@@ -236,13 +251,24 @@ export class RunOrchestrator {
               ? "cancelled" as const
               : "failed" as const;
 
-        await this.record({
+        const event: RunEvent = {
           type: "run_finished",
           status: finalStatus,
           final: this.state.data.final,
           error: this.state.data.error,
           timestamp: this.now(),
-        });
+        };
+
+        if (
+          this.state.status === "completed" ||
+          this.state.status === "cancelled" ||
+          this.state.status === "failed"
+        ) {
+          this.transcript.append(event);
+          this.transcript.saveState(this.state.data);
+        } else {
+          await this.record(event);
+        }
         break;
       }
     }

@@ -1,4 +1,5 @@
 export * from "./bash/index.js";
+export * from "./code-intel/index.js";
 export * from "./environment/index.js";
 export * from "./im/index.js";
 export * from "./model/index.js";

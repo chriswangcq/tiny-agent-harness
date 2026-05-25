@@ -4,8 +4,15 @@
   "description": "An open coding agent harness where all external actions converge to bash tool calls.",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "tiny-agent": "dist/cli/main.js",
+    "im": "dist/cli/im-entry.js",
+    "skill": "dist/cli/skill-entry.js",
+    "codeq": "dist/code-intel/cli.js"
+  },
   "scripts": {
     "build": "tsc",
+    "codeq": "node --loader ts-node/esm src/code-intel/cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -20,6 +27,7 @@
     "@types/node": "^20.14.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.5.0",
+    "typescript-language-server": "^5.3.0",
     "vitest": "^2.0.0"
   }
 }

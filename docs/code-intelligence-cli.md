@@ -1,6 +1,6 @@
 # Code Intelligence CLI Design
 
-本文记录 tiny-agent-harness 的 code intelligence CLI 设计。这个 CLI 暂名为 `codeq`，含义是 code query。
+本文记录 tiny-agent-harness 的 code intelligence CLI 设计与当前实现。这个 CLI 名为 `codeq`，含义是 code query。
 
 ## Decision
 
@@ -85,13 +85,13 @@ The agent decides what to do with those facts.
 
 ## First Version Scope
 
-第一版推荐只支持 TypeScript / JavaScript，并优先使用 LSP server：
+当前版本支持 TypeScript / JavaScript，并优先使用 LSP server：
 
 ```text
 typescript-language-server --stdio
 ```
 
-可接受的第一版命令：
+当前实现的只读命令：
 
 ```text
 codeq capabilities --json
@@ -103,7 +103,15 @@ codeq references <location> --json
 codeq hover <location> --json
 ```
 
-第一版只读。`rename` 和 `code-actions` 可以先设计契约，但不要默认实现写入。
+当前版本只读。`rename` 和 `code-actions` 仍然只保留设计契约，不默认实现写入。
+
+`diagnostics --workspace` 当前使用 TypeScript compiler fallback：
+
+```text
+tsc --noEmit --pretty false
+```
+
+它和 LSP diagnostics 使用同一个 JSON result shape，并在 `backend.source` 标记为 `typescript-compiler`。
 
 ## Location Format
 
@@ -664,17 +672,17 @@ Do not make tests depend on a user's editor, global VS Code install, or existing
 
 ### Phase 1: read-only TypeScript CLI
 
-- Add `codeq` binary.
-- Add stateless LSP client.
-- Support `capabilities`, `symbols`, `definition`, `references`, `hover`.
-- Add `diagnostics <path>` if server publish diagnostics are reliable enough.
-- Add tests with a fake LSP server and tiny TypeScript fixture.
+- Done: add `codeq` binary.
+- Done: add stateless LSP client.
+- Done: support `capabilities`, `symbols`, `definition`, `references`, `hover`.
+- Done: support `diagnostics <path>` via LSP publish diagnostics.
+- Done: add tests with a fake LSP server and tiny TypeScript fixture.
 
 ### Phase 2: reliable diagnostics
 
-- Add `diagnostics --workspace`.
-- Decide whether TypeScript workspace diagnostics should use LSP pull diagnostics or a TypeScript compiler fallback.
-- Keep the output shape identical either way.
+- Done: add `diagnostics --workspace` with a TypeScript compiler fallback.
+- Done: keep the output shape identical to file diagnostics.
+- Later: revisit LSP pull diagnostics if TypeScript language-server support becomes reliable enough.
 
 ### Phase 3: edit planning
 
@@ -719,7 +727,6 @@ Treat codeq output as evidence, not authority. If applying edits, inspect the ta
 ## Open Questions
 
 - Should TypeScript v1 use `typescript-language-server` only, or allow a direct `tsserver` backend when LSP diagnostics are weak?
-- Should `codeq diagnostics --workspace` be allowed to fall back to `npm run typecheck` when no LSP workspace diagnostics are available?
+- Should `codeq diagnostics --workspace` eventually use LSP pull diagnostics instead of the current `tsc --noEmit --pretty false` fallback?
 - Should previews include absolute file paths, workspace-relative paths, or both?
 - Should daemon mode ever become default for TUI sessions, or stay opt-in forever?
-
