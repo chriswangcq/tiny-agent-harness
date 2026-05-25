@@ -13,11 +13,19 @@ npm install
 npm run build
 ```
 
-推荐直接用一个命令启动前台 TUI。它会自动在后台启动 agent run，并把 run 日志写到 `.tiny-agent/launcher/`：
+把 DeepSeek API key 放到项目根目录的 `ak.txt`：
 
 ```bash
 cd ~/Documents/DeepSeek
-export DEEPSEEK_API_KEY=your-key-here
+printf '%s\n' 'your-deepseek-api-key' > ak.txt
+```
+
+`ak.txt` 已经在 `.gitignore` 里，不会被提交。也可以继续用环境变量 `DEEPSEEK_API_KEY`，但本地 demo 推荐直接放 `ak.txt`。
+
+然后用一个命令启动前台 TUI。它会自动在后台启动 agent run，并把 run 日志写到 `.tiny-agent/launcher/`：
+
+```bash
+cd ~/Documents/DeepSeek
 node dist/cli/main.js ui --channel default
 ```
 
@@ -59,7 +67,7 @@ npm link
 tiny-agent ui --channel default
 ```
 
-本地 API key 文件不要提交。如果你自己把 key 放在本机忽略文件里，可以自行 export 到 `DEEPSEEK_API_KEY` 后再运行。
+启动时会优先读取 `DEEPSEEK_API_KEY`，如果没有设置，再读取当前目录的 `ak.txt`。
 
 ## 核心设计理念
 

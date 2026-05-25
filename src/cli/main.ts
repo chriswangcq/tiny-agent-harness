@@ -29,6 +29,29 @@ function die(message: string): never {
   process.exit(1);
 }
 
+function resolveDeepSeekApiKey(): string | undefined {
+  const fromEnv = process.env.DEEPSEEK_API_KEY?.trim();
+  if (fromEnv) {
+    return fromEnv;
+  }
+
+  const akPath = path.resolve("ak.txt");
+  if (!fs.existsSync(akPath)) {
+    return undefined;
+  }
+
+  const fromFile = fs.readFileSync(akPath, "utf-8").trim();
+  return fromFile.length > 0 ? fromFile : undefined;
+}
+
+function missingApiKeyMessage(): string {
+  return (
+    "DeepSeek API key is required.\n" +
+    "  Put your key in ./ak.txt, then run tiny-agent again.\n" +
+    "  Or set DEEPSEEK_API_KEY in the environment."
+  );
+}
+
 function parseCliOptions(args: string[]): {
   channel?: string;
   task?: string;
@@ -207,12 +230,10 @@ async function waitForNewLatestRun(options: {
 async function runUnifiedUi(args: string[]): Promise<void> {
   const { channel: parsedChannel, task } = parseCliOptions(args);
   const channel = parsedChannel ?? process.env.TAH_IM_CHANNEL ?? "default";
+  const apiKey = resolveDeepSeekApiKey();
 
-  if (!process.env.DEEPSEEK_API_KEY) {
-    die(
-      "DEEPSEEK_API_KEY environment variable is required.\n" +
-        "  export DEEPSEEK_API_KEY=your-key-here",
-    );
+  if (!apiKey) {
+    die(missingApiKeyMessage());
   }
 
   const baseDir = path.resolve(".tiny-agent");
@@ -237,7 +258,7 @@ async function runUnifiedUi(args: string[]): Promise<void> {
 
   const child = spawn(process.execPath, runArgs, {
     cwd: process.cwd(),
-    env: process.env,
+    env: { ...process.env, DEEPSEEK_API_KEY: apiKey },
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -358,12 +379,9 @@ async function main(): Promise<void> {
   }
 
   // --- Read env vars ---
-  const apiKey = process.env.DEEPSEEK_API_KEY;
+  const apiKey = resolveDeepSeekApiKey();
   if (!apiKey) {
-    die(
-      "DEEPSEEK_API_KEY environment variable is required.\n" +
-        "  export DEEPSEEK_API_KEY=your-key-here",
-    );
+    die(missingApiKeyMessage());
   }
 
   const baseUrl = process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com/beta";
