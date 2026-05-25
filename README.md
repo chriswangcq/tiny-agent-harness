@@ -22,3 +22,4 @@
 - [IM CLI Transport](docs/im-cli-transport.md)
 - [Environment Model](docs/environment-model.md)
 - [Skill CLI](docs/skill-cli.md)
+- [TUI](docs/tui.md)
