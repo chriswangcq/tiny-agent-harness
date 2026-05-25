@@ -1,10 +1,10 @@
-# DeepSeek FIM Two-Pass Adapter Design
+# DeepSeek V4 Native Tool-Call FIM Adapter Design
 
 本文记录 tiny-agent-harness 第一版主模型适配层。
 
 ## Decision
 
-主路径使用 DeepSeek FIM Completion，而不是 chat completions 或 provider-native tool calling。
+主路径使用 DeepSeek V4 的 FIM Completion 做两段式生成，但 decision pass 输出 DeepSeek V4 native tool-call frame，而不是 harness 自定义 JSON block。
 
 官方 FIM 约束：
 
@@ -12,8 +12,14 @@
 - 调用 `client.completions.create(...)`。
 - 请求字段使用 `prompt` 和可选 `suffix`。
 - 官方说明最大补全长度为 4K。
+- V4 模型 ID 使用 `deepseek-v4-pro`，需要更快/更便宜时可换 `deepseek-v4-flash`。
+- 官方 Models & Pricing 表显示 V4 支持 Tool Calls、Chat Prefix Completion 和 FIM Completion；FIM 仅支持 non-thinking mode，所以本 harness 的 thinking 是通过第一段 FIM 自己生成的 artifact。
 
-参考：<https://api-docs.deepseek.com/zh-cn/guides/fim_completion>
+参考：
+
+- <https://api-docs.deepseek.com/guides/fim_completion/>
+- <https://api-docs.deepseek.com/guides/tool_calls>
+- <https://api-docs.deepseek.com/quick_start/pricing/>
 
 ## Why FIM
 
@@ -24,9 +30,26 @@
 2. tool-call-or-final decision generation
 ```
 
-FIM 的 `prompt + suffix` 形式可以把模型输出夹在两个边界之间，让 harness 控制模型“这一段只能填 thinking”或“这一段只能填 decision”。
+FIM 的 `prompt + suffix` 形式可以把模型输出夹在两个边界之间，让 harness 控制模型“这一段只能填 thinking”或“这一段只能填 DeepSeek native tool-call middle”。
 
 这不是把 FIM 当普通代码补全用，而是把它当成受约束的 step generator。
+
+Decision pass 贴近 DeepSeek V4 post-train 的 tool-call 格式：
+
+```text
+<｜Assistant｜></think>
+<｜tool▁calls▁begin｜>
+<｜tool▁call▁begin｜>bash<｜tool▁sep｜>{"session":"default","command":"pwd"}
+<｜tool▁call▁end｜>
+<｜tool▁calls▁end｜>
+<｜end▁of▁sentence｜>
+```
+
+Harness 只让模型补中间这一段：
+
+```text
+function_name<｜tool▁sep｜>{json_arguments}
+```
 
 ## Module
 
@@ -36,11 +59,11 @@ DeepSeekFimAdapter
   input: ModelStepContext
   output: ModelTurn
 
-FimPromptBuilder
-  owns: plain-text FIM prompt and suffix construction
+DeepSeekV4NativeToolTemplateRenderer
+  owns: DeepSeek V4 special-token prompt and suffix construction
 
-FimDecisionParser
-  owns: decision JSON parsing into ModelTurn
+NativeToolDecisionParser
+  owns: function_name<｜tool▁sep｜>{json_arguments} parsing into ModelTurn
 ```
 
 Run orchestrator 仍然只看到一个 `call_model` effect。两次 FIM 调用是 adapter 内部细节。
@@ -85,95 +108,126 @@ type FimCompletionRequest = {
 Thinking prompt shape:
 
 ```text
-<tah_context>
-Task:
-...
+<｜begin▁of▁sentence｜>{system_prompt}
 
-Recent observations:
-...
+<｜User｜>
+{task}
 
-Available tool:
-bash ...
-</tah_context>
+{environment_reminder}
 
-<agent_thinking>
+{transcript_summary}
+
+{tool_and_bash_contract}
+
+<｜Assistant｜><think>
 ```
 
 Thinking suffix:
 
 ```text
-</agent_thinking>
+</think>
 ```
 
 The filled middle is stored as:
 
 ```ts
 type AgentThinking = {
-  text: string;
-  source: "deepseek_fim";
+  content: string;
+  raw?: unknown;
 };
 ```
 
 Thinking is not shown to the user as a final answer. It is recorded in transcript for debugging and self-improvement.
 
-## Pass 2: Generate Decision
+## Pass 2: Generate Native Tool Decision
 
-The second FIM call generates only the next decision.
+The second FIM call generates only the middle of one DeepSeek native tool call.
 
 Decision prompt shape:
 
 ```text
-<tah_context>
-...
-</tah_context>
+<｜begin▁of▁sentence｜>{system_prompt}
 
-<agent_thinking>
-...thinking from pass 1...
-</agent_thinking>
+<｜User｜>
+{task}
 
-<next_decision>
+{environment_reminder}
+
+{transcript_summary}
+
+{tool_and_bash_contract}
+
+<｜Assistant｜><think>
+{thinking_from_pass_1}
+</think>
+<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>
 ```
 
 Decision suffix:
 
 ```text
-</next_decision>
+<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>
 ```
 
-The filled middle must be one JSON object matching one of these shapes:
+The filled middle must be:
 
-```json
-{
-  "type": "tool_call",
-  "name": "bash",
-  "arguments": {
-    "session": "default",
-    "command": "pwd && ls -la",
-    "timeoutMs": 30000
-  }
-}
+```text
+function_name<｜tool▁sep｜>{json_arguments}
 ```
 
-```json
-{
-  "type": "final",
-  "content": "Done."
-}
+Allowed decision functions:
+
+- `bash`: external bash tool call.
+- `io_wait`: internal wait request.
+- `final`: internal completion request.
+
+Examples:
+
+```text
+bash<｜tool▁sep｜>{"session":"default","command":"pwd && ls -la","timeoutMs":30000}
 ```
 
-```json
-{
-  "type": "io_wait",
-  "reason": "Waiting for the user's next message before continuing.",
-  "condition": {
-    "kind": "event",
-    "eventKind": "user_message_received",
-    "source": "im"
-  }
-}
+```text
+io_wait<｜tool▁sep｜>{"reason":"Waiting for the user's next message before continuing.","condition":{"kind":"new_user_message","channel":"default"}}
 ```
 
-This is a harness decision grammar. It is not provider-native tool calling.
+```text
+final<｜tool▁sep｜>{"content":"Done."}
+```
+
+This is still a harness decision grammar, but its surface form matches DeepSeek native tool-call training format.
+
+## Native Tool Decision Parser
+
+The parser receives only the FIM-filled middle:
+
+```text
+{name}<｜tool▁sep｜>{json}
+```
+
+Parsing steps:
+
+1. Trim whitespace.
+2. Split once on `<｜tool▁sep｜>`.
+3. Validate function name is one of `bash`, `io_wait`, `final`.
+4. Parse the JSON arguments.
+5. Normalize into `ModelTurn`.
+6. Reject any extra assistant content before or after the single tool call.
+
+Normalization:
+
+```text
+bash(args)
+  -> ModelTurn.tool_call with InternalToolCall(name="bash", arguments=args)
+
+io_wait(args)
+  -> ModelTurn.io_wait
+
+final(args)
+  -> ModelTurn.final
+```
+
+`io_wait` and `final` are not external tools. They reuse native tool-call framing only because it aligns with DeepSeek V4's post-training format and gives the decision pass one consistent output shape.
 
 ## Model Turn
 
@@ -245,12 +299,11 @@ type InternalToolCall = {
 
 Decision generation can fail in normal model ways:
 
-- not valid JSON
-- JSON is not an object
-- missing `type`
-- unsupported `type`
-- tool name is not `bash`
-- `arguments` fail bash tool schema validation
+- missing `<｜tool▁sep｜>`
+- unsupported function name
+- arguments are not valid JSON
+- function arguments do not match `bash`, `io_wait`, or `final` schema
+- extra assistant content appears before or after the single native tool call middle
 
 Parser-level failures become `ModelTurn.invalid_output`.
 
@@ -324,8 +377,11 @@ The tool definition provides:
 
 The decision grammar provides:
 
-- `type: "tool_call"`
-- `type: "final"`
+- native decision function `bash`
+- native decision function `io_wait`
+- native decision function `final`
+- special separator `<｜tool▁sep｜>`
+- JSON argument schemas for each decision function
 
 The prompt should not include alternate historical APIs or examples that contradict the current path.
 
@@ -342,8 +398,8 @@ Implement only:
 Defer:
 
 - streaming
-- native chat tool calls
+- provider-managed chat tool calls
 - strict JSON mode
 - FIM as a standalone code completion CLI
 
-The current path is: DeepSeek FIM two-pass, one bash tool, one tool call per step.
+The current path is: DeepSeek V4 FIM two-pass, DeepSeek native tool-call framing for decision output, one decision function call per step.

@@ -12,9 +12,33 @@
 
 ## FIM Decision Tool Call Protocol
 
-模型层使用 DeepSeek FIM two-pass。第一通生成 reasoning，第二通生成 decision。Decision 可以是 `tool_call` 或 `final`。
+模型层使用 DeepSeek V4 FIM two-pass。第一通生成 reasoning，第二通生成 DeepSeek native tool-call frame 的中间内容。
 
-FIM decision grammar 是 harness 自己的协议，不是 provider-native tool calling。
+Decision pass 使用 DeepSeek V4 原生 tool-call special token 边界，但不走 API provider-native tool calling。Harness 手工组装 prompt/suffix，并解析 FIM 填充的中间段。
+
+Decision pass 由 harness 预填：
+
+```text
+<｜Assistant｜></think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>
+```
+
+并提供 suffix：
+
+```text
+<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>
+```
+
+模型只需要补：
+
+```text
+function_name<｜tool▁sep｜>{json_arguments}
+```
+
+允许的 function name：
+
+- `bash`: 外部 bash tool call。
+- `io_wait`: 内部等待请求。
+- `final`: 内部完成请求。
 
 模型适配层把 FIM decision 归一化为：
 
@@ -22,6 +46,7 @@ FIM decision grammar 是 harness 自己的协议，不是 provider-native tool c
 type ModelTurn =
   | { kind: "final"; content: string; raw?: unknown }
   | { kind: "tool_call"; toolCall: InternalToolCall; raw?: unknown }
+  | { kind: "io_wait"; wait: IoWaitRequest; raw?: unknown }
   | { kind: "invalid_output"; message: string; raw?: unknown };
 
 type InternalToolCall = {

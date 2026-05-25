@@ -337,14 +337,14 @@ type ToolResult = {
 };
 ```
 
-For the FIM adapter, `ToolResult` is rendered into the next step context as an observation. There is no provider-native tool result message.
+For the FIM adapter, `ToolResult` is rendered into the next step context as an observation. The decision surface uses DeepSeek V4 native tool-call framing, but tool results are still harness observations rather than provider-native tool result messages.
 
 ## Execution Chain
 
 ```text
 1. DeepSeekFimAdapter writes STATIC_TOOL_CATALOG into the FIM decision context.
 2. FIM thinking pass generates reasoning-only text.
-3. FIM decision pass returns final content or a bash tool call decision.
+3. FIM decision pass fills the DeepSeek V4 native tool-call middle: `function_name<｜tool▁sep｜>{json_arguments}`.
 4. DeepSeekFimAdapter normalizes the decision into ModelTurn.
 5. If ModelTurn is final, AgentRunState completes the run.
 6. If ModelTurn is tool_call, harness validates the bash arguments.
