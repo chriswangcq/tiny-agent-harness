@@ -13,6 +13,7 @@
 - **外部世界事件化**：IM 消息、bash session 状态、命令完成/超时、skill run 状态统一进入 `Environment`。模型每轮看到的是被消费过的 factual reminder，而不是隐藏的可变状态。
 - **日志是主要调试接口**：Observation 只返回新增输出窗口、return code、offset 和 log path；完整输出写入 session log，run 事件写入 transcript JSONL。大上下文靠路径回看，不靠一次性塞进 prompt。
 - **失败也进入回路**：无效模型输出、tool validation 失败、review 拒绝都会转成 recoverable observation，让 agent 下一轮自我修正，而不是立刻把 run 打死。
+- **复盘由 agent 判断触发**：skill 执行结束后不是固定进入复盘流程，而是由 agent 根据输出、失败模式、风险和任务结果决定是否 `close --review required`。Harness 只提供状态机和记录位置。
 - **审阅先于执行**：所有 bash request 在执行前经过 `ToolReviewer`。当前 demo 可以默认 approve，但边界已经为人工审核、策略审核、权限分级和安全审计留好入口。
 - **观察面不拥有事实**：TUI 是 transcript player / control surface，只读取 durable artifacts 并渲染 view model，不成为第二个 run orchestrator。
 - **面向 AI 时代的可维护性**：减少隐藏状态、重复路径和“看起来合理但已经过时”的上下文，让未来的人和 agent 都不容易误读当前架构。
@@ -26,7 +27,7 @@
 - **可恢复 run artifacts**：每个 run 产出 `state.json` 和 `transcript.jsonl`；每个 session 有独立 log。审阅、debug、TUI、resume、eval 都可以围绕这些 artifact 展开。
 - **`io_wait` 是一等决策**：等待用户消息或外部事件不是 `sleep`，而是 run state machine 中可记录、可恢复、可回放的 `waiting_for_io` 状态。
 - **Environment 的 one-shot event 和 persistent fact 分层**：新事件只消费一次；active skill run 这类仍然成立的事实会持续提醒，直到状态关闭。
-- **Skill CLI 有生命周期闭环**：skill 可发现、可执行、可保持 active、可 close、可进入 review pending，并能把复盘 lessons 追加到 skill 附件。
+- **Skill CLI 有生命周期闭环**：skill 可发现、可执行、可保持 active、可 close；agent 可以按需把 skill run 转入 review pending，复盘后把 lessons 追加到 skill 附件。
 - **Code Intelligence CLI 作为语义查询层**：LSP 能力不进入 harness 内核，而是通过 `codeq` CLI 暴露给 agent，用来查询 diagnostics、symbols、definition、references 和 hover。
 - **TUI 以 view model 播放 agent loop**：`TranscriptReader` 读 JSONL，`ViewModelBuilder` 纯逻辑归一化事件，renderer 只负责展示 conversation 和 loop frame。
 - **端口化协作边界**：model、prompt、validator、reviewer、bash、environment、skill 都通过明确接口连接，便于替换 adapter、接真实 IM、接策略 reviewer 或做单元测试。
@@ -37,7 +38,7 @@
 - **可恢复 agent runtime**：现有 `state.json`、`transcript.jsonl`、session log 已经具备 resume/replay 的基础，后续可以实现 run 级恢复、断点继续和失败复盘。
 - **可审计的自动化执行层**：所有外部动作都收敛到 bash request + review + observation，天然适合接人工审批、权限策略、危险命令拦截和企业审计。
 - **CLI 生态的 agent OS 雏形**：只要能力能做成 CLI，就能被 agent 使用，同时仍共享同一套 session、日志、审核和 TUI 观察机制。
-- **技能系统可自我改进**：skill run 的 active/review/lessons 流程为经验沉淀留了位置，后续可以把成功/失败模式沉淀进 skill 附件，而不是只留在一次性对话里。
+- **技能系统可自我进化**：skill run 的 active/review/lessons 流程为经验沉淀留了位置。agent 可以根据 skill 执行结果判断是否复盘，把成功/失败模式沉淀进 skill 附件，未来再汇总为 skill 级别的改进。
 - **更自然的人机协作**：IM transport 和 `io_wait` 可以扩展出多轮协作、用户确认、取消指令、外部 webhook 唤醒等能力。
 - **异步工作流和后台任务**：session manager 已经支持长运行进程、poll 和 interrupt，适合承载 dev server、test watcher、REPL、后台 job 等 coding agent 常见场景。
 - **多模型/多 provider 适配**：orchestrator 只消费 `ModelTurn`，DeepSeek FIM 是当前主路径；未来可以接其它模型 adapter，只要保持 decision 归一化协议。
@@ -47,9 +48,9 @@
 
 ## Code Intelligence CLI
 
-`codeq` 是计划中的代码智能 CLI，用来把 LSP / language server 的语义能力暴露给 coding agent。它不是模型可见的新 tool，也不改变 “所有外部动作都走 `bash`” 的核心约束；agent 使用它时，本质上仍然是在 bash session 里运行普通命令。
+`codeq` 是仓库内置的代码智能 CLI，用来把 LSP / language server 的语义能力暴露给 coding agent。它不是模型可见的新 tool，也不改变 “所有外部动作都走 `bash`” 的核心约束；agent 使用它时，本质上仍然是在 bash session 里运行普通命令。
 
-第一版目标是只读的 TypeScript / JavaScript 查询能力：
+当前实现提供只读的 TypeScript / JavaScript 查询能力：
 
 ```bash
 codeq diagnostics --workspace --json
@@ -61,7 +62,7 @@ codeq hover src/run/orchestrator.ts:37:18 --json
 
 它解决的是 `rg` 和直接读文件不擅长的问题：某个 symbol 的真实定义、引用点、文件结构化 symbol、hover 类型信息，以及 language server 已经知道的诊断。`codeq` 输出统一 JSON envelope、稳定错误码、受限结果数量和短 preview，避免把大段 language server 输出直接塞回 prompt。
 
-第一版建议保持 stateless：每次命令启动 language server、执行一次查询、关闭退出。这样会比 daemon 慢一些，但状态清楚、可复现、容易写测试，也不会在 harness 内部引入隐藏的长期索引状态。等启动成本真的成为问题，再引入显式的 `codeq server start/status/restart/stop` daemon 模式。
+当前实现保持 stateless：每次命令启动 language server、执行一次查询、关闭退出。这样会比 daemon 慢一些，但状态清楚、可复现、容易写测试，也不会在 harness 内部引入隐藏的长期索引状态。等启动成本真的成为问题，再引入显式的 `codeq server start/status/restart/stop` daemon 模式。
 
 这个方向的详细契约见 [Code Intelligence CLI](docs/code-intelligence-cli.md)。
 
