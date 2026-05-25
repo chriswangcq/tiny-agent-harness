@@ -11,28 +11,36 @@ export type BashCommandInput = {
   timeoutMs?: number; // default: 30000
 };
 
+export type BashListControlInput = {
+  control: "list";
+};
+
+export type BashCreateControlInput = {
+  control: "create";
+  session: string;
+  cwd?: string;
+  shell?: string;
+  env?: Record<string, string>;
+  defaultTimeoutMs?: number;
+  maxObservationBytes?: number;
+};
+
+export type BashSessionControlInput = {
+  control: "status" | "poll" | "interrupt" | "terminate" | "restart";
+  session: string;
+};
+
+export type BashSendInputControlInput = {
+  control: "sendInput";
+  session: string;
+  input: string;
+};
+
 export type BashControlInput =
-  | {
-      control: "list";
-    }
-  | {
-      control: "create";
-      session: string;
-      cwd?: string;
-      shell?: string;
-      env?: Record<string, string>;
-      defaultTimeoutMs?: number;
-      maxObservationBytes?: number;
-    }
-  | {
-      control: "status" | "poll" | "interrupt" | "terminate" | "restart";
-      session: string;
-    }
-  | {
-      control: "sendInput";
-      session: string;
-      input: string;
-    };
+  | BashListControlInput
+  | BashCreateControlInput
+  | BashSessionControlInput
+  | BashSendInputControlInput;
 
 // ─── Bash Session (harness internal) ────────────────────────────────
 
@@ -55,7 +63,7 @@ export type SessionOutput = {
   truncatedCount: number;
 };
 
-export type BashSession = {
+export type BashSessionData = {
   id: string;
   state: BashSessionState;
 
@@ -112,4 +120,14 @@ export type BashSessionSummary = {
   currentCommand?: string;
   outputLogPath: string;
   updatedAt: string;
+};
+
+// ─── Session Create Options ─────────────────────────────────────────
+
+export type SessionCreateOptions = {
+  cwd?: string;
+  shell?: string;
+  env?: Record<string, string>;
+  defaultTimeoutMs?: number;
+  maxObservationBytes?: number;
 };

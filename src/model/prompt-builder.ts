@@ -1,6 +1,6 @@
 import type {
   ModelPrompt,
-  ChatMessage,
+  ModelPromptMessage,
   BashObservation,
   AgentObservation,
 } from "../types/index.js";
@@ -38,7 +38,7 @@ export class PromptBuilder {
    * Build the initial prompt for a new run (no history yet).
    */
   buildInitialPrompt(task: string): ModelPrompt {
-    const messages: ChatMessage[] = [
+    const messages: ModelPromptMessage[] = [
       { role: "system", content: SYSTEM_MESSAGE },
       { role: "user", content: task },
     ];
@@ -50,7 +50,7 @@ export class PromptBuilder {
    * Build a prompt that includes prior tool-call / observation history.
    */
   buildNextPrompt(task: string, history: HistoryEntry[]): ModelPrompt {
-    const messages: ChatMessage[] = [
+    const messages: ModelPromptMessage[] = [
       { role: "system", content: SYSTEM_MESSAGE },
       { role: "user", content: task },
     ];
@@ -59,26 +59,16 @@ export class PromptBuilder {
       if (entry.role === "assistant_tool_call") {
         messages.push({
           role: "assistant",
-          content: "",
-          tool_calls: [
-            {
-              id: entry.toolCallId,
-              type: "function",
-              function: {
-                name: entry.name,
-                arguments:
-                  typeof entry.arguments === "string"
-                    ? entry.arguments
-                    : JSON.stringify(entry.arguments),
-              },
-            },
-          ],
+          content: JSON.stringify({
+            type: "tool_call",
+            id: entry.toolCallId,
+            name: entry.name,
+            arguments: entry.arguments,
+          }),
         });
       } else {
-        // tool_result
         messages.push({
-          role: "tool",
-          tool_call_id: entry.toolCallId,
+          role: "observation",
           content: JSON.stringify(entry.observation),
         });
       }

@@ -1,207 +1,227 @@
 import type {
-  ModelPrompt,
-  ModelOutput,
+  AgentThinking,
+  BashToolInput,
+  FimStepOutput,
+  InternalToolCall,
+  ModelStepContext,
   ModelTurn,
   ToolDefinition,
-  OpenAIFunctionTool,
-  OpenAIToolCall,
 } from "../types/index.js";
 
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-
-export type AdapterConfig = {
+export type DeepSeekFimConfig = {
   apiKey: string;
   baseUrl: string;
   model: string;
+  thinkingMaxTokens: number;
+  decisionMaxTokens: number;
 };
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+type Decision =
+  | {
+      type: "tool_call";
+      name: "bash";
+      arguments: BashToolInput;
+    }
+  | {
+      type: "final";
+      content: string;
+    };
 
-function convertToOpenAITools(tools: ToolDefinition[]): OpenAIFunctionTool[] {
-  return tools.map((t) => ({
-    type: "function" as const,
-    function: {
-      name: t.name,
-      description: t.description,
-      parameters: t.inputSchema,
-    },
-  }));
-}
+export class DeepSeekFimAdapter {
+  private readonly config: DeepSeekFimConfig;
 
-// ---------------------------------------------------------------------------
-// OpenAICompatibleAdapter
-// ---------------------------------------------------------------------------
-
-export class OpenAICompatibleAdapter {
-  private readonly config: AdapterConfig;
-
-  constructor(config: AdapterConfig) {
+  constructor(config: DeepSeekFimConfig) {
     this.config = config;
   }
 
-  async complete(
-    prompt: ModelPrompt,
-    options: { tools: ToolDefinition[] },
-  ): Promise<{ output: ModelOutput; turn: ModelTurn }> {
-    const url = `${this.config.baseUrl}/v1/chat/completions`;
+  async generateTurn(
+    context: ModelStepContext,
+    options: { bashTool: ToolDefinition },
+  ): Promise<FimStepOutput> {
+    const thinking = await this.generateThinking(context, options.bashTool);
+    const rawDecision = await this.generateDecision(
+      context,
+      thinking,
+      options.bashTool,
+    );
+    const turn = this.parseDecision(context, thinking, rawDecision);
 
-    const body = {
-      model: this.config.model,
-      messages: prompt.messages,
-      tools: convertToOpenAITools(options.tools),
+    return { thinking, rawDecision, turn };
+  }
+
+  private async generateThinking(
+    context: ModelStepContext,
+    bashTool: ToolDefinition,
+  ): Promise<AgentThinking> {
+    const prompt = this.renderThinkingPrompt(context, bashTool);
+    const content = await this.completeFim({
+      prompt,
+      suffix: "</agent_thinking>",
+      maxTokens: this.config.thinkingMaxTokens,
+    });
+
+    return { content, raw: { prompt } };
+  }
+
+  private async generateDecision(
+    context: ModelStepContext,
+    thinking: AgentThinking,
+    bashTool: ToolDefinition,
+  ): Promise<string> {
+    return this.completeFim({
+      prompt: this.renderDecisionPrompt(context, thinking, bashTool),
+      suffix: "</next_decision>",
+      maxTokens: this.config.decisionMaxTokens,
+    });
+  }
+
+  private async completeFim(input: {
+    prompt: string;
+    suffix: string;
+    maxTokens: number;
+  }): Promise<string> {
+    const response = await fetch(`${this.config.baseUrl}/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.config.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.config.model,
+        prompt: input.prompt,
+        suffix: input.suffix,
+        max_tokens: input.maxTokens,
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`DeepSeek FIM request failed: ${response.status} ${body}`);
+    }
+
+    const data = (await response.json()) as {
+      choices?: Array<{ text?: string }>;
     };
+    const text = data.choices?.[0]?.text;
+    if (typeof text !== "string") {
+      throw new Error("DeepSeek FIM response missing choices[0].text");
+    }
 
-    let responseData: unknown;
+    return text;
+  }
+
+  private parseDecision(
+    context: ModelStepContext,
+    thinking: AgentThinking,
+    rawDecision: string,
+  ): ModelTurn {
+    let parsed: unknown;
 
     try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.config.apiKey}`,
-        },
-        body: JSON.stringify(body),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        return {
-          output: { raw: { status: response.status, body: errorText } },
-          turn: {
-            kind: "invalid_output",
-            message: `API request failed with status ${response.status}: ${errorText}`,
-            raw: { status: response.status, body: errorText },
-          },
-        };
-      }
-
-      responseData = await response.json();
-    } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : "Unknown fetch error";
+      parsed = JSON.parse(rawDecision);
+    } catch {
       return {
-        output: { raw: null },
-        turn: {
-          kind: "invalid_output",
-          message: `Fetch error: ${message}`,
-          raw: null,
-        },
+        kind: "invalid_output",
+        message: "FIM decision was not valid JSON.",
+        thinking,
+        rawDecision,
       };
     }
 
-    return this.parseResponse(responseData);
-  }
-
-  // -------------------------------------------------------------------------
-  // Response parsing
-  // -------------------------------------------------------------------------
-
-  private parseResponse(
-    data: unknown,
-  ): { output: ModelOutput; turn: ModelTurn } {
-    const output: ModelOutput = { raw: data };
-
-    // Validate basic response shape
-    if (
-      typeof data !== "object" ||
-      data === null ||
-      !("choices" in data) ||
-      !Array.isArray((data as Record<string, unknown>).choices)
-    ) {
+    if (!isDecision(parsed)) {
       return {
-        output,
-        turn: {
-          kind: "invalid_output",
-          message: "Response missing choices array",
-          raw: data,
-        },
+        kind: "invalid_output",
+        message: "FIM decision did not match the decision grammar.",
+        thinking,
+        rawDecision,
+        raw: parsed,
       };
     }
 
-    const choices = (data as Record<string, unknown>).choices as unknown[];
-    if (choices.length === 0) {
+    if (parsed.type === "final") {
       return {
-        output,
-        turn: {
-          kind: "invalid_output",
-          message: "Response choices array is empty",
-          raw: data,
-        },
+        kind: "final",
+        content: parsed.content,
+        thinking,
+        rawDecision,
+        raw: parsed,
       };
     }
 
-    const choice = choices[0] as Record<string, unknown>;
-    const message = choice.message as Record<string, unknown> | undefined;
-
-    if (!message || typeof message !== "object") {
-      return {
-        output,
-        turn: {
-          kind: "invalid_output",
-          message: "Response missing message in first choice",
-          raw: data,
-        },
-      };
-    }
-
-    // Check for tool calls
-    const toolCalls = message.tool_calls as OpenAIToolCall[] | undefined;
-
-    if (Array.isArray(toolCalls) && toolCalls.length > 0) {
-      const tc = toolCalls[0];
-
-      let parsedArguments: unknown;
-      try {
-        parsedArguments = JSON.parse(tc.function.arguments);
-      } catch {
-        return {
-          output,
-          turn: {
-            kind: "invalid_output",
-            message: `Failed to parse tool call arguments: ${tc.function.arguments}`,
-            raw: data,
-          },
-        };
-      }
-
-      return {
-        output,
-        turn: {
-          kind: "tool_call",
-          toolCall: {
-            id: tc.id,
-            name: "bash",
-            arguments: parsedArguments as import("../types/index.js").BashToolInput,
-          },
-          raw: data,
-        },
-      };
-    }
-
-    // Check for final content
-    const content = message.content;
-    if (typeof content === "string" && content.length > 0) {
-      return {
-        output,
-        turn: {
-          kind: "final",
-          content,
-          raw: data,
-        },
-      };
-    }
+    const toolCall: InternalToolCall = {
+      id: `fim-call-${context.runId}-${context.stepIndex}`,
+      name: "bash",
+      arguments: parsed.arguments,
+      raw: parsed,
+    };
 
     return {
-      output,
-      turn: {
-        kind: "invalid_output",
-        message: "Response has neither content nor tool_calls",
-        raw: data,
-      },
+      kind: "tool_call",
+      toolCall,
+      thinking,
+      rawDecision,
+      raw: parsed,
     };
   }
+
+  private renderThinkingPrompt(
+    context: ModelStepContext,
+    bashTool: ToolDefinition,
+  ): string {
+    return [
+      "<tah_context>",
+      `Run: ${context.runId}`,
+      `Step: ${context.stepIndex}`,
+      ...context.messages.map((message) => {
+        return `${message.role.toUpperCase()}: ${message.content}`;
+      }),
+      `Tool: ${bashTool.name}`,
+      bashTool.description,
+      "</tah_context>",
+      "",
+      "<agent_thinking>",
+    ].join("\n");
+  }
+
+  private renderDecisionPrompt(
+    context: ModelStepContext,
+    thinking: AgentThinking,
+    bashTool: ToolDefinition,
+  ): string {
+    return [
+      "<tah_context>",
+      `Run: ${context.runId}`,
+      `Step: ${context.stepIndex}`,
+      ...context.messages.map((message) => {
+        return `${message.role.toUpperCase()}: ${message.content}`;
+      }),
+      `Tool: ${bashTool.name}`,
+      bashTool.description,
+      JSON.stringify(bashTool.inputSchema),
+      "</tah_context>",
+      "",
+      "<agent_thinking>",
+      thinking.content,
+      "</agent_thinking>",
+      "",
+      "<next_decision>",
+    ].join("\n");
+  }
+}
+
+function isDecision(value: unknown): value is Decision {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (record.type === "final") {
+    return typeof record.content === "string";
+  }
+
+  if (record.type === "tool_call") {
+    return record.name === "bash" && typeof record.arguments === "object";
+  }
+
+  return false;
 }
