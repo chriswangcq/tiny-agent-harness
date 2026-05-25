@@ -27,6 +27,7 @@
 - **`io_wait` 是一等决策**：等待用户消息或外部事件不是 `sleep`，而是 run state machine 中可记录、可恢复、可回放的 `waiting_for_io` 状态。
 - **Environment 的 one-shot event 和 persistent fact 分层**：新事件只消费一次；active skill run 这类仍然成立的事实会持续提醒，直到状态关闭。
 - **Skill CLI 有生命周期闭环**：skill 可发现、可执行、可保持 active、可 close、可进入 review pending，并能把复盘 lessons 追加到 skill 附件。
+- **Code Intelligence CLI 作为语义查询层**：LSP 能力不进入 harness 内核，而是通过 `codeq` CLI 暴露给 agent，用来查询 diagnostics、symbols、definition、references 和 hover。
 - **TUI 以 view model 播放 agent loop**：`TranscriptReader` 读 JSONL，`ViewModelBuilder` 纯逻辑归一化事件，renderer 只负责展示 conversation 和 loop frame。
 - **端口化协作边界**：model、prompt、validator、reviewer、bash、environment、skill 都通过明确接口连接，便于替换 adapter、接真实 IM、接策略 reviewer 或做单元测试。
 - **测试覆盖架构骨架**：已有 run state、environment、validator、skill discovery/store、TUI transcript/view-model 等测试，优先保护状态转移和边界契约。
@@ -43,6 +44,26 @@
 - **评估和可观测性平台**：transcript 记录 thinking、decision、validation、review、tool execution、observation，后续可以做 step 级 eval、trace 可视化和 regression replay。
 - **更强的 TUI / 控制台**：当前 TUI 已能播放 run loop，后续可增加 session tail、active skill、review pending、命令批准和 replay/follow 模式。
 - **安全边界可逐层加固**：从 always approve 过渡到 command classifier、workspace policy、network/file 权限、敏感信息扫描，都可以挂在现有 `ToolReviewer` 边界上。
+
+## Code Intelligence CLI
+
+`codeq` 是计划中的代码智能 CLI，用来把 LSP / language server 的语义能力暴露给 coding agent。它不是模型可见的新 tool，也不改变 “所有外部动作都走 `bash`” 的核心约束；agent 使用它时，本质上仍然是在 bash session 里运行普通命令。
+
+第一版目标是只读的 TypeScript / JavaScript 查询能力：
+
+```bash
+codeq diagnostics --workspace --json
+codeq symbols src/run/orchestrator.ts --json
+codeq definition src/run/orchestrator.ts:37:18 --json
+codeq references src/run/orchestrator.ts:37:18 --json
+codeq hover src/run/orchestrator.ts:37:18 --json
+```
+
+它解决的是 `rg` 和直接读文件不擅长的问题：某个 symbol 的真实定义、引用点、文件结构化 symbol、hover 类型信息，以及 language server 已经知道的诊断。`codeq` 输出统一 JSON envelope、稳定错误码、受限结果数量和短 preview，避免把大段 language server 输出直接塞回 prompt。
+
+第一版建议保持 stateless：每次命令启动 language server、执行一次查询、关闭退出。这样会比 daemon 慢一些，但状态清楚、可复现、容易写测试，也不会在 harness 内部引入隐藏的长期索引状态。等启动成本真的成为问题，再引入显式的 `codeq server start/status/restart/stop` daemon 模式。
+
+这个方向的详细契约见 [Code Intelligence CLI](docs/code-intelligence-cli.md)。
 
 ## 当前核心方向
 
@@ -61,6 +82,7 @@
 - [Tool Call And Observation](docs/tool-call-observation.md)
 - [Run Orchestrator And Agent Run State](docs/run-orchestrator-state.md)
 - [Static Bash Tool Definition](docs/static-bash-tool-definition.md)
+- [Code Intelligence CLI](docs/code-intelligence-cli.md)
 - [DeepSeek V4 Native Tool-Call FIM Adapter](docs/deepseek-fim-adapter.md)
 - [IM CLI Transport](docs/im-cli-transport.md)
 - [Environment Model](docs/environment-model.md)
