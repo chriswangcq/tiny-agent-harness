@@ -20,6 +20,7 @@ RunOrchestrator
 
 AgentRunState
   owns: status, step index, transcript pointers, pending tool call/review, stop conditions
+  references: active skill run reminder state through Environment / SkillRunStore
   exposes: nextEffect(), apply(event)
 
 DeepSeekFimAdapter
@@ -33,6 +34,7 @@ ImCliTransport
 
 Environment
   owns: latest external events and consumed-event cursors
+  owns: persistent reminder facts such as active skill runs
 
 ToolCallValidator
   owns: schema validation and conversion from InternalToolCall to ToolRequest
@@ -89,6 +91,8 @@ type AgentRunState = {
   pendingToolRequest?: ToolRequest;
   pendingReview?: ToolReviewDecision;
   pendingIoWait?: IoWaitRequest;
+
+  activeSkillRuns?: ActiveSkillRunSummary[];
 
   final?: string;
   error?: RunError;
@@ -162,6 +166,42 @@ type IoWaitRequest = {
         source?: EnvironmentEvent["source"];
       };
 };
+```
+
+## Active Skill Run State
+
+Skill run 不建议塞进 `AgentRunStatus` 顶层枚举。顶层状态已经表达当前 run 是否在等模型、等审核、等工具或等 IO；如果再加一个 `skill_running`，会和 `waiting_for_tool` 等状态互相覆盖。
+
+更清晰的做法是：AgentRunState 保持主循环状态机，SkillRunState 作为子状态机存在。每轮 `call_model` 前，orchestrator 把 active skill runs 渲染进 system reminder。
+
+```ts
+type ActiveSkillRunSummary = {
+  skillRunId: string;
+  skill: string;
+  status: "running" | "review_pending";
+  executionReturnCode?: number;
+  executionLogPath: string;
+  reviewTaskPath?: string;
+};
+```
+
+`running` 表示 skill 上下文仍然 active，不一定表示 shell process 仍在运行。关闭必须由 agent 显式运行：
+
+```bash
+skill close <skillRunId> --review none --json '<summary>'
+skill close <skillRunId> --review required --json '<summary>'
+```
+
+如果 close 时选择 `--review required`，SkillRunState 进入 `review_pending`，并生成 `review-task.txt`。这个 review task 会持续进入 system reminder，直到 agent 运行：
+
+```bash
+skill review-complete <skillRunId> --json '<review>'
+```
+
+完成复盘后，经验教训追加到 skill 附件，例如：
+
+```text
+.tiny-agent/skills/<skill>/attachments/lessons.md
 ```
 
 ```ts
@@ -602,9 +642,15 @@ if events not empty:
   reminder = renderEnvironmentReminder(events)
   context.messages.push({ role: "system", content: reminder })
   record(environment_events_consumed)
+
+activeSkillRuns = skillRunStore.listActive()
+if activeSkillRuns not empty:
+  context.messages.push({ role: "system", content: renderActiveSkillReminder(activeSkillRuns) })
 ```
 
 Reminder rendering follows the policy in `docs/environment-model.md`: newest events win, large outputs are represented by log paths, and consumed event ids advance the run's environment cursor.
+
+Environment event reminders are consumed once. Active skill reminders are persistent state facts and are rendered every model step until the skill run reaches `closed`.
 
 ## Synthetic Observations
 

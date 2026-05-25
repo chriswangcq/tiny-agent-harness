@@ -11,10 +11,13 @@ Environment 是 Agent 之外的最新环境事件模型。
 - IM 新用户消息
 - bash session 状态切换
 - bash command 完成、超时、被中断
+- skill run started / closed / review pending / review completed
 
 Agent loop 不直接轮询每个外部系统。每轮 loop 开始时，orchestrator 从 Environment 消费新事件，把它们渲染成 system reminder，可以包在 user message / model context 里。
 
 `io_wait` 也不直接等待 IM。它等待 Environment 中出现满足条件的事件。
+
+除了事件，Environment 还可以提供 persistent reminder facts。事件是一次性的，消费后不重复；persistent facts 会每轮重复渲染，直到状态关闭。Active skill run 就属于 persistent fact。
 
 ## Responsibilities
 
@@ -22,6 +25,7 @@ Agent loop 不直接轮询每个外部系统。每轮 loop 开始时，orchestra
 Environment
   owns: latest external environment events
   owns: event cursors / consumed offsets
+  owns: persistent reminder facts such as active skill runs
   exposes: appendEvent(), consumeSince(), waitFor()
 
 ImCliTransport
@@ -32,9 +36,14 @@ BashSessionManager
   owns: bash session runtime
   emits: environment events session_state_changed, command_finished, command_timed_out
 
+Skill CLI / SkillRunStore
+  owns: active skill run state
+  emits: environment events skill_run_started, skill_run_closed, skill_review_pending, skill_review_completed
+  exposes: listActiveSkillRuns()
+
 RunOrchestrator
   owns: consume environment events at loop boundary
-  owns: render events into system reminder
+  owns: render one-shot events and persistent facts into system reminder
   owns: wait_io by waiting on Environment.waitFor(...)
 ```
 
@@ -84,6 +93,18 @@ type EnvironmentEvent =
       session: string;
       commandId: string;
       outputLogPath: string;
+    }
+  | {
+      id: string;
+      kind: "skill_run_started" | "skill_run_closed" | "skill_review_pending" | "skill_review_completed";
+      source: "skill";
+      timestamp: string;
+      skillRunId: string;
+      skill: string;
+      statePath: string;
+      executionLogPath?: string;
+      reviewTaskPath?: string;
+      lessonsPath?: string;
     };
 ```
 
@@ -124,6 +145,45 @@ Consumption rules:
 5. `io_wait_satisfied` events are not special-cased; the matching EnvironmentEvent is consumed by the next model step like every other environment event.
 
 This keeps Environment as the source of facts and prevents duplicated reminders.
+
+## Persistent Reminder Facts
+
+Not every reminder is an event.
+
+Environment events answer: "What changed since the last model step?"
+
+Persistent reminder facts answer: "What is still true and should remain in the model's attention?"
+
+Active skill runs are persistent facts:
+
+```ts
+type PersistentReminderFact =
+  | {
+      kind: "active_skill_run";
+      skillRunId: string;
+      skill: string;
+      status: "running" | "review_pending";
+      executionReturnCode?: number;
+      executionLogPath: string;
+      reviewTaskPath?: string;
+    };
+```
+
+Rendering rules:
+
+1. Render persistent facts after one-shot environment events.
+2. Render active skill runs every model step while status is `running` or `review_pending`.
+3. Stop rendering when status becomes `closed`.
+4. Do not advance the environment event cursor for persistent facts; they are state snapshots, not consumed events.
+5. Do not include full execution logs or review task bodies. Include paths so the agent can inspect them through bash.
+
+Example:
+
+```text
+Active skill reminder:
+- [skillrun-2026-05-25-001] skill=coding-review status=running rc=0 log=.tiny-agent/skill-runs/skillrun-2026-05-25-001/execution.txt
+- [skillrun-2026-05-25-002] skill=debugging status=review_pending task=.tiny-agent/skill-runs/skillrun-2026-05-25-002/review-task.txt
+```
 
 ## Event Cropping Rules
 
