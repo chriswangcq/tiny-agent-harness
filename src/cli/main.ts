@@ -102,8 +102,17 @@ function adaptBashPort(manager: BashSessionManager): BashPort {
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  // --- Route subcommands ---
+  const firstArg = process.argv[2];
+
+  if (firstArg === "tui") {
+    const { runTui } = await import("./tui.js");
+    runTui(process.argv.slice(3));
+    return;
+  }
+
   // --- Read task from argv ---
-  const task = process.argv[2];
+  const task = firstArg;
   if (!task) {
     die("Usage: tiny-agent <task>\n  Provide the task as the first argument.");
   }
@@ -117,8 +126,8 @@ async function main(): Promise<void> {
     );
   }
 
-  const baseUrl = process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com";
-  const modelName = process.env.MODEL_NAME ?? "deepseek-chat";
+  const baseUrl = process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com/beta";
+  const modelName = process.env.MODEL_NAME ?? "deepseek-v4-pro";
 
   // --- Create directory structure ---
   const baseDir = path.resolve(".tiny-agent");
@@ -168,6 +177,7 @@ async function main(): Promise<void> {
       consumeSince() { return []; },
       waitFor() { return new Promise(() => {}); },
     },
+    listActiveSkillRuns: () => [],
   };
 
   // --- Create initial state ---

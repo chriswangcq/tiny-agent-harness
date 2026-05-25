@@ -64,6 +64,18 @@ export type EnvironmentEvent =
       session: string;
       commandId: string;
       outputLogPath: string;
+    }
+  | {
+      id: string;
+      kind: "skill_run_started" | "skill_run_closed" | "skill_review_pending" | "skill_review_completed";
+      source: "skill";
+      timestamp: string;
+      skillRunId: string;
+      skill: string;
+      statePath: string;
+      executionLogPath?: string;
+      reviewTaskPath?: string;
+      lessonsPath?: string;
     };
 
 // ─── Environment State ─────────────────────────────────────────────

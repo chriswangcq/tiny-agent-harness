@@ -4,6 +4,7 @@ import type { ToolDefinition, ToolRequest, ToolReviewDecision, ToolCallValidatio
 import type { BashObservation } from "../types/bash.js";
 import type { InternalToolCall } from "../types/model.js";
 import type { EnvironmentPort, EnvironmentEvent, IoWaitRequest } from "../types/environment.js";
+import type { ActiveSkillRunSummary } from "../types/skill.js";
 import { AgentRunState } from "./state.js";
 import { TranscriptStore } from "../transcript/store.js";
 
@@ -39,6 +40,7 @@ export interface RunPorts {
   prompt: PromptPort;
   bashTool: ToolDefinition;
   environment: EnvironmentPort;
+  listActiveSkillRuns: () => ActiveSkillRunSummary[];
 }
 
 export class RunOrchestrator {
@@ -100,6 +102,13 @@ export class RunOrchestrator {
           this.state.data.task,
           this.history,
         );
+
+        const activeSkillRuns = this.ports.listActiveSkillRuns();
+        if (activeSkillRuns.length > 0) {
+          const reminder = renderActiveSkillReminder(activeSkillRuns);
+          messages.push({ role: "system", content: reminder });
+        }
+
         const context: ModelStepContext = {
           runId: this.state.data.runId,
           stepIndex: this.state.data.stepIndex,
@@ -240,4 +249,20 @@ export class RunOrchestrator {
 
     return this.state;
   }
+}
+
+function renderActiveSkillReminder(runs: ActiveSkillRunSummary[]): string {
+  const lines = ["Active skill reminder:"];
+  for (const run of runs) {
+    let line = `- [${run.skillRunId}] skill=${run.skill} status=${run.status}`;
+    if (run.executionReturnCode !== undefined) {
+      line += ` rc=${run.executionReturnCode}`;
+    }
+    line += ` log=${run.executionLogPath}`;
+    if (run.status === "review_pending" && run.reviewTaskPath) {
+      line += ` task=${run.reviewTaskPath}`;
+    }
+    lines.push(line);
+  }
+  return lines.join("\n");
 }

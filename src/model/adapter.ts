@@ -19,19 +19,29 @@ export type DeepSeekFimConfig = {
 
 type Decision =
   | {
-      type: "tool_call";
       name: "bash";
       arguments: BashToolInput;
     }
   | {
-      type: "final";
-      content: string;
+      name: "final";
+      arguments: {
+        content: string;
+      };
     }
   | {
-      type: "io_wait";
-      reason?: string;
-      condition: IoWaitRequest["condition"];
+      name: "io_wait";
+      arguments: {
+        reason?: string;
+        condition: IoWaitRequest["condition"];
+      };
     };
+
+const TOOL_SEP = "<｜tool▁sep｜>";
+const TOOL_CALL_BEGIN = "<｜tool▁call▁begin｜>";
+const TOOL_CALL_END = "<｜tool▁call▁end｜>";
+const TOOL_CALLS_BEGIN = "<｜tool▁calls▁begin｜>";
+const TOOL_CALLS_END = "<｜tool▁calls▁end｜>";
+const END_OF_SENTENCE = "<｜end▁of▁sentence｜>";
 
 export class DeepSeekFimAdapter {
   private readonly config: DeepSeekFimConfig;
@@ -62,7 +72,7 @@ export class DeepSeekFimAdapter {
     const prompt = this.renderThinkingPrompt(context, bashTool);
     const content = await this.completeFim({
       prompt,
-      suffix: "</agent_thinking>",
+      suffix: "</think>",
       maxTokens: this.config.thinkingMaxTokens,
     });
 
@@ -76,7 +86,7 @@ export class DeepSeekFimAdapter {
   ): Promise<string> {
     return this.completeFim({
       prompt: this.renderDecisionPrompt(context, thinking, bashTool),
-      suffix: "</next_decision>",
+      suffix: `${TOOL_CALL_END}${TOOL_CALLS_END}${END_OF_SENTENCE}`,
       maxTokens: this.config.decisionMaxTokens,
     });
   }
@@ -121,54 +131,46 @@ export class DeepSeekFimAdapter {
     thinking: AgentThinking,
     rawDecision: string,
   ): ModelTurn {
-    let parsed: unknown;
-
-    try {
-      parsed = JSON.parse(rawDecision);
-    } catch {
+    const parsed = parseNativeToolDecision(rawDecision);
+    if (parsed.status === "invalid") {
       return {
         kind: "invalid_output",
-        message: "FIM decision was not valid JSON.",
+        message: parsed.message,
         thinking,
         rawDecision,
       };
     }
 
-    if (!isDecision(parsed)) {
-      return {
-        kind: "invalid_output",
-        message: "FIM decision did not match the decision grammar.",
-        thinking,
-        rawDecision,
-        raw: parsed,
-      };
-    }
+    const decision = parsed.decision;
 
-    if (parsed.type === "final") {
+    if (decision.name === "final") {
       return {
         kind: "final",
-        content: parsed.content,
+        content: decision.arguments.content,
         thinking,
         rawDecision,
-        raw: parsed,
+        raw: decision,
       };
     }
 
-    if (parsed.type === "io_wait") {
+    if (decision.name === "io_wait") {
       return {
         kind: "io_wait",
-        wait: { reason: parsed.reason, condition: parsed.condition },
+        wait: {
+          reason: decision.arguments.reason,
+          condition: decision.arguments.condition,
+        },
         thinking,
         rawDecision,
-        raw: parsed,
+        raw: decision,
       };
     }
 
     const toolCall: InternalToolCall = {
       id: `fim-call-${context.runId}-${context.stepIndex}`,
       name: "bash",
-      arguments: parsed.arguments,
-      raw: parsed,
+      arguments: decision.arguments,
+      raw: decision,
     };
 
     return {
@@ -185,17 +187,9 @@ export class DeepSeekFimAdapter {
     bashTool: ToolDefinition,
   ): string {
     return [
-      "<tah_context>",
-      `Run: ${context.runId}`,
-      `Step: ${context.stepIndex}`,
-      ...context.messages.map((message) => {
-        return `${message.role.toUpperCase()}: ${message.content}`;
-      }),
-      `Tool: ${bashTool.name}`,
-      bashTool.description,
-      "</tah_context>",
+      this.renderDeepSeekChatContext(context, bashTool),
       "",
-      "<agent_thinking>",
+      "<｜Assistant｜><think>",
     ].join("\n");
   }
 
@@ -205,43 +199,179 @@ export class DeepSeekFimAdapter {
     bashTool: ToolDefinition,
   ): string {
     return [
-      "<tah_context>",
+      this.renderDeepSeekChatContext(context, bashTool),
+      "",
+      "<｜Assistant｜><think>",
+      thinking.content,
+      `</think>${TOOL_CALLS_BEGIN}${TOOL_CALL_BEGIN}`,
+    ].join("\n");
+  }
+
+  private renderDeepSeekChatContext(
+    context: ModelStepContext,
+    bashTool: ToolDefinition,
+  ): string {
+    const systemMessages = context.messages
+      .filter((message) => message.role === "system")
+      .map((message) => message.content);
+    const nonSystemMessages = context.messages
+      .filter((message) => message.role !== "system")
+      .map((message) => {
+        return `[${message.role}]\n${message.content}`;
+      });
+
+    const systemPrompt = systemMessages.join("\n\n");
+
+    return [
+      `<｜begin▁of▁sentence｜>${systemPrompt}`,
+      "",
+      "<｜User｜>",
       `Run: ${context.runId}`,
       `Step: ${context.stepIndex}`,
-      ...context.messages.map((message) => {
-        return `${message.role.toUpperCase()}: ${message.content}`;
-      }),
-      `Tool: ${bashTool.name}`,
+      ...nonSystemMessages,
+      "",
+      "Decision functions:",
+      "- bash: perform the only external action through bash.",
+      "- io_wait: wait for an environment event.",
+      "- final: complete the task.",
+      "",
+      `Bash tool: ${bashTool.name}`,
       bashTool.description,
       JSON.stringify(bashTool.inputSchema),
-      "</tah_context>",
-      "",
-      "<agent_thinking>",
-      thinking.content,
-      "</agent_thinking>",
-      "",
-      "<next_decision>",
     ].join("\n");
   }
 }
 
-function isDecision(value: unknown): value is Decision {
+type ParseDecisionResult =
+  | {
+      status: "valid";
+      decision: Decision;
+    }
+  | {
+      status: "invalid";
+      message: string;
+    };
+
+function parseNativeToolDecision(rawDecision: string): ParseDecisionResult {
+  const normalized = stripNativeToolBoundaries(rawDecision.trim());
+  const separatorIndex = normalized.indexOf(TOOL_SEP);
+
+  if (separatorIndex === -1) {
+    return {
+      status: "invalid",
+      message: "FIM decision did not contain DeepSeek native tool separator.",
+    };
+  }
+
+  const name = normalized.slice(0, separatorIndex).trim();
+  const rawArguments = normalized.slice(separatorIndex + TOOL_SEP.length).trim();
+
+  let parsedArguments: unknown;
+  try {
+    parsedArguments = JSON.parse(rawArguments);
+  } catch {
+    return {
+      status: "invalid",
+      message: "FIM native tool decision arguments were not valid JSON.",
+    };
+  }
+
+  if (name === "bash") {
+    if (!isRecord(parsedArguments)) {
+      return {
+        status: "invalid",
+        message: "FIM native bash decision arguments must be an object.",
+      };
+    }
+    return {
+      status: "valid",
+      decision: {
+        name,
+        arguments: parsedArguments as BashToolInput,
+      },
+    };
+  }
+
+  if (name === "io_wait") {
+    if (!isIoWaitArguments(parsedArguments)) {
+      return {
+        status: "invalid",
+        message: "FIM native io_wait decision arguments did not match the schema.",
+      };
+    }
+    return {
+      status: "valid",
+      decision: {
+        name,
+        arguments: parsedArguments,
+      },
+    };
+  }
+
+  if (name === "final") {
+    if (!isFinalArguments(parsedArguments)) {
+      return {
+        status: "invalid",
+        message: "FIM native final decision arguments did not match the schema.",
+      };
+    }
+    return {
+      status: "valid",
+      decision: {
+        name,
+        arguments: parsedArguments,
+      },
+    };
+  }
+
+  return {
+    status: "invalid",
+    message: `Unsupported FIM native decision function: ${name}`,
+  };
+}
+
+function stripNativeToolBoundaries(text: string): string {
+  let value = text.trim();
+
+  for (const prefix of [TOOL_CALLS_BEGIN, TOOL_CALL_BEGIN]) {
+    if (value.startsWith(prefix)) {
+      value = value.slice(prefix.length).trim();
+    }
+  }
+
+  const endIndexes = [TOOL_CALL_END, TOOL_CALLS_END, END_OF_SENTENCE]
+    .map((token) => value.indexOf(token))
+    .filter((index) => index >= 0);
+
+  if (endIndexes.length > 0) {
+    value = value.slice(0, Math.min(...endIndexes)).trim();
+  }
+
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null) {
     return false;
   }
 
-  const record = value as Record<string, unknown>;
-  if (record.type === "final") {
-    return typeof record.content === "string";
+  return !Array.isArray(value);
+}
+
+function isFinalArguments(value: unknown): value is { content: string } {
+  return isRecord(value) && typeof value.content === "string";
+}
+
+function isIoWaitArguments(
+  value: unknown,
+): value is { reason?: string; condition: IoWaitRequest["condition"] } {
+  if (!isRecord(value) || !isRecord(value.condition)) {
+    return false;
   }
 
-  if (record.type === "tool_call") {
-    return record.name === "bash" && typeof record.arguments === "object";
+  if (value.reason !== undefined && typeof value.reason !== "string") {
+    return false;
   }
 
-  if (record.type === "io_wait") {
-    return typeof record.condition === "object" && record.condition !== null;
-  }
-
-  return false;
+  return true;
 }

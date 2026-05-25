@@ -21,6 +21,7 @@ import type {
   UserMessage,
   AgentMessage,
 } from "./environment.js";
+import type { ActiveSkillRunSummary } from "./skill.js";
 
 // ─── Agent Run Status ───────────────────────────────────────────────
 
@@ -58,6 +59,8 @@ export interface AgentRunStateData {
   pendingToolRequest?: ToolRequest;
   pendingReview?: ToolReviewDecision;
   pendingIoWait?: IoWaitRequest;
+
+  activeSkillRuns?: ActiveSkillRunSummary[];
 
   final?: string;
   error?: RunError;
