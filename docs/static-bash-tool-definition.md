@@ -12,16 +12,16 @@ Harness 写死唯一内置工具：
 bash
 ```
 
-但它仍然用通用 tool definition 形状暴露给模型适配层，这样不同模型 provider 的原生 tool calling 都可以映射到同一套内部协议。
+但它仍然用通用 tool definition 形状描述给 DeepSeek FIM adapter。FIM adapter 会把这份定义写入 decision prompt，并在 decision 生成后用同一份 schema 做校验。
 
 ```text
 StaticToolCatalog
   contains exactly one tool: bash
 
-ModelProviderAdapter
+DeepSeekFimAdapter
   receives common ToolDefinition[]
-  sends provider-native tool schema to model
-  normalizes provider-native tool calls into InternalToolCall
+  writes tool description and schema into FIM decision context
+  normalizes FIM decision JSON into InternalToolCall
 
 RunOrchestrator
   receives InternalToolCall
@@ -44,7 +44,7 @@ MCP、memory、skills、sub-agent、tests、code edits 都必须通过 `bash` �
 
 ## Common Tool Definition
 
-这是 harness 内部使用的 provider-agnostic tool definition。
+这是 harness 内部使用的 tool definition。
 
 ```ts
 type ToolName = "bash";
@@ -72,7 +72,7 @@ const STATIC_TOOL_CATALOG = [BASH_TOOL_DEFINITION] as const;
 
 ## Internal Tool Call
 
-无论 provider 原生返回什么格式，模型适配层都归一化为：
+无论 FIM decision 原始文本是什么，模型适配层都尝试归一化为：
 
 ```ts
 type InternalToolCall = {
@@ -83,7 +83,7 @@ type InternalToolCall = {
 };
 ```
 
-如果 provider 不支持原生 tool calling，兼容 adapter 可以把模型 JSON 输出转换成同样的 `InternalToolCall`。这是兼容层，不是主协议。
+因为 FIM 没有 provider-generated tool call id，harness 会生成 `id`，格式建议为 `fim-call-{runId}-{stepIndex}`。
 
 ## Model Turn
 
@@ -108,7 +108,7 @@ type ModelTurn =
     };
 ```
 
-Run state 只消费 `ModelTurn`，不直接消费 provider 原始响应。
+Run state 只消费 `ModelTurn`，不直接消费 FIM 原始文本。
 
 ## Bash Tool Input
 
@@ -269,10 +269,10 @@ Control 示例：
 
 ## Validation
 
-Validation happens after model adapter normalization and before review.
+Validation happens after FIM decision normalization and before review.
 
 ```text
-provider-native tool call
+FIM decision JSON
   -> InternalToolCall
   -> schema validation
   -> ToolRequest
@@ -327,7 +327,7 @@ type ToolRequest =
 
 ## Tool Result
 
-After execution, the result keeps provider-agnostic identity:
+After execution, the result keeps harness-level identity:
 
 ```ts
 type ToolResult = {
@@ -337,21 +337,22 @@ type ToolResult = {
 };
 ```
 
-For native tool-calling providers, the adapter converts `ToolResult` back into the provider's expected tool-result message shape.
+For the FIM adapter, `ToolResult` is rendered into the next step context as an observation. There is no provider-native tool result message.
 
 ## Execution Chain
 
 ```text
-1. ModelProviderAdapter exposes STATIC_TOOL_CATALOG to the model.
-2. Model returns either final content or a native bash tool call.
-3. ModelProviderAdapter normalizes to ModelTurn.
-4. If ModelTurn is final, AgentRunState completes the run.
-5. If ModelTurn is tool_call, harness validates the bash arguments.
-6. Valid arguments become ToolRequest.
-7. ToolRequest enters ToolReviewer.
-8. Approved request is executed by BashSessionManager.
-9. BashSessionManager returns BashObservation.
-10. ToolResult is appended to transcript and sent back through the model adapter next turn.
+1. DeepSeekFimAdapter writes STATIC_TOOL_CATALOG into the FIM decision context.
+2. FIM thinking pass generates reasoning-only text.
+3. FIM decision pass returns final content or a bash tool call decision.
+4. DeepSeekFimAdapter normalizes the decision into ModelTurn.
+5. If ModelTurn is final, AgentRunState completes the run.
+6. If ModelTurn is tool_call, harness validates the bash arguments.
+7. Valid arguments become ToolRequest.
+8. ToolRequest enters ToolReviewer.
+9. Approved request is executed by BashSessionManager.
+10. BashSessionManager returns BashObservation.
+11. ToolResult is appended to transcript and rendered into the next FIM step context.
 ```
 
 ## Implementation Notes

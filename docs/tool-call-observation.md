@@ -10,11 +10,13 @@
 4. Tool review 位于 bash 执行之前。demo 模式下所有请求都 approve。
 5. Observation 只返回本次新增输出窗口和 return code。完整输出持久化到 session log，Agent 通过 bash 原生命令自行翻页查看。
 
-## Model Tool Call Protocol
+## FIM Decision Tool Call Protocol
 
-模型通过 provider 原生 tool calling 请求工具，或返回 final。Harness 不把大段工具使用说明塞进 prompt，也不要求主路径靠模型手写 JSON。
+模型层使用 DeepSeek FIM two-pass。第一通生成 reasoning，第二通生成 decision。Decision 可以是 `tool_call` 或 `final`。
 
-模型适配层把 provider 原生响应归一化为：
+FIM decision grammar 是 harness 自己的协议，不是 provider-native tool calling。
+
+模型适配层把 FIM decision 归一化为：
 
 ```ts
 type ModelTurn =
@@ -49,7 +51,7 @@ type InternalToolCall = {
 }
 ```
 
-如果 provider 不支持原生 tool calling，可以由兼容 adapter 把模型 JSON 输出转换成同样的 `InternalToolCall`。这是兼容层，不是主协议。
+FIM 不提供 provider-generated tool call id，所以 harness 生成 `InternalToolCall.id`。
 
 ## Bash Tool Input
 
@@ -343,7 +345,7 @@ printf '\n__TAH_COMMAND_DONE__ rc=%s cwd=%s\n' "$?" "$PWD"
 
 ## Execution Semantics
 
-1. Model adapter 接收 provider 原生响应。
+1. DeepSeek FIM adapter 完成 thinking pass 和 decision pass。
 2. 如果是 final，结束 run。
 3. 如果是 `bash` tool call，校验 arguments。
 4. 校验通过后构造 `ToolRequest`。
@@ -360,9 +362,9 @@ printf '\n__TAH_COMMAND_DONE__ rc=%s cwd=%s\n' "$?" "$PWD"
 
 ## Tool Description Guidance
 
-工具使用方法主要放在 `bash` tool definition 的 description 和 input schema 里，而不是塞进一大段 system prompt。
+工具使用方法主要放在 `bash` tool definition 的 description 和 input schema 里，而不是塞进一大段 FIM context。
 
-System prompt 只保留高层约束，例如：
+FIM context 只保留高层约束，例如：
 
 ```text
 All external actions must use the provided tools.

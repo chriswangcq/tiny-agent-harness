@@ -16,20 +16,20 @@
 ```text
 RunOrchestrator
   owns: loop, side effects, IO boundaries
-  calls: ModelClient, ToolReviewer, BashSessionManager, TranscriptStore
+  calls: DeepSeekFimAdapter, ToolReviewer, BashSessionManager, ImCliTransport, TranscriptStore
 
 AgentRunState
   owns: status, step index, transcript pointers, pending tool call/review, stop conditions
   exposes: nextEffect(), apply(event)
 
-ModelClient
-  owns: LLM API request/response
+DeepSeekFimAdapter
+  owns: two FIM completions per model step and conversion into ModelTurn
 
-PromptBuilder
-  owns: prompt construction from task, config, transcript, session summaries
+FimPromptBuilder
+  owns: FIM prompt/suffix construction from task, config, transcript, session summaries
 
-ModelProviderAdapter
-  owns: provider-native tool calling conversion into ModelTurn
+ImCliTransport
+  owns: user message receive/send through im CLI
 
 ToolCallValidator
   owns: schema validation and conversion from InternalToolCall to ToolRequest
@@ -79,7 +79,7 @@ type AgentRunState = {
   transcriptPath: string;
   lastEventId?: string;
 
-  pendingModelOutput?: ModelOutput;
+  pendingModelOutput?: FimStepOutput;
   pendingModelTurn?: ModelTurn;
   pendingToolCall?: InternalToolCall;
   pendingToolRequest?: ToolRequest;
@@ -102,28 +102,43 @@ model output -> optional tool validation -> optional tool review -> optional too
 
 ## Model Turn
 
-模型原始响应必须经过 provider adapter，run state 不直接消费 provider 原始格式。
+模型原始响应必须经过 DeepSeek FIM adapter，run state 不直接消费 FIM 原始文本。
 
 ```ts
 type ModelTurn =
   | {
       kind: "final";
       content: string;
+      thinking: AgentThinking;
+      rawDecision: string;
       raw?: unknown;
     }
   | {
       kind: "tool_call";
       toolCall: InternalToolCall;
+      thinking: AgentThinking;
+      rawDecision: string;
       raw?: unknown;
     }
   | {
       kind: "invalid_output";
       message: string;
+      thinking?: AgentThinking;
+      rawDecision?: string;
       raw?: unknown;
     };
 ```
 
 `invalid_output` 不一定让 run 失败。第一版可以把 invalid output 转成 observation，让 Agent 下一轮自我修正。
+
+```ts
+type FimStepOutput = {
+  thinking: AgentThinking;
+  rawDecision: string;
+  turn: ModelTurn;
+  usage?: unknown;
+};
+```
 
 Tool call validation produces either a reviewable request or a recoverable observation.
 
@@ -147,7 +162,7 @@ type ToolCallValidation =
 type NextEffect =
   | {
       type: "call_model";
-      prompt: ModelPrompt;
+      context: ModelStepContext;
     }
   | {
       type: "validate_tool_call";
@@ -203,8 +218,20 @@ type RunEvent =
   | {
       type: "model_output_received";
       stepIndex: number;
-      output: ModelOutput;
+      output: FimStepOutput;
       turn: ModelTurn;
+      timestamp: string;
+    }
+  | {
+      type: "user_message_received";
+      runId: string;
+      message: UserMessage;
+      timestamp: string;
+    }
+  | {
+      type: "agent_message_sent";
+      runId: string;
+      message: AgentMessage;
       timestamp: string;
     }
   | {
@@ -288,10 +315,10 @@ async function runAgent(initialState: AgentRunState, ports: RunPorts) {
         timestamp: ports.clock.now()
       });
 
-      const output = await ports.model.complete(effect.prompt, {
-        tools: ports.tools.staticCatalog
+      const output = await ports.fim.generateTurn(effect.context, {
+        bashTool: ports.tools.bash
       });
-      const turn = ports.modelAdapter.normalize(output);
+      const turn = output.turn;
 
       await record({
         type: "model_output_received",
@@ -507,7 +534,7 @@ Review rejection observation:
 }
 ```
 
-These observations enter the transcript exactly like bash observations, so the next prompt can include them.
+These observations enter the transcript exactly like bash observations, so the next FIM step context can include them.
 
 ## Step Counting
 
@@ -543,7 +570,7 @@ Suggested run directory:
 
 `transcript.jsonl` is append-only and is the audit source.
 
-Prompt files are optional but useful for debugging model behavior without stuffing huge prompt text into every JSONL event.
+Prompt files are optional but useful for debugging model behavior without stuffing huge FIM prompt text into every JSONL event.
 
 ## Resume Semantics
 
