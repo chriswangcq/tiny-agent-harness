@@ -35,10 +35,20 @@ function makeAdapter(): DeepSeekFimAdapter {
   });
 }
 
-function okFimResponse(text: string): Response {
+function okFimResponse(
+  text: string,
+  finishReason?: string | null,
+  completionTokens?: number,
+): Response {
   return {
     ok: true,
-    json: async () => ({ choices: [{ text }] }),
+    json: async () => ({
+      choices: [{ text, finish_reason: finishReason }],
+      usage:
+        completionTokens === undefined
+          ? undefined
+          : { completion_tokens: completionTokens },
+    }),
     text: async () => "",
   } as unknown as Response;
 }
@@ -56,6 +66,23 @@ function stubFimResponses(...texts: string[]) {
   const fetchMock = vi.fn();
   for (const text of texts) {
     fetchMock.mockResolvedValueOnce(okFimResponse(text));
+  }
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+function stubFimResponseChunks(
+  ...chunks: Array<{
+    text: string;
+    finishReason?: string | null;
+    completionTokens?: number;
+  }>
+) {
+  const fetchMock = vi.fn();
+  for (const chunk of chunks) {
+    fetchMock.mockResolvedValueOnce(
+      okFimResponse(chunk.text, chunk.finishReason, chunk.completionTokens),
+    );
   }
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
@@ -154,6 +181,44 @@ describe("DeepSeekFimAdapter", () => {
           arguments: { session: "default", command: "pwd" },
         }),
       );
+    }
+  });
+
+  it("continues FIM completions when the response hits the token limit", async () => {
+    const decisionPrefix = [
+      `bash">`,
+      `<${DSML}parameter name="session" string="true">default</${DSML}parameter>`,
+      `<${DSML}parameter name="command" string="true">ec`,
+    ].join("\n");
+    const decisionSuffix = `ho hi</${DSML}parameter>`;
+    const fetchMock = stubFimResponseChunks(
+      { text: "Need ", finishReason: "length" },
+      { text: "inspect cwd", finishReason: "stop" },
+      { text: decisionPrefix, finishReason: "length" },
+      { text: decisionSuffix, finishReason: "stop" },
+    );
+
+    const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
+      bashTool: BASH_TOOL_DEFINITION,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(String(requestBody(fetchMock, 1).prompt)).toBe(
+      `${MOCK_ENCODED_PREFIX}Need `,
+    );
+    expect(String(requestBody(fetchMock, 3).prompt)).toContain(decisionPrefix);
+
+    expect(output.thinking.content).toBe("Need inspect cwd");
+    expect(output.usage).toEqual({
+      thinking: { finishReasons: ["length", "stop"], continuationRounds: 1 },
+      decision: { finishReasons: ["length", "stop"], continuationRounds: 1 },
+    });
+    expect(output.turn.kind).toBe("tool_call");
+    if (output.turn.kind === "tool_call") {
+      expect(output.turn.toolCall.arguments).toEqual({
+        session: "default",
+        command: "echo hi",
+      });
     }
   });
 

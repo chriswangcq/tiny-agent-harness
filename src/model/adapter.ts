@@ -21,6 +21,30 @@ export type DeepSeekFimConfig = {
   model: string;
   thinkingMaxTokens: number;
   decisionMaxTokens: number;
+  continuationMaxRounds?: number;
+};
+
+type FimCompletionMeta = {
+  finishReasons: Array<string | null | undefined>;
+  continuationRounds: number;
+};
+
+type FimCompletionResult = FimCompletionMeta & {
+  text: string;
+};
+
+type FimChoice = {
+  text?: string;
+  finish_reason?: string | null;
+  finishReason?: string | null;
+};
+
+type FimResponse = {
+  choices?: FimChoice[];
+  usage?: {
+    completion_tokens?: number;
+    completionTokens?: number;
+  };
 };
 
 type Decision =
@@ -120,14 +144,22 @@ export class DeepSeekFimAdapter {
     options: { bashTool: ToolDefinition },
   ): Promise<FimStepOutput> {
     const thinking = await this.generateThinking(context, options.bashTool);
-    const rawDecision = await this.generateDecision(
+    const decision = await this.generateDecision(
       context,
       thinking,
       options.bashTool,
     );
-    const turn = this.parseDecision(context, thinking, rawDecision);
+    const turn = this.parseDecision(context, thinking, decision.text);
 
-    return { thinking, rawDecision, turn };
+    return {
+      thinking,
+      rawDecision: decision.text,
+      turn,
+      usage: {
+        thinking: extractFimMeta(thinking.raw),
+        decision: extractFimMeta(decision.meta),
+      },
+    };
   }
 
   private async generateThinking(
@@ -136,20 +168,23 @@ export class DeepSeekFimAdapter {
   ): Promise<AgentThinking> {
     const messages = this.attachTools(context.messages, bashTool);
     const prompt = this.encodePrompt(messages);
-    const content = await this.completeFim({
+    const completion = await this.completeFim({
       prompt,
       suffix: "</think>",
       maxTokens: this.config.thinkingMaxTokens,
     });
 
-    return { content, raw: { prompt } };
+    return {
+      content: completion.text,
+      raw: { prompt, ...completionMeta(completion) },
+    };
   }
 
   private async generateDecision(
     context: ModelStepContext,
     thinking: AgentThinking,
     bashTool: ToolDefinition,
-  ): Promise<string> {
+  ): Promise<{ text: string; meta: FimCompletionMeta }> {
     const messages = this.attachTools(context.messages, bashTool);
     const basePrefix = this.encodePrompt(messages);
     const sanitized = sanitizeThinkingForDecisionPrompt(thinking.content);
@@ -158,11 +193,16 @@ export class DeepSeekFimAdapter {
       sanitized +
       `</think>\n\n${DSML_TOOL_CALLS_OPEN}\n${DSML_INVOKE_OPEN_PREFIX}`;
 
-    return this.completeFim({
+    const completion = await this.completeFim({
       prompt,
       suffix: `\n${DSML_INVOKE_CLOSE}\n${DSML_TOOL_CALLS_CLOSE}${END_OF_SENTENCE}`,
       maxTokens: this.config.decisionMaxTokens,
     });
+
+    return {
+      text: completion.text,
+      meta: completionMeta(completion),
+    };
   }
 
   private attachTools(
@@ -202,7 +242,41 @@ export class DeepSeekFimAdapter {
     prompt: string;
     suffix: string;
     maxTokens: number;
-  }): Promise<string> {
+  }): Promise<FimCompletionResult> {
+    const maxContinuationRounds = this.config.continuationMaxRounds ?? 4;
+    const finishReasons: Array<string | null | undefined> = [];
+    let text = "";
+    let continuationRounds = 0;
+
+    for (;;) {
+      const chunk = await this.requestFimCompletion({
+        ...input,
+        prompt: input.prompt + text,
+      });
+      text += chunk.text;
+      finishReasons.push(chunk.finishReason);
+
+      if (
+        !shouldContinueFim(chunk, input.maxTokens) ||
+        continuationRounds >= maxContinuationRounds ||
+        chunk.text.length === 0
+      ) {
+        return { text, finishReasons, continuationRounds };
+      }
+
+      continuationRounds++;
+    }
+  }
+
+  private async requestFimCompletion(input: {
+    prompt: string;
+    suffix: string;
+    maxTokens: number;
+  }): Promise<{
+    text: string;
+    finishReason?: string | null;
+    completionTokens?: number;
+  }> {
     const response = await fetch(`${this.config.baseUrl}/completions`, {
       method: "POST",
       headers: {
@@ -224,15 +298,19 @@ export class DeepSeekFimAdapter {
       );
     }
 
-    const data = (await response.json()) as {
-      choices?: Array<{ text?: string }>;
-    };
-    const text = data.choices?.[0]?.text;
+    const data = (await response.json()) as FimResponse;
+    const choice = data.choices?.[0];
+    const text = choice?.text;
     if (typeof text !== "string") {
       throw new Error("DeepSeek FIM response missing choices[0].text");
     }
 
-    return text;
+    return {
+      text,
+      finishReason: choice?.finish_reason ?? choice?.finishReason,
+      completionTokens:
+        data.usage?.completion_tokens ?? data.usage?.completionTokens,
+    };
   }
 
   private parseDecision(
@@ -590,4 +668,46 @@ function isIoWaitArguments(
     return false;
   }
   return true;
+}
+
+function shouldContinueFim(
+  chunk: { finishReason?: string | null; completionTokens?: number },
+  maxTokens: number,
+): boolean {
+  const finishReason = (chunk.finishReason ?? "").toLowerCase();
+  if (finishReason) {
+    return (
+      finishReason === "length" ||
+      finishReason === "max_tokens" ||
+      finishReason === "max_tokens_exceeded"
+    );
+  }
+  return (
+    typeof chunk.completionTokens === "number" &&
+    chunk.completionTokens >= maxTokens
+  );
+}
+
+function completionMeta(value: FimCompletionMeta): FimCompletionMeta {
+  return {
+    finishReasons: value.finishReasons,
+    continuationRounds: value.continuationRounds,
+  };
+}
+
+function extractFimMeta(value: unknown): FimCompletionMeta | undefined {
+  if (!isRecord(value)) return undefined;
+  if (!Array.isArray(value.finishReasons)) return undefined;
+  const continuationRounds = value.continuationRounds;
+  if (typeof continuationRounds !== "number") return undefined;
+  return {
+    finishReasons: value.finishReasons.map((reason) =>
+      typeof reason === "string"
+        ? reason
+        : reason == null
+          ? reason
+          : String(reason),
+    ),
+    continuationRounds,
+  };
 }
