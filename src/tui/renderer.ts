@@ -492,11 +492,7 @@ export class BlessedRenderer implements TuiRenderer {
   }
 
   private updateLoopDetailLayout(selectedFrame: LoopFrame | undefined): void {
-    if (
-      selectedFrame &&
-      this.ui.mode === "browse" &&
-      (this.ui.pane === "loop" || this.ui.pane === "detail")
-    ) {
+    if (selectedFrame) {
       this.loopList.width = "60%";
       this.loopDetailBox.show();
       return;
