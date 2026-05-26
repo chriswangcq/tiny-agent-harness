@@ -392,6 +392,9 @@ describe("ViewModelBuilder", () => {
     expect(frame.phase).toBe("io_wait");
     expect(frame.status).toBe("ok");
     expect(frame.title).toBe("IO wait satisfied");
+    expect(frame.summary).toContain("event=ev-1");
+    expect(frame.summary).toContain("[user@cli] hello");
+    expect(frame.detail).toContain('"kind": "user_message_received"');
   });
 
   // 18
@@ -408,6 +411,7 @@ describe("ViewModelBuilder", () => {
     expect(frame.phase).toBe("environment");
     expect(frame.status).toBe("ok");
     expect(frame.title).toBe("3 events consumed");
+    expect(frame.summary).toBe("ev-1, ev-2, ev-3");
   });
 
   // 19
@@ -447,6 +451,63 @@ describe("ViewModelBuilder", () => {
       expect(item.text).toBe("hello");
       expect(item.sourceEventId).toBe("msg-1");
     }
+  });
+
+  it("sorts conversation items by timestamp with stable insertion order for ties", () => {
+    const b = builderWithRunStarted();
+    b.addImUserMessage({
+      id: "late-user",
+      channel: "cli",
+      role: "user",
+      text: "late",
+      createdAt: "2026-01-01T00:00:03Z",
+    });
+    b.addImAgentMessage({
+      channel: "cli",
+      role: "agent",
+      kind: "status",
+      text: "early agent",
+      createdAt: "2026-01-01T00:00:01Z",
+    });
+    b.addImUserMessage({
+      id: "early-user",
+      channel: "cli",
+      role: "user",
+      text: "early user",
+      createdAt: "2026-01-01T00:00:01Z",
+    });
+
+    expect(b.getViewModel().conversation.map((item) => item.text)).toEqual([
+      "early agent",
+      "early user",
+      "late",
+    ]);
+  });
+
+  it("deduplicates user and agent messages across transcript and IM sources", () => {
+    const b = builderWithRunStarted();
+    const user = makeUserMessage();
+    const agent = makeAgentMessage();
+
+    b.applyEvent({
+      type: "user_message_received",
+      runId: "run-1",
+      message: user,
+      timestamp: user.createdAt,
+    });
+    b.addImUserMessage(user);
+    b.applyEvent({
+      type: "agent_message_sent",
+      runId: "run-1",
+      message: agent,
+      timestamp: agent.createdAt,
+    });
+    b.addImAgentMessage(agent);
+
+    expect(b.getViewModel().conversation.map((item) => item.text)).toEqual([
+      "hello",
+      "processing...",
+    ]);
   });
 
   // 21
@@ -504,7 +565,7 @@ describe("ViewModelBuilder", () => {
     }
     const vm = b.getViewModel();
     expect(vm.conversation).toHaveLength(3);
-    // Should keep the last 3
+    // Should keep the latest 3 after timestamp/order sorting.
     if (vm.conversation[0].kind === "user") {
       expect(vm.conversation[0].text).toBe("msg 2");
     }

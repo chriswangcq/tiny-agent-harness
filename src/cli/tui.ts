@@ -6,20 +6,23 @@ export function runTui(args: string[]): void {
   // Parse --run flag
   let runId: string | undefined;
   let channel: string | undefined;
+  let stateDir: string | undefined;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--run" && i + 1 < args.length) {
       runId = args[i + 1];
     } else if (args[i] === "--channel" && i + 1 < args.length) {
       channel = args[i + 1];
+    } else if (args[i] === "--state-dir" && i + 1 < args.length) {
+      stateDir = args[i + 1];
     }
   }
 
   if (!runId) {
-    console.error("[tiny-agent] Usage: tiny-agent tui --run <runId|latest> [--channel <channel>]");
+    console.error("[tiny-agent] Usage: tiny-agent tui --run <runId|latest> [--channel <channel>] [--state-dir <dir>]");
     process.exit(1);
   }
 
-  const baseDir = path.resolve(".tiny-agent");
+  const baseDir = path.resolve(stateDir ?? ".tiny-agent");
   const runsDir = path.join(baseDir, "runs");
 
   // Resolve "latest"

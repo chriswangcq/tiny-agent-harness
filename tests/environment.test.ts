@@ -113,6 +113,25 @@ describe("Environment", () => {
     expect(resolved).toEqual(event);
   });
 
+  it("waitFor satisfaction does not consume the matched future event", async () => {
+    const env = new Environment();
+
+    const promise = env.waitFor({
+      runId: "run-1",
+      wait: {
+        reason: "waiting for user",
+        condition: { kind: "new_user_message", channel: "default" },
+      },
+    });
+
+    const event = makeUserMessageEvent("e1", "deliver me");
+    env.appendEvent(event);
+
+    await expect(promise).resolves.toEqual(event);
+    expect(env.consumeSince({ runId: "run-1" })).toEqual([event]);
+    expect(env.consumeSince({ runId: "run-1" })).toEqual([]);
+  });
+
   it("waitFor new_user_message waits for the requested channel", async () => {
     const env = new Environment();
 
@@ -157,6 +176,23 @@ describe("Environment", () => {
     });
 
     expect(resolved).toEqual(event);
+  });
+
+  it("waitFor immediate satisfaction does not consume the matched existing event", async () => {
+    const env = new Environment();
+    const event = makeUserMessageEvent("e1", "already here");
+    env.appendEvent(event);
+
+    const resolved = await env.waitFor({
+      runId: "run-1",
+      wait: {
+        reason: "waiting for user",
+        condition: { kind: "new_user_message", channel: "default" },
+      },
+    });
+
+    expect(resolved).toEqual(event);
+    expect(env.consumeSince({ runId: "run-1" })).toEqual([event]);
   });
 
   it("renderReminder formats events", () => {

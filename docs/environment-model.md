@@ -13,7 +13,9 @@ Environment 是 Agent 之外的最新环境事件模型。
 - bash command 完成、超时、被中断
 - skill run started / closed / review pending / review completed
 
-Agent loop 不直接轮询每个外部系统。每轮 loop 开始时，orchestrator 从 Environment 消费新事件，把它们渲染成 system reminder，可以包在 user message / model context 里。
+Agent loop 不直接轮询每个外部系统。每轮 loop 开始时，orchestrator 从 Environment 消费新事件，把它们渲染成 environment reminder / model context。
+
+本 harness 不设长期存在的 `User` 主消息。用户本人也是 Environment 的一部分：IM 输入会先成为 `user_message_received` 事件，再被投影进模型上下文。新鲜的用户消息事件代表当前用户意图，但它仍然通过 Environment 通道进入，而不是另开一个特殊的主消息入口。
 
 `io_wait` 也不直接等待 IM。它等待 Environment 中出现满足条件的事件。
 
@@ -43,7 +45,7 @@ Skill CLI / SkillRunStore
 
 RunOrchestrator
   owns: consume environment events at loop boundary
-  owns: render one-shot events and persistent facts into system reminder
+  owns: render one-shot events and persistent facts into environment context
   owns: wait_io by waiting on Environment.waitFor(...)
 ```
 
@@ -131,10 +133,10 @@ At the start of each model step:
 ```text
 events = environment.consumeSince(runId)
 reminder = renderEnvironmentReminder(events)
-context.messages.push({ role: "system", content: reminder })
+context.messages.push({ role: "latest_reminder", content: reminder })
 ```
 
-The reminder can also be wrapped as a user-context message if the provider path prefers that shape.
+The reminder is rendered as environment context, not as a persistent User main message.
 
 Consumption rules:
 

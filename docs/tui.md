@@ -25,7 +25,7 @@ TUI reads those facts and renders them.
 │ Header: run id / status / step / cwd / model / active sessions / skills    │
 ├────────────────────────────────────────────────────────────────────────────┤
 │ Conversation                                                               │
-│ user messages, agent status, final answers, errors                         │
+│ user messages, agent status replies, errors                                │
 │                                                                            │
 │                                                                            │
 ├────────────────────────────────────────────────────────────────────────────┤
@@ -218,7 +218,7 @@ type ConversationItem =
       kind: "agent";
       timestamp: string;
       text: string;
-      messageKind: "status" | "final" | "error";
+      messageKind: "status" | "error";
     }
   | {
       kind: "system";
@@ -296,10 +296,6 @@ run_started
 model_requested
   -> LoopFrame phase=model status=running title="model requested"
 
-model_output_received(final)
-  -> ConversationItem agent final
-  -> LoopFrame phase=decision status=ok title="final"
-
 model_output_received(tool_call)
   -> LoopFrame phase=decision status=ok title="tool call: bash"
 
@@ -375,8 +371,7 @@ run=run-123 status=waiting_for_io step=7/50 cwd=/repo model=deepseek-v4-pro sess
 显示：
 
 - user IM messages
-- agent status messages
-- final answer
+- agent status messages, including user-facing completion replies sent through IM
 - errors
 
 不显示：
@@ -458,14 +453,38 @@ keep selected logPath and offset in UI state
 - 按 `/` 在当前 log excerpt 内搜索。
 - 完整搜索仍推荐通过 agent 自己用 bash 执行 `rg` / `sed` / `tail`。
 
+## Follow And Selection
+
+Conversation pane 和 Agent Loop pane 默认都保持置底。只有用户进入 browse mode 并用上下键移动当前 pane 时，该 pane 的 follow bottom 会暂停；另一个 pane 仍然可以继续置底。
+
+回到 input mode 时：
+
+- conversation follow bottom 恢复。
+- loop follow bottom 恢复。
+- loop selection 清除。
+
+Conversation 是 transcript 与 IM poll 的合并 projection：
+
+- 先按稳定 message key 去重。
+- 再按 timestamp 升序渲染。
+- timestamp 相同则保持进入 projection 的顺序。
+
+Agent Loop 使用 frame-level selection。选中的是 `LoopFrame.id`，不是 blessed list 的文本行号。这样 step header、展开 detail 或 log path 增加额外行时，选中态仍然指向同一个 loop frame。
+
+当 loop pane 处于 browse mode 且有选中 frame 时，下半屏切成左右两栏：
+
+- 左侧：loop frame list。
+- 右侧：selected frame detail，包括 step、phase、status、summary、detail、logPath。
+
 ## Keyboard
 
 第一版快捷键：
 
 ```text
-Tab          switch focus between conversation and loop player
-j / Down     scroll down
-k / Up       scroll up
+Esc          enter browse mode from input mode
+Tab          switch focus between conversation and loop player in browse mode
+j / Down     scroll down or move selected loop frame down
+k / Up       scroll up or move selected loop frame up
 g            jump to top
 G            jump to bottom
 f            toggle follow mode
@@ -618,7 +637,7 @@ type TuiLimits = {
 3. 上半屏 conversation pane
 4. 下半屏 loop player
 5. live tail transcript
-6. follow / scroll / expand frame
+6. independent follow bottom / scroll / loop frame selection / detail pane
 7. bash log path 和 output excerpt 显示
 8. active skill reminder 显示
 9. `q` 退出 TUI，不停止 run

@@ -12,42 +12,65 @@
 
 ## FIM Decision Tool Call Protocol
 
-模型层使用 DeepSeek V4 FIM two-pass。第一通生成 reasoning，第二通生成 DeepSeek native tool-call frame 的中间内容。
+模型层使用 DeepSeek V4 FIM two-pass。第一通生成 reasoning，第二通生成 DeepSeek V4 DSML tool-call frame 的中间内容。
 
-Decision pass 使用 DeepSeek V4 原生 tool-call special token 边界，但不走 API provider-native tool calling。Harness 手工组装 prompt/suffix，并解析 FIM 填充的中间段。
+Decision pass 使用 DeepSeek V4 DSML tool-call 边界，但不走 API provider-native tool calling。Harness 手工组装 prompt/suffix，并解析 FIM 填充的中间段。
 
 Decision pass 由 harness 预填：
 
 ```text
-<｜Assistant｜></think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>
+<｜Assistant｜><think>
+{thinking_from_pass_1}
+</think>
+
+<｜DSML｜tool_calls>
+<｜DSML｜invoke name="
 ```
 
 并提供 suffix：
 
 ```text
-<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls><｜end▁of▁sentence｜>
 ```
 
 模型只需要补：
 
 ```text
-function_name<｜tool▁sep｜>{json_arguments}
+function_name">
+<｜DSML｜parameter name="param_name" string="true|false">param_value</｜DSML｜parameter>
 ```
 
 允许的 function name：
 
 - `bash`: 外部 bash tool call。
 - `io_wait`: 内部等待请求。
-- `final`: 内部完成请求。
 
 模型适配层把 FIM decision 归一化为：
 
 ```ts
 type ModelTurn =
-  | { kind: "final"; content: string; raw?: unknown }
-  | { kind: "tool_call"; toolCall: InternalToolCall; raw?: unknown }
-  | { kind: "io_wait"; wait: IoWaitRequest; raw?: unknown }
-  | { kind: "invalid_output"; message: string; raw?: unknown };
+  | {
+      kind: "tool_call";
+      toolCall: InternalToolCall;
+      thinking: AgentThinking;
+      rawDecision: string;
+      raw?: unknown;
+    }
+  | {
+      kind: "io_wait";
+      wait: IoWaitRequest;
+      thinking: AgentThinking;
+      rawDecision: string;
+      raw?: unknown;
+    }
+  | {
+      kind: "invalid_output";
+      message: string;
+      thinking?: AgentThinking;
+      rawDecision?: string;
+      raw?: unknown;
+    };
 
 type InternalToolCall = {
   id: string;
@@ -59,21 +82,19 @@ type InternalToolCall = {
 
 请求执行 bash 命令时，tool call name 是 `bash`，arguments 是：
 
-```json
-{
-  "session": "default",
-  "command": "find . -maxdepth 2 -type f | sort",
-  "timeoutMs": 10000
-}
+```text
+bash">
+<｜DSML｜parameter name="session" string="true">default</｜DSML｜parameter>
+<｜DSML｜parameter name="command" string="true">find . -maxdepth 2 -type f | sort</｜DSML｜parameter>
+<｜DSML｜parameter name="timeoutMs" string="false">10000</｜DSML｜parameter>
 ```
 
 请求 session control 时，tool call name 仍然是 `bash`，arguments 是：
 
-```json
-{
-  "control": "poll",
-  "session": "server"
-}
+```text
+bash">
+<｜DSML｜parameter name="control" string="true">poll</｜DSML｜parameter>
+<｜DSML｜parameter name="session" string="true">server</｜DSML｜parameter>
 ```
 
 FIM 不提供 provider-generated tool call id，所以 harness 生成 `InternalToolCall.id`。
@@ -358,12 +379,13 @@ type BashSessionSummary = {
 
 ```bash
 <user command>
-printf '\n__TAH_COMMAND_DONE__ rc=%s cwd=%s\n' "$?" "$PWD"
+printf '\n__TAH_COMMAND_DONE__ id=<command-id> rc=%s cwd=%s\n' "$?" "$PWD"
 ```
 
 规则：
 
 - Marker 写入 session log，方便 debug 和 replay。
+- Marker 必须绑定当前 command id。旧 log 或用户命令输出里的 marker-like 文本不能完成当前命令。
 - Marker 不返回给 Agent 的 observation output。
 - 如果 marker 出现，session 回到 `idle`，并解析 `returnCode` 和最新 `cwd`。
 - 如果 marker 没出现且 timeout 到达，session 可能仍为 `running`，`returnCode` 为 `null`。
@@ -371,7 +393,7 @@ printf '\n__TAH_COMMAND_DONE__ rc=%s cwd=%s\n' "$?" "$PWD"
 ## Execution Semantics
 
 1. DeepSeek FIM adapter 完成 thinking pass 和 decision pass。
-2. 如果是 final，结束 run。
+2. 如果是 `io_wait`，run state 进入 `waiting_for_io`，直到匹配的 environment event 到达。
 3. 如果是 `bash` tool call，校验 arguments。
 4. 校验通过后构造 `ToolRequest`。
 5. `ToolRequest` 进入 review。
@@ -384,6 +406,7 @@ printf '\n__TAH_COMMAND_DONE__ rc=%s cwd=%s\n' "$?" "$PWD"
 12. Observation 只返回自 `lastObservationOffset` 之后的新增输出窗口。
 13. 如果新增输出超过 `maxObservationBytes`，截断并设置 `outputTruncated: true`。
 14. Agent 需要更多上下文时，通过 bash 命令读取 session log 或项目文件。
+15. 任务完成时，Agent 通过 bash 调用 IM CLI 发送用户可见答复，然后返回 `io_wait` 等待下一条用户消息或环境事件。
 
 ## Tool Description Guidance
 
@@ -393,6 +416,6 @@ FIM context 只保留高层约束，例如：
 
 ```text
 All external actions must use the provided tools.
-The only available tool is bash.
-Return final content when the task is complete.
+The only external tool is bash.
+When the task is complete, send the answer through the IM CLI with bash, then return io_wait.
 ```

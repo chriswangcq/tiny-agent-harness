@@ -2,6 +2,8 @@
 
 本文记录 tiny-agent-harness 第一版 run loop、agent run state、effect 和 event 协议。
 
+> Current implementation note: model-level `final` is no longer part of the supported `ModelTurn` contract. Completion replies are sent to the user through IM via the bash tool, then the agent returns `io_wait` to wait for the next environment event.
+
 ## Design Principles
 
 1. Run orchestrator 本质是一个 `for` / `while` loop。
@@ -94,7 +96,6 @@ type AgentRunState = {
 
   activeSkillRuns?: ActiveSkillRunSummary[];
 
-  final?: string;
   error?: RunError;
 };
 ```
@@ -107,7 +108,7 @@ type AgentRunState = {
 model output -> optional tool validation -> optional tool review -> optional tool execution -> observation
 ```
 
-如果模型直接返回 final，则该 run 完成，不再增加新的 tool step。
+如果任务已经完成，模型仍然不直接返回用户可见正文；Agent 应通过 bash 调用 IM CLI 发送答复，然后返回 `io_wait`，让 run 等待下一条用户消息或环境事件。
 
 ## Model Turn
 
@@ -115,13 +116,6 @@ model output -> optional tool validation -> optional tool review -> optional too
 
 ```ts
 type ModelTurn =
-  | {
-      kind: "final";
-      content: string;
-      thinking: AgentThinking;
-      rawDecision: string;
-      raw?: unknown;
-    }
   | {
       kind: "tool_call";
       toolCall: InternalToolCall;
@@ -260,7 +254,7 @@ type NextEffect =
     }
   | {
       type: "stop";
-      reason: "final" | "max_steps" | "failed" | "cancelled";
+      reason: "completed" | "max_steps" | "failed" | "cancelled";
     };
 ```
 
@@ -378,7 +372,6 @@ type RunEvent =
   | {
       type: "run_finished";
       status: "completed" | "failed" | "cancelled";
-      final?: string;
       error?: RunError;
       timestamp: string;
     };
@@ -522,7 +515,6 @@ async function runAgent(initialState: AgentRunState, ports: RunPorts) {
       await record({
         type: "run_finished",
         status: state.status === "completed" ? "completed" : state.status === "cancelled" ? "cancelled" : "failed",
-        final: state.final,
         error: state.error,
         timestamp: ports.clock.now()
       });
@@ -545,11 +537,11 @@ created + run_started
 running + model_requested
   -> waiting_for_model
 
-waiting_for_model + model_output_received(final)
-  -> completed
-
 waiting_for_model + model_output_received(tool_call)
   -> running with pending tool call
+
+waiting_for_model + model_output_received(io_wait)
+  -> waiting_for_io
 
 waiting_for_model + model_output_received(io_wait)
   -> running with pending IO wait
@@ -640,12 +632,12 @@ At the boundary before `call_model`, the orchestrator consumes environment event
 events = environment.consumeSince(runId)
 if events not empty:
   reminder = renderEnvironmentReminder(events)
-  context.messages.push({ role: "system", content: reminder })
+  context.messages.push({ role: "latest_reminder", content: reminder })
   record(environment_events_consumed)
 
 activeSkillRuns = skillRunStore.listActive()
 if activeSkillRuns not empty:
-  context.messages.push({ role: "system", content: renderActiveSkillReminder(activeSkillRuns) })
+  context.messages.push({ role: "latest_reminder", content: renderActiveSkillReminder(activeSkillRuns) })
 ```
 
 Reminder rendering follows the policy in `docs/environment-model.md`: newest events win, large outputs are represented by log paths, and consumed event ids advance the run's environment cursor.
@@ -661,7 +653,7 @@ Invalid output observation:
 ```json
 {
   "kind": "model_output",
-  "message": "Model response did not contain final content or a valid tool call.",
+  "message": "Model response did not contain a valid tool call.",
   "recoverable": true
 }
 ```
@@ -705,7 +697,7 @@ IO wait satisfied observation:
 }
 ```
 
-These observations enter the transcript exactly like bash observations, while the full EnvironmentEvent is also consumed into the next FIM step as a system reminder.
+These observations enter the transcript exactly like bash observations, while the full EnvironmentEvent is also consumed into the next FIM step as environment context.
 
 ## Step Counting
 

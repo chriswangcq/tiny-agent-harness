@@ -27,28 +27,33 @@
 
 ```text
 1. reasoning-only generation
-2. tool-call-or-final decision generation
+2. tool-call-only decision generation
 ```
 
 FIM 的 `prompt + suffix` 形式可以把模型输出夹在两个边界之间，让 harness 控制模型“这一段只能填 thinking”或“这一段只能填 DeepSeek native tool-call middle”。
 
 这不是把 FIM 当普通代码补全用，而是把它当成受约束的 step generator。
 
-Decision pass 贴近 DeepSeek V4 post-train 的 tool-call 格式：
+Decision pass 贴近 DeepSeek V4 post-train 的 DSML tool-call 格式：
 
 ```text
-<｜Assistant｜></think>
-<｜tool▁calls▁begin｜>
-<｜tool▁call▁begin｜>bash<｜tool▁sep｜>{"session":"default","command":"pwd"}
-<｜tool▁call▁end｜>
-<｜tool▁calls▁end｜>
-<｜end▁of▁sentence｜>
+<｜Assistant｜><think>
+{thinking_from_pass_1}
+</think>
+
+<｜DSML｜tool_calls>
+<｜DSML｜invoke name="bash">
+<｜DSML｜parameter name="session" string="true">default</｜DSML｜parameter>
+<｜DSML｜parameter name="command" string="true">pwd</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls><｜end▁of▁sentence｜>
 ```
 
 Harness 只让模型补中间这一段：
 
 ```text
-function_name<｜tool▁sep｜>{json_arguments}
+function_name">
+<｜DSML｜parameter name="param_name" string="true|false">param_value</｜DSML｜parameter>
 ```
 
 ## Module
@@ -59,11 +64,11 @@ DeepSeekFimAdapter
   input: ModelStepContext
   output: ModelTurn
 
-DeepSeekV4NativeToolTemplateRenderer
-  owns: DeepSeek V4 special-token prompt and suffix construction
+DeepSeekV4DsmlToolTemplateRenderer
+  owns: DeepSeek V4 DSML prompt and suffix construction
 
 NativeToolDecisionParser
-  owns: function_name<｜tool▁sep｜>{json_arguments} parsing into ModelTurn
+  owns: DSML invoke/parameter parsing into ModelTurn
 ```
 
 Run orchestrator 仍然只看到一个 `call_model` effect。两次 FIM 调用是 adapter 内部细节。
@@ -82,15 +87,11 @@ RunOrchestrator
 type ModelStepContext = {
   runId: string;
   stepIndex: number;
-  task: string;
-  cwd: string;
-  recentTranscript: AgentObservation[];
-  sessionSummaries: BashSessionSummary[];
-  bashTool: ToolDefinition;
+  messages: V4ChatMessage[];
 };
 ```
 
-The adapter builds a compact plain-text context from this state. Large bash output is not pasted wholesale; observations already contain log paths and offsets.
+The adapter encodes the messages prepared by the orchestrator. There is no special persistent User main message in this harness. User input is part of the Environment; `user_message_received` events are rendered into environment reminders and passed as `latest_reminder` messages. Large bash output is not pasted wholesale; observations already contain log paths and offsets.
 
 ## Pass 1: Generate Thinking
 
@@ -109,9 +110,6 @@ Thinking prompt shape:
 
 ```text
 <｜begin▁of▁sentence｜>{system_prompt}
-
-<｜User｜>
-{task}
 
 {environment_reminder}
 
@@ -137,19 +135,16 @@ type AgentThinking = {
 };
 ```
 
-Thinking is not shown to the user as a final answer. It is recorded in transcript for debugging and self-improvement.
+Thinking is not shown to the user as the user-visible answer. It is recorded in transcript for debugging and self-improvement.
 
 ## Pass 2: Generate Native Tool Decision
 
-The second FIM call generates only the middle of one DeepSeek native tool call.
+The second FIM call generates only the middle of one DeepSeek V4 DSML tool call.
 
 Decision prompt shape:
 
 ```text
 <｜begin▁of▁sentence｜>{system_prompt}
-
-<｜User｜>
-{task}
 
 {environment_reminder}
 
@@ -160,39 +155,43 @@ Decision prompt shape:
 <｜Assistant｜><think>
 {thinking_from_pass_1}
 </think>
-<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>
+
+<｜DSML｜tool_calls>
+<｜DSML｜invoke name="
 ```
 
 Decision suffix:
 
 ```text
-<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls><｜end▁of▁sentence｜>
 ```
 
 The filled middle must be:
 
 ```text
-function_name<｜tool▁sep｜>{json_arguments}
+function_name">
+<｜DSML｜parameter name="param_name" string="true|false">param_value</｜DSML｜parameter>
 ```
 
 Allowed decision functions:
 
 - `bash`: external bash tool call.
 - `io_wait`: internal wait request.
-- `final`: internal completion request.
 
 Examples:
 
 ```text
-bash<｜tool▁sep｜>{"session":"default","command":"pwd && ls -la","timeoutMs":30000}
+bash">
+<｜DSML｜parameter name="session" string="true">default</｜DSML｜parameter>
+<｜DSML｜parameter name="command" string="true">pwd && ls -la</｜DSML｜parameter>
+<｜DSML｜parameter name="timeoutMs" string="false">30000</｜DSML｜parameter>
 ```
 
 ```text
-io_wait<｜tool▁sep｜>{"reason":"Waiting for the user's next message before continuing.","condition":{"kind":"new_user_message","channel":"default"}}
-```
-
-```text
-final<｜tool▁sep｜>{"content":"Done."}
+io_wait">
+<｜DSML｜parameter name="reason" string="true">Waiting for the user's next message before continuing.</｜DSML｜parameter>
+<｜DSML｜parameter name="condition" string="false">{"kind":"new_user_message","channel":"default"}</｜DSML｜parameter>
 ```
 
 This is still a harness decision grammar, but its surface form matches DeepSeek native tool-call training format.
@@ -202,15 +201,16 @@ This is still a harness decision grammar, but its surface form matches DeepSeek 
 The parser receives only the FIM-filled middle:
 
 ```text
-{name}<｜tool▁sep｜>{json}
+{name}">
+<｜DSML｜parameter name="..." string="true|false">...</｜DSML｜parameter>
 ```
 
 Parsing steps:
 
 1. Trim whitespace.
-2. Split once on `<｜tool▁sep｜>`.
-3. Validate function name is one of `bash`, `io_wait`, `final`.
-4. Parse the JSON arguments.
+2. Extract the DSML invoke name and parameters.
+3. Validate function name is one of `bash`, `io_wait`.
+4. Parse parameter values according to their `string` flag.
 5. Normalize into `ModelTurn`.
 6. Reject any extra assistant content before or after the single tool call.
 
@@ -223,40 +223,35 @@ bash(args)
 io_wait(args)
   -> ModelTurn.io_wait
 
-final(args)
-  -> ModelTurn.final
 ```
 
-`io_wait` and `final` are not external tools. They reuse native tool-call framing only because it aligns with DeepSeek V4's post-training format and gives the decision pass one consistent output shape.
+`io_wait` is not an external tool. It reuses native tool-call framing only because it aligns with DeepSeek V4's post-training format and gives the decision pass one consistent output shape.
 
 ## Model Turn
 
 ```ts
 type ModelTurn =
   | {
-      kind: "final";
-      content: string;
-      thinking: AgentThinking;
-      rawDecision: string;
-    }
-  | {
       kind: "tool_call";
       toolCall: InternalToolCall;
       thinking: AgentThinking;
       rawDecision: string;
+      raw?: unknown;
     }
   | {
       kind: "io_wait";
       wait: IoWaitRequest;
       thinking: AgentThinking;
       rawDecision: string;
+      raw?: unknown;
     }
   | {
       kind: "invalid_output";
       message: string;
       thinking?: AgentThinking;
       rawDecision?: string;
-};
+      raw?: unknown;
+    };
 ```
 
 First version supports only one wait condition:
@@ -302,7 +297,7 @@ Decision generation can fail in normal model ways:
 - missing `<｜tool▁sep｜>`
 - unsupported function name
 - arguments are not valid JSON
-- function arguments do not match `bash`, `io_wait`, or `final` schema
+- function arguments do not match `bash` or `io_wait` schema
 - extra assistant content appears before or after the single native tool call middle
 
 Parser-level failures become `ModelTurn.invalid_output`.
@@ -379,7 +374,6 @@ The decision grammar provides:
 
 - native decision function `bash`
 - native decision function `io_wait`
-- native decision function `final`
 - special separator `<｜tool▁sep｜>`
 - JSON argument schemas for each decision function
 

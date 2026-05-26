@@ -33,6 +33,7 @@ export type RunHeaderView = {
 
 export type ConversationItem =
   | {
+      id: string;
       kind: "user";
       timestamp: string;
       channel: string;
@@ -40,12 +41,14 @@ export type ConversationItem =
       sourceEventId?: string;
     }
   | {
+      id: string;
       kind: "agent";
       timestamp: string;
       text: string;
       messageKind: "status" | "error";
     }
   | {
+      id: string;
       kind: "system";
       timestamp: string;
       text: string;

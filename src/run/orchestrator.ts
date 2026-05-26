@@ -1,5 +1,5 @@
 import type { RunEvent } from "../types/run.js";
-import type { FimStepOutput, ModelStepContext, ModelPromptMessage } from "../types/model.js";
+import type { FimStepOutput, ModelStepContext, V4ChatMessage, AgentThinking } from "../types/model.js";
 import type { ToolDefinition, ToolRequest, ToolReviewDecision, ToolCallValidation, AgentObservation } from "../types/tools.js";
 import type { BashObservation } from "../types/bash.js";
 import type { InternalToolCall } from "../types/model.js";
@@ -26,11 +26,11 @@ export interface BashPort {
 }
 
 export interface PromptPort {
-  buildMessages(task: string, history: HistoryItem[]): ModelPromptMessage[];
+  buildMessages(task: string, history: HistoryItem[]): V4ChatMessage[];
 }
 
 export type HistoryItem =
-  | { type: "tool_call"; toolCall: InternalToolCall }
+  | { type: "tool_call"; toolCall: InternalToolCall; thinking?: AgentThinking }
   | { type: "observation"; observation: BashObservation | AgentObservation }
   | { type: "environment_reminder"; content: string };
 
@@ -117,7 +117,7 @@ export class RunOrchestrator {
         const activeSkillRuns = this.ports.listActiveSkillRuns();
         if (activeSkillRuns.length > 0) {
           const reminder = renderActiveSkillReminder(activeSkillRuns);
-          messages.push({ role: "system", content: reminder });
+          messages.push({ role: "latest_reminder", content: reminder });
         }
 
         const context: ModelStepContext = {
@@ -195,7 +195,11 @@ export class RunOrchestrator {
             : undefined);
 
         if (toolCall) {
-          this.history.push({ type: "tool_call", toolCall });
+          this.history.push({
+            type: "tool_call",
+            toolCall,
+            thinking: this.state.data.pendingModelOutput?.thinking,
+          });
         }
         this.history.push({ type: "observation", observation });
 

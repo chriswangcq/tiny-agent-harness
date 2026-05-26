@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import * as path from "node:path";
+
 import type {
   AgentThinking,
   BashToolInput,
@@ -6,6 +10,8 @@ import type {
   ModelStepContext,
   ModelTurn,
   ToolDefinition,
+  V4ChatMessage,
+  V4Tool,
 } from "../types/index.js";
 import type { IoWaitRequest } from "../types/environment.js";
 
@@ -51,41 +57,52 @@ const TOOL_CALLS_BEGIN = "<｜tool▁calls▁begin｜>";
 const TOOL_CALLS_END = "<｜tool▁calls▁end｜>";
 
 // ---------------------------------------------------------------------------
-// io_wait tool schema (for prompt rendering)
+// io_wait tool definition (OpenAI format for V4 encoder)
 // ---------------------------------------------------------------------------
 
-const IO_WAIT_TOOL_SCHEMA = {
-  name: "io_wait",
-  description:
-    "Pause and wait for an external event before continuing. " +
-    "Use this after replying to the user or when you need to wait for user input.",
-  parameters: {
-    type: "object",
-    properties: {
-      reason: {
-        type: "string",
-        description: "Why you are waiting.",
-      },
-      condition: {
-        type: "object",
-        description: "The condition to wait for.",
-        properties: {
-          kind: {
-            type: "string",
-            enum: ["new_user_message", "event"],
-            description: "Type of event to wait for.",
-          },
-          channel: {
-            type: "string",
-            description: "Channel to wait on (for new_user_message).",
-          },
+const IO_WAIT_V4_TOOL: V4Tool = {
+  type: "function",
+  function: {
+    name: "io_wait",
+    description:
+      "Pause and wait for an external event before continuing. " +
+      "Use this after replying to the user or when you need to wait for user input.",
+    parameters: {
+      type: "object",
+      properties: {
+        reason: {
+          type: "string",
+          description: "Why you are waiting.",
         },
-        required: ["kind"],
+        condition: {
+          type: "object",
+          description: "The condition to wait for.",
+          properties: {
+            kind: {
+              type: "string",
+              enum: ["new_user_message", "event"],
+              description: "Type of event to wait for.",
+            },
+            channel: {
+              type: "string",
+              description: "Channel to wait on (for new_user_message).",
+            },
+          },
+          required: ["kind"],
+        },
       },
+      required: ["condition"],
     },
-    required: ["condition"],
   },
 };
+
+// ---------------------------------------------------------------------------
+// Python encoder path
+// ---------------------------------------------------------------------------
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const ENCODE_SCRIPT = path.resolve(__dirname, "../../scripts/encode-prompt.py");
 
 // ---------------------------------------------------------------------------
 // DeepSeekFimAdapter
@@ -117,7 +134,8 @@ export class DeepSeekFimAdapter {
     context: ModelStepContext,
     bashTool: ToolDefinition,
   ): Promise<AgentThinking> {
-    const prompt = this.renderThinkingPrompt(context, bashTool);
+    const messages = this.attachTools(context.messages, bashTool);
+    const prompt = this.encodePrompt(messages);
     const content = await this.completeFim({
       prompt,
       suffix: "</think>",
@@ -132,10 +150,51 @@ export class DeepSeekFimAdapter {
     thinking: AgentThinking,
     bashTool: ToolDefinition,
   ): Promise<string> {
+    const messages = this.attachTools(context.messages, bashTool);
+    const basePrefix = this.encodePrompt(messages);
+    const sanitized = sanitizeThinkingForDecisionPrompt(thinking.content);
+    const prompt =
+      basePrefix +
+      sanitized +
+      `</think>\n\n${DSML_TOOL_CALLS_OPEN}\n${DSML_INVOKE_OPEN_PREFIX}`;
+
     return this.completeFim({
-      prompt: this.renderDecisionPrompt(context, thinking, bashTool),
+      prompt,
       suffix: `\n${DSML_INVOKE_CLOSE}\n${DSML_TOOL_CALLS_CLOSE}${END_OF_SENTENCE}`,
       maxTokens: this.config.decisionMaxTokens,
+    });
+  }
+
+  private attachTools(
+    messages: V4ChatMessage[],
+    bashTool: ToolDefinition,
+  ): V4ChatMessage[] {
+    const bashV4Tool: V4Tool = {
+      type: "function",
+      function: {
+        name: bashTool.name,
+        description: bashTool.description,
+        parameters: bashTool.inputSchema,
+      },
+    };
+
+    const result = [...messages];
+    const sysIdx = result.findIndex((m) => m.role === "system");
+    if (sysIdx !== -1) {
+      const sys = result[sysIdx]!;
+      if (sys.role === "system") {
+        result[sysIdx] = { ...sys, tools: [bashV4Tool, IO_WAIT_V4_TOOL] };
+      }
+    }
+    return result;
+  }
+
+  private encodePrompt(messages: V4ChatMessage[]): string {
+    const input = JSON.stringify({ messages, thinking_mode: "thinking" });
+    return execFileSync("python3", [ENCODE_SCRIPT], {
+      input,
+      encoding: "utf-8",
+      timeout: 10_000,
     });
   }
 
@@ -221,93 +280,27 @@ export class DeepSeekFimAdapter {
       raw: parsed,
     };
   }
+}
 
-  // -----------------------------------------------------------------------
-  // Prompt rendering
-  // -----------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Thinking sanitization
+// ---------------------------------------------------------------------------
 
-  private renderThinkingPrompt(
-    context: ModelStepContext,
-    bashTool: ToolDefinition,
-  ): string {
-    return [
-      this.renderDeepSeekChatContext(context, bashTool),
-      "",
-      "<｜Assistant｜><think>",
-    ].join("\n");
-  }
+function sanitizeThinkingForDecisionPrompt(content: string): string {
+  const withoutThinkTags = content.replace(/<\/?think>/gi, "");
+  const withoutDsmlBlocks = withoutThinkTags
+    .replace(/<｜DSML｜tool_calls>[\s\S]*?(?:<\/｜DSML｜tool_calls>|$)/g, "")
+    .replace(/<｜DSML｜invoke name="[^"]*">[\s\S]*?(?:<\/｜DSML｜invoke>|$)/g, "");
 
-  private renderDecisionPrompt(
-    context: ModelStepContext,
-    thinking: AgentThinking,
-    bashTool: ToolDefinition,
-  ): string {
-    return [
-      this.renderDeepSeekChatContext(context, bashTool),
-      "",
-      "<｜Assistant｜><think>",
-      thinking.content,
-      `</think>\n\n${DSML_TOOL_CALLS_OPEN}\n${DSML_INVOKE_OPEN_PREFIX}`,
-    ].join("\n");
-  }
+  const safeLines = withoutDsmlBlocks
+    .split(/\r?\n/)
+    .filter((line) => !line.includes("｜tool"))
+    .filter((line) => !line.includes("｜DSML｜"))
+    .filter((line) => !line.includes("<tool_call"))
+    .filter((line) => !line.includes("</tool_call>"));
 
-  private renderDeepSeekChatContext(
-    context: ModelStepContext,
-    bashTool: ToolDefinition,
-  ): string {
-    const systemMessages = context.messages
-      .filter((message) => message.role === "system")
-      .map((message) => message.content);
-    const nonSystemMessages = context.messages
-      .filter((message) => message.role !== "system")
-      .map((message) => `[${message.role}]\n${message.content}`);
-
-    const systemPrompt = systemMessages.join("\n\n");
-
-    const bashSchema = jsonDumps({
-      name: bashTool.name,
-      description: bashTool.description,
-      parameters: bashTool.inputSchema,
-    });
-    const ioWaitSchema = jsonDumps(IO_WAIT_TOOL_SCHEMA);
-
-    return [
-      `<｜begin▁of▁sentence｜>${systemPrompt}`,
-      "",
-      "## Tools",
-      "",
-      "You have access to a set of tools to help answer the user's question." +
-        ` You can invoke tools by writing a "${DSML_TOOL_CALLS_OPEN}" block like the following:`,
-      "",
-      DSML_TOOL_CALLS_OPEN,
-      `${DSML_INVOKE_OPEN_PREFIX}$TOOL_NAME">`,
-      `<${DSML}parameter name="$PARAMETER_NAME" string="true|false">$PARAMETER_VALUE${DSML_PARAM_CLOSE}`,
-      "...",
-      DSML_INVOKE_CLOSE,
-      DSML_TOOL_CALLS_CLOSE,
-      "",
-      'String parameters should be specified as is and set `string="true"`. ' +
-        "For all other types (numbers, booleans, arrays, objects), " +
-        'pass the value in JSON format and set `string="false"`.',
-      "",
-      "If thinking_mode is enabled (triggered by <think>), you MUST output your " +
-        "complete reasoning inside <think>...</think> BEFORE any tool calls or final response.",
-      "",
-      "Otherwise, output directly after </think> with tool calls or final response.",
-      "",
-      "### Available Tool Schemas",
-      "",
-      bashSchema,
-      ioWaitSchema,
-      "",
-      "You MUST strictly follow the above defined tool name and parameter schemas to invoke tool calls.",
-      "",
-      "<｜User｜>",
-      `Run: ${context.runId}`,
-      `Step: ${context.stepIndex}`,
-      ...nonSystemMessages,
-    ].join("\n");
-  }
+  const sanitized = safeLines.join("\n").trim();
+  return sanitized || "Prior thinking contained only decision-frame markup and was omitted.";
 }
 
 // ---------------------------------------------------------------------------
@@ -597,37 +590,4 @@ function isIoWaitArguments(
     return false;
   }
   return true;
-}
-
-function jsonDumps(value: unknown): string {
-  const str = JSON.stringify(value);
-  const parts: string[] = [];
-  let inString = false;
-  let escape = false;
-
-  for (let i = 0; i < str.length; i++) {
-    const ch = str[i]!;
-    if (escape) {
-      parts.push(ch);
-      escape = false;
-      continue;
-    }
-    if (ch === "\\" && inString) {
-      parts.push(ch);
-      escape = true;
-      continue;
-    }
-    if (ch === '"') {
-      inString = !inString;
-      parts.push(ch);
-      continue;
-    }
-    if (!inString && (ch === ":" || ch === ",")) {
-      parts.push(ch + " ");
-      continue;
-    }
-    parts.push(ch);
-  }
-
-  return parts.join("");
 }

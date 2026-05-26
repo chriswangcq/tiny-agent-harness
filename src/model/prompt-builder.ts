@@ -1,6 +1,5 @@
 import type {
-  ModelPrompt,
-  ModelPromptMessage,
+  V4ChatMessage,
   BashObservation,
   AgentObservation,
 } from "../types/index.js";
@@ -15,6 +14,7 @@ export type HistoryEntry =
       toolCallId: string;
       name: string;
       arguments: unknown;
+      thinking?: string;
     }
   | {
       role: "tool_result";
@@ -35,7 +35,8 @@ const SYSTEM_MESSAGE =
   "- bash: execute shell commands. Use it for ALL external actions.\n" +
   "- io_wait: pause until the next external event. This is a TOOL CALL, not a shell command. " +
   "Never run io_wait via bash — invoke it directly as a tool.\n\n" +
-  "User messages appear in environment reminders as [user@channel] lines.\n" +
+  "There is no special User main message. User input is part of the environment and appears only in environment reminders as [user@channel] lines.\n" +
+  "Treat new [user@channel] events as current user intent, not as background chatter.\n" +
   "To reply: bash tool → node dist/cli/main.js im send --channel <channel> --kind status --text '<reply>'\n" +
   "After replying or completing work: io_wait tool → wait for the next user message.\n\n" +
   "Workflow: read user message → bash(work) → bash(im send reply) → io_wait.\n" +
@@ -46,46 +47,43 @@ const SYSTEM_MESSAGE =
 // ---------------------------------------------------------------------------
 
 export class PromptBuilder {
-  /**
-   * Build the initial prompt for a new run (no history yet).
-   */
-  buildInitialPrompt(task: string): ModelPrompt {
-    const messages: ModelPromptMessage[] = [
+  buildInitialPrompt(_task: string): { messages: V4ChatMessage[] } {
+    const messages: V4ChatMessage[] = [
       { role: "system", content: SYSTEM_MESSAGE },
-      { role: "user", content: task },
     ];
-
     return { messages };
   }
 
-  /**
-   * Build a prompt that includes prior tool-call / observation history.
-   */
-  buildNextPrompt(task: string, history: HistoryEntry[]): ModelPrompt {
-    const messages: ModelPromptMessage[] = [
+  buildNextPrompt(_task: string, history: HistoryEntry[]): { messages: V4ChatMessage[] } {
+    const messages: V4ChatMessage[] = [
       { role: "system", content: SYSTEM_MESSAGE },
-      { role: "user", content: task },
     ];
 
     for (const entry of history) {
       if (entry.role === "assistant_tool_call") {
         messages.push({
           role: "assistant",
-          content: JSON.stringify({
-            type: "tool_call",
-            id: entry.toolCallId,
-            name: entry.name,
-            arguments: entry.arguments,
-          }),
+          content: "",
+          reasoning: entry.thinking ?? "",
+          tool_calls: [
+            {
+              type: "function",
+              function: {
+                name: entry.name,
+                arguments: JSON.stringify(entry.arguments),
+              },
+            },
+          ],
         });
       } else if (entry.role === "tool_result") {
         messages.push({
-          role: "observation",
+          role: "tool",
+          tool_call_id: entry.toolCallId,
           content: JSON.stringify(entry.observation),
         });
       } else if (entry.role === "environment_reminder") {
         messages.push({
-          role: "system",
+          role: "latest_reminder",
           content: entry.content,
         });
       }

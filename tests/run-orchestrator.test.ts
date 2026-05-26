@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AgentRunState } from "../src/run/state.js";
+import { Environment } from "../src/environment/environment.js";
 import {
   RunOrchestrator,
   type HistoryItem,
@@ -67,6 +68,7 @@ function makeRun(options?: {
   maxSteps?: number;
   envEvents?: EnvironmentEvent[];
   waitEvent?: EnvironmentEvent;
+  environment?: RunPorts["environment"];
   validateResult?: RunPorts["validator"]["validate"];
   reviewDecision?: ToolReviewDecision;
   bashObservation?: BashObservation;
@@ -148,20 +150,20 @@ function makeRun(options?: {
     },
     prompt: {
       buildMessages(task, history) {
+        void task;
         histories.push([...history]);
         return [
           { role: "system", content: "system" },
-          { role: "user", content: task },
           ...history.map((entry) =>
             entry.type === "environment_reminder"
-              ? { role: "system" as const, content: entry.content }
-              : { role: "observation" as const, content: JSON.stringify(entry) },
+              ? { role: "latest_reminder" as const, content: entry.content }
+              : { role: "latest_reminder" as const, content: JSON.stringify(entry) },
           ),
         ];
       },
     },
     bashTool: BASH_TOOL_DEFINITION,
-    environment: {
+    environment: options?.environment ?? {
       appendEvent() {},
       consumeSince(call) {
         consumedCalls.push(call);
@@ -201,6 +203,24 @@ function readTranscript(store: TranscriptStore): RunEvent[] {
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line) as RunEvent);
+}
+
+async function waitForTranscriptCount(
+  store: TranscriptStore,
+  type: RunEvent["type"],
+  count: number,
+): Promise<RunEvent[]> {
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(store.transcriptFilePath)) {
+      const events = readTranscript(store);
+      if (events.filter((event) => event.type === type).length >= count) {
+        return events;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for ${count} transcript events of type ${type}`);
 }
 
 describe("RunOrchestrator", () => {
@@ -294,7 +314,7 @@ describe("RunOrchestrator", () => {
 
     expect(histories).toHaveLength(2);
     expect(histories[1]).toEqual([
-      { type: "tool_call", toolCall },
+      { type: "tool_call", toolCall, thinking: { content: "need bash" } },
       {
         type: "observation",
         observation: expect.objectContaining({
@@ -414,8 +434,8 @@ describe("RunOrchestrator", () => {
 
     // Environment reminder should be in messages
     const messages = contexts[0]!.messages;
-    const envReminder = messages.find(
-      (m) => m.role === "system" && m.content.includes("Environment reminder:"),
+    const envReminder = messages.find((m) =>
+      m.role === "latest_reminder" && m.content.includes("Environment reminder:"),
     );
     expect(envReminder).toBeDefined();
     expect(envReminder!.content).toContain("command_finished");
@@ -424,7 +444,7 @@ describe("RunOrchestrator", () => {
 
     // Skill reminder should also be present
     const skillReminder = messages.find(
-      (m) => m.role === "system" && m.content.includes("Active skill reminder:"),
+      (m) => m.role === "latest_reminder" && m.content.includes("Active skill reminder:"),
     );
     expect(skillReminder).toBeDefined();
     expect(skillReminder!.content).toContain("skillrun-001");
@@ -474,6 +494,72 @@ describe("RunOrchestrator", () => {
           type: "io_wait_satisfied",
           wait,
           event,
+        }),
+      ]),
+    );
+  });
+
+  it("delivers the wait-satisfying user message into the next model context", async () => {
+    const wait: IoWaitRequest = {
+      reason: "need user reply",
+      condition: { kind: "new_user_message", channel: "default" },
+    };
+    const firstMessage: EnvironmentEvent = {
+      id: "msg-env-poem-001",
+      kind: "user_message_received",
+      source: "im",
+      timestamp: "2026-05-25T12:00:00.000Z",
+      message: {
+        id: "msg-poem-001",
+        channel: "default",
+        role: "user",
+        text: "发一首诗",
+        createdAt: "2026-05-25T12:00:00.000Z",
+      },
+    };
+    const secondMessage: EnvironmentEvent = {
+      id: "msg-env-poem-002",
+      kind: "user_message_received",
+      source: "im",
+      timestamp: "2026-05-25T12:00:01.000Z",
+      message: {
+        id: "msg-poem-002",
+        channel: "default",
+        role: "user",
+        text: "继续",
+        createdAt: "2026-05-25T12:00:01.000Z",
+      },
+    };
+    const environment = new Environment();
+    const { orchestrator, transcript, contexts } = makeRun({
+      outputs: [ioWaitOutput(wait), ioWaitOutput(wait)],
+      maxSteps: 2,
+      environment,
+    });
+
+    const runPromise = orchestrator.run();
+
+    await waitForTranscriptCount(transcript, "io_wait_started", 1);
+    environment.appendEvent(firstMessage);
+
+    await waitForTranscriptCount(transcript, "model_requested", 2);
+    expect(contexts).toHaveLength(2);
+    const secondPrompt = contexts[1]!.messages
+      .map((message) => message.content)
+      .join("\n");
+    expect(secondPrompt).toContain("[user@default] 发一首诗");
+
+    await waitForTranscriptCount(transcript, "io_wait_started", 2);
+    environment.appendEvent(secondMessage);
+
+    const endState = await runPromise;
+    expect(endState.status).toBe("failed");
+
+    expect(readTranscript(transcript)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "environment_events_consumed",
+          eventIds: ["msg-env-poem-001"],
         }),
       ]),
     );

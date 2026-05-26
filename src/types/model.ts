@@ -84,13 +84,70 @@ export type ModelPromptMessage = {
   content: string;
 };
 
+// ---------------------------------------------------------------------------
+// V4 chat message types (OpenAI-compatible, for Python encoder)
+// ---------------------------------------------------------------------------
+
+export type V4ChatMessage =
+  | V4SystemMessage
+  | V4UserMessage
+  | V4AssistantMessage
+  | V4ToolMessage
+  | V4LatestReminderMessage;
+
+export type V4SystemMessage = {
+  role: "system";
+  content: string;
+  tools?: V4Tool[];
+};
+
+export type V4UserMessage = {
+  role: "user";
+  content: string;
+};
+
+export type V4AssistantMessage = {
+  role: "assistant";
+  content: string;
+  reasoning?: string;
+  tool_calls?: V4ToolCall[];
+};
+
+export type V4ToolMessage = {
+  role: "tool";
+  tool_call_id: string;
+  content: string;
+};
+
+export type V4LatestReminderMessage = {
+  role: "latest_reminder";
+  content: string;
+};
+
+export type V4Tool = {
+  type: "function";
+  function: {
+    name: string;
+    description?: string;
+    parameters: unknown;
+  };
+};
+
+export type V4ToolCall = {
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
+};
+
 /**
  * Context passed to the FIM adapter for a single model step.
  */
 export type ModelStepContext = {
   runId: string;
   stepIndex: number;
-  messages: ModelPromptMessage[];
+  messages: V4ChatMessage[];
 };
 
 /**

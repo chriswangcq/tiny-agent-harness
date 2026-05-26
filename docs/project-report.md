@@ -126,9 +126,8 @@ Decision pass 允许的 function name 是：
 | --- | --- |
 | `bash` | 唯一外部动作工具，执行命令或 session control。 |
 | `io_wait` | 内部等待请求，不是外部工具。 |
-| `final` | 内部完成请求，不是外部工具。 |
 
-这种做法既利用 DeepSeek V4 tool-call post-training 的输出形式，又不把 provider-native tool calling 变成 harness 的核心协议。orchestrator 只消费归一化后的 `ModelTurn`。
+这种做法既利用 DeepSeek V4 tool-call post-training 的输出形式，又不把 provider-native tool calling 变成 harness 的核心协议。orchestrator 只消费归一化后的 `ModelTurn`。当任务完成时，Agent 仍然通过 `bash` 调用 IM CLI 发送用户可见答复，然后返回 `io_wait` 等待下一条环境事件。
 
 ### 4.3 Bash Tool 与 Session Manager
 

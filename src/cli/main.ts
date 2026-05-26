@@ -18,7 +18,7 @@ import { ImCliTransport } from "../im/transport.js";
 import { SkillRunStore } from "../skill/store.js";
 import type { ToolRequest } from "../types/tools.js";
 import type { BashObservation } from "../types/bash.js";
-import type { ModelPromptMessage } from "../types/model.js";
+import type { V4ChatMessage } from "../types/model.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -55,19 +55,23 @@ function missingApiKeyMessage(): string {
 function parseCliOptions(args: string[]): {
   channel?: string;
   task?: string;
+  stateDir?: string;
 } {
   let channel: string | undefined;
   let task: string | undefined;
+  let stateDir: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--channel" && i + 1 < args.length) {
       channel = args[++i];
     } else if (args[i] === "--task" && i + 1 < args.length) {
       task = args[++i];
+    } else if (args[i] === "--state-dir" && i + 1 < args.length) {
+      stateDir = args[++i];
     }
   }
 
-  return { channel, task };
+  return { channel, task, stateDir };
 }
 
 function convertHistoryItems(items: HistoryItem[]): HistoryEntry[] {
@@ -79,6 +83,7 @@ function convertHistoryItems(items: HistoryItem[]): HistoryEntry[] {
         toolCallId: item.toolCall.id,
         name: item.toolCall.name,
         arguments: item.toolCall.arguments,
+        thinking: item.thinking?.content,
       });
     } else if (item.type === "observation") {
       entries.push({
@@ -233,7 +238,7 @@ async function waitForNewLatestRun(options: {
 }
 
 async function runUnifiedUi(args: string[]): Promise<void> {
-  const { channel: parsedChannel, task } = parseCliOptions(args);
+  const { channel: parsedChannel, task, stateDir } = parseCliOptions(args);
   const channel = parsedChannel ?? process.env.TAH_IM_CHANNEL ?? "default";
   const apiKey = resolveDeepSeekApiKey();
 
@@ -241,7 +246,7 @@ async function runUnifiedUi(args: string[]): Promise<void> {
     die(missingApiKeyMessage());
   }
 
-  const baseDir = path.resolve(".tiny-agent");
+  const baseDir = path.resolve(stateDir ?? ".tiny-agent");
   const runsDir = path.join(baseDir, "runs");
   const launcherDir = path.join(baseDir, "launcher");
   fs.mkdirSync(launcherDir, { recursive: true });
@@ -256,6 +261,8 @@ async function runUnifiedUi(args: string[]): Promise<void> {
     "run",
     "--channel",
     channel,
+    "--state-dir",
+    baseDir,
   ];
   if (task) {
     runArgs.push("--task", task);
@@ -300,7 +307,7 @@ async function runUnifiedUi(args: string[]): Promise<void> {
   console.log("[tiny-agent] Opening TUI. Press m to send the first task.");
 
   const { runTui } = await import("./tui.js");
-  runTui(["--run", runId, "--channel", channel]);
+  runTui(["--run", runId, "--channel", channel, "--state-dir", baseDir]);
 }
 
 async function waitForFirstMessage(
@@ -409,26 +416,31 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   let channel: string | undefined;
   let taskArg: string | undefined;
+  let stateDirArg: string | undefined;
 
   if (args[0] === "run") {
     const parsed = parseCliOptions(args.slice(1));
     channel = parsed.channel;
     taskArg = parsed.task;
+    stateDirArg = parsed.stateDir;
     if (!channel) {
-      die("Usage: tiny-agent run --channel <channel> [--task <task>]");
+      die("Usage: tiny-agent run --channel <channel> [--task <task>] [--state-dir <dir>]");
     }
   } else if (args[0]) {
     const reserved = ["io_wait", "io-wait", "final"];
     if (reserved.includes(args[0])) {
       die(`"${args[0]}" is a tool call, not a CLI command. Do not run it via bash.`);
     }
+    const parsed = parseCliOptions(args.slice(1));
+    channel = parsed.channel;
+    stateDirArg = parsed.stateDir;
     taskArg = args[0];
   } else {
     die(
         "Usage:\n" +
-        "  tiny-agent <task>\n" +
-        "  tiny-agent run --channel <channel> [--task <task>]\n" +
-        "  tiny-agent ui --channel <channel> [--task <task>]",
+        "  tiny-agent <task> [--state-dir <dir>]\n" +
+        "  tiny-agent run --channel <channel> [--task <task>] [--state-dir <dir>]\n" +
+        "  tiny-agent ui --channel <channel> [--task <task>] [--state-dir <dir>]",
     );
   }
 
@@ -445,7 +457,7 @@ async function main(): Promise<void> {
   }
 
   // --- Create directory structure ---
-  const baseDir = path.resolve(".tiny-agent");
+  const baseDir = path.resolve(stateDirArg ?? ".tiny-agent");
   const runsDir = path.join(baseDir, "runs");
   const sessionsDir = path.join(baseDir, "sessions");
   const skillsDir = path.join(baseDir, "skills");
@@ -505,6 +517,20 @@ async function main(): Promise<void> {
   let task: string;
   if (taskArg) {
     task = taskArg;
+    const createdAt = new Date().toISOString();
+    environment.appendEvent({
+      id: `env-task-${runId}`,
+      kind: "user_message_received",
+      source: "im",
+      timestamp: createdAt,
+      message: {
+        id: `task-${runId}`,
+        channel,
+        role: "user",
+        text: taskArg,
+        createdAt,
+      },
+    });
   } else {
     console.log(`[tiny-agent] Waiting for user message on channel: ${channel}`);
     task = await waitForFirstMessage(imTransport, environment, channel);
@@ -549,7 +575,7 @@ async function main(): Promise<void> {
     reviewer,
     bash: adaptBashPort(bashManager),
     prompt: {
-      buildMessages(task: string, history: HistoryItem[]): ModelPromptMessage[] {
+      buildMessages(task: string, history: HistoryItem[]): V4ChatMessage[] {
         const entries = convertHistoryItems(history);
         const hasToolHistory = entries.some(
           (e) => e.role === "assistant_tool_call" || e.role === "tool_result",

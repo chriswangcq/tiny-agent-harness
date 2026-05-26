@@ -92,18 +92,24 @@ Model adapter 输出三种结果：
 ```ts
 type ModelTurn =
   | {
-      kind: "final";
-      content: string;
+      kind: "tool_call";
+      toolCall: InternalToolCall;
+      thinking: AgentThinking;
+      rawDecision: string;
       raw?: unknown;
     }
   | {
-      kind: "tool_call";
-      toolCall: InternalToolCall;
+      kind: "io_wait";
+      wait: IoWaitRequest;
+      thinking: AgentThinking;
+      rawDecision: string;
       raw?: unknown;
     }
   | {
       kind: "invalid_output";
       message: string;
+      thinking?: AgentThinking;
+      rawDecision?: string;
       raw?: unknown;
     };
 ```
@@ -344,9 +350,9 @@ For the FIM adapter, `ToolResult` is rendered into the next step context as an o
 ```text
 1. DeepSeekFimAdapter writes STATIC_TOOL_CATALOG into the FIM decision context.
 2. FIM thinking pass generates reasoning-only text.
-3. FIM decision pass fills the DeepSeek V4 native tool-call middle: `function_name<｜tool▁sep｜>{json_arguments}`.
+3. FIM decision pass fills the DeepSeek V4 DSML tool-call middle: `function_name">...<｜DSML｜parameter ...>`.
 4. DeepSeekFimAdapter normalizes the decision into ModelTurn.
-5. If ModelTurn is final, AgentRunState completes the run.
+5. If ModelTurn is io_wait, AgentRunState waits for the matching environment event.
 6. If ModelTurn is tool_call, harness validates the bash arguments.
 7. Valid arguments become ToolRequest.
 8. ToolRequest enters ToolReviewer.

@@ -59,7 +59,6 @@ export class Environment implements EnvironmentPort {
     this.waiters = remaining;
 
     for (const waiter of matched) {
-      this._state.consumedByRun[waiter.runId] = event.id;
       waiter.resolve(event);
     }
   }
@@ -131,7 +130,6 @@ export class Environment implements EnvironmentPort {
     for (let i = startIndex; i < this._state.events.length; i++) {
       const event = this._state.events[i]!;
       if (this.eventMatchesWait(event, wait)) {
-        this._state.consumedByRun[runId] = event.id;
         return Promise.resolve(event);
       }
     }

@@ -12,6 +12,7 @@ const ptyMock = vi.hoisted(() => {
     private dataHandler: DataHandler | undefined;
     private exitHandler: ExitHandler | undefined;
     private lastCommand = "";
+    private lastMarkerId = "";
 
     constructor(readonly cwd: string) {}
 
@@ -24,9 +25,10 @@ const ptyMock = vi.hoisted(() => {
     }
 
     write(data: string): void {
-      if (data.includes("__TAH_COMMAND_DONE__")) {
+      if (data.includes("__TAH_COMMAND_DONE__") && data.includes("rc=%s cwd=%s")) {
+        this.lastMarkerId = data.match(/__TAH_COMMAND_DONE__ id=([^ ]+)/)?.[1] ?? "";
         if (!this.lastCommand.includes("sleep")) {
-          this.emit(`\n__TAH_COMMAND_DONE__ rc=0 cwd=${this.cwd}\n`);
+          this.emit(`\n__TAH_COMMAND_DONE__ id=${this.lastMarkerId} rc=0 cwd=${this.cwd}\n`);
         }
         return;
       }
@@ -37,6 +39,11 @@ const ptyMock = vi.hoisted(() => {
       if (this.lastCommand.startsWith("printf ")) {
         this.emit(this.lastCommand.slice("printf ".length));
       }
+    }
+
+    finishLastCommand(output = "late", returnCode = 0): void {
+      this.emit(output);
+      this.emit(`\n__TAH_COMMAND_DONE__ id=${this.lastMarkerId} rc=${returnCode} cwd=${this.cwd}\n`);
     }
 
     kill(): void {
@@ -303,5 +310,64 @@ describe("BashSessionManager", () => {
     expect(manager.getSession("slow")?.currentCommand?.status).toBe("timed_out");
 
     await manager.handleControl({ control: "terminate", session: "slow" });
+  });
+
+  it("observes command completion after timeout releases focus", async () => {
+    const { manager } = makeManager();
+
+    const observation = await manager.executeCommandAutoCreate(
+      "slow",
+      "sleep 0.2; printf late",
+      10,
+    );
+
+    expect(observation).toMatchObject({
+      session: "slow",
+      state: "running",
+      returnCode: null,
+      timedOut: true,
+      focusReleased: true,
+    });
+
+    ptyMock.spawned[0]!.finishLastCommand("late", 0);
+
+    const poll = await manager.handleControl({
+      control: "poll",
+      session: "slow",
+    });
+
+    expect(poll).toMatchObject({
+      session: "slow",
+      state: "idle",
+      returnCode: 0,
+      control: "poll",
+    });
+    expect(poll.output).toContain("late");
+    expect(manager.getSession("slow")?.currentCommand).toMatchObject({
+      status: "exited",
+      returnCode: 0,
+    });
+  });
+
+  it("ignores marker-like command output that does not match the active command id", async () => {
+    const { manager } = makeManager();
+
+    const observation = await manager.executeCommandAutoCreate(
+      "logs",
+      'printf "__TAH_COMMAND_DONE__ id=old-command rc=7 cwd=/tmp\\n"',
+      1000,
+    );
+
+    expect(observation).toMatchObject({
+      session: "logs",
+      state: "idle",
+      returnCode: 0,
+      timedOut: undefined,
+      focusReleased: undefined,
+    });
+    expect(manager.getSession("logs")?.currentCommand).toMatchObject({
+      status: "exited",
+      returnCode: 0,
+    });
   });
 });

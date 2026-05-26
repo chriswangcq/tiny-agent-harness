@@ -1,19 +1,28 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DeepSeekFimAdapter } from "../src/model/adapter.js";
 import { parseDsmlDecision } from "../src/model/adapter.js";
 import { BASH_TOOL_DEFINITION } from "../src/tools/catalog.js";
-import type { ModelStepContext } from "../src/types/model.js";
+import type { ModelStepContext, V4ChatMessage } from "../src/types/model.js";
 
 const DSML = "｜DSML｜";
+
+const MOCK_ENCODED_PREFIX =
+  "<｜begin▁of▁sentence｜>System rules\n\n## Tools\n\n...\n<｜latest_reminder｜>Environment reminder:\n[user@default] List files<｜Assistant｜><think>";
+
+vi.mock("node:child_process", () => ({
+  execFileSync: vi.fn(() => MOCK_ENCODED_PREFIX),
+}));
 
 const BASE_CONTEXT: ModelStepContext = {
   runId: "run-test",
   stepIndex: 3,
   messages: [
     { role: "system", content: "System rules" },
-    { role: "user", content: "List files" },
-    { role: "observation", content: "{\"returnCode\":0}" },
-  ],
+    {
+      role: "latest_reminder",
+      content: "Environment reminder:\n[user@default] List files",
+    },
+  ] as V4ChatMessage[],
 };
 
 function makeAdapter(): DeepSeekFimAdapter {
@@ -113,25 +122,25 @@ describe("DeepSeekFimAdapter", () => {
       }),
     });
 
-    // Thinking pass
+    // Thinking pass — prefix from Python encoder, suffix is </think>
     expect(requestBody(fetchMock, 0)).toMatchObject({
       model: "deepseek-v4-pro",
       suffix: "</think>",
       max_tokens: 123,
     });
-    expect(String(requestBody(fetchMock, 0).prompt)).toContain(
-      "<｜Assistant｜><think>",
-    );
+    const thinkingPrompt = String(requestBody(fetchMock, 0).prompt);
+    expect(thinkingPrompt).toBe(MOCK_ENCODED_PREFIX);
 
-    // Decision pass — V4 DSML suffix and prefix
+    // Decision pass — prefix includes thinking content + DSML invoke prefix
     const decisionBody = requestBody(fetchMock, 1);
     expect(decisionBody.suffix).toBe(
       `\n</${DSML}invoke>\n</${DSML}tool_calls><｜end▁of▁sentence｜>`,
     );
     expect(decisionBody.max_tokens).toBe(45);
     const decisionPrompt = String(decisionBody.prompt);
-    expect(decisionPrompt).toContain("## Tools");
-    expect(decisionPrompt).toContain("Available Tool Schemas");
+    expect(decisionPrompt).toContain(MOCK_ENCODED_PREFIX);
+    expect(decisionPrompt).toContain("Need inspect cwd");
+    expect(decisionPrompt).toContain(`</think>\n\n<${DSML}tool_calls>`);
     expect(decisionPrompt).toContain(`<${DSML}invoke name="`);
 
     // Parsed result
@@ -166,6 +175,36 @@ describe("DeepSeekFimAdapter", () => {
         condition: { kind: "new_user_message", channel: "default" },
       });
     }
+  });
+
+  it("sanitizes thinking before injecting it into the decision prompt", async () => {
+    const contaminatedThinking = [
+      "Need answer in IM.",
+      "</think>",
+      `<${DSML}tool_calls>`,
+      `bash<｜tool▁sep｜>{"session":"default","command":"pwd"}`,
+      `</${DSML}tool_calls>`,
+    ].join("\n");
+    const fetchMock = stubFimResponses(
+      contaminatedThinking,
+      dsmlBash({ session: "default", command: "pwd" }),
+    );
+
+    const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
+      bashTool: BASH_TOOL_DEFINITION,
+    });
+
+    const decisionPrompt = String(requestBody(fetchMock, 1).prompt);
+    const injectedThinking = decisionPrompt
+      .split("<｜Assistant｜><think>")
+      .at(-1)!
+      .split("</think>")[0]!;
+
+    expect(output.thinking.content).toBe(contaminatedThinking);
+    expect(injectedThinking).toContain("Need answer in IM.");
+    expect(injectedThinking).not.toContain("</think>");
+    expect(injectedThinking).not.toContain("｜DSML｜");
+    expect(injectedThinking).not.toContain("｜tool");
   });
 
   it("rejects final decisions as unsupported", async () => {
@@ -306,6 +345,28 @@ describe("DeepSeekFimAdapter", () => {
         bashTool: BASH_TOOL_DEFINITION,
       }),
     ).rejects.toThrow("DeepSeek FIM response missing choices[0].text");
+  });
+
+  it("attaches bash and io_wait tools to the first system message", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const mockExec = vi.mocked(execFileSync);
+
+    stubFimResponses(
+      "thinking",
+      dsmlBash({ session: "default", command: "pwd" }),
+    );
+
+    await makeAdapter().generateTurn(BASE_CONTEXT, {
+      bashTool: BASH_TOOL_DEFINITION,
+    });
+
+    const callInput = JSON.parse(mockExec.mock.calls[0]![2]!.input as string);
+    const sysMsg = callInput.messages[0];
+    expect(sysMsg.role).toBe("system");
+    expect(sysMsg.tools).toHaveLength(2);
+    expect(sysMsg.tools[0].function.name).toBe("bash");
+    expect(sysMsg.tools[1].function.name).toBe("io_wait");
+    expect(callInput.thinking_mode).toBe("thinking");
   });
 });
 

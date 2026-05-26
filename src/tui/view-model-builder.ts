@@ -5,7 +5,11 @@
 // then call getViewModel() to snapshot the current state.
 
 import type { RunEvent, AgentRunStateData } from "../types/run.js";
-import type { UserMessage, AgentMessage } from "../types/environment.js";
+import type {
+  UserMessage,
+  AgentMessage,
+  EnvironmentEvent,
+} from "../types/environment.js";
 import type {
   TuiViewModel,
   RunHeaderView,
@@ -15,6 +19,10 @@ import type {
 } from "./types.js";
 import { DEFAULT_TUI_LIMITS } from "./types.js";
 
+type ConversationProjectionItem = ConversationItem & {
+  order: number;
+};
+
 export class ViewModelBuilder {
   private header: RunHeaderView = {
     runId: "",
@@ -23,9 +31,11 @@ export class ViewModelBuilder {
     maxSteps: 0,
     cwd: "",
   };
-  private conversation: ConversationItem[] = [];
+  private conversation: ConversationProjectionItem[] = [];
   private loop: LoopFrame[] = [];
   private frameCounter = 0;
+  private conversationCounter = 0;
+  private seenConversationIds = new Set<string>();
   private readonly limits: TuiLimits;
 
   constructor(limits?: Partial<TuiLimits>) {
@@ -211,7 +221,8 @@ export class ViewModelBuilder {
           phase: "io_wait",
           status: "ok",
           title: "IO wait satisfied",
-          summary: "",
+          summary: formatEnvironmentEventSummary(event.event),
+          detail: JSON.stringify(event.event, null, 2),
         });
         break;
 
@@ -222,12 +233,13 @@ export class ViewModelBuilder {
           phase: "environment",
           status: "ok",
           title: `${event.eventIds.length} events consumed`,
-          summary: "",
+          summary: event.eventIds.join(", "),
         });
         break;
 
       case "agent_message_sent":
-        this.conversation.push({
+        this.addConversationItem({
+          id: agentConversationId(event.message),
           kind: "agent",
           timestamp: event.timestamp,
           text: event.message.text,
@@ -236,7 +248,8 @@ export class ViewModelBuilder {
         break;
 
       case "user_message_received":
-        this.conversation.push({
+        this.addConversationItem({
+          id: userConversationId(event.message),
           kind: "user",
           timestamp: event.timestamp,
           channel: event.message.channel,
@@ -264,13 +277,9 @@ export class ViewModelBuilder {
     }
   }
 
-  private seenImUserIds = new Set<string>();
-  private seenImOutboxTimestamps = new Set<string>();
-
   addImUserMessage(msg: UserMessage): void {
-    if (this.seenImUserIds.has(msg.id)) return;
-    this.seenImUserIds.add(msg.id);
-    this.conversation.push({
+    this.addConversationItem({
+      id: userConversationId(msg),
       kind: "user",
       timestamp: msg.createdAt,
       channel: msg.channel,
@@ -280,10 +289,8 @@ export class ViewModelBuilder {
   }
 
   addImAgentMessage(msg: AgentMessage): void {
-    const key = `${msg.createdAt}-${msg.text.slice(0, 50)}`;
-    if (this.seenImOutboxTimestamps.has(key)) return;
-    this.seenImOutboxTimestamps.add(key);
-    this.conversation.push({
+    this.addConversationItem({
+      id: agentConversationId(msg),
       kind: "agent",
       timestamp: msg.createdAt,
       text: msg.text,
@@ -305,17 +312,18 @@ export class ViewModelBuilder {
   }
 
   getViewModel(): TuiViewModel {
+    const sortedConversation = [...this.conversation].sort(compareConversationItems);
     const conversation =
-      this.conversation.length > this.limits.maxConversationItems
-        ? this.conversation.slice(-this.limits.maxConversationItems)
-        : [...this.conversation];
+      sortedConversation.length > this.limits.maxConversationItems
+        ? sortedConversation.slice(-this.limits.maxConversationItems)
+        : sortedConversation;
     const loop =
       this.loop.length > this.limits.maxLoopFrames
         ? this.loop.slice(-this.limits.maxLoopFrames)
         : [...this.loop];
     return {
       run: { ...this.header },
-      conversation,
+      conversation: conversation.map(({ order: _order, ...item }) => item),
       loop,
       sessions: [],
       activeSkills: [],
@@ -326,4 +334,55 @@ export class ViewModelBuilder {
     this.frameCounter++;
     this.loop.push({ ...frame, id: `frame-${this.frameCounter}` });
   }
+
+  private addConversationItem(item: ConversationItem): void {
+    if (this.seenConversationIds.has(item.id)) return;
+    this.seenConversationIds.add(item.id);
+    this.conversationCounter++;
+    this.conversation.push({ ...item, order: this.conversationCounter });
+  }
+}
+
+function userConversationId(message: UserMessage): string {
+  return `user:${message.id}`;
+}
+
+function agentConversationId(message: AgentMessage): string {
+  return `agent:${message.createdAt}:${message.kind}:${message.text}`;
+}
+
+function compareConversationItems(
+  left: ConversationProjectionItem,
+  right: ConversationProjectionItem,
+): number {
+  const timeDiff = timestampMs(left.timestamp) - timestampMs(right.timestamp);
+  if (timeDiff !== 0) return timeDiff;
+  return left.order - right.order;
+}
+
+function timestampMs(timestamp: string): number {
+  const ms = Date.parse(timestamp);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function formatEnvironmentEventSummary(event: EnvironmentEvent): string {
+  switch (event.kind) {
+    case "user_message_received":
+      return `event=${event.id} [user@${event.message.channel}] ${truncateForSummary(event.message.text)}`;
+    case "session_state_changed":
+      return `event=${event.id} session=${event.session} ${event.previousState}->${event.nextState}`;
+    case "command_finished":
+      return `event=${event.id} command_finished session=${event.session} rc=${event.returnCode}`;
+    case "command_timed_out":
+      return `event=${event.id} command_timed_out session=${event.session}`;
+    case "skill_run_started":
+    case "skill_run_closed":
+    case "skill_review_pending":
+    case "skill_review_completed":
+      return `event=${event.id} ${event.kind} skill=${event.skill}`;
+  }
+}
+
+function truncateForSummary(text: string, maxLength = 80): string {
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength - 3)}...`;
 }

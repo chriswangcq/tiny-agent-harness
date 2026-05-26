@@ -29,7 +29,7 @@ ImCliTransport
 
 RunOrchestrator
   owns: when to receive initial task
-  owns: when to send final/status messages
+  owns: when to send status/error messages
 
 AgentRunState
   owns: recorded user messages as run events
@@ -51,7 +51,6 @@ Recommended command shape:
 ```bash
 im recv --channel default --cursor <cursor> --json
 im send --channel default --kind status --text "Working..."
-im send --channel default --kind final --text "Done."
 im ack --channel default --message-id <id>
 ```
 
@@ -85,7 +84,7 @@ Outgoing agent message:
 type AgentMessage = {
   channel: string;
   role: "agent";
-  kind: "status" | "final" | "error";
+  kind: "status" | "error";
   text: string;
   runId?: string;
   createdAt: string;
@@ -93,7 +92,7 @@ type AgentMessage = {
 };
 ```
 
-`kind=status` is optional progress output. `kind=final` is the answer when the run completes.
+`kind=status` covers both optional progress output and user-facing task replies. `kind=error` is used when the harness cannot deliver normal progress or completion information.
 
 ## Transport Port
 
@@ -171,8 +170,8 @@ First version:
 - allow the Agent to submit `io_wait` for a new user message
 - while in `waiting_for_io`, do not call the model or execute bash
 - resume the Agent loop when the wait condition is satisfied
-- run until final / failed / cancelled
-- send final or error
+- run until completed / failed / cancelled
+- send status or error
 
 Defer multi-message live chat during a run.
 
@@ -240,7 +239,7 @@ run does not start
 CLI exits with error
 ```
 
-If `im send final` fails after a run completes:
+If the completion `im send --kind status` delivery fails after a run completes:
 
 ```text
 run remains completed

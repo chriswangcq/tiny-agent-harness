@@ -11,10 +11,12 @@ const COMPLETION_MARKER = "__TAH_COMMAND_DONE__";
 
 /**
  * The marker command appended after every user command.
- * It prints the marker, the exit code of the preceding command, and the
- * current working directory -- all on a single line.
+ * It prints the command-specific marker id, the exit code of the preceding
+ * command, and the current working directory -- all on a single line.
  */
-const MARKER_COMMAND = `printf '\\n${COMPLETION_MARKER} rc=%s cwd=%s\\n' "$?" "$PWD"`;
+function markerCommand(commandId: string): string {
+  return `printf '\\n${COMPLETION_MARKER} id=${commandId} rc=%s cwd=%s\\n' "$?" "$PWD"`;
+}
 
 // ---------------------------------------------------------------------------
 // BashSession
@@ -49,6 +51,7 @@ export class BashSession {
   private totalBytes = 0;
   private lastObservationOffset = 0;
   private markerSearchStart = 0;
+  private activeMarkerId: string | null = null;
   private truncatedCount = 0;
 
   state: BashSessionState = "idle";
@@ -214,6 +217,7 @@ export class BashSession {
     const effectiveTimeout = timeoutMs ?? this.defaultTimeoutMs;
     const startOffset = this.totalBytes;
     this.markerSearchStart = this.outputBuffer.length;
+    this.activeMarkerId = commandId;
 
     // Record current command
     this.currentCommand = {
@@ -227,12 +231,16 @@ export class BashSession {
     this.state = "running";
     this.updatedAt = new Date().toISOString();
 
+    // Start waiting before writing. Test PTYs and some real PTYs can emit output
+    // synchronously from write(), so the marker waiter must exist first.
+    const markerWait = this.waitForMarker(effectiveTimeout);
+
     // Write the command + marker
     this.pty.write(`${command}\n`);
-    this.pty.write(`${MARKER_COMMAND}\n`);
+    this.pty.write(`${markerCommand(commandId)}\n`);
 
     // Wait for marker or timeout
-    const result = await this.waitForMarker(effectiveTimeout);
+    const result = await markerWait;
 
     const endOffset = this.totalBytes;
 
@@ -344,29 +352,44 @@ export class BashSession {
   }
 
   private checkForMarker(): void {
-    if (!this.markerResolve) return;
+    const info = this.findCompletionMarker();
+    if (!info) return;
 
-    // Only search for markers in output produced after the current command started
+    this.completeCurrentCommand(info);
+
+    if (this.markerResolve) {
+      this.markerResolve(info);
+      this.markerResolve = null;
+    }
+  }
+
+  private findCompletionMarker(): { returnCode: number; cwd: string } | null {
+    if (!this.activeMarkerId) return null;
+
+    // Only search for markers in output produced after the current command started.
+    // The marker id must match the active command so old session-log output cannot
+    // complete the current command.
     const searchRegion = this.outputBuffer.substring(this.markerSearchStart);
-    const markerIndex = searchRegion.lastIndexOf(COMPLETION_MARKER);
-    if (markerIndex === -1) return;
+    const markerIndex = searchRegion.lastIndexOf(
+      `${COMPLETION_MARKER} id=${this.activeMarkerId}`,
+    );
+    if (markerIndex === -1) return null;
 
     const lineStart = markerIndex;
     const lineEnd = searchRegion.indexOf("\n", lineStart);
-    if (lineEnd === -1) return;
+    if (lineEnd === -1) return null;
 
     const markerLine = searchRegion.substring(lineStart, lineEnd);
 
     // Require rc=<number> to distinguish real marker output from PTY echo
     const rcMatch = markerLine.match(/rc=(-?\d+)/);
-    if (!rcMatch) return;
+    if (!rcMatch) return null;
 
     const cwdMatch = markerLine.match(/cwd=(.+)$/);
     const returnCode = parseInt(rcMatch[1], 10);
     const cwd = cwdMatch ? cwdMatch[1].trim() : this.cwd;
 
-    this.markerResolve({ returnCode, cwd });
-    this.markerResolve = null;
+    return { returnCode, cwd };
   }
 
   private waitForMarker(
@@ -374,35 +397,36 @@ export class BashSession {
   ): Promise<{ timedOut: boolean; returnCode: number; cwd: string }> {
     return new Promise((resolve) => {
       // Check if marker already in buffer (only in the current command's region)
-      const searchRegion = this.outputBuffer.substring(this.markerSearchStart);
-      const markerIndex = searchRegion.lastIndexOf(COMPLETION_MARKER);
-      if (markerIndex !== -1) {
-        const lineStart = markerIndex;
-        const lineEnd = searchRegion.indexOf("\n", lineStart);
-        if (lineEnd !== -1) {
-          const markerLine = searchRegion.substring(lineStart, lineEnd);
-          const rcMatch = markerLine.match(/rc=(-?\d+)/);
-          // Only resolve if this is a real marker (not just an echo)
-          if (rcMatch) {
-            const cwdMatch = markerLine.match(/cwd=(.+)$/);
-            const returnCode = parseInt(rcMatch[1], 10);
-            const cwd = cwdMatch ? cwdMatch[1].trim() : this.cwd;
-            resolve({ timedOut: false, returnCode, cwd });
-            return;
-          }
-        }
+      const existing = this.findCompletionMarker();
+      if (existing) {
+        this.completeCurrentCommand(existing);
+        resolve({ timedOut: false, ...existing });
+        return;
       }
 
       const timer = setTimeout(() => {
-        this.markerResolve = null;
         resolve({ timedOut: true, returnCode: -1, cwd: this.cwd });
       }, timeoutMs);
 
       this.markerResolve = (info) => {
         clearTimeout(timer);
+        this.completeCurrentCommand(info);
         resolve({ timedOut: false, ...info });
       };
     });
+  }
+
+  private completeCurrentCommand(info: { returnCode: number; cwd: string }): void {
+    this.cwd = info.cwd;
+    this.activeMarkerId = null;
+    if (this.currentCommand && this.currentCommand.status !== "interrupted") {
+      this.currentCommand.status = "exited";
+      this.currentCommand.returnCode = info.returnCode;
+    }
+    if (this.state !== "terminated") {
+      this.state = "idle";
+    }
+    this.updatedAt = new Date().toISOString();
   }
 
   private getOutputSince(offset: number): string {
