@@ -56,16 +56,20 @@ describe("TuiInteractionState", () => {
     expect(state.followBottom).toEqual({ conversation: false, loop: true });
   });
 
-  it("returning to input mode clears selection and restores follow bottom", () => {
+  it("returning to input mode restores follow bottom and sync selects the latest frame", () => {
     const state = new TuiInteractionState();
+    const frames = [frame("a", 0), frame("b", 1)];
 
-    state.enterBrowse([frame("a", 0)], "loop");
-    state.moveSelection([frame("a", 0)], -1);
+    state.enterBrowse(frames, "loop");
+    state.moveSelection(frames, -1);
     state.enterInput();
 
     expect(state.mode).toBe("input");
     expect(state.selectedLoopFrameId).toBeUndefined();
     expect(state.followBottom).toEqual({ conversation: true, loop: true });
+
+    state.syncWithFrames(frames);
+    expect(state.selectedLoopFrameId).toBe("b");
   });
 
   it("syncs selection to the latest frame when following bottom", () => {
@@ -93,6 +97,16 @@ describe("TuiInteractionState", () => {
 
     state.leaveDetail(frames);
     expect(state.pane).toBe("loop");
+    expect(state.selectedLoopFrameId).toBe("b");
+  });
+
+  it("input mode keeps cursor on newest frame as frames append", () => {
+    const state = new TuiInteractionState();
+
+    state.syncWithFrames([frame("a", 0)]);
+    expect(state.selectedLoopFrameId).toBe("a");
+
+    state.syncWithFrames([frame("a", 0), frame("b", 1)]);
     expect(state.selectedLoopFrameId).toBe("b");
   });
 });

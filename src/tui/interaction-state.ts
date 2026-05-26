@@ -97,7 +97,15 @@ export class TuiInteractionState {
   }
 
   syncWithFrames(frames: LoopFrame[]): void {
-    if (this.mode !== "browse" || (this.pane !== "loop" && this.pane !== "detail")) return;
+    if (frames.length === 0) {
+      this.selectedLoopFrameId = undefined;
+      return;
+    }
+    if (this.mode === "input") {
+      this.selectLastLoopFrame(frames);
+      return;
+    }
+    if (this.pane !== "loop" && this.pane !== "detail") return;
     this.ensureLoopSelection(frames);
     if (this.pane === "loop" && this.followBottom.loop) {
       this.selectLastLoopFrame(frames);
