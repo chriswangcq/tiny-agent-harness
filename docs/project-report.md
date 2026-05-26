@@ -135,7 +135,7 @@ Decision pass 允许的 function name 是：
 
 `src/bash` 基于 `node-pty` 管理长期 session，支持：
 
-- 普通命令：`{ session, command, timeoutMs }`
+- 普通命令：`{ command, session?, timeoutMs? }`，省略 session 时归一化为 `default`
 - 控制命令：`list`、`create`、`status`、`poll`、`sendInput`、`interrupt`、`terminate`、`restart`
 
 命令执行时会注入 completion marker 来提取 return code 和 cwd。timeout 只释放 agent focus，不 kill 进程；长任务可以继续运行，后续通过 `poll`、`sendInput`、`interrupt` 或 `restart` 管理。

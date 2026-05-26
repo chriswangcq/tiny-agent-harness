@@ -70,11 +70,6 @@ export class ToolCallValidator {
     toolCallId: string,
     args: BashCommandInput,
   ): ToolCallValidation {
-    if (!isNonEmptyString(args.session)) {
-      return invalid(
-        "Invalid bash tool arguments: command input requires a non-empty session.",
-      );
-    }
     if (!isNonEmptyString(args.command)) {
       return invalid(
         "Invalid bash tool arguments: command input requires a non-empty command.",
@@ -85,12 +80,13 @@ export class ToolCallValidator {
       typeof args.timeoutMs === "number" && args.timeoutMs > 0
         ? args.timeoutMs
         : DEFAULT_TIMEOUT_MS;
+    const session = isNonEmptyString(args.session) ? args.session : "default";
 
     const request: ToolRequest = {
       kind: "command",
       toolName: "bash",
       toolCallId,
-      session: args.session,
+      session,
       command: args.command,
       timeoutMs,
     };

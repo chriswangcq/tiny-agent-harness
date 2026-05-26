@@ -124,7 +124,7 @@ Run state 只消费 `ModelTurn`，不直接消费 FIM 原始文本。
 type BashToolInput = BashCommandInput | BashControlInput;
 
 type BashCommandInput = {
-  session: string;
+  session?: string;
   command: string;
   timeoutMs?: number;
 };
@@ -182,15 +182,15 @@ Control 示例：
   "oneOf": [
     {
       "title": "BashCommandInput",
-      "required": ["session", "command"],
+      "required": ["command"],
       "properties": {
         "session": {
           "type": "string",
-          "description": "Persistent bash session id, such as default, server, test, or scratch."
+          "description": "Optional persistent bash session id. Defaults to default when omitted."
         },
         "command": {
           "type": "string",
-          "description": "Bash command to execute in the specified session."
+          "description": "Bash command to execute in the selected session."
         },
         "timeoutMs": {
           "type": "number",
@@ -291,7 +291,7 @@ Invalid arguments produce a synthetic observation instead of executing:
 ```json
 {
   "kind": "tool_validation",
-  "message": "Invalid bash tool arguments: command input requires session and command.",
+  "message": "Invalid bash tool arguments: command input requires a non-empty command.",
   "recoverable": true
 }
 ```

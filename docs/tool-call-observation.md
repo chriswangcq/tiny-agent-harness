@@ -101,13 +101,13 @@ FIM 不提供 provider-generated tool call id，所以 harness 生成 `InternalT
 
 ## Bash Tool Input
 
-所有 command request 必须显式指定 `session`。
+Command request 可以省略 `session`；省略或空字符串会在 validator 中归一化为 `default`。内部 `ToolRequest` 仍然持有显式 session，方便审计和执行。
 
 ```ts
 type BashToolInput = BashCommandInput | BashControlInput;
 
 type BashCommandInput = {
-  session: string;
+  session?: string;
   command: string;
   timeoutMs?: number; // default: 30000
 };

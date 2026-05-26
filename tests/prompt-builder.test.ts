@@ -11,6 +11,9 @@ describe("PromptBuilder", () => {
       role: "system",
       content: expect.stringContaining("two tools: bash and io_wait"),
     });
+    expect(prompt.messages[0]!.content).toContain("bash command fields");
+    expect(prompt.messages[0]!.content).toContain("Thinking is reasoning-only");
+    expect(prompt.messages[0]!.content).not.toContain("DSML");
     expect(prompt.messages[0]!.content).toContain("no special User main message");
     expect(prompt.messages[0]!.content).toContain("role=user for chat-template compatibility");
   });

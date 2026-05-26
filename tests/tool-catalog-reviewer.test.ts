@@ -39,6 +39,19 @@ describe("static tool catalog", () => {
     }
   });
 
+  it("lets command inputs omit session so the validator can default it", () => {
+    const schema = BASH_TOOL_DEFINITION.inputSchema as BashInputSchema;
+    const commandInput = schema.oneOf?.find(
+      (variant) => variant.title === "BashCommandInput",
+    );
+
+    expect(commandInput?.required).toEqual(["command"]);
+    expect(commandInput?.properties?.session).toEqual({
+      type: "string",
+      description: "Optional persistent bash session id. Defaults to default when omitted.",
+    });
+  });
+
   it("keeps session controls and sendInput separate in schema", () => {
     const schema = BASH_TOOL_DEFINITION.inputSchema as BashInputSchema;
     const sessionControl = schema.oneOf?.find(

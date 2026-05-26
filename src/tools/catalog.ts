@@ -9,17 +9,17 @@ const BashToolInputSchema: JsonSchema = {
   oneOf: [
     {
       title: "BashCommandInput",
-      required: ["session", "command"],
+      required: ["command"],
       properties: {
         session: {
           type: "string",
           description:
-            "Persistent bash session id, such as default, server, test, or scratch.",
+            "Optional persistent bash session id. Defaults to default when omitted.",
         },
         command: {
           type: "string",
           description:
-            "Bash command to execute in the specified session.",
+            "Bash command to execute in the selected session.",
         },
         timeoutMs: {
           type: "number",

@@ -130,8 +130,8 @@ export class ViewModelBuilder {
               summary: turn.message,
               detail: formatDetail([
                 ["message", turn.message],
-                ["thinking", turn.thinking?.content],
-                ["raw decision", turn.rawDecision],
+                ["thinking", compactLongText(turn.thinking?.content)],
+                ["raw decision", compactLongText(turn.rawDecision)],
                 ["raw", turn.raw],
               ]),
             });
@@ -203,19 +203,34 @@ export class ViewModelBuilder {
         break;
 
       case "tool_execution_finished":
-        this.pushFrame({
-          stepIndex: event.stepIndex,
-          timestamp: event.timestamp,
-          phase: "tool",
-          status: event.observation.returnCode === 0 ? "ok" : "error",
-          title: `bash finished rc=${event.observation.returnCode}`,
-          summary: event.observation.output?.slice(0, 200) ?? "",
-          logPath: event.observation.outputLogPath,
-          detail: formatDetail([
-            ["request", event.request],
-            ["observation", event.observation],
-          ]),
-        });
+        {
+          const timedOut = event.observation.timedOut === true;
+          const status = timedOut
+            ? "waiting"
+            : event.observation.returnCode === 0
+              ? "ok"
+              : "error";
+          const title = timedOut
+            ? "bash timed out, focus released"
+            : `bash finished rc=${event.observation.returnCode}`;
+          const summary = timedOut
+            ? `session=${event.observation.session ?? "unknown"} still running`
+            : event.observation.output?.slice(0, 200) ?? "";
+
+          this.pushFrame({
+            stepIndex: event.stepIndex,
+            timestamp: event.timestamp,
+            phase: "tool",
+            status,
+            title,
+            summary,
+            logPath: event.observation.outputLogPath,
+            detail: formatDetail([
+              ["request", event.request],
+              ["observation", event.observation],
+            ]),
+          });
+        }
         break;
 
       case "observation_appended":
@@ -377,6 +392,23 @@ export class ViewModelBuilder {
         ? "model completed with invalid output"
         : "model completed";
     frame.summary = formatModelOutputSummary(event.turn);
+    if (event.turn.kind === "invalid_output") {
+      frame.detail = formatDetail([
+        ["message", event.turn.message],
+        ["thinking", compactLongText(event.output.thinking.content)],
+        ["raw decision", compactLongText(event.output.rawDecision)],
+        [
+          "turn",
+          {
+            kind: event.turn.kind,
+            message: event.turn.message,
+          },
+        ],
+        ["usage", event.output.usage],
+      ]);
+      return;
+    }
+
     frame.detail = formatDetail([
       ["thinking", event.output.thinking.content],
       ["thinking raw", event.output.thinking.raw],
@@ -492,6 +524,20 @@ function formatDetail(
 function formatDetailValue(value: unknown): string {
   if (typeof value === "string") return value;
   return JSON.stringify(value, null, 2);
+}
+
+function compactLongText(value: string | undefined, maxLength = 2400): string | undefined {
+  if (value === undefined || value.length <= maxLength) return value;
+  const headLength = Math.floor(maxLength * 0.65);
+  const tailLength = maxLength - headLength;
+  const omitted = value.length - headLength - tailLength;
+  return [
+    value.slice(0, headLength),
+    "",
+    `... <truncated ${omitted} chars> ...`,
+    "",
+    value.slice(-tailLength),
+  ].join("\n");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -50,6 +50,34 @@ describe("ToolCallValidator valid inputs", () => {
     }
   });
 
+  it("defaults omitted command session to default", () => {
+    const result = validator.validate(
+      makeCall({
+        arguments: { command: "pwd" } as any,
+      }),
+    );
+
+    expect(result.status).toBe("valid");
+    if (result.status === "valid" && result.request.kind === "command") {
+      expect(result.request.session).toBe("default");
+      expect(result.request.command).toBe("pwd");
+    }
+  });
+
+  it("defaults empty command session to default", () => {
+    const result = validator.validate(
+      makeCall({
+        arguments: { session: "", command: "echo hi" },
+      }),
+    );
+
+    expect(result.status).toBe("valid");
+    if (result.status === "valid" && result.request.kind === "command") {
+      expect(result.request.session).toBe("default");
+      expect(result.request.command).toBe("echo hi");
+    }
+  });
+
   it("valid list control (no session needed)", () => {
     const result = validator.validate(
       makeCall({
@@ -157,18 +185,6 @@ describe("ToolCallValidator valid inputs", () => {
 // ===========================================================================
 
 describe("ToolCallValidator invalid inputs", () => {
-  it("invalid: missing session on command", () => {
-    const result = validator.validate(
-      makeCall({
-        arguments: { session: "", command: "echo hi" },
-      }),
-    );
-    expect(result.status).toBe("invalid");
-    if (result.status === "invalid") {
-      expect(result.observation.message).toMatch(/session/i);
-    }
-  });
-
   it("invalid: missing command on command input", () => {
     const result = validator.validate(
       makeCall({
@@ -199,7 +215,7 @@ describe("ToolCallValidator invalid inputs", () => {
     }
   });
 
-  it("invalid: command input missing both session and command", () => {
+  it("invalid: command input missing command", () => {
     const result = validator.validate(
       makeCall({
         arguments: { session: "", command: "" },

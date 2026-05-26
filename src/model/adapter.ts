@@ -68,20 +68,15 @@ const DSML = "｜DSML｜";
 const DSML_TOOL_CALLS_OPEN = `<${DSML}tool_calls>`;
 const DSML_TOOL_CALLS_CLOSE = `</${DSML}tool_calls>`;
 const DSML_INVOKE_OPEN_PREFIX = `<${DSML}invoke name="`;
+const DSML_INVOKE_ECHO_PREFIX = `invoke name="`;
 const DSML_INVOKE_CLOSE = `</${DSML}invoke>`;
 const DSML_PARAM_CLOSE = `</${DSML}parameter>`;
+const THINKING_STOP_SEQUENCES = [DSML_TOOL_CALLS_OPEN];
 
 const END_OF_SENTENCE = "<｜end▁of▁sentence｜>";
 
-// V3 tokens (kept for fallback parsing)
-const TOOL_SEP = "<｜tool▁sep｜>";
-const TOOL_CALL_BEGIN = "<｜tool▁call▁begin｜>";
-const TOOL_CALL_END = "<｜tool▁call▁end｜>";
-const TOOL_CALLS_BEGIN = "<｜tool▁calls▁begin｜>";
-const TOOL_CALLS_END = "<｜tool▁calls▁end｜>";
-
 // ---------------------------------------------------------------------------
-// io_wait tool definition (OpenAI format for V4 encoder)
+// io_wait tool definition (OpenAI format for the V4 encoder)
 // ---------------------------------------------------------------------------
 
 const IO_WAIT_V4_TOOL: V4Tool = {
@@ -172,6 +167,7 @@ export class DeepSeekFimAdapter {
       prompt,
       suffix: "</think>",
       maxTokens: this.config.thinkingMaxTokens,
+      stop: THINKING_STOP_SEQUENCES,
     });
 
     return {
@@ -242,6 +238,7 @@ export class DeepSeekFimAdapter {
     prompt: string;
     suffix: string;
     maxTokens: number;
+    stop?: string[];
   }): Promise<FimCompletionResult> {
     const maxContinuationRounds = this.config.continuationMaxRounds ?? 4;
     const finishReasons: Array<string | null | undefined> = [];
@@ -272,23 +269,29 @@ export class DeepSeekFimAdapter {
     prompt: string;
     suffix: string;
     maxTokens: number;
+    stop?: string[];
   }): Promise<{
     text: string;
     finishReason?: string | null;
     completionTokens?: number;
   }> {
+    const body: Record<string, unknown> = {
+      model: this.config.model,
+      prompt: input.prompt,
+      suffix: input.suffix,
+      max_tokens: input.maxTokens,
+    };
+    if (input.stop && input.stop.length > 0) {
+      body.stop = input.stop;
+    }
+
     const response = await fetch(`${this.config.baseUrl}/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${this.config.apiKey}`,
       },
-      body: JSON.stringify({
-        model: this.config.model,
-        prompt: input.prompt,
-        suffix: input.suffix,
-        max_tokens: input.maxTokens,
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -392,17 +395,30 @@ export type ParseDecisionResult =
 export function parseDsmlDecision(rawDecision: string): ParseDecisionResult {
   const text = rawDecision.trim();
 
-  const dsmlResult = tryParseDsml(text);
-  if (dsmlResult) return dsmlResult;
+  if (looksLikeDsml(text)) {
+    return parseDsml(text);
+  }
 
-  return parseV3Fallback(text);
+  return {
+    status: "invalid",
+    message: "Expected a V4 DSML tool call.",
+  };
 }
 
 // ---------------------------------------------------------------------------
 // DSML parser (V4 primary format)
 // ---------------------------------------------------------------------------
 
-function tryParseDsml(raw: string): ParseDecisionResult | null {
+function looksLikeDsml(text: string): boolean {
+  return (
+    text.includes(DSML) ||
+    text.includes(DSML_INVOKE_OPEN_PREFIX) ||
+    text.startsWith(DSML_INVOKE_ECHO_PREFIX) ||
+    /^[A-Za-z_][A-Za-z0-9_]*">\s*/.test(text)
+  );
+}
+
+function parseDsml(raw: string): ParseDecisionResult {
   let text = raw;
 
   // Strip trailing close tokens the model might echo from the suffix
@@ -412,34 +428,73 @@ function tryParseDsml(raw: string): ParseDecisionResult | null {
   }
   text = text.trim();
 
+  if (text.startsWith(DSML_TOOL_CALLS_OPEN)) {
+    text = text.slice(DSML_TOOL_CALLS_OPEN.length).trim();
+  }
+
   // If the model repeated the invoke-open prefix, skip to the last occurrence
   const lastInvoke = text.lastIndexOf(DSML_INVOKE_OPEN_PREFIX);
   if (lastInvoke !== -1) {
     text = text.slice(lastInvoke + DSML_INVOKE_OPEN_PREFIX.length);
+  } else if (text.startsWith(DSML_INVOKE_ECHO_PREFIX)) {
+    text = text.slice(DSML_INVOKE_ECHO_PREFIX.length);
   }
 
   // Expected: functionName">\n<params>
   const quoteClose = text.indexOf('">');
-  if (quoteClose === -1) return null;
+  if (quoteClose === -1) {
+    return {
+      status: "invalid",
+      message: 'Malformed DSML tool call: missing function name terminator `">`.',
+    };
+  }
 
   const name = text.slice(0, quoteClose).trim();
-  if (!name || name.length > 50) return null;
+  if (!name || name.length > 50) {
+    return {
+      status: "invalid",
+      message: "Malformed DSML tool call: invalid function name.",
+    };
+  }
 
   const rest = text.slice(quoteClose + 2);
+  const openParameterCount = countOccurrences(
+    rest,
+    `<${DSML}parameter`,
+  );
+  const closeParameterCount = countOccurrences(rest, DSML_PARAM_CLOSE);
 
-  // Try DSML parameter tags first
+  if (openParameterCount > closeParameterCount) {
+    return {
+      status: "invalid",
+      message: "Malformed DSML tool call: unclosed DSML parameter tag.",
+    };
+  }
+
   const params = parseDsmlParameters(rest);
   if (Object.keys(params).length > 0) {
     return buildDecision(name, params);
   }
 
-  // Fall back to JSON body after the name (model might mix formats)
-  const json = tryExtractJson(rest);
-  if (json && isRecord(json)) {
-    return buildDecision(name, json);
+  if (openParameterCount > 0) {
+    return {
+      status: "invalid",
+      message: "Malformed DSML tool call: no complete DSML parameters found.",
+    };
   }
 
-  return null;
+  if (rest.includes("{")) {
+    return {
+      status: "invalid",
+      message:
+        "Malformed DSML tool call: expected DSML parameter tags, not raw JSON.",
+    };
+  }
+
+  return {
+    status: "invalid",
+    message: "Malformed DSML tool call: expected DSML parameter tags.",
+  };
 }
 
 function parseDsmlParameters(text: string): Record<string, unknown> {
@@ -468,136 +523,6 @@ function parseDsmlParameters(text: string): Record<string, unknown> {
   }
 
   return params;
-}
-
-// ---------------------------------------------------------------------------
-// V3 fallback parser
-// ---------------------------------------------------------------------------
-
-function parseV3Fallback(text: string): ParseDecisionResult {
-  const normalized = stripV3Boundaries(text);
-  const separatorIndex = normalized.indexOf(TOOL_SEP);
-
-  let name: string;
-  let rawArguments: string;
-
-  if (separatorIndex !== -1) {
-    name = normalized.slice(0, separatorIndex).trim();
-    rawArguments = normalized.slice(separatorIndex + TOOL_SEP.length).trim();
-
-    // V3 template format: function<sep>name\n```json\nargs\n```
-    if (name === "function") {
-      const nlIdx = rawArguments.indexOf("\n");
-      if (nlIdx !== -1) {
-        name = rawArguments.slice(0, nlIdx).trim();
-        rawArguments = rawArguments.slice(nlIdx).trim();
-      }
-    }
-
-    // Handle multiple separators: id=...<sep>bash<sep>{json}
-    const secondSep = rawArguments.indexOf(TOOL_SEP);
-    if (secondSep !== -1) {
-      const beforeSecond = rawArguments.slice(0, secondSep).trim();
-      const afterSecond = rawArguments.slice(secondSep + TOOL_SEP.length).trim();
-      if (beforeSecond === "bash" || beforeSecond === "io_wait") {
-        name = beforeSecond;
-        rawArguments = afterSecond;
-      }
-    }
-  } else {
-    const braceIndex = normalized.indexOf("{");
-    if (braceIndex === -1) {
-      return {
-        status: "invalid",
-        message: "Could not parse tool call: no DSML parameters, no separator, no JSON found.",
-      };
-    }
-    name = normalized.slice(0, braceIndex).trim();
-    rawArguments = normalized.slice(braceIndex).trim();
-  }
-
-  // Strip ```json wrapper
-  rawArguments = rawArguments
-    .replace(/^```json\s*\n?/, "")
-    .replace(/\n?```\s*$/, "")
-    .trim();
-
-  // Strip trailing XML-like tags
-  rawArguments = rawArguments.replace(/<\/tool_call>\s*$/, "").trim();
-
-  if (name === "function_name" || name === "" || name === "function") {
-    return {
-      status: "invalid",
-      message: "Could not determine function name from tool call.",
-    };
-  }
-
-  // Strip prefix junk: "tool_call id=... name=bash arguments="
-  const argsPrefixMatch = name.match(
-    /^(?:tool_call\s+)?(?:id=\S+\s+)?(?:name=)?(\w+)(?:\s+arguments?=?)?$/,
-  );
-  if (argsPrefixMatch) {
-    name = argsPrefixMatch[1]!;
-  }
-
-  let parsedArguments: unknown;
-  try {
-    parsedArguments = JSON.parse(rawArguments);
-  } catch {
-    // Try to wrap raw command as bash JSON
-    if (name === "bash" && rawArguments && !rawArguments.startsWith("{")) {
-      parsedArguments = { session: "default", command: rawArguments };
-    } else {
-      return {
-        status: "invalid",
-        message: "Tool call arguments were not valid JSON.",
-      };
-    }
-  }
-
-  if (!isRecord(parsedArguments)) {
-    return {
-      status: "invalid",
-      message: "Tool call arguments must be an object.",
-    };
-  }
-
-  return buildDecision(name, parsedArguments);
-}
-
-function stripV3Boundaries(text: string): string {
-  let value = text.trim();
-
-  const boundaryPrefixes = [
-    TOOL_CALLS_BEGIN,
-    TOOL_CALL_BEGIN,
-    "</tool▁calls▁begin｜>",
-    "</tool▁call▁begin｜>",
-    "</end▁of▁sentence｜>",
-  ];
-  for (const prefix of boundaryPrefixes) {
-    if (value.startsWith(prefix)) {
-      value = value.slice(prefix.length).trim();
-    }
-  }
-
-  const endTokens = [
-    TOOL_CALL_END,
-    TOOL_CALLS_END,
-    END_OF_SENTENCE,
-    "</tool▁call▁end｜>",
-    "</tool▁calls▁end｜>",
-    "</end▁of▁sentence｜>",
-  ];
-  const endIndexes = endTokens
-    .map((token) => value.indexOf(token))
-    .filter((index) => index >= 0);
-
-  if (endIndexes.length > 0) {
-    value = value.slice(0, Math.min(...endIndexes)).trim();
-  }
-
-  return value;
 }
 
 // ---------------------------------------------------------------------------
@@ -634,24 +559,19 @@ function buildDecision(
   };
 }
 
-function tryExtractJson(text: string): unknown | null {
-  const trimmed = text.trim();
-  const braceIdx = trimmed.indexOf("{");
-  if (braceIdx === -1) return null;
-  const jsonText = trimmed
-    .slice(braceIdx)
-    .replace(/\n?```\s*$/, "")
-    .replace(/<\/tool_call>\s*$/, "")
-    .trim();
-  try {
-    return JSON.parse(jsonText);
-  } catch {
-    return null;
-  }
-}
-
 function escapeForRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function countOccurrences(text: string, needle: string): number {
+  if (needle.length === 0) return 0;
+  let count = 0;
+  let index = text.indexOf(needle);
+  while (index !== -1) {
+    count++;
+    index = text.indexOf(needle, index + needle.length);
+  }
+  return count;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

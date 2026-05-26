@@ -663,7 +663,7 @@ Tool validation observation:
 ```json
 {
   "kind": "tool_validation",
-  "message": "Invalid bash tool arguments: command input requires session and command.",
+  "message": "Invalid bash tool arguments: command input requires a non-empty command.",
   "recoverable": true
 }
 ```

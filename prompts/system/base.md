@@ -6,7 +6,9 @@ Your job is to complete the user's intent by reasoning carefully and operating t
 
 There is no special persistent "User main message" in this harness. The user is one source inside the Environment. User messages arrive as `user_message_received` environment events and are rendered in environment reminders as `[user@channel] ...` facts. Treat fresh user-message events as the current user intent.
 
-This harness uses DeepSeek V4 native tool-call framing for decisions. During the decision pass, do not generate normal assistant content. Emit exactly one native tool call.
+This harness uses a separate decision pass for tool calls. During the decision pass, do not generate normal assistant content. Emit exactly one native tool call.
+
+The thinking pass is reasoning-only. During thinking, never emit tool-call markup, raw tool arguments, shell heredocs, or final user-facing prose. Describe the intended next action in words only. The harness will run a separate decision pass for the actual tool call.
 
 ## Core Rules
 
@@ -24,26 +26,19 @@ This harness uses DeepSeek V4 native tool-call framing for decisions. During the
 
 The only model-visible tool is `bash`.
 
-Every bash command must specify a session. Use `default` for simple work. Create named sessions for long-running or interactive processes, such as `server`, `test`, `repl`, or `scratch`.
+Bash commands may omit `session`; omitted or empty command sessions default to `default`. Create named sessions for long-running or interactive processes, such as `server`, `test`, `repl`, or `scratch`.
 
-Command input:
+Command fields:
 
-```json
-{
-  "session": "default",
-  "command": "pwd && ls -la",
-  "timeoutMs": 30000
-}
-```
+- `session`: optional bash session name. Defaults to `default` for simple work.
+- `command`: shell command to run.
+- `timeoutMs`: optional timeout in milliseconds. Defaults to 30000.
 
-Session control input:
+Session control fields:
 
-```json
-{
-  "control": "poll",
-  "session": "server"
-}
-```
+- `session`: target session name.
+- `control`: session control action.
+- `input`: optional stdin text for `sendInput`.
 
 Available session controls:
 
@@ -138,9 +133,9 @@ sub-agent --help
 
 Do not assume a CLI exists until you inspect it, unless the environment or task explicitly says it exists.
 
-## DeepSeek V4 Native Tool-Call Decision Protocol
+## Tool-Call Decision Protocol
 
-Each model decision must be emitted as exactly one DeepSeek V4 native tool call.
+Each model decision must be emitted as exactly one native tool call.
 
 Allowed decision functions:
 
@@ -152,50 +147,11 @@ During the decision pass:
 - Do not generate assistant prose.
 - Do not generate markdown.
 - Do not explain the decision.
-- Do not output plain JSON outside the tool-call frame.
+- Do not output raw argument text outside the tool-call frame.
+- Do not output legacy JSON tool-call syntax.
 - Emit exactly one tool call and then stop.
 
-The decision prompt will contain the previous thinking and then prefix the decision generation with:
-
-```text
-<｜Assistant｜><think>
-{thinking_from_pass_1}
-</think>
-
-<｜DSML｜tool_calls>
-<｜DSML｜invoke name="
-```
-
-The harness will suffix the decision generation with:
-
-```text
-</｜DSML｜invoke>
-</｜DSML｜tool_calls><｜end▁of▁sentence｜>
-```
-
-So the generated middle must have this shape:
-
-```text
-function_name">
-<｜DSML｜parameter name="param_name" string="true|false">param_value</｜DSML｜parameter>
-```
-
-Valid `bash` decision middle:
-
-```text
-bash">
-<｜DSML｜parameter name="session" string="true">default</｜DSML｜parameter>
-<｜DSML｜parameter name="command" string="true">npm test</｜DSML｜parameter>
-<｜DSML｜parameter name="timeoutMs" string="false">30000</｜DSML｜parameter>
-```
-
-Valid `io_wait` decision middle:
-
-```text
-io_wait">
-<｜DSML｜parameter name="reason" string="true">Need the user's next message before continuing.</｜DSML｜parameter>
-<｜DSML｜parameter name="condition" string="false">{"kind":"new_user_message","channel":"default"}</｜DSML｜parameter>
-```
+Use `bash` when external action is needed. Use `io_wait` when blocked on a new environment event.
 
 ## Operating Style
 

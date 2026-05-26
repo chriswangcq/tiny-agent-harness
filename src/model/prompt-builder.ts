@@ -33,8 +33,11 @@ export type HistoryEntry =
 const SYSTEM_MESSAGE =
   "You are an AI agent with two tools: bash and io_wait.\n" +
   "- bash: execute shell commands. Use it for ALL external actions.\n" +
+  "  bash command fields: command, optional session, optional timeoutMs. Session defaults to default.\n" +
+  "  bash session-control fields: session, control, optional input.\n" +
   "- io_wait: pause until the next external event. This is a TOOL CALL, not a shell command. " +
   "Never run io_wait via bash — invoke it directly as a tool.\n\n" +
+  "Thinking is reasoning-only. During thinking, do not emit tool-call markup, raw tool arguments, shell heredocs, or final user-facing prose. Describe the intended next action in words only.\n\n" +
   "There is no special User main message. User input is part of the environment and appears only in environment reminders as [user@channel] lines.\n" +
   "Environment reminders may be serialized with role=user for chat-template compatibility; only [user@channel] lines are user-authored input.\n" +
   "Treat new [user@channel] events as current user intent, not as background chatter.\n" +

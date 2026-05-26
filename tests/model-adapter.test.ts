@@ -26,6 +26,10 @@ const BASE_CONTEXT: ModelStepContext = {
   ] as V4ChatMessage[],
 };
 
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
 function makeAdapter(): DeepSeekFimAdapter {
   return new DeepSeekFimAdapter({
     apiKey: "test-key",
@@ -155,6 +159,7 @@ describe("DeepSeekFimAdapter", () => {
       model: "deepseek-v4-pro",
       suffix: "</think>",
       max_tokens: 123,
+      stop: [`<${DSML}tool_calls>`],
     });
     const thinkingPrompt = String(requestBody(fetchMock, 0).prompt);
     expect(thinkingPrompt).toBe(MOCK_ENCODED_PREFIX);
@@ -165,6 +170,7 @@ describe("DeepSeekFimAdapter", () => {
       `\n</${DSML}invoke>\n</${DSML}tool_calls><｜end▁of▁sentence｜>`,
     );
     expect(decisionBody.max_tokens).toBe(45);
+    expect(decisionBody).not.toHaveProperty("stop");
     const decisionPrompt = String(decisionBody.prompt);
     expect(decisionPrompt).toContain(MOCK_ENCODED_PREFIX);
     expect(decisionPrompt).toContain("Need inspect cwd");
@@ -204,6 +210,10 @@ describe("DeepSeekFimAdapter", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(requestBody(fetchMock, 0).stop).toEqual([`<${DSML}tool_calls>`]);
+    expect(requestBody(fetchMock, 1).stop).toEqual([`<${DSML}tool_calls>`]);
+    expect(requestBody(fetchMock, 2)).not.toHaveProperty("stop");
+    expect(requestBody(fetchMock, 3)).not.toHaveProperty("stop");
     expect(String(requestBody(fetchMock, 1).prompt)).toBe(
       `${MOCK_ENCODED_PREFIX}Need `,
     );
@@ -276,7 +286,7 @@ describe("DeepSeekFimAdapter", () => {
   it("rejects final decisions as unsupported", async () => {
     stubFimResponses(
       "Task is complete",
-      'final<｜tool▁sep｜>{"content":"done"}',
+      `final">\n<${DSML}parameter name="content" string="true">done</${DSML}parameter>`,
     );
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
@@ -289,7 +299,7 @@ describe("DeepSeekFimAdapter", () => {
     });
   });
 
-  it("falls back to V3 format with separator", async () => {
+  it("rejects legacy V3 format with separator", async () => {
     stubFimResponses(
       "Thinking",
       'bash<｜tool▁sep｜>{"session":"default","command":"pwd"}',
@@ -299,16 +309,13 @@ describe("DeepSeekFimAdapter", () => {
       bashTool: BASH_TOOL_DEFINITION,
     });
 
-    expect(output.turn.kind).toBe("tool_call");
-    if (output.turn.kind === "tool_call") {
-      expect(output.turn.toolCall.arguments).toEqual({
-        session: "default",
-        command: "pwd",
-      });
-    }
+    expect(output.turn).toMatchObject({
+      kind: "invalid_output",
+      message: expect.stringContaining("Expected a V4 DSML tool call"),
+    });
   });
 
-  it("falls back to brace-split when native separator is missing", async () => {
+  it("rejects ambiguous brace-split output when DSML is missing", async () => {
     stubFimResponses(
       "Thinking",
       'bash {"session":"default","command":"pwd"}',
@@ -318,13 +325,10 @@ describe("DeepSeekFimAdapter", () => {
       bashTool: BASH_TOOL_DEFINITION,
     });
 
-    expect(output.turn.kind).toBe("tool_call");
-    if (output.turn.kind === "tool_call") {
-      expect(output.turn.toolCall.arguments).toEqual({
-        session: "default",
-        command: "pwd",
-      });
-    }
+    expect(output.turn).toMatchObject({
+      kind: "invalid_output",
+      message: expect.stringContaining("Expected a V4 DSML tool call"),
+    });
   });
 
   it("returns invalid_output when no JSON is found in decision", async () => {
@@ -336,7 +340,7 @@ describe("DeepSeekFimAdapter", () => {
 
     expect(output.turn).toMatchObject({
       kind: "invalid_output",
-      message: expect.stringContaining("no DSML parameters"),
+      message: expect.stringContaining("Expected a V4 DSML tool call"),
     });
   });
 
@@ -349,14 +353,14 @@ describe("DeepSeekFimAdapter", () => {
 
     expect(output.turn).toMatchObject({
       kind: "invalid_output",
-      message: expect.stringContaining("not valid JSON"),
+      message: expect.stringContaining("Expected a V4 DSML tool call"),
     });
   });
 
   it("returns invalid_output for unsupported decision functions", async () => {
     stubFimResponses(
       "Thinking",
-      'python<｜tool▁sep｜>{"code":"print(1)"}',
+      `python">\n<${DSML}parameter name="code" string="true">print(1)</${DSML}parameter>`,
     );
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
@@ -369,7 +373,7 @@ describe("DeepSeekFimAdapter", () => {
     });
   });
 
-  it("strips malformed V3 boundary tokens with </ prefix", async () => {
+  it("rejects legacy V3 boundary tokens with separator", async () => {
     stubFimResponses(
       "Thinking",
       '</end▁of▁sentence｜>bash<｜tool▁sep｜>{"session":"default","command":"ls"}',
@@ -379,10 +383,10 @@ describe("DeepSeekFimAdapter", () => {
       bashTool: BASH_TOOL_DEFINITION,
     });
 
-    expect(output.turn.kind).toBe("tool_call");
-    if (output.turn.kind === "tool_call") {
-      expect(output.turn.toolCall.arguments).toMatchObject({ command: "ls" });
-    }
+    expect(output.turn).toMatchObject({
+      kind: "invalid_output",
+      message: expect.stringContaining("Expected a V4 DSML tool call"),
+    });
   });
 
   it("throws with response body when the FIM request fails", async () => {
@@ -413,7 +417,7 @@ describe("DeepSeekFimAdapter", () => {
     ).rejects.toThrow("DeepSeek FIM response missing choices[0].text");
   });
 
-  it("attaches bash and io_wait tools to the first system message", async () => {
+  it("passes tools to the encoder so V4 chat template conditions both FIM passes", async () => {
     const { execFileSync } = await import("node:child_process");
     const mockExec = vi.mocked(execFileSync);
 
@@ -426,13 +430,21 @@ describe("DeepSeekFimAdapter", () => {
       bashTool: BASH_TOOL_DEFINITION,
     });
 
-    const callInput = JSON.parse(mockExec.mock.calls[0]![2]!.input as string);
-    const sysMsg = callInput.messages[0];
-    expect(sysMsg.role).toBe("system");
-    expect(sysMsg.tools).toHaveLength(2);
-    expect(sysMsg.tools[0].function.name).toBe("bash");
-    expect(sysMsg.tools[1].function.name).toBe("io_wait");
-    expect(callInput.thinking_mode).toBe("thinking");
+    const thinkingInput = JSON.parse(mockExec.mock.calls[0]![2]!.input as string);
+    const thinkingSysMsg = thinkingInput.messages[0];
+    expect(thinkingSysMsg.role).toBe("system");
+    expect(thinkingSysMsg.tools).toHaveLength(2);
+    expect(thinkingSysMsg.tools[0].function.name).toBe("bash");
+    expect(thinkingSysMsg.tools[1].function.name).toBe("io_wait");
+    expect(thinkingInput.thinking_mode).toBe("thinking");
+
+    const decisionInput = JSON.parse(mockExec.mock.calls[1]![2]!.input as string);
+    const decisionSysMsg = decisionInput.messages[0];
+    expect(decisionSysMsg.role).toBe("system");
+    expect(decisionSysMsg.tools).toHaveLength(2);
+    expect(decisionSysMsg.tools[0].function.name).toBe("bash");
+    expect(decisionSysMsg.tools[1].function.name).toBe("io_wait");
+    expect(decisionInput.thinking_mode).toBe("thinking");
   });
 });
 
@@ -497,28 +509,92 @@ describe("parseDsmlDecision", () => {
     });
   });
 
-  it("handles DSML name with JSON body fallback", () => {
+  it("rejects DSML name with JSON body instead of parameter tags", () => {
     const raw = 'bash">\n{"session":"default","command":"pwd"}';
     const result = parseDsmlDecision(raw);
-    expect(result).toEqual({
-      status: "valid",
-      decision: {
-        name: "bash",
-        arguments: { session: "default", command: "pwd" },
-      },
+    expect(result).toMatchObject({
+      status: "invalid",
+      message: expect.stringContaining("expected DSML parameter tags"),
     });
   });
 
-  it("falls back to V3 separator format", () => {
-    const raw = 'bash<｜tool▁sep｜>{"session":"default","command":"pwd"}';
+  it("rejects unclosed DSML parameter tags without falling back to JSON", () => {
+    const raw =
+      `bash">\n` +
+      `<${DSML}parameter name="command" string="true">cat > snake.html << 'HTMLEOF'\n` +
+      `<html></html>\nHTMLEOF\necho "OK"`;
     const result = parseDsmlDecision(raw);
-    expect(result.status).toBe("valid");
+    expect(result).toMatchObject({
+      status: "invalid",
+      message: expect.stringContaining("unclosed DSML parameter tag"),
+    });
   });
 
-  it("handles V3 function<sep>name format", () => {
+  it("rejects V3 separator format", () => {
+    const raw = 'bash<｜tool▁sep｜>{"session":"default","command":"pwd"}';
+    const result = parseDsmlDecision(raw);
+    expect(result).toMatchObject({
+      status: "invalid",
+      message: expect.stringContaining("Expected a V4 DSML tool call"),
+    });
+  });
+
+  it("rejects V3 function<sep>name format", () => {
     const raw =
       'function<｜tool▁sep｜>bash\n```json\n{"session":"default","command":"pwd"}\n```';
     const result = parseDsmlDecision(raw);
+    expect(result).toMatchObject({
+      status: "invalid",
+      message: expect.stringContaining("Expected a V4 DSML tool call"),
+    });
+  });
+
+  it("rejects double separator: id=...<sep>bash<sep>{json}", () => {
+    const raw =
+      'id=fim-call-1<｜tool▁sep｜>bash<｜tool▁sep｜>{"session":"default","command":"pwd"}';
+    const result = parseDsmlDecision(raw);
+    expect(result).toMatchObject({
+      status: "invalid",
+      message: expect.stringContaining("Expected a V4 DSML tool call"),
+    });
+  });
+
+  it("rejects trailing </tool_call> XML tag fallback", () => {
+    const raw =
+      'bash<｜tool▁sep｜>{"session":"default","command":"pwd"}</tool_call>';
+    const result = parseDsmlDecision(raw);
+    expect(result).toMatchObject({
+      status: "invalid",
+      message: expect.stringContaining("Expected a V4 DSML tool call"),
+    });
+  });
+
+  it("rejects tool_call prefix format without DSML or V3 separator", () => {
+    const raw =
+      'tool_call id=fim-call-1 name=bash arguments={"session":"default","command":"pwd"}';
+    const result = parseDsmlDecision(raw);
+    expect(result).toMatchObject({
+      status: "invalid",
+      message: expect.stringContaining("Expected a V4 DSML tool call"),
+    });
+  });
+
+  it("rejects raw text after V3 separator instead of wrapping it as bash JSON", () => {
+    const raw =
+      "bash<｜tool▁sep｜>node dist/cli/main.js im send --channel default --text hello";
+    const result = parseDsmlDecision(raw);
+    expect(result).toMatchObject({
+      status: "invalid",
+      message: expect.stringContaining("Expected a V4 DSML tool call"),
+    });
+  });
+
+  it("handles model echoing invoke-open without the DSML prefix", () => {
+    const raw =
+      `invoke name="bash">\n` +
+      `<${DSML}parameter name="session" string="true">default</${DSML}parameter>\n` +
+      `<${DSML}parameter name="command" string="true">pwd</${DSML}parameter>`;
+    const result = parseDsmlDecision(raw);
     expect(result).toEqual({
       status: "valid",
       decision: {
@@ -526,46 +602,6 @@ describe("parseDsmlDecision", () => {
         arguments: { session: "default", command: "pwd" },
       },
     });
-  });
-
-  it("handles double separator: id=...<sep>bash<sep>{json}", () => {
-    const raw =
-      'id=fim-call-1<｜tool▁sep｜>bash<｜tool▁sep｜>{"session":"default","command":"pwd"}';
-    const result = parseDsmlDecision(raw);
-    expect(result.status).toBe("valid");
-    if (result.status === "valid") {
-      expect(result.decision.name).toBe("bash");
-    }
-  });
-
-  it("handles trailing </tool_call> XML tag", () => {
-    const raw =
-      'bash<｜tool▁sep｜>{"session":"default","command":"pwd"}</tool_call>';
-    const result = parseDsmlDecision(raw);
-    expect(result.status).toBe("valid");
-  });
-
-  it("handles tool_call prefix format", () => {
-    const raw =
-      'tool_call id=fim-call-1 name=bash arguments={"session":"default","command":"pwd"}';
-    const result = parseDsmlDecision(raw);
-    expect(result.status).toBe("valid");
-    if (result.status === "valid") {
-      expect(result.decision.arguments).toMatchObject({ command: "pwd" });
-    }
-  });
-
-  it("constructs bash command from raw text after V3 separator", () => {
-    const raw =
-      "bash<｜tool▁sep｜>node dist/cli/main.js im send --channel default --text hello";
-    const result = parseDsmlDecision(raw);
-    expect(result.status).toBe("valid");
-    if (result.status === "valid") {
-      expect(result.decision.name).toBe("bash");
-      expect((result.decision.arguments as Record<string, unknown>).command).toBe(
-        "node dist/cli/main.js im send --channel default --text hello",
-      );
-    }
   });
 
   it("handles commands with special characters in DSML parameters", () => {

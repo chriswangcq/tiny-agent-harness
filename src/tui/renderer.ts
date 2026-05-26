@@ -32,6 +32,8 @@ export class BlessedRenderer implements TuiRenderer {
   private conversationLineIndexes = new Map<string, number>();
   private loopFrameLineIndexes = new Map<string, number>();
   private expandedFrames = new Set<string>();
+  private lastConversationDetailItemId: string | undefined;
+  private lastLoopDetailFrameId: string | undefined;
   private keyHandler?: (key: TuiKey) => void;
   private messageHandler?: (text: string) => void;
   private inputBuffer = "";
@@ -189,6 +191,7 @@ export class BlessedRenderer implements TuiRenderer {
     const selectedConversationItem = this.ui.selectedConversationItem(
       view.conversation,
     );
+    const selectedConversationItemId = selectedConversationItem?.id;
     this.updateConversationDetailLayout(selectedConversationItem);
 
     const convItems = this.renderConversationItems(view.conversation);
@@ -196,15 +199,24 @@ export class BlessedRenderer implements TuiRenderer {
     this.conversationDetailBox.setContent(
       this.renderConversationDetail(selectedConversationItem),
     );
-    this.selectConversationListRow(selectedConversationItem?.id);
+    if (selectedConversationItemId !== this.lastConversationDetailItemId) {
+      this.conversationDetailBox.setScrollPerc(0);
+      this.lastConversationDetailItemId = selectedConversationItemId;
+    }
+    this.selectConversationListRow(selectedConversationItemId);
 
     const selectedLoopFrame = this.ui.selectedLoopFrame(view.loop);
+    const selectedLoopFrameId = selectedLoopFrame?.id;
     this.updateLoopDetailLayout(selectedLoopFrame);
 
     const loopItems = this.renderLoopFrames(view.loop);
     this.loopList.setItems(loopItems);
     this.loopDetailBox.setContent(this.renderLoopDetail(selectedLoopFrame));
-    this.selectLoopListRow(selectedLoopFrame?.id);
+    if (selectedLoopFrameId !== this.lastLoopDetailFrameId) {
+      this.loopDetailBox.setScrollPerc(0);
+      this.lastLoopDetailFrameId = selectedLoopFrameId;
+    }
+    this.selectLoopListRow(selectedLoopFrameId);
 
     if (this.ui.followBottom.conversation) {
       this.conversationList.setScrollPerc(100);

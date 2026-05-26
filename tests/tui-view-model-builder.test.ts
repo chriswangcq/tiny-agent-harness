@@ -72,6 +72,19 @@ function makeBashObservation(rc = 0): BashObservation {
   return { session: "default", state: "idle", returnCode: rc, output: "hi\n", outputTruncated: false, outputLogPath: "/tmp/log.txt" };
 }
 
+function makeTimedOutBashObservation(): BashObservation {
+  return {
+    session: "default",
+    state: "running",
+    returnCode: null,
+    timedOut: true,
+    focusReleased: true,
+    output: "partial output\n",
+    outputTruncated: false,
+    outputLogPath: "/tmp/log.txt",
+  };
+}
+
 function makeAgentObservation(): AgentObservation {
   return { kind: "tool_validation", message: "validation error", recoverable: true };
 }
@@ -229,6 +242,39 @@ describe("ViewModelBuilder", () => {
     expect(frame.status).toBe("warn");
     expect(frame.title).toBe("invalid model output");
     expect(frame.summary).toBe("bad output");
+  });
+
+  it("model_output_received invalid_output compacts long diagnostic detail", () => {
+    const b = builderWithRunStarted();
+    const longRawDecision = `bash">\n${"x".repeat(5000)}`;
+    const turn: ModelTurn = {
+      kind: "invalid_output",
+      message: "Malformed DSML tool call: unclosed DSML parameter tag.",
+      rawDecision: longRawDecision,
+      thinking: { content: "thinking" },
+    };
+
+    b.applyEvent({ type: "model_requested", stepIndex: 0, timestamp: NOW });
+    b.applyEvent({
+      type: "model_output_received",
+      stepIndex: 0,
+      output: {
+        thinking: { content: "thinking" },
+        rawDecision: longRawDecision,
+        turn,
+      },
+      turn,
+      timestamp: LATER,
+    });
+
+    const vm = b.getViewModel();
+    const modelFrame = vm.loop.find(
+      (frame) => frame.stepIndex === 0 && frame.phase === "model",
+    );
+
+    expect(modelFrame?.detail).toContain("unclosed DSML parameter tag");
+    expect(modelFrame?.detail).toContain("<truncated");
+    expect(modelFrame?.detail).not.toContain("thinking raw");
   });
 
   // 7
@@ -389,6 +435,28 @@ describe("ViewModelBuilder", () => {
     expect(frame.phase).toBe("tool");
     expect(frame.status).toBe("error");
     expect(frame.title).toBe("bash finished rc=1");
+  });
+
+  it("tool_execution_finished timeout keeps the tool frame waiting instead of error", () => {
+    const b = builderWithRunStarted();
+    b.applyEvent({
+      type: "tool_execution_finished",
+      stepIndex: 0,
+      request: makeCommandRequest(),
+      observation: makeTimedOutBashObservation(),
+      timestamp: LATER,
+    });
+
+    const vm = b.getViewModel();
+    const frame = vm.loop[vm.loop.length - 1];
+    expect(frame.phase).toBe("tool");
+    expect(frame.status).toBe("waiting");
+    expect(frame.title).toBe("bash timed out, focus released");
+    expect(frame.summary).toBe("session=default still running");
+    expect(frame.logPath).toBe("/tmp/log.txt");
+    expect(frame.detail).toContain('"timedOut": true');
+    expect(frame.detail).toContain('"focusReleased": true');
+    expect(frame.detail).toContain('"state": "running"');
   });
 
   // 15

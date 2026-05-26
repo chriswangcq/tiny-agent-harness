@@ -1,12 +1,12 @@
 // ─── Bash Tool Input ────────────────────────────────────────────────
 //
-// All command requests must explicitly specify `session`.
+// Command requests may omit `session`; the validator normalizes it to "default".
 // Control requests manage session lifecycle via the same `bash` tool.
 
 export type BashToolInput = BashCommandInput | BashControlInput;
 
 export type BashCommandInput = {
-  session: string;
+  session?: string;
   command: string;
   timeoutMs?: number; // default: 30000
 };
