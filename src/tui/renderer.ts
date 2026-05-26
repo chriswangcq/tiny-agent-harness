@@ -124,6 +124,7 @@ export class BlessedRenderer implements TuiRenderer {
         "{bold}Browse mode{/bold}:",
         "  Tab         switch loop/conversation",
         "  j/k         scroll up/down",
+        "  ←/→         move between loop list and detail",
         "  g/G         jump to top/bottom",
         "  f           toggle follow mode",
         "  Enter       expand/collapse selected loop frame",
@@ -288,7 +289,11 @@ export class BlessedRenderer implements TuiRenderer {
   ): void {
     const frames = this.lastView?.loop ?? [];
     const activeList =
-      this.ui.pane === "conversation" ? this.conversationList : this.loopList;
+      this.ui.pane === "conversation"
+        ? this.conversationList
+        : this.ui.pane === "detail"
+          ? this.loopDetailBox
+          : this.loopList;
 
     switch (key.name) {
       case "q":
@@ -305,8 +310,27 @@ export class BlessedRenderer implements TuiRenderer {
         this.updateStyles();
         this.rerenderLastView();
         return;
+      case "right":
+        if (this.ui.pane === "loop" && this.ui.selectedLoopFrameId) {
+          this.ui.enterDetail(frames);
+          this.updateStyles();
+          this.rerenderLastView();
+        }
+        return;
+      case "left":
+        if (this.ui.pane === "detail") {
+          this.ui.leaveDetail(frames);
+          this.updateStyles();
+          this.rerenderLastView();
+        }
+        return;
       case "j":
       case "down":
+        if (this.ui.pane === "detail") {
+          this.loopDetailBox.scroll(1);
+          this.screen.render();
+          return;
+        }
         this.ui.moveSelection(frames, 1);
         if (this.ui.pane === "conversation") {
           activeList.scroll(1);
@@ -317,6 +341,11 @@ export class BlessedRenderer implements TuiRenderer {
         return;
       case "k":
       case "up":
+        if (this.ui.pane === "detail") {
+          this.loopDetailBox.scroll(-1);
+          this.screen.render();
+          return;
+        }
         this.ui.moveSelection(frames, -1);
         if (this.ui.pane === "conversation") {
           activeList.scroll(-1);
@@ -326,6 +355,11 @@ export class BlessedRenderer implements TuiRenderer {
         }
         return;
       case "g":
+        if (this.ui.pane === "detail") {
+          activeList.setScrollPerc(key.shift ? 100 : 0);
+          this.screen.render();
+          return;
+        }
         if (!key.shift) {
           this.ui.jumpTop(frames);
           activeList.setScrollPerc(0);
@@ -336,6 +370,7 @@ export class BlessedRenderer implements TuiRenderer {
         this.rerenderLastView();
         return;
       case "f":
+        if (this.ui.pane === "detail") return;
         this.ui.toggleFollow(frames);
         if (this.ui.followBottom[this.ui.pane]) {
           activeList.setScrollPerc(100);
@@ -457,7 +492,11 @@ export class BlessedRenderer implements TuiRenderer {
   }
 
   private updateLoopDetailLayout(selectedFrame: LoopFrame | undefined): void {
-    if (selectedFrame && this.ui.mode === "browse" && this.ui.pane === "loop") {
+    if (
+      selectedFrame &&
+      this.ui.mode === "browse" &&
+      (this.ui.pane === "loop" || this.ui.pane === "detail")
+    ) {
       this.loopList.width = "60%";
       this.loopDetailBox.show();
       return;
@@ -545,7 +584,7 @@ export class BlessedRenderer implements TuiRenderer {
     } else {
       convBorder.fg = this.ui.pane === "conversation" ? "white" : "gray";
       loopBorder.fg = this.ui.pane === "loop" ? "white" : "gray";
-      detailBorder.fg = this.ui.pane === "loop" ? "white" : "gray";
+      detailBorder.fg = this.ui.pane === "detail" ? "white" : "gray";
       inputBorder.fg = "gray";
       this.inputBar.setLabel(" message> (i=input, Tab=switch, ?=help) ");
     }

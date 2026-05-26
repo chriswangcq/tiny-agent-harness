@@ -78,4 +78,21 @@ describe("TuiInteractionState", () => {
 
     expect(state.selectedLoopFrameId).toBe("b");
   });
+
+  it("right-detail focus preserves selected loop frame without changing follow state", () => {
+    const state = new TuiInteractionState();
+    const frames = [frame("a", 0), frame("b", 1)];
+
+    state.enterBrowse(frames, "loop");
+    state.enterDetail(frames);
+    state.moveSelection(frames, -1);
+
+    expect(state.pane).toBe("detail");
+    expect(state.selectedLoopFrameId).toBe("b");
+    expect(state.followBottom).toEqual({ conversation: true, loop: true });
+
+    state.leaveDetail(frames);
+    expect(state.pane).toBe("loop");
+    expect(state.selectedLoopFrameId).toBe("b");
+  });
 });

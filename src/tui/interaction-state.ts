@@ -1,7 +1,7 @@
 import type { LoopFrame } from "./types.js";
 
 export type TuiMode = "input" | "browse";
-export type TuiPane = "conversation" | "loop";
+export type TuiPane = "conversation" | "loop" | "detail";
 
 export type FollowBottomState = {
   conversation: boolean;
@@ -26,9 +26,17 @@ export class TuiInteractionState {
   enterBrowse(frames: LoopFrame[], pane: TuiPane = this.pane): void {
     this.mode = "browse";
     this.pane = pane;
-    if (pane === "loop") {
+    if (pane === "loop" || pane === "detail") {
       this.ensureLoopSelection(frames);
     }
+  }
+
+  enterDetail(frames: LoopFrame[]): void {
+    this.enterBrowse(frames, "detail");
+  }
+
+  leaveDetail(frames: LoopFrame[]): void {
+    this.enterBrowse(frames, "loop");
   }
 
   switchPane(frames: LoopFrame[]): void {
@@ -41,9 +49,13 @@ export class TuiInteractionState {
 
   moveSelection(frames: LoopFrame[], delta: number): void {
     this.mode = "browse";
-    this.followBottom[this.pane] = false;
+    if (this.pane === "conversation") {
+      this.followBottom.conversation = false;
+      return;
+    }
 
     if (this.pane !== "loop") return;
+    this.followBottom.loop = false;
     if (frames.length === 0) {
       this.selectedLoopFrameId = undefined;
       return;
@@ -56,13 +68,19 @@ export class TuiInteractionState {
 
   jumpTop(frames: LoopFrame[]): void {
     this.mode = "browse";
-    this.followBottom[this.pane] = false;
+    if (this.pane === "conversation") {
+      this.followBottom.conversation = false;
+      return;
+    }
+    if (this.pane !== "loop") return;
+    this.followBottom.loop = false;
     if (this.pane === "loop" && frames.length > 0) {
       this.selectedLoopFrameId = frames[0]!.id;
     }
   }
 
   jumpBottom(frames: LoopFrame[]): void {
+    if (this.pane === "detail") return;
     this.followBottom[this.pane] = true;
     if (this.pane === "loop") {
       this.selectLastLoopFrame(frames);
@@ -70,6 +88,7 @@ export class TuiInteractionState {
   }
 
   toggleFollow(frames: LoopFrame[]): void {
+    if (this.pane === "detail") return;
     const next = !this.followBottom[this.pane];
     this.followBottom[this.pane] = next;
     if (next && this.pane === "loop") {
@@ -78,9 +97,9 @@ export class TuiInteractionState {
   }
 
   syncWithFrames(frames: LoopFrame[]): void {
-    if (this.mode !== "browse" || this.pane !== "loop") return;
+    if (this.mode !== "browse" || (this.pane !== "loop" && this.pane !== "detail")) return;
     this.ensureLoopSelection(frames);
-    if (this.followBottom.loop) {
+    if (this.pane === "loop" && this.followBottom.loop) {
       this.selectLastLoopFrame(frames);
     }
   }
