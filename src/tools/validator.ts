@@ -5,6 +5,7 @@ import type {
   AgentObservation,
   BashCommandInput,
   BashControlInput,
+  StashFileInput,
 } from "../types/index.js";
 
 // ---------------------------------------------------------------------------
@@ -44,10 +45,18 @@ const SESSION_CONTROLS = new Set([
 
 export class ToolCallValidator {
   validate(toolCall: InternalToolCall): ToolCallValidation {
-    // Only "bash" tool is supported
-    if (toolCall.name !== "bash") {
+    const toolName = (toolCall as { name: string }).name;
+
+    if (toolName === "stash_file") {
+      return this.validateStashFile(
+        toolCall.id,
+        toolCall.arguments as StashFileInput,
+      );
+    }
+
+    if (toolName !== "bash") {
       return invalid(
-        `Unknown tool "${toolCall.name}". The only available tool is "bash".`,
+        `Unknown tool "${toolName}". Available tools are "bash" and "stash_file".`,
       );
     }
 
@@ -60,6 +69,46 @@ export class ToolCallValidator {
 
     // Must be a command input
     return this.validateCommand(toolCall.id, args as BashCommandInput);
+  }
+
+  private validateStashFile(
+    toolCallId: string,
+    args: StashFileInput,
+  ): ToolCallValidation {
+    if (!isString(args.content)) {
+      return invalid(
+        "Invalid stash_file arguments: content must be a string.",
+      );
+    }
+
+    if (args.name !== undefined && !isString(args.name)) {
+      return invalid("Invalid stash_file arguments: name must be a string.");
+    }
+
+    if (args.description !== undefined && !isString(args.description)) {
+      return invalid(
+        "Invalid stash_file arguments: description must be a string.",
+      );
+    }
+
+    const encoding = args.encoding ?? "utf8";
+    if (encoding !== "utf8" && encoding !== "base64") {
+      return invalid(
+        'Invalid stash_file arguments: encoding must be "utf8" or "base64".',
+      );
+    }
+
+    const request: ToolRequest = {
+      kind: "stash_file",
+      toolName: "stash_file",
+      toolCallId,
+      name: args.name,
+      content: args.content,
+      encoding,
+      description: args.description,
+    };
+
+    return { status: "valid", request };
   }
 
   // -----------------------------------------------------------------------

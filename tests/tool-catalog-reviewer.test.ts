@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { BASH_TOOL_DEFINITION, STATIC_TOOL_CATALOG } from "../src/tools/catalog.js";
+import {
+  BASH_TOOL_DEFINITION,
+  STATIC_TOOL_CATALOG,
+  STASH_FILE_TOOL_DEFINITION,
+} from "../src/tools/catalog.js";
 import { AlwaysApproveReviewer } from "../src/tools/reviewer.js";
 import type { ToolRequest } from "../src/types/tools.js";
 
@@ -16,11 +20,14 @@ type BashInputSchema = {
 };
 
 describe("static tool catalog", () => {
-  it("exposes bash as the only model-visible tool", () => {
-    expect(STATIC_TOOL_CATALOG).toHaveLength(1);
+  it("exposes bash and stash_file as model-visible tools", () => {
+    expect(STATIC_TOOL_CATALOG).toHaveLength(2);
     expect(STATIC_TOOL_CATALOG[0]).toBe(BASH_TOOL_DEFINITION);
+    expect(STATIC_TOOL_CATALOG[1]).toBe(STASH_FILE_TOOL_DEFINITION);
     expect(BASH_TOOL_DEFINITION.name).toBe("bash");
     expect(BASH_TOOL_DEFINITION.description).toContain("All external actions");
+    expect(STASH_FILE_TOOL_DEFINITION.name).toBe("stash_file");
+    expect(STASH_FILE_TOOL_DEFINITION.description).toContain("artifact write");
   });
 
   it("documents all supported bash input variants in oneOf schema", () => {

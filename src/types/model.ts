@@ -5,6 +5,7 @@
 
 import type { BashToolInput } from "./bash.js";
 import type { IoWaitRequest } from "./environment.js";
+import type { StashFileInput } from "./tools.js";
 
 /**
  * Raw model output placeholder. Will be refined as the FIM adapter
@@ -24,12 +25,19 @@ export type AgentThinking = {
  * Harness-generated tool call. FIM does not provide a provider-generated
  * tool call id, so the harness generates `id` (e.g. `fim-call-{runId}-{stepIndex}`).
  */
-export type InternalToolCall = {
-  id: string;
-  name: "bash";
-  arguments: BashToolInput;
-  raw?: unknown;
-};
+export type InternalToolCall =
+  | {
+      id: string;
+      name: "bash";
+      arguments: BashToolInput;
+      raw?: unknown;
+    }
+  | {
+      id: string;
+      name: "stash_file";
+      arguments: StashFileInput;
+      raw?: unknown;
+    };
 
 /**
  * The normalized result of a single FIM decision pass.

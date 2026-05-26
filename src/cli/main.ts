@@ -12,11 +12,12 @@ import type { HistoryEntry } from "../model/prompt-builder.js";
 import { BashSessionManager } from "../bash/session-manager.js";
 import { ToolCallValidator } from "../tools/validator.js";
 import { AlwaysApproveReviewer } from "../tools/reviewer.js";
-import { BASH_TOOL_DEFINITION } from "../tools/catalog.js";
+import { STATIC_TOOL_CATALOG } from "../tools/catalog.js";
 import { Environment } from "../environment/environment.js";
 import { ImCliTransport } from "../im/transport.js";
 import { SkillRunStore } from "../skill/store.js";
-import type { ToolRequest } from "../types/tools.js";
+import { FileArtifactStore } from "../artifacts/file-store.js";
+import type { AgentObservation, BashToolRequest } from "../types/tools.js";
 import type { BashObservation } from "../types/bash.js";
 import type { V4ChatMessage } from "../types/model.js";
 
@@ -74,6 +75,110 @@ function parseCliOptions(args: string[]): {
   return { channel, task, stateDir };
 }
 
+function extractSharedFlags(args: string[]): {
+  rest: string[];
+  stateDir?: string;
+  json: boolean;
+} {
+  const rest: string[] = [];
+  let stateDir: string | undefined;
+  let json = false;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--state-dir" && i + 1 < args.length) {
+      stateDir = args[++i];
+    } else if (arg === "--json") {
+      json = true;
+    } else {
+      rest.push(arg);
+    }
+  }
+
+  return { rest, stateDir, json };
+}
+
+function createArtifactStore(stateDir?: string): FileArtifactStore {
+  const baseDir = path.resolve(stateDir ?? ".tiny-agent");
+  return new FileArtifactStore({
+    rootDir: path.join(baseDir, "artifacts", "files"),
+    cwd: process.cwd(),
+  });
+}
+
+async function runArtifact(args: string[]): Promise<void> {
+  const { rest, stateDir, json } = extractSharedFlags(args);
+  const subcommand = rest[0];
+  const store = createArtifactStore(stateDir);
+
+  if (subcommand === "list") {
+    const items = store.list();
+    if (json) {
+      process.stdout.write(`${JSON.stringify(items, null, 2)}\n`);
+      return;
+    }
+    if (items.length === 0) {
+      console.log("[tiny-agent] No file artifacts.");
+      return;
+    }
+    for (const item of items) {
+      console.log(
+        `${item.artifactId}\t${item.bytes} bytes\t${item.sha256}\t${item.name}`,
+      );
+    }
+    return;
+  }
+
+  if (subcommand === "show") {
+    const artifactId = rest[1];
+    if (!artifactId) {
+      die("Usage: tiny-agent artifact show <artifactId> [--json] [--state-dir <dir>]");
+    }
+    const meta = store.readMeta(artifactId);
+    if (json) {
+      process.stdout.write(`${JSON.stringify(meta, null, 2)}\n`);
+      return;
+    }
+    console.log(`artifactId: ${meta.artifactId}`);
+    console.log(`name:       ${meta.name}`);
+    console.log(`bytes:      ${meta.bytes}`);
+    console.log(`sha256:     ${meta.sha256}`);
+    console.log(`createdAt:  ${meta.createdAt}`);
+    console.log(`toolCallId: ${meta.toolCallId}`);
+    if (meta.description) {
+      console.log(`description:${meta.description}`);
+    }
+    return;
+  }
+
+  if (subcommand === "write") {
+    const artifactId = rest[1];
+    const destination = rest[2];
+    if (!artifactId || !destination) {
+      die(
+        "Usage: tiny-agent artifact write <artifactId> <path> [--json] [--state-dir <dir>]",
+      );
+    }
+    const result = store.write(artifactId, destination);
+    if (json) {
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      return;
+    }
+    console.log(
+      `[tiny-agent] Wrote ${result.artifactId} to ${result.destinationPath} ` +
+        `(${result.bytes} bytes, sha256 ${result.sha256}).`,
+    );
+    return;
+  }
+
+  die(
+    "Usage:\n" +
+      "  tiny-agent artifact list [--json] [--state-dir <dir>]\n" +
+      "  tiny-agent artifact show <artifactId> [--json] [--state-dir <dir>]\n" +
+      "  tiny-agent artifact write <artifactId> <path> [--json] [--state-dir <dir>]",
+  );
+}
+
 function convertHistoryItems(items: HistoryItem[]): HistoryEntry[] {
   const entries: HistoryEntry[] = [];
   for (const item of items) {
@@ -103,7 +208,7 @@ function convertHistoryItems(items: HistoryItem[]): HistoryEntry[] {
 
 function adaptBashPort(manager: BashSessionManager): BashPort {
   return {
-    async execute(request: ToolRequest): Promise<BashObservation> {
+    async execute(request: BashToolRequest): Promise<BashObservation> {
       if (request.kind === "command") {
         return manager.executeCommandAutoCreate(
           request.session,
@@ -349,6 +454,7 @@ Usage:
   tiny-agent tui --run <runId|latest>                 Attach TUI to existing run
   tiny-agent im  <subcommand> [options]               IM message operations
   tiny-agent skill <subcommand> [options]             Skill management
+  tiny-agent artifact <subcommand> [options]          Staged file artifacts
   tiny-agent --help                                   Show this help
 
 IM subcommands:
@@ -366,6 +472,11 @@ Skill subcommands:
   close  <runId>                Close a skill run
   review-complete <runId>       Complete skill review
   validate <name>               Validate skill structure
+
+Artifact subcommands:
+  list                          List staged file artifacts
+  show   <artifactId>           Show artifact metadata
+  write  <artifactId> <path>    Materialize artifact bytes at path
 
 Environment variables:
   DEEPSEEK_API_KEY   (required) API key for DeepSeek
@@ -405,6 +516,11 @@ async function main(): Promise<void> {
   if (firstArg === "skill") {
     const { runSkill } = await import("./skill.js");
     await runSkill(process.argv.slice(3));
+    return;
+  }
+
+  if (firstArg === "artifact") {
+    await runArtifact(process.argv.slice(3));
     return;
   }
 
@@ -463,7 +579,8 @@ async function main(): Promise<void> {
   const skillsDir = path.join(baseDir, "skills");
   const skillRunsDir = path.join(baseDir, "skill-runs");
   const imDir = path.join(baseDir, "im");
-  for (const dir of [runsDir, sessionsDir, skillsDir, skillRunsDir, imDir]) {
+  const artifactsDir = path.join(baseDir, "artifacts", "files");
+  for (const dir of [runsDir, sessionsDir, skillsDir, skillRunsDir, imDir, artifactsDir]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 
@@ -512,6 +629,10 @@ async function main(): Promise<void> {
   const environment = new Environment();
   const imTransport = new ImCliTransport({ baseDir: imDir });
   const skillRunStore = new SkillRunStore({ skillRunsDir, skillsDir });
+  const artifactStore = new FileArtifactStore({
+    rootDir: artifactsDir,
+    cwd: process.cwd(),
+  });
 
   // --- Wait for first IM message if no --task ---
   let task: string;
@@ -574,6 +695,11 @@ async function main(): Promise<void> {
     validator,
     reviewer,
     bash: adaptBashPort(bashManager),
+    artifacts: {
+      async stash(request): Promise<AgentObservation> {
+        return artifactStore.stash(request);
+      },
+    },
     prompt: {
       buildMessages(task: string, history: HistoryItem[]): V4ChatMessage[] {
         const entries = convertHistoryItems(history);
@@ -586,7 +712,7 @@ async function main(): Promise<void> {
         return promptBuilder.buildNextPrompt(task, entries).messages;
       },
     },
-    bashTool: BASH_TOOL_DEFINITION,
+    tools: [...STATIC_TOOL_CATALOG],
     environment,
     listActiveSkillRuns: () => skillRunStore.listActive(),
   };

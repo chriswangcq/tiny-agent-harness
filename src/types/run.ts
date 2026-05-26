@@ -192,7 +192,7 @@ export type RunEvent =
       type: "tool_execution_finished";
       stepIndex: number;
       request: ToolRequest;
-      observation: BashObservation;
+      observation: BashObservation | AgentObservation;
       timestamp: string;
     }
   | {

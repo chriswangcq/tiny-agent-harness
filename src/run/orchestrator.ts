@@ -1,6 +1,14 @@
 import type { RunEvent } from "../types/run.js";
 import type { FimStepOutput, ModelStepContext, V4ChatMessage, AgentThinking } from "../types/model.js";
-import type { ToolDefinition, ToolRequest, ToolReviewDecision, ToolCallValidation, AgentObservation } from "../types/tools.js";
+import type {
+  AgentObservation,
+  BashToolRequest,
+  StashFileToolRequest,
+  ToolCallValidation,
+  ToolDefinition,
+  ToolRequest,
+  ToolReviewDecision,
+} from "../types/tools.js";
 import type { BashObservation } from "../types/bash.js";
 import type { InternalToolCall } from "../types/model.js";
 import type { EnvironmentPort, EnvironmentEvent, IoWaitRequest } from "../types/environment.js";
@@ -11,7 +19,7 @@ import { AgentRunState } from "./state.js";
 import { TranscriptStore } from "../transcript/store.js";
 
 export interface ModelPort {
-  generateTurn(context: ModelStepContext, options: { bashTool: ToolDefinition }): Promise<FimStepOutput>;
+  generateTurn(context: ModelStepContext, options: { tools: ToolDefinition[] }): Promise<FimStepOutput>;
 }
 
 export interface ValidatorPort {
@@ -23,7 +31,11 @@ export interface ReviewerPort {
 }
 
 export interface BashPort {
-  execute(request: ToolRequest): Promise<BashObservation>;
+  execute(request: BashToolRequest): Promise<BashObservation>;
+}
+
+export interface ArtifactPort {
+  stash(request: StashFileToolRequest): Promise<AgentObservation>;
 }
 
 export interface PromptPort {
@@ -40,8 +52,9 @@ export interface RunPorts {
   validator: ValidatorPort;
   reviewer: ReviewerPort;
   bash: BashPort;
+  artifacts: ArtifactPort;
   prompt: PromptPort;
-  bashTool: ToolDefinition;
+  tools: ToolDefinition[];
   environment: EnvironmentPort;
   listActiveSkillRuns: () => ActiveSkillRunSummary[];
 }
@@ -137,7 +150,7 @@ export class RunOrchestrator {
         });
 
         const output = await this.ports.model.generateTurn(context, {
-          bashTool: this.ports.bashTool,
+          tools: this.ports.tools,
         });
 
         await this.record({
@@ -191,7 +204,10 @@ export class RunOrchestrator {
           timestamp: this.now(),
         });
 
-        const observation = await this.ports.bash.execute(effect.request);
+        const observation =
+          effect.request.toolName === "bash"
+            ? await this.ports.bash.execute(effect.request)
+            : await this.ports.artifacts.stash(effect.request);
         const toolCall =
           this.state.data.pendingToolCall ??
           (this.state.data.pendingModelTurn?.kind === "tool_call"

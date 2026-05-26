@@ -1,15 +1,13 @@
 // ─── Tool Types ─────────────────────────────────────────────────────
 //
 // Static tool catalog, tool request/review/result, and validation types.
-// The first version has exactly one tool: bash.
 
 import type { BashObservation } from "./bash.js";
 import type { EnvironmentEvent } from "./environment.js";
 
 // ─── Tool Catalog ───────────────────────────────────────────────────
 
-/** The only tool name supported in v1. */
-export type ToolName = "bash";
+export type ToolName = "bash" | "stash_file";
 
 /** A JSON Schema value (opaque to the harness). */
 export type JsonSchema = Record<string, unknown>;
@@ -21,9 +19,16 @@ export type ToolDefinition = {
   inputSchema: JsonSchema;
 };
 
+export type StashFileInput = {
+  name?: string;
+  content: string;
+  encoding?: "utf8" | "base64";
+  description?: string;
+};
+
 // ─── Tool Request (validated, ready for review) ─────────────────────
 
-export type ToolRequest =
+export type BashToolRequest =
   | {
       kind: "command";
       toolName: "bash";
@@ -56,6 +61,18 @@ export type ToolRequest =
       };
     };
 
+export type StashFileToolRequest = {
+  kind: "stash_file";
+  toolName: "stash_file";
+  toolCallId: string;
+  name?: string;
+  content: string;
+  encoding: "utf8" | "base64";
+  description?: string;
+};
+
+export type ToolRequest = BashToolRequest | StashFileToolRequest;
+
 // ─── Tool Review ────────────────────────────────────────────────────
 
 export type ToolReviewDecision = {
@@ -69,7 +86,7 @@ export type ToolReviewDecision = {
 
 export type ToolResult = {
   toolCallId: string;
-  toolName: "bash";
+  toolName: ToolName;
   observation: BashObservation | AgentObservation;
 };
 
@@ -84,13 +101,25 @@ export type ToolCallValidation =
 // Synthetic observations fed back to the model for recoverable failures
 // (invalid output, validation errors, review rejections).
 
-export type AgentObservation = {
-  kind: "model_output" | "tool_validation" | "tool_review" | "io_wait";
-  message: string;
-  recoverable: boolean;
-  decision?: {
-    status: "approved" | "rejected";
-    reason: string;
-  };
-  event?: EnvironmentEvent;
-};
+export type AgentObservation =
+  | {
+      kind: "model_output" | "tool_validation" | "tool_review" | "io_wait";
+      message: string;
+      recoverable: boolean;
+      decision?: {
+        status: "approved" | "rejected";
+        reason: string;
+      };
+      event?: EnvironmentEvent;
+    }
+  | {
+      kind: "file_artifact";
+      message: string;
+      recoverable: false;
+      artifactId: string;
+      name: string;
+      bytes: number;
+      sha256: string;
+      contentPath: string;
+      writeCommand: string;
+    };

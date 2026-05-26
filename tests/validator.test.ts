@@ -178,6 +178,52 @@ describe("ToolCallValidator valid inputs", () => {
       expect(result.request.input).toBe("yes\n");
     }
   });
+
+  it("valid stash_file input defaults encoding to utf8", () => {
+    const result = validator.validate(
+      makeCall({
+        name: "stash_file",
+        arguments: {
+          name: "snake.html",
+          content: "<!DOCTYPE html>",
+          description: "generated game",
+        },
+      }),
+    );
+
+    expect(result.status).toBe("valid");
+    if (result.status === "valid") {
+      expect(result.request).toEqual({
+        kind: "stash_file",
+        toolName: "stash_file",
+        toolCallId: "tc-1",
+        name: "snake.html",
+        content: "<!DOCTYPE html>",
+        encoding: "utf8",
+        description: "generated game",
+      });
+    }
+  });
+
+  it("valid stash_file input accepts base64 bytes", () => {
+    const result = validator.validate(
+      makeCall({
+        name: "stash_file",
+        arguments: {
+          content: "aGVsbG8=",
+          encoding: "base64",
+        },
+      }),
+    );
+
+    expect(result.status).toBe("valid");
+    if (result.status === "valid") {
+      expect(result.request.kind).toBe("stash_file");
+      if (result.request.kind === "stash_file") {
+        expect(result.request.encoding).toBe("base64");
+      }
+    }
+  });
 });
 
 // ===========================================================================
@@ -257,6 +303,34 @@ describe("ToolCallValidator invalid inputs", () => {
     expect(result.status).toBe("invalid");
     if (result.status === "invalid") {
       expect(result.observation.message).toMatch(/session/i);
+    }
+  });
+
+  it("invalid: stash_file content must be a string", () => {
+    const result = validator.validate(
+      makeCall({
+        name: "stash_file",
+        arguments: { content: 123 } as any,
+      }),
+    );
+
+    expect(result.status).toBe("invalid");
+    if (result.status === "invalid") {
+      expect(result.observation.message).toMatch(/content/i);
+    }
+  });
+
+  it("invalid: stash_file encoding is constrained", () => {
+    const result = validator.validate(
+      makeCall({
+        name: "stash_file",
+        arguments: { content: "hello", encoding: "hex" } as any,
+      }),
+    );
+
+    expect(result.status).toBe("invalid");
+    if (result.status === "invalid") {
+      expect(result.observation.message).toMatch(/encoding/i);
     }
   });
 });

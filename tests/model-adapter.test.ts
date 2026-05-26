@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DeepSeekFimAdapter } from "../src/model/adapter.js";
 import { parseDsmlDecision } from "../src/model/adapter.js";
-import { BASH_TOOL_DEFINITION } from "../src/tools/catalog.js";
+import { STATIC_TOOL_CATALOG } from "../src/tools/catalog.js";
 import type { ModelStepContext, V4ChatMessage } from "../src/types/model.js";
 
 const DSML = "｜DSML｜";
@@ -119,6 +119,16 @@ function dsmlBash(params: Record<string, string | object>): string {
   return `bash">\n${lines.join("\n")}`;
 }
 
+function dsmlStashFile(params: Record<string, string | object>): string {
+  const lines = Object.entries(params).map(([key, value]) => {
+    if (typeof value === "string") {
+      return `<${DSML}parameter name="${key}" string="true">${value}</${DSML}parameter>`;
+    }
+    return `<${DSML}parameter name="${key}" string="false">${JSON.stringify(value)}</${DSML}parameter>`;
+  });
+  return `stash_file">\n${lines.join("\n")}`;
+}
+
 function dsmlIoWait(reason: string, condition: object): string {
   return [
     `io_wait">`,
@@ -140,7 +150,7 @@ describe("DeepSeekFimAdapter", () => {
     const fetchMock = stubFimResponses("Need inspect cwd", rawDecision);
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
-      bashTool: BASH_TOOL_DEFINITION,
+      tools: [...STATIC_TOOL_CATALOG],
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -166,11 +176,9 @@ describe("DeepSeekFimAdapter", () => {
 
     // Decision pass — prefix includes thinking content + DSML invoke prefix
     const decisionBody = requestBody(fetchMock, 1);
-    expect(decisionBody.suffix).toBe(
-      `\n</${DSML}invoke>\n</${DSML}tool_calls><｜end▁of▁sentence｜>`,
-    );
+    expect(decisionBody).not.toHaveProperty("suffix");
     expect(decisionBody.max_tokens).toBe(45);
-    expect(decisionBody).not.toHaveProperty("stop");
+    expect(decisionBody.stop).toEqual([`</${DSML}invoke>`]);
     const decisionPrompt = String(decisionBody.prompt);
     expect(decisionPrompt).toContain(MOCK_ENCODED_PREFIX);
     expect(decisionPrompt).toContain("Need inspect cwd");
@@ -206,14 +214,16 @@ describe("DeepSeekFimAdapter", () => {
     );
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
-      bashTool: BASH_TOOL_DEFINITION,
+      tools: [...STATIC_TOOL_CATALOG],
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(requestBody(fetchMock, 0).stop).toEqual([`<${DSML}tool_calls>`]);
     expect(requestBody(fetchMock, 1).stop).toEqual([`<${DSML}tool_calls>`]);
-    expect(requestBody(fetchMock, 2)).not.toHaveProperty("stop");
-    expect(requestBody(fetchMock, 3)).not.toHaveProperty("stop");
+    expect(requestBody(fetchMock, 2).stop).toEqual([`</${DSML}invoke>`]);
+    expect(requestBody(fetchMock, 2)).not.toHaveProperty("suffix");
+    expect(requestBody(fetchMock, 3).stop).toEqual([`</${DSML}invoke>`]);
+    expect(requestBody(fetchMock, 3)).not.toHaveProperty("suffix");
     expect(String(requestBody(fetchMock, 1).prompt)).toBe(
       `${MOCK_ENCODED_PREFIX}Need `,
     );
@@ -241,7 +251,7 @@ describe("DeepSeekFimAdapter", () => {
     stubFimResponses("Need user input", rawDecision);
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
-      bashTool: BASH_TOOL_DEFINITION,
+      tools: [...STATIC_TOOL_CATALOG],
     });
 
     expect(output.turn.kind).toBe("io_wait");
@@ -250,6 +260,34 @@ describe("DeepSeekFimAdapter", () => {
         reason: "need confirmation",
         condition: { kind: "new_user_message", channel: "default" },
       });
+    }
+  });
+
+  it("parses DSML stash_file decisions as internal tool calls", async () => {
+    const rawDecision = dsmlStashFile({
+      name: "snake.html",
+      content: "<!DOCTYPE html>\n<title>Snake</title>",
+      encoding: "utf8",
+    });
+    stubFimResponses("Need stage generated file", rawDecision);
+
+    const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
+      tools: [...STATIC_TOOL_CATALOG],
+    });
+
+    expect(output.turn.kind).toBe("tool_call");
+    if (output.turn.kind === "tool_call") {
+      expect(output.turn.toolCall).toEqual(
+        expect.objectContaining({
+          id: "fim-call-run-test-3",
+          name: "stash_file",
+          arguments: {
+            name: "snake.html",
+            content: "<!DOCTYPE html>\n<title>Snake</title>",
+            encoding: "utf8",
+          },
+        }),
+      );
     }
   });
 
@@ -267,7 +305,7 @@ describe("DeepSeekFimAdapter", () => {
     );
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
-      bashTool: BASH_TOOL_DEFINITION,
+      tools: [...STATIC_TOOL_CATALOG],
     });
 
     const decisionPrompt = String(requestBody(fetchMock, 1).prompt);
@@ -290,7 +328,7 @@ describe("DeepSeekFimAdapter", () => {
     );
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
-      bashTool: BASH_TOOL_DEFINITION,
+      tools: [...STATIC_TOOL_CATALOG],
     });
 
     expect(output.turn).toMatchObject({
@@ -306,7 +344,7 @@ describe("DeepSeekFimAdapter", () => {
     );
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
-      bashTool: BASH_TOOL_DEFINITION,
+      tools: [...STATIC_TOOL_CATALOG],
     });
 
     expect(output.turn).toMatchObject({
@@ -322,7 +360,7 @@ describe("DeepSeekFimAdapter", () => {
     );
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
-      bashTool: BASH_TOOL_DEFINITION,
+      tools: [...STATIC_TOOL_CATALOG],
     });
 
     expect(output.turn).toMatchObject({
@@ -335,7 +373,7 @@ describe("DeepSeekFimAdapter", () => {
     stubFimResponses("Thinking", "I should run a command");
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
-      bashTool: BASH_TOOL_DEFINITION,
+      tools: [...STATIC_TOOL_CATALOG],
     });
 
     expect(output.turn).toMatchObject({
@@ -348,7 +386,7 @@ describe("DeepSeekFimAdapter", () => {
     stubFimResponses("Thinking", "bash<｜tool▁sep｜>{not json}");
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
-      bashTool: BASH_TOOL_DEFINITION,
+      tools: [...STATIC_TOOL_CATALOG],
     });
 
     expect(output.turn).toMatchObject({
@@ -364,7 +402,7 @@ describe("DeepSeekFimAdapter", () => {
     );
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
-      bashTool: BASH_TOOL_DEFINITION,
+      tools: [...STATIC_TOOL_CATALOG],
     });
 
     expect(output.turn).toMatchObject({
@@ -380,7 +418,7 @@ describe("DeepSeekFimAdapter", () => {
     );
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
-      bashTool: BASH_TOOL_DEFINITION,
+      tools: [...STATIC_TOOL_CATALOG],
     });
 
     expect(output.turn).toMatchObject({
@@ -397,7 +435,7 @@ describe("DeepSeekFimAdapter", () => {
 
     await expect(
       makeAdapter().generateTurn(BASE_CONTEXT, {
-        bashTool: BASH_TOOL_DEFINITION,
+        tools: [...STATIC_TOOL_CATALOG],
       }),
     ).rejects.toThrow("DeepSeek FIM request failed: 429 rate limited");
   });
@@ -412,7 +450,7 @@ describe("DeepSeekFimAdapter", () => {
 
     await expect(
       makeAdapter().generateTurn(BASE_CONTEXT, {
-        bashTool: BASH_TOOL_DEFINITION,
+        tools: [...STATIC_TOOL_CATALOG],
       }),
     ).rejects.toThrow("DeepSeek FIM response missing choices[0].text");
   });
@@ -427,23 +465,27 @@ describe("DeepSeekFimAdapter", () => {
     );
 
     await makeAdapter().generateTurn(BASE_CONTEXT, {
-      bashTool: BASH_TOOL_DEFINITION,
+      tools: [...STATIC_TOOL_CATALOG],
     });
 
     const thinkingInput = JSON.parse(mockExec.mock.calls[0]![2]!.input as string);
     const thinkingSysMsg = thinkingInput.messages[0];
     expect(thinkingSysMsg.role).toBe("system");
-    expect(thinkingSysMsg.tools).toHaveLength(2);
-    expect(thinkingSysMsg.tools[0].function.name).toBe("bash");
-    expect(thinkingSysMsg.tools[1].function.name).toBe("io_wait");
+    expect(thinkingSysMsg.tools.map((tool: any) => tool.function.name)).toEqual([
+      "bash",
+      "stash_file",
+      "io_wait",
+    ]);
     expect(thinkingInput.thinking_mode).toBe("thinking");
 
     const decisionInput = JSON.parse(mockExec.mock.calls[1]![2]!.input as string);
     const decisionSysMsg = decisionInput.messages[0];
     expect(decisionSysMsg.role).toBe("system");
-    expect(decisionSysMsg.tools).toHaveLength(2);
-    expect(decisionSysMsg.tools[0].function.name).toBe("bash");
-    expect(decisionSysMsg.tools[1].function.name).toBe("io_wait");
+    expect(decisionSysMsg.tools.map((tool: any) => tool.function.name)).toEqual([
+      "bash",
+      "stash_file",
+      "io_wait",
+    ]);
     expect(decisionInput.thinking_mode).toBe("thinking");
   });
 });

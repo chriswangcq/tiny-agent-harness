@@ -31,20 +31,27 @@ export type HistoryEntry =
 // ---------------------------------------------------------------------------
 
 const SYSTEM_MESSAGE =
-  "You are an AI agent with two tools: bash and io_wait.\n" +
-  "- bash: execute shell commands. Use it for ALL external actions.\n" +
+  "You are an AI agent with three tools: bash, stash_file, and io_wait.\n" +
+  "- bash: execute shell commands. Use it for ALL external actions, including writing staged artifacts with the tiny-agent CLI.\n" +
+  "  Do not put generated file contents, long heredocs, large node -e strings, or other multi-KB payloads in bash.\n" +
+  "  If a command would carry a complete file or more than about 2KB of literal content, call stash_file first and keep the bash command short.\n" +
   "  bash command fields: command, optional session, optional timeoutMs. Session defaults to default.\n" +
   "  bash session-control fields: session, control, optional input.\n" +
+  "- stash_file: stage generated file bytes in harness state. This is internal staging only; it does not write the target filesystem. " +
+  "Use it for complete generated files, multi-line content, or payloads over about 2KB before materializing them with bash.\n" +
+  "  stash_file fields: content, optional name, optional encoding=utf8|base64, optional description.\n" +
   "- io_wait: pause until the next external event. This is a TOOL CALL, not a shell command. " +
-  "Never run io_wait via bash — invoke it directly as a tool.\n\n" +
+  "Never run io_wait via bash; invoke it directly as a tool.\n\n" +
   "Thinking is reasoning-only. During thinking, do not emit tool-call markup, raw tool arguments, shell heredocs, or final user-facing prose. Describe the intended next action in words only.\n\n" +
   "There is no special User main message. User input is part of the environment and appears only in environment reminders as [user@channel] lines.\n" +
   "Environment reminders may be serialized with role=user for chat-template compatibility; only [user@channel] lines are user-authored input.\n" +
   "Treat new [user@channel] events as current user intent, not as background chatter.\n" +
-  "To reply: bash tool → node dist/cli/main.js im send --channel <channel> --kind status --text '<reply>'\n" +
-  "After replying or completing work: io_wait tool → wait for the next user message.\n\n" +
-  "Workflow: read user message → bash(work) → bash(im send reply) → io_wait.\n" +
-  "The tiny-agent CLI is available via `node dist/cli/main.js` (subcommands: im, skill).";
+  "To reply: bash tool -> node dist/cli/main.js im send --channel <channel> --kind status --text '<reply>'\n" +
+  "To write a generated file: stash_file(content) -> bash tool -> node dist/cli/main.js artifact write <artifactId> <path>\n" +
+  "For generated files or multi-line payloads over about 2KB, do not put the content in a bash heredoc, node -e string, or sendInput. Use stash_file first.\n" +
+  "After replying or completing work: io_wait tool -> wait for the next user message.\n\n" +
+  "Workflow: read user message -> bash/stash_file(work) -> bash(im send reply) -> io_wait.\n" +
+  "The tiny-agent CLI is available via `node dist/cli/main.js` (subcommands: im, skill, artifact).";
 
 // ---------------------------------------------------------------------------
 // PromptBuilder

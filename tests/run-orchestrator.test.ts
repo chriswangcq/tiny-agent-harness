@@ -10,12 +10,12 @@ import {
   type RunPorts,
 } from "../src/run/orchestrator.js";
 import { TranscriptStore } from "../src/transcript/store.js";
-import { BASH_TOOL_DEFINITION } from "../src/tools/catalog.js";
+import { STATIC_TOOL_CATALOG } from "../src/tools/catalog.js";
 import type { BashObservation } from "../src/types/bash.js";
 import type { EnvironmentEvent, IoWaitRequest } from "../src/types/environment.js";
 import type { FimStepOutput, InternalToolCall, ModelStepContext, ModelTurn } from "../src/types/model.js";
 import type { RunEvent } from "../src/types/run.js";
-import type { ToolRequest, ToolReviewDecision } from "../src/types/tools.js";
+import type { AgentObservation, StashFileToolRequest, ToolRequest, ToolReviewDecision } from "../src/types/tools.js";
 
 let tmpDirs: string[] = [];
 
@@ -72,6 +72,7 @@ function makeRun(options?: {
   validateResult?: RunPorts["validator"]["validate"];
   reviewDecision?: ToolReviewDecision;
   bashObservation?: BashObservation;
+  artifactObservation?: AgentObservation;
   activeSkillRuns?: ReturnType<RunPorts["listActiveSkillRuns"]>;
 }) {
   const runDir = path.join(makeTmpDir(), "run-001");
@@ -96,6 +97,7 @@ function makeRun(options?: {
   const waitCalls: Array<{ runId: string; wait: IoWaitRequest }> = [];
   const reviewCalls: ToolRequest[] = [];
   const bashCalls: ToolRequest[] = [];
+  const artifactCalls: StashFileToolRequest[] = [];
 
   const ports: RunPorts = {
     model: {
@@ -111,14 +113,25 @@ function makeRun(options?: {
     validator: {
       validate: options?.validateResult ?? ((toolCall) => ({
         status: "valid",
-        request: {
-          kind: "command",
-          toolName: "bash",
-          toolCallId: toolCall.id,
-          session: "default",
-          command: "pwd",
-          timeoutMs: 30_000,
-        },
+        request:
+          toolCall.name === "stash_file"
+            ? {
+                kind: "stash_file",
+                toolName: "stash_file",
+                toolCallId: toolCall.id,
+                content: toolCall.arguments.content,
+                encoding: toolCall.arguments.encoding ?? "utf8",
+                name: toolCall.arguments.name,
+                description: toolCall.arguments.description,
+              }
+            : {
+                kind: "command",
+                toolName: "bash",
+                toolCallId: toolCall.id,
+                session: "default",
+                command: "pwd",
+                timeoutMs: 30_000,
+              },
       })),
     },
     reviewer: {
@@ -148,6 +161,24 @@ function makeRun(options?: {
         );
       },
     },
+    artifacts: {
+      async stash(request) {
+        artifactCalls.push(request);
+        return (
+          options?.artifactObservation ?? {
+            kind: "file_artifact",
+            recoverable: false,
+            message: "stashed file artifact file-call",
+            artifactId: "file-call",
+            name: "artifact.txt",
+            bytes: 5,
+            sha256: "abc123",
+            contentPath: ".tiny-agent/artifacts/files/file-call/content",
+            writeCommand: "node dist/cli/main.js artifact write file-call <target-path>",
+          }
+        );
+      },
+    },
     prompt: {
       buildMessages(task, history) {
         void task;
@@ -162,7 +193,7 @@ function makeRun(options?: {
         ];
       },
     },
-    bashTool: BASH_TOOL_DEFINITION,
+    tools: [...STATIC_TOOL_CATALOG],
     environment: options?.environment ?? {
       appendEvent() {},
       consumeSince(call) {
@@ -193,6 +224,7 @@ function makeRun(options?: {
     waitCalls,
     reviewCalls,
     bashCalls,
+    artifactCalls,
   };
 }
 
@@ -340,6 +372,64 @@ describe("RunOrchestrator", () => {
       "io_wait_started",
       "io_wait_satisfied",
       "run_finished",
+    ]);
+  });
+
+  it("executes an approved stash_file tool call through the artifact port", async () => {
+    const toolCall: InternalToolCall = {
+      id: "call-stash",
+      name: "stash_file",
+      arguments: {
+        name: "snake.html",
+        content: "<!DOCTYPE html>",
+      },
+    };
+    const wait: IoWaitRequest = {
+      reason: "awaiting next instruction",
+      condition: { kind: "new_user_message", channel: "default" },
+    };
+    const { orchestrator, histories, artifactCalls, bashCalls } = makeRun({
+      outputs: [toolOutput(toolCall), ioWaitOutput(wait)],
+      maxSteps: 2,
+      waitEvent: {
+        id: "msg-env-wait",
+        kind: "user_message_received",
+        source: "im",
+        timestamp: "2026-05-25T12:02:00.000Z",
+        message: {
+          id: "msg-wait",
+          channel: "default",
+          role: "user",
+          text: "ok",
+          createdAt: "2026-05-25T12:02:00.000Z",
+        },
+      },
+    });
+
+    await orchestrator.run();
+
+    expect(bashCalls).toHaveLength(0);
+    expect(artifactCalls).toEqual([
+      {
+        kind: "stash_file",
+        toolName: "stash_file",
+        toolCallId: "call-stash",
+        name: "snake.html",
+        content: "<!DOCTYPE html>",
+        encoding: "utf8",
+        description: undefined,
+      },
+    ]);
+    expect(histories[1]).toEqual([
+      { type: "tool_call", toolCall, thinking: { content: "need bash" } },
+      {
+        type: "observation",
+        observation: expect.objectContaining({
+          kind: "file_artifact",
+          artifactId: "file-call",
+          writeCommand: expect.stringContaining("artifact write"),
+        }),
+      },
     ]);
   });
 

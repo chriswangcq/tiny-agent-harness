@@ -9,6 +9,7 @@ import type {
   InternalToolCall,
   ModelStepContext,
   ModelTurn,
+  StashFileInput,
   ToolDefinition,
   V4ChatMessage,
   V4Tool,
@@ -53,6 +54,10 @@ type Decision =
       arguments: BashToolInput;
     }
   | {
+      name: "stash_file";
+      arguments: StashFileInput;
+    }
+  | {
       name: "io_wait";
       arguments: {
         reason?: string;
@@ -71,9 +76,11 @@ const DSML_INVOKE_OPEN_PREFIX = `<${DSML}invoke name="`;
 const DSML_INVOKE_ECHO_PREFIX = `invoke name="`;
 const DSML_INVOKE_CLOSE = `</${DSML}invoke>`;
 const DSML_PARAM_CLOSE = `</${DSML}parameter>`;
-const THINKING_STOP_SEQUENCES = [DSML_TOOL_CALLS_OPEN];
-
 const END_OF_SENTENCE = "<｜end▁of▁sentence｜>";
+
+const THINKING_STOP_SEQUENCES = [DSML_TOOL_CALLS_OPEN];
+const DECISION_STOP_SEQUENCES = [DSML_INVOKE_CLOSE];
+const DECISION_TRAILER = `\n${DSML_INVOKE_CLOSE}\n${DSML_TOOL_CALLS_CLOSE}${END_OF_SENTENCE}`;
 
 // ---------------------------------------------------------------------------
 // io_wait tool definition (OpenAI format for the V4 encoder)
@@ -136,13 +143,13 @@ export class DeepSeekFimAdapter {
 
   async generateTurn(
     context: ModelStepContext,
-    options: { bashTool: ToolDefinition },
+    options: { tools: ToolDefinition[] },
   ): Promise<FimStepOutput> {
-    const thinking = await this.generateThinking(context, options.bashTool);
+    const thinking = await this.generateThinking(context, options.tools);
     const decision = await this.generateDecision(
       context,
       thinking,
-      options.bashTool,
+      options.tools,
     );
     const turn = this.parseDecision(context, thinking, decision.text);
 
@@ -159,9 +166,9 @@ export class DeepSeekFimAdapter {
 
   private async generateThinking(
     context: ModelStepContext,
-    bashTool: ToolDefinition,
+    tools: ToolDefinition[],
   ): Promise<AgentThinking> {
-    const messages = this.attachTools(context.messages, bashTool);
+    const messages = this.attachTools(context.messages, tools);
     const prompt = this.encodePrompt(messages);
     const completion = await this.completeFim({
       prompt,
@@ -179,9 +186,9 @@ export class DeepSeekFimAdapter {
   private async generateDecision(
     context: ModelStepContext,
     thinking: AgentThinking,
-    bashTool: ToolDefinition,
+    tools: ToolDefinition[],
   ): Promise<{ text: string; meta: FimCompletionMeta }> {
-    const messages = this.attachTools(context.messages, bashTool);
+    const messages = this.attachTools(context.messages, tools);
     const basePrefix = this.encodePrompt(messages);
     const sanitized = sanitizeThinkingForDecisionPrompt(thinking.content);
     const prompt =
@@ -191,35 +198,35 @@ export class DeepSeekFimAdapter {
 
     const completion = await this.completeFim({
       prompt,
-      suffix: `\n${DSML_INVOKE_CLOSE}\n${DSML_TOOL_CALLS_CLOSE}${END_OF_SENTENCE}`,
       maxTokens: this.config.decisionMaxTokens,
+      stop: DECISION_STOP_SEQUENCES,
     });
 
     return {
-      text: completion.text,
+      text: completion.text + DECISION_TRAILER,
       meta: completionMeta(completion),
     };
   }
 
   private attachTools(
     messages: V4ChatMessage[],
-    bashTool: ToolDefinition,
+    tools: ToolDefinition[],
   ): V4ChatMessage[] {
-    const bashV4Tool: V4Tool = {
+    const v4Tools: V4Tool[] = tools.map((tool) => ({
       type: "function",
       function: {
-        name: bashTool.name,
-        description: bashTool.description,
-        parameters: bashTool.inputSchema,
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.inputSchema,
       },
-    };
+    }));
 
     const result = [...messages];
     const sysIdx = result.findIndex((m) => m.role === "system");
     if (sysIdx !== -1) {
       const sys = result[sysIdx]!;
       if (sys.role === "system") {
-        result[sysIdx] = { ...sys, tools: [bashV4Tool, IO_WAIT_V4_TOOL] };
+        result[sysIdx] = { ...sys, tools: [...v4Tools, IO_WAIT_V4_TOOL] };
       }
     }
     return result;
@@ -236,7 +243,7 @@ export class DeepSeekFimAdapter {
 
   private async completeFim(input: {
     prompt: string;
-    suffix: string;
+    suffix?: string;
     maxTokens: number;
     stop?: string[];
   }): Promise<FimCompletionResult> {
@@ -267,7 +274,7 @@ export class DeepSeekFimAdapter {
 
   private async requestFimCompletion(input: {
     prompt: string;
-    suffix: string;
+    suffix?: string;
     maxTokens: number;
     stop?: string[];
   }): Promise<{
@@ -278,9 +285,11 @@ export class DeepSeekFimAdapter {
     const body: Record<string, unknown> = {
       model: this.config.model,
       prompt: input.prompt,
-      suffix: input.suffix,
       max_tokens: input.maxTokens,
     };
+    if (input.suffix !== undefined) {
+      body.suffix = input.suffix;
+    }
     if (input.stop && input.stop.length > 0) {
       body.stop = input.stop;
     }
@@ -346,12 +355,20 @@ export class DeepSeekFimAdapter {
       };
     }
 
-    const toolCall: InternalToolCall = {
-      id: `fim-call-${context.runId}-${context.stepIndex}`,
-      name: "bash",
-      arguments: decision.arguments,
-      raw: decision,
-    };
+    const toolCall: InternalToolCall =
+      decision.name === "bash"
+        ? {
+            id: `fim-call-${context.runId}-${context.stepIndex}`,
+            name: "bash",
+            arguments: decision.arguments,
+            raw: decision,
+          }
+        : {
+            id: `fim-call-${context.runId}-${context.stepIndex}`,
+            name: "stash_file",
+            arguments: decision.arguments,
+            raw: decision,
+          };
 
     return {
       kind: "tool_call",
@@ -393,7 +410,7 @@ export type ParseDecisionResult =
   | { status: "invalid"; message: string };
 
 export function parseDsmlDecision(rawDecision: string): ParseDecisionResult {
-  const text = rawDecision.trim();
+  const text = stripTrailingDecisionFrame(rawDecision);
 
   if (looksLikeDsml(text)) {
     return parseDsml(text);
@@ -419,14 +436,7 @@ function looksLikeDsml(text: string): boolean {
 }
 
 function parseDsml(raw: string): ParseDecisionResult {
-  let text = raw;
-
-  // Strip trailing close tokens the model might echo from the suffix
-  for (const token of [END_OF_SENTENCE, DSML_TOOL_CALLS_CLOSE, DSML_INVOKE_CLOSE]) {
-    const idx = text.lastIndexOf(token);
-    if (idx !== -1) text = text.slice(0, idx);
-  }
-  text = text.trim();
+  let text = stripTrailingDecisionFrame(raw);
 
   if (text.startsWith(DSML_TOOL_CALLS_OPEN)) {
     text = text.slice(DSML_TOOL_CALLS_OPEN.length).trim();
@@ -497,6 +507,27 @@ function parseDsml(raw: string): ParseDecisionResult {
   };
 }
 
+function stripTrailingDecisionFrame(raw: string): string {
+  let text = raw.trim();
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    for (const token of [
+      END_OF_SENTENCE,
+      DSML_TOOL_CALLS_CLOSE,
+      DSML_INVOKE_CLOSE,
+    ]) {
+      if (text.endsWith(token)) {
+        text = text.slice(0, -token.length).trim();
+        changed = true;
+      }
+    }
+  }
+
+  return text;
+}
+
 function parseDsmlParameters(text: string): Record<string, unknown> {
   const params: Record<string, unknown> = {};
   const paramRegex = new RegExp(
@@ -537,6 +568,13 @@ function buildDecision(
     return {
       status: "valid",
       decision: { name: "bash", arguments: args as BashToolInput },
+    };
+  }
+
+  if (name === "stash_file") {
+    return {
+      status: "valid",
+      decision: { name: "stash_file", arguments: args as StashFileInput },
     };
   }
 

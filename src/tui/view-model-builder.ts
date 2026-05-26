@@ -6,6 +6,7 @@
 
 import type { RunEvent, AgentRunStateData } from "../types/run.js";
 import type { ModelTurn } from "../types/model.js";
+import type { BashObservation } from "../types/bash.js";
 import type {
   UserMessage,
   AgentMessage,
@@ -196,7 +197,7 @@ export class ViewModelBuilder {
           timestamp: event.timestamp,
           phase: "tool",
           status: "running",
-          title: "bash started",
+          title: `${event.request.toolName} started`,
           summary: "",
           detail: formatDetail([["request", event.request]]),
         });
@@ -204,18 +205,31 @@ export class ViewModelBuilder {
 
       case "tool_execution_finished":
         {
-          const timedOut = event.observation.timedOut === true;
-          const status = timedOut
-            ? "waiting"
-            : event.observation.returnCode === 0
-              ? "ok"
-              : "error";
-          const title = timedOut
-            ? "bash timed out, focus released"
-            : `bash finished rc=${event.observation.returnCode}`;
-          const summary = timedOut
-            ? `session=${event.observation.session ?? "unknown"} still running`
-            : event.observation.output?.slice(0, 200) ?? "";
+          const observation = event.observation;
+          let status: LoopFrame["status"];
+          let title: string;
+          let summary: string;
+          let logPath: string | undefined;
+
+          if (isBashObservation(observation)) {
+            const timedOut = observation.timedOut === true;
+            status = timedOut
+              ? "waiting"
+              : observation.returnCode === 0
+                ? "ok"
+                : "error";
+            title = timedOut
+              ? "bash timed out, focus released"
+              : `bash finished rc=${observation.returnCode}`;
+            summary = timedOut
+              ? `session=${observation.session ?? "unknown"} still running`
+              : observation.output?.slice(0, 200) ?? "";
+            logPath = observation.outputLogPath;
+          } else {
+            status = "ok";
+            title = `${event.request.toolName} finished`;
+            summary = observation.message;
+          }
 
           this.pushFrame({
             stepIndex: event.stepIndex,
@@ -224,10 +238,10 @@ export class ViewModelBuilder {
             status,
             title,
             summary,
-            logPath: event.observation.outputLogPath,
+            logPath,
             detail: formatDetail([
               ["request", event.request],
-              ["observation", event.observation],
+              ["observation", observation],
             ]),
           });
         }
@@ -480,9 +494,17 @@ function truncateForSummary(text: string, maxLength = 80): string {
   return text.length <= maxLength ? text : `${text.slice(0, maxLength - 3)}...`;
 }
 
-function formatToolCallSummary(toolCall: { arguments: unknown }): string {
+function formatToolCallSummary(toolCall: { name?: string; arguments: unknown }): string {
   const args = toolCall.arguments;
   if (isRecord(args)) {
+    if (toolCall.name === "stash_file") {
+      const name = typeof args.name === "string" ? args.name : "artifact";
+      const content =
+        typeof args.content === "string"
+          ? `${Buffer.byteLength(args.content, "utf8")} chars`
+          : "content";
+      return `name=${JSON.stringify(name)} ${content}`;
+    }
     const session = typeof args.session === "string" ? args.session : "default";
     const command = typeof args.command === "string" ? args.command : undefined;
     if (command) {
@@ -542,4 +564,8 @@ function compactLongText(value: string | undefined, maxLength = 2400): string | 
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isBashObservation(value: unknown): value is BashObservation {
+  return isRecord(value) && "returnCode" in value && "output" in value;
 }
