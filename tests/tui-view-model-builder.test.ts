@@ -85,6 +85,20 @@ function makeTimedOutBashObservation(): BashObservation {
   };
 }
 
+function makeBusyBashObservation(): BashObservation {
+  return {
+    session: "default",
+    state: "running",
+    returnCode: null,
+    output: "",
+    outputTruncated: false,
+    outputLogPath: "/tmp/log.txt",
+    errorCode: "SESSION_BUSY",
+    message:
+      'Session "default" is already running a command; rejected the new command without writing to the PTY. Use poll, interrupt, terminate, or restart before sending another command.',
+  };
+}
+
 function makeAgentObservation(): AgentObservation {
   return { kind: "tool_validation", message: "validation error", recoverable: true };
 }
@@ -457,6 +471,25 @@ describe("ViewModelBuilder", () => {
     expect(frame.detail).toContain('"timedOut": true');
     expect(frame.detail).toContain('"focusReleased": true');
     expect(frame.detail).toContain('"state": "running"');
+  });
+
+  it("tool_execution_finished with bash errorCode shows the actionable message", () => {
+    const b = builderWithRunStarted();
+    b.applyEvent({
+      type: "tool_execution_finished",
+      stepIndex: 0,
+      request: makeCommandRequest(),
+      observation: makeBusyBashObservation(),
+      timestamp: LATER,
+    });
+
+    const vm = b.getViewModel();
+    const frame = vm.loop[vm.loop.length - 1];
+    expect(frame.phase).toBe("tool");
+    expect(frame.status).toBe("error");
+    expect(frame.title).toBe("bash rejected SESSION_BUSY");
+    expect(frame.summary).toContain("rejected the new command");
+    expect(frame.detail).toContain('"errorCode": "SESSION_BUSY"');
   });
 
   // 15

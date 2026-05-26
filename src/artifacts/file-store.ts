@@ -96,14 +96,7 @@ export class FileArtifactStore {
     return fs
       .readdirSync(this.rootDir, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
-      .map((entry) => {
-        try {
-          return this.readMeta(entry.name);
-        } catch {
-          return undefined;
-        }
-      })
-      .filter((meta): meta is FileArtifactMeta => meta !== undefined)
+      .map((entry) => this.readMeta(entry.name))
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 

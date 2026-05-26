@@ -481,9 +481,13 @@ function parseDsml(raw: string): ParseDecisionResult {
     };
   }
 
-  const params = parseDsmlParameters(rest);
-  if (Object.keys(params).length > 0) {
-    return buildDecision(name, params);
+  const paramsResult = parseDsmlParameters(rest);
+  if (paramsResult.status === "invalid") {
+    return paramsResult;
+  }
+
+  if (Object.keys(paramsResult.params).length > 0) {
+    return buildDecision(name, paramsResult.params);
   }
 
   if (openParameterCount > 0) {
@@ -528,7 +532,11 @@ function stripTrailingDecisionFrame(raw: string): string {
   return text;
 }
 
-function parseDsmlParameters(text: string): Record<string, unknown> {
+function parseDsmlParameters(
+  text: string,
+):
+  | { status: "valid"; params: Record<string, unknown> }
+  | { status: "invalid"; message: string } {
   const params: Record<string, unknown> = {};
   const paramRegex = new RegExp(
     `<${escapeForRegex(DSML)}parameter\\s+name="([^"]*)"\\s+string="(true|false)"` +
@@ -548,12 +556,15 @@ function parseDsmlParameters(text: string): Record<string, unknown> {
       try {
         params[paramName] = JSON.parse(value);
       } catch {
-        params[paramName] = value;
+        return {
+          status: "invalid",
+          message: `Malformed DSML tool call: parameter "${paramName}" declared string="false" but did not contain valid JSON.`,
+        };
       }
     }
   }
 
-  return params;
+  return { status: "valid", params };
 }
 
 // ---------------------------------------------------------------------------

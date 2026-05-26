@@ -280,14 +280,21 @@ describe("BashSessionManager", () => {
     expect(current.maxObservationBytes).toBe(4321);
   });
 
-  it("throws a clear error for controls targeting a missing session", async () => {
+  it("returns a structured error for controls targeting a missing session", async () => {
     const { manager } = makeManager();
 
     await expect(
       manager.handleControl({ control: "status", session: "missing" }),
-    ).rejects.toThrow(
-      'Session "missing" does not exist. Use the "create" control or send a command to auto-create it.',
-    );
+    ).resolves.toEqual({
+      session: "missing",
+      returnCode: null,
+      output: "",
+      outputTruncated: false,
+      control: "status",
+      errorCode: "SESSION_NOT_AVAILABLE",
+      message:
+        'Session "missing" does not exist. Use the "create" control or send a command to auto-create it.',
+    });
   });
 
   it("timeout releases focus while leaving the session running", async () => {
@@ -347,6 +354,44 @@ describe("BashSessionManager", () => {
       status: "exited",
       returnCode: 0,
     });
+  });
+
+  it("rejects a new command while the session is still running", async () => {
+    const { manager, logDir } = makeManager();
+
+    await manager.executeCommandAutoCreate(
+      "slow",
+      "sleep 0.2; printf late",
+      10,
+    );
+
+    const rejected = await manager.executeCommandAutoCreate(
+      "slow",
+      "printf should-not-run",
+      1000,
+    );
+
+    expect(rejected).toEqual({
+      session: "slow",
+      state: "running",
+      returnCode: null,
+      output: "",
+      outputTruncated: false,
+      outputLogPath: path.join(logDir, "slow.log"),
+      errorCode: "SESSION_BUSY",
+      message:
+        'Session "slow" is already running a command; rejected the new command without writing to the PTY. ' +
+        "Use poll, interrupt, terminate, or restart before sending another command.",
+    });
+
+    expect(fs.readFileSync(path.join(logDir, "slow.log"), "utf-8")).not.toContain(
+      "should-not-run",
+    );
+    expect(manager.getSession("slow")?.currentCommand).toMatchObject({
+      status: "timed_out",
+    });
+
+    await manager.handleControl({ control: "terminate", session: "slow" });
   });
 
   it("ignores marker-like command output that does not match the active command id", async () => {

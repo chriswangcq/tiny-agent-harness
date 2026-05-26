@@ -70,4 +70,15 @@ describe("FileArtifactStore", () => {
 
     expect([...fs.readFileSync(outPath)]).toEqual([0, 1, 2]);
   });
+
+  it("surfaces corrupted artifact metadata instead of hiding it from list", () => {
+    const tmp = makeTmpDir();
+    const rootDir = path.join(tmp, "artifacts");
+    const store = new FileArtifactStore({ rootDir, cwd: tmp });
+    const badDir = path.join(rootDir, "file-corrupt");
+    fs.mkdirSync(badDir, { recursive: true });
+    fs.writeFileSync(path.join(badDir, "meta.json"), "{not json", "utf8");
+
+    expect(() => store.list()).toThrow();
+  });
 });

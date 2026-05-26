@@ -29,11 +29,16 @@ function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.length > 0;
 }
 
+function utf8Bytes(value: string): number {
+  return Buffer.byteLength(value, "utf8");
+}
+
 // ---------------------------------------------------------------------------
 // ToolCallValidator
 // ---------------------------------------------------------------------------
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const MAX_PTY_INPUT_BYTES = 4096;
 
 const SESSION_CONTROLS = new Set([
   "status",
@@ -125,6 +130,14 @@ export class ToolCallValidator {
       );
     }
 
+    const commandBytes = utf8Bytes(args.command);
+    if (commandBytes > MAX_PTY_INPUT_BYTES) {
+      return invalid(
+        `Invalid bash tool arguments: command is ${commandBytes} bytes, above the ${MAX_PTY_INPUT_BYTES}-byte PTY input limit. ` +
+          "Stage large file content with stash_file, then run a short artifact write command.",
+      );
+    }
+
     const timeoutMs =
       typeof args.timeoutMs === "number" && args.timeoutMs > 0
         ? args.timeoutMs
@@ -204,6 +217,13 @@ export class ToolCallValidator {
       if (!isString(args.input)) {
         return invalid(
           "Invalid bash tool arguments: sendInput control requires an input string.",
+        );
+      }
+      const inputBytes = utf8Bytes(args.input);
+      if (inputBytes > MAX_PTY_INPUT_BYTES) {
+        return invalid(
+          `Invalid bash tool arguments: sendInput is ${inputBytes} bytes, above the ${MAX_PTY_INPUT_BYTES}-byte PTY input limit. ` +
+            "Use stash_file for large content instead of streaming it through the PTY.",
         );
       }
       const request: ToolRequest = {

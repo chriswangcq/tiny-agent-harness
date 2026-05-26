@@ -218,10 +218,14 @@ export class ViewModelBuilder {
               : observation.returnCode === 0
                 ? "ok"
                 : "error";
-            title = timedOut
+            title = observation.errorCode
+              ? `bash rejected ${observation.errorCode}`
+              : timedOut
               ? "bash timed out, focus released"
               : `bash finished rc=${observation.returnCode}`;
-            summary = timedOut
+            summary = observation.message
+              ? observation.message
+              : timedOut
               ? `session=${observation.session ?? "unknown"} still running`
               : observation.output?.slice(0, 200) ?? "";
             logPath = observation.outputLogPath;

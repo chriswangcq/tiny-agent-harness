@@ -560,6 +560,19 @@ describe("parseDsmlDecision", () => {
     });
   });
 
+  it("rejects non-string DSML parameters that are not valid JSON", () => {
+    const raw = [
+      `bash">`,
+      `<${DSML}parameter name="session" string="true">default</${DSML}parameter>`,
+      `<${DSML}parameter name="command" string="false">pwd</${DSML}parameter>`,
+    ].join("\n");
+    const result = parseDsmlDecision(raw);
+    expect(result).toMatchObject({
+      status: "invalid",
+      message: expect.stringContaining('declared string="false"'),
+    });
+  });
+
   it("rejects unclosed DSML parameter tags without falling back to JSON", () => {
     const raw =
       `bash">\n` +

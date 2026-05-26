@@ -35,6 +35,7 @@ const SYSTEM_MESSAGE =
   "- bash: execute shell commands. Use it for ALL external actions, including writing staged artifacts with the tiny-agent CLI.\n" +
   "  Do not put generated file contents, long heredocs, large node -e strings, or other multi-KB payloads in bash.\n" +
   "  If a command would carry a complete file or more than about 2KB of literal content, call stash_file first and keep the bash command short.\n" +
+  "  If a bash command times out and the session state is running, do not send another command to that session. Use poll, interrupt, terminate, or restart first.\n" +
   "  bash command fields: command, optional session, optional timeoutMs. Session defaults to default.\n" +
   "  bash session-control fields: session, control, optional input.\n" +
   "- stash_file: stage generated file bytes in harness state. This is internal staging only; it does not write the target filesystem. " +

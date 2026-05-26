@@ -76,11 +76,28 @@ export class BashSessionManager {
     command: string,
     timeoutMs?: number,
   ): Promise<BashObservation> {
-    const session = this.getSessionOrThrow(sessionId);
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return missingSessionObservation(sessionId);
+    }
 
-    // Auto-create the session if it doesn't exist is not done here;
-    // the orchestrator should create it via the "create" control first
-    // or we auto-create here for the "default" session.
+    // Direct execution reports missing sessions as observations. The
+    // auto-create wrapper is the only path that creates sessions implicitly.
+
+    if (session.state === "running") {
+      return {
+        session: sessionId,
+        state: session.state,
+        returnCode: null,
+        output: "",
+        outputTruncated: false,
+        outputLogPath: session.logPath,
+        errorCode: "SESSION_BUSY",
+        message:
+          `Session "${sessionId}" is already running a command; rejected the new command without writing to the PTY. ` +
+          "Use poll, interrupt, terminate, or restart before sending another command.",
+      };
+    }
 
     const commandId = `cmd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -188,7 +205,10 @@ export class BashSessionManager {
   }
 
   private handleStatus(sessionId: string): BashObservation {
-    const session = this.getSessionOrThrow(sessionId);
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return missingSessionObservation(sessionId, "status");
+    }
 
     const summaries: BashSessionSummary[] = [
       {
@@ -214,7 +234,10 @@ export class BashSessionManager {
   }
 
   private handlePoll(sessionId: string): BashObservation {
-    const session = this.getSessionOrThrow(sessionId);
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return missingSessionObservation(sessionId, "poll");
+    }
     const pollResult = session.poll();
 
     return {
@@ -231,7 +254,10 @@ export class BashSessionManager {
   }
 
   private handleSendInput(sessionId: string, input: string): BashObservation {
-    const session = this.getSessionOrThrow(sessionId);
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return missingSessionObservation(sessionId, "sendInput");
+    }
 
     try {
       session.writeInput(input);
@@ -244,6 +270,7 @@ export class BashSessionManager {
         output: "",
         outputTruncated: false,
         control: "sendInput",
+        errorCode: "SESSION_NOT_AVAILABLE",
         message: `Failed to send input: ${msg}`,
       };
     }
@@ -260,7 +287,10 @@ export class BashSessionManager {
   }
 
   private handleInterrupt(sessionId: string): BashObservation {
-    const session = this.getSessionOrThrow(sessionId);
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return missingSessionObservation(sessionId, "interrupt");
+    }
     session.interrupt();
 
     return {
@@ -275,7 +305,10 @@ export class BashSessionManager {
   }
 
   private handleTerminate(sessionId: string): BashObservation {
-    const session = this.getSessionOrThrow(sessionId);
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return missingSessionObservation(sessionId, "terminate");
+    }
     session.kill();
 
     return {
@@ -340,14 +373,6 @@ export class BashSessionManager {
   // Helpers
   // -----------------------------------------------------------------------
 
-  private getSessionOrThrow(sessionId: string): BashSession {
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      throw new Error(`Session "${sessionId}" does not exist. Use the "create" control or send a command to auto-create it.`);
-    }
-    return session;
-  }
-
   hasSession(sessionId: string): boolean {
     return this.sessions.has(sessionId);
   }
@@ -355,4 +380,19 @@ export class BashSessionManager {
   getSession(sessionId: string): BashSession | undefined {
     return this.sessions.get(sessionId);
   }
+}
+
+function missingSessionObservation(
+  sessionId: string,
+  control?: BashObservation["control"],
+): BashObservation {
+  return {
+    session: sessionId,
+    returnCode: null,
+    output: "",
+    outputTruncated: false,
+    control,
+    errorCode: "SESSION_NOT_AVAILABLE",
+    message: `Session "${sessionId}" does not exist. Use the "create" control or send a command to auto-create it.`,
+  };
 }

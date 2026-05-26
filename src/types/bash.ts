@@ -100,6 +100,7 @@ export type BashObservation = {
   outputStartOffset?: number;
   outputEndOffset?: number;
 
+  errorCode?: "SESSION_BUSY" | "SESSION_NOT_AVAILABLE";
   control?:
     | "list"
     | "create"

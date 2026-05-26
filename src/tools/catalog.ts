@@ -112,7 +112,8 @@ export const BASH_TOOL_DEFINITION: ToolDefinition = {
     "Run shell commands or manage persistent bash sessions. All external actions must go through this tool, " +
     "including materializing staged artifacts with `node dist/cli/main.js artifact write <artifactId> <path>`. " +
     "Do not embed generated files, long heredocs, large node -e strings, or other multi-KB payloads in bash; " +
-    "stage those bytes with stash_file first, then run a short bash command.",
+    "stage those bytes with stash_file first, then run a short bash command. " +
+    "Do not send a new command to a session that is still running; use poll, interrupt, terminate, or restart first.",
   inputSchema: BashToolInputSchema,
 };
 

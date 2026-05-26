@@ -179,6 +179,38 @@ describe("ToolCallValidator valid inputs", () => {
     }
   });
 
+  it("rejects bash commands above the PTY input limit", () => {
+    const result = validator.validate(
+      makeCall({
+        arguments: { command: `printf ${"x".repeat(4096)}` } as any,
+      }),
+    );
+
+    expect(result.status).toBe("invalid");
+    if (result.status === "invalid") {
+      expect(result.observation.message).toContain("PTY input limit");
+      expect(result.observation.message).toContain("stash_file");
+    }
+  });
+
+  it("rejects sendInput payloads above the PTY input limit", () => {
+    const result = validator.validate(
+      makeCall({
+        arguments: {
+          control: "sendInput",
+          session: "s1",
+          input: "x".repeat(4097),
+        } as any,
+      }),
+    );
+
+    expect(result.status).toBe("invalid");
+    if (result.status === "invalid") {
+      expect(result.observation.message).toContain("PTY input limit");
+      expect(result.observation.message).toContain("stash_file");
+    }
+  });
+
   it("valid stash_file input defaults encoding to utf8", () => {
     const result = validator.validate(
       makeCall({
