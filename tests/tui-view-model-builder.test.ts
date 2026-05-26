@@ -164,6 +164,10 @@ describe("ViewModelBuilder", () => {
     expect(frame.status).toBe("ok");
     expect(frame.title).toBe("tool call: bash");
     expect(frame.summary).toContain("session=default");
+    expect(frame.summary).toContain("echo hi");
+    expect(frame.detail).toContain("## tool call");
+    expect(frame.detail).toContain('"command": "echo hi"');
+    expect(frame.detail).toContain("## thinking");
   });
 
   // 5
@@ -217,6 +221,9 @@ describe("ViewModelBuilder", () => {
     expect(frame.phase).toBe("validation");
     expect(frame.status).toBe("ok");
     expect(frame.title).toBe("tool call validated");
+    expect(frame.detail).toContain("## tool call");
+    expect(frame.detail).toContain("## validation result");
+    expect(frame.detail).toContain('"request"');
   });
 
   // 8
@@ -236,6 +243,8 @@ describe("ViewModelBuilder", () => {
     expect(frame.status).toBe("warn");
     expect(frame.title).toBe("tool validation failed");
     expect(frame.summary).toBe("validation error");
+    expect(frame.detail).toContain("## validation result");
+    expect(frame.detail).toContain("validation error");
   });
 
   // 9
@@ -253,6 +262,8 @@ describe("ViewModelBuilder", () => {
     expect(frame.phase).toBe("review");
     expect(frame.status).toBe("running");
     expect(frame.title).toBe("review requested");
+    expect(frame.detail).toContain("## request");
+    expect(frame.detail).toContain('"command": "echo hi"');
   });
 
   // 10
@@ -271,6 +282,9 @@ describe("ViewModelBuilder", () => {
     expect(frame.status).toBe("ok");
     expect(frame.title).toBe("approved");
     expect(frame.summary).toBe("ok");
+    expect(frame.detail).toContain("## request");
+    expect(frame.detail).toContain("## decision");
+    expect(frame.detail).toContain('"status": "approved"');
   });
 
   // 11
@@ -289,6 +303,8 @@ describe("ViewModelBuilder", () => {
     expect(frame.status).toBe("warn");
     expect(frame.title).toBe("rejected");
     expect(frame.summary).toBe("nope");
+    expect(frame.detail).toContain("## decision");
+    expect(frame.detail).toContain('"status": "rejected"');
   });
 
   // 12
@@ -306,6 +322,8 @@ describe("ViewModelBuilder", () => {
     expect(frame.phase).toBe("tool");
     expect(frame.status).toBe("running");
     expect(frame.title).toBe("bash started");
+    expect(frame.detail).toContain("## request");
+    expect(frame.detail).toContain('"timeoutMs": 30000');
   });
 
   // 13
@@ -324,6 +342,10 @@ describe("ViewModelBuilder", () => {
     expect(frame.status).toBe("ok");
     expect(frame.title).toBe("bash finished rc=0");
     expect(frame.logPath).toBe("/tmp/log.txt");
+    expect(frame.detail).toContain("## request");
+    expect(frame.detail).toContain("## observation");
+    expect(frame.detail).toContain('"returnCode": 0');
+    expect(frame.detail).toContain('"outputLogPath": "/tmp/log.txt"');
   });
 
   // 14
@@ -357,6 +379,8 @@ describe("ViewModelBuilder", () => {
     expect(frame.phase).toBe("observation");
     expect(frame.status).toBe("ok");
     expect(frame.title).toBe("observation appended");
+    expect(frame.detail).toContain("## observation");
+    expect(frame.detail).toContain("validation error");
   });
 
   // 16
@@ -375,6 +399,8 @@ describe("ViewModelBuilder", () => {
     expect(frame.status).toBe("waiting");
     expect(frame.title).toBe("waiting for IO");
     expect(frame.summary).toBe("need input");
+    expect(frame.detail).toContain("## wait");
+    expect(frame.detail).toContain('"new_user_message"');
   });
 
   // 17
@@ -412,6 +438,8 @@ describe("ViewModelBuilder", () => {
     expect(frame.status).toBe("ok");
     expect(frame.title).toBe("3 events consumed");
     expect(frame.summary).toBe("ev-1, ev-2, ev-3");
+    expect(frame.detail).toContain("## event ids");
+    expect(frame.detail).toContain("ev-2");
   });
 
   // 19

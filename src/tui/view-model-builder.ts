@@ -92,7 +92,13 @@ export class ViewModelBuilder {
               phase: "decision",
               status: "ok",
               title: "tool call: bash",
-              summary: `session=${session}`,
+              summary: formatToolCallSummary(turn.toolCall),
+              detail: formatDetail([
+                ["thinking", turn.thinking.content],
+                ["tool call", turn.toolCall],
+                ["raw decision", turn.rawDecision],
+                ["raw", turn.raw],
+              ]),
             });
             break;
           }
@@ -104,6 +110,12 @@ export class ViewModelBuilder {
               status: "waiting",
               title: "io wait requested",
               summary: turn.wait.reason ?? "",
+              detail: formatDetail([
+                ["thinking", turn.thinking.content],
+                ["wait", turn.wait],
+                ["raw decision", turn.rawDecision],
+                ["raw", turn.raw],
+              ]),
             });
             break;
           case "invalid_output":
@@ -114,15 +126,14 @@ export class ViewModelBuilder {
               status: "warn",
               title: "invalid model output",
               summary: turn.message,
+              detail: formatDetail([
+                ["message", turn.message],
+                ["thinking", turn.thinking?.content],
+                ["raw decision", turn.rawDecision],
+                ["raw", turn.raw],
+              ]),
             });
             break;
-        }
-        // Add thinking detail if present
-        if (event.output.thinking?.content) {
-          const lastFrame = this.loop[this.loop.length - 1];
-          if (lastFrame) {
-            lastFrame.detail = `thinking (${event.output.thinking.content.length} chars)`;
-          }
         }
         break;
       }
@@ -140,6 +151,10 @@ export class ViewModelBuilder {
             : "observation" in event.result
               ? event.result.observation.message
               : "",
+          detail: formatDetail([
+            ["tool call", event.toolCall],
+            ["validation result", event.result],
+          ]),
         });
         break;
       }
@@ -153,6 +168,7 @@ export class ViewModelBuilder {
           status: "running",
           title: "review requested",
           summary: "",
+          detail: formatDetail([["request", event.request]]),
         });
         break;
 
@@ -164,6 +180,10 @@ export class ViewModelBuilder {
           status: event.decision.status === "approved" ? "ok" : "warn",
           title: event.decision.status === "approved" ? "approved" : "rejected",
           summary: event.decision.reason ?? "",
+          detail: formatDetail([
+            ["request", event.request],
+            ["decision", event.decision],
+          ]),
         });
         break;
 
@@ -176,6 +196,7 @@ export class ViewModelBuilder {
           status: "running",
           title: "bash started",
           summary: "",
+          detail: formatDetail([["request", event.request]]),
         });
         break;
 
@@ -188,6 +209,10 @@ export class ViewModelBuilder {
           title: `bash finished rc=${event.observation.returnCode}`,
           summary: event.observation.output?.slice(0, 200) ?? "",
           logPath: event.observation.outputLogPath,
+          detail: formatDetail([
+            ["request", event.request],
+            ["observation", event.observation],
+          ]),
         });
         break;
 
@@ -199,6 +224,7 @@ export class ViewModelBuilder {
           status: "ok",
           title: "observation appended",
           summary: "",
+          detail: formatDetail([["observation", event.observation]]),
         });
         break;
 
@@ -211,6 +237,7 @@ export class ViewModelBuilder {
           status: "waiting",
           title: "waiting for IO",
           summary: event.wait.reason ?? "",
+          detail: formatDetail([["wait", event.wait]]),
         });
         break;
 
@@ -234,6 +261,7 @@ export class ViewModelBuilder {
           status: "ok",
           title: `${event.eventIds.length} events consumed`,
           summary: event.eventIds.join(", "),
+          detail: formatDetail([["event ids", event.eventIds]]),
         });
         break;
 
@@ -385,4 +413,43 @@ function formatEnvironmentEventSummary(event: EnvironmentEvent): string {
 
 function truncateForSummary(text: string, maxLength = 80): string {
   return text.length <= maxLength ? text : `${text.slice(0, maxLength - 3)}...`;
+}
+
+function formatToolCallSummary(toolCall: { arguments: unknown }): string {
+  const args = toolCall.arguments;
+  if (isRecord(args)) {
+    const session = typeof args.session === "string" ? args.session : "default";
+    const command = typeof args.command === "string" ? args.command : undefined;
+    if (command) {
+      return `session=${session} command=${JSON.stringify(truncateForSummary(command, 80))}`;
+    }
+    const control = typeof args.control === "string" ? args.control : undefined;
+    if (control) {
+      return `control=${control}${typeof args.session === "string" ? ` session=${args.session}` : ""}`;
+    }
+    return `session=${session}`;
+  }
+  return "";
+}
+
+function formatDetail(
+  sections: Array<[title: string, value: unknown]>,
+): string {
+  const lines: string[] = [];
+  for (const [title, value] of sections) {
+    if (value === undefined || value === null || value === "") continue;
+    if (lines.length > 0) lines.push("");
+    lines.push(`## ${title}`);
+    lines.push(formatDetailValue(value));
+  }
+  return lines.join("\n");
+}
+
+function formatDetailValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  return JSON.stringify(value, null, 2);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
