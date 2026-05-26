@@ -156,8 +156,8 @@ function makeRun(options?: {
           { role: "system", content: "system" },
           ...history.map((entry) =>
             entry.type === "environment_reminder"
-              ? { role: "latest_reminder" as const, content: entry.content }
-              : { role: "latest_reminder" as const, content: JSON.stringify(entry) },
+              ? { role: "user" as const, content: entry.content }
+              : { role: "user" as const, content: JSON.stringify(entry) },
           ),
         ];
       },
@@ -435,7 +435,7 @@ describe("RunOrchestrator", () => {
     // Environment reminder should be in messages
     const messages = contexts[0]!.messages;
     const envReminder = messages.find((m) =>
-      m.role === "latest_reminder" && m.content.includes("Environment reminder:"),
+      m.role === "user" && m.content.includes("Environment reminder:"),
     );
     expect(envReminder).toBeDefined();
     expect(envReminder!.content).toContain("command_finished");
@@ -444,7 +444,7 @@ describe("RunOrchestrator", () => {
 
     // Skill reminder should also be present
     const skillReminder = messages.find(
-      (m) => m.role === "latest_reminder" && m.content.includes("Active skill reminder:"),
+      (m) => m.role === "user" && m.content.includes("Active skill reminder:"),
     );
     expect(skillReminder).toBeDefined();
     expect(skillReminder!.content).toContain("skillrun-001");

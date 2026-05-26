@@ -5,6 +5,7 @@ import type { BashObservation } from "../types/bash.js";
 import type { InternalToolCall } from "../types/model.js";
 import type { EnvironmentPort, EnvironmentEvent, IoWaitRequest } from "../types/environment.js";
 import { Environment } from "../environment/environment.js";
+import { wrapReminderAsUserContent } from "../model/prompt-builder.js";
 import type { ActiveSkillRunSummary } from "../types/skill.js";
 import { AgentRunState } from "./state.js";
 import { TranscriptStore } from "../transcript/store.js";
@@ -117,7 +118,10 @@ export class RunOrchestrator {
         const activeSkillRuns = this.ports.listActiveSkillRuns();
         if (activeSkillRuns.length > 0) {
           const reminder = renderActiveSkillReminder(activeSkillRuns);
-          messages.push({ role: "latest_reminder", content: reminder });
+          messages.push({
+            role: "user",
+            content: wrapReminderAsUserContent(reminder),
+          });
         }
 
         const context: ModelStepContext = {

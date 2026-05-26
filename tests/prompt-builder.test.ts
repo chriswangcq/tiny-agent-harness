@@ -12,6 +12,7 @@ describe("PromptBuilder", () => {
       content: expect.stringContaining("two tools: bash and io_wait"),
     });
     expect(prompt.messages[0]!.content).toContain("no special User main message");
+    expect(prompt.messages[0]!.content).toContain("role=user for chat-template compatibility");
   });
 
   it("buildNextPrompt serializes tool call and observation history in order", () => {
@@ -93,7 +94,7 @@ describe("PromptBuilder", () => {
     });
   });
 
-  it("buildNextPrompt renders environment_reminder entries as system role messages in chronological position", () => {
+  it("buildNextPrompt renders environment_reminder entries as user-role environment messages in chronological position", () => {
     const history: HistoryEntry[] = [
       {
         role: "assistant_tool_call",
@@ -123,9 +124,12 @@ describe("PromptBuilder", () => {
       "system",
       "assistant",
       "tool",
-      "latest_reminder",
+      "user",
     ]);
-    expect(prompt.messages[3]!.content).toBe(
+    expect(prompt.messages[3]!.content).toContain(
+      "System-generated environment reminder.",
+    );
+    expect(prompt.messages[3]!.content).toContain(
       "Environment reminder:\n- [env-im-001] user_message_received",
     );
   });

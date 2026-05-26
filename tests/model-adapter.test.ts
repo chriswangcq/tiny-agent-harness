@@ -7,7 +7,7 @@ import type { ModelStepContext, V4ChatMessage } from "../src/types/model.js";
 const DSML = "｜DSML｜";
 
 const MOCK_ENCODED_PREFIX =
-  "<｜begin▁of▁sentence｜>System rules\n\n## Tools\n\n...\n<｜latest_reminder｜>Environment reminder:\n[user@default] List files<｜Assistant｜><think>";
+  "<｜begin▁of▁sentence｜>System rules\n\n## Tools\n\n...\n<｜User｜>System-generated environment reminder.\nEnvironment reminder:\n[user@default] List files<｜Assistant｜><think>";
 
 vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(() => MOCK_ENCODED_PREFIX),
@@ -19,8 +19,9 @@ const BASE_CONTEXT: ModelStepContext = {
   messages: [
     { role: "system", content: "System rules" },
     {
-      role: "latest_reminder",
-      content: "Environment reminder:\n[user@default] List files",
+      role: "user",
+      content:
+        "System-generated environment reminder.\nEnvironment reminder:\n[user@default] List files",
     },
   ] as V4ChatMessage[],
 };
