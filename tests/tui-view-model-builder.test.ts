@@ -170,6 +170,32 @@ describe("ViewModelBuilder", () => {
     expect(frame.detail).toContain("## thinking");
   });
 
+  it("model_output_received completes the matching model LoopFrame with thinking detail", () => {
+    const b = builderWithRunStarted();
+    b.applyEvent({ type: "model_requested", stepIndex: 0, timestamp: NOW });
+    b.applyEvent({
+      type: "model_output_received",
+      stepIndex: 0,
+      output: makeToolCallOutput(),
+      turn: makeToolCallTurn(),
+      timestamp: LATER,
+    });
+
+    const vm = b.getViewModel();
+    const modelFrame = vm.loop.find(
+      (frame) => frame.stepIndex === 0 && frame.phase === "model",
+    );
+
+    expect(modelFrame).toBeDefined();
+    expect(modelFrame!.status).toBe("ok");
+    expect(modelFrame!.title).toBe("model completed");
+    expect(modelFrame!.summary).toContain("decision=tool_call");
+    expect(modelFrame!.detail).toContain("## thinking");
+    expect(modelFrame!.detail).toContain("thinking about it");
+    expect(modelFrame!.detail).toContain("## raw decision");
+    expect(modelFrame!.detail).toContain("## turn");
+  });
+
   // 5
   it("model_output_received io_wait creates io_wait LoopFrame", () => {
     const b = builderWithRunStarted();

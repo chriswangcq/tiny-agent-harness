@@ -5,6 +5,7 @@
 // then call getViewModel() to snapshot the current state.
 
 import type { RunEvent, AgentRunStateData } from "../types/run.js";
+import type { ModelTurn } from "../types/model.js";
 import type {
   UserMessage,
   AgentMessage,
@@ -79,6 +80,7 @@ export class ViewModelBuilder {
 
       case "model_output_received": {
         const turn = event.turn;
+        this.completeModelFrame(event);
         switch (turn.kind) {
           case "tool_call": {
             const args = turn.toolCall.arguments;
@@ -363,6 +365,37 @@ export class ViewModelBuilder {
     this.loop.push({ ...frame, id: `frame-${this.frameCounter}` });
   }
 
+  private completeModelFrame(
+    event: Extract<RunEvent, { type: "model_output_received" }>,
+  ): void {
+    const frame = this.findLatestModelFrame(event.stepIndex);
+    if (!frame) return;
+
+    frame.status = event.turn.kind === "invalid_output" ? "warn" : "ok";
+    frame.title =
+      event.turn.kind === "invalid_output"
+        ? "model completed with invalid output"
+        : "model completed";
+    frame.summary = formatModelOutputSummary(event.turn);
+    frame.detail = formatDetail([
+      ["thinking", event.output.thinking.content],
+      ["thinking raw", event.output.thinking.raw],
+      ["raw decision", event.output.rawDecision],
+      ["turn", event.turn],
+      ["usage", event.output.usage],
+    ]);
+  }
+
+  private findLatestModelFrame(stepIndex: number): LoopFrame | undefined {
+    for (let index = this.loop.length - 1; index >= 0; index--) {
+      const frame = this.loop[index]!;
+      if (frame.stepIndex === stepIndex && frame.phase === "model") {
+        return frame;
+      }
+    }
+    return undefined;
+  }
+
   private addConversationItem(item: ConversationItem): void {
     if (this.seenConversationIds.has(item.id)) return;
     this.seenConversationIds.add(item.id);
@@ -430,6 +463,17 @@ function formatToolCallSummary(toolCall: { arguments: unknown }): string {
     return `session=${session}`;
   }
   return "";
+}
+
+function formatModelOutputSummary(turn: ModelTurn): string {
+  switch (turn.kind) {
+    case "tool_call":
+      return `decision=tool_call ${formatToolCallSummary(turn.toolCall)}`;
+    case "io_wait":
+      return `decision=io_wait ${turn.wait.reason ?? ""}`.trim();
+    case "invalid_output":
+      return `decision=invalid_output ${turn.message}`.trim();
+  }
 }
 
 function formatDetail(
