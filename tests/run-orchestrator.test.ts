@@ -32,16 +32,6 @@ afterEach(() => {
   tmpDirs = [];
 });
 
-function finalOutput(content: string): FimStepOutput {
-  const turn: ModelTurn = {
-    kind: "final",
-    content,
-    thinking: { content: "done" },
-    rawDecision: `final:${content}`,
-  };
-  return { thinking: turn.thinking, rawDecision: turn.rawDecision, turn };
-}
-
 function toolOutput(toolCall: InternalToolCall): FimStepOutput {
   const turn: ModelTurn = {
     kind: "tool_call",
@@ -74,6 +64,7 @@ function ioWaitOutput(wait: IoWaitRequest): FimStepOutput {
 
 function makeRun(options?: {
   outputs?: FimStepOutput[];
+  maxSteps?: number;
   envEvents?: EnvironmentEvent[];
   waitEvent?: EnvironmentEvent;
   validateResult?: RunPorts["validator"]["validate"];
@@ -83,15 +74,20 @@ function makeRun(options?: {
 }) {
   const runDir = path.join(makeTmpDir(), "run-001");
   const transcript = new TranscriptStore(runDir);
+  const maxSteps = options?.maxSteps ?? 5;
   const state = AgentRunState.create({
     runId: "run-001",
     task: "test task",
     cwd: "/repo",
-    maxSteps: 5,
+    maxSteps,
     transcriptPath: transcript.transcriptFilePath,
   });
 
-  const outputs = [...(options?.outputs ?? [finalOutput("ok")])];
+  const defaultWait: IoWaitRequest = {
+    reason: "awaiting next instruction",
+    condition: { kind: "new_user_message", channel: "default" },
+  };
+  const outputs = [...(options?.outputs ?? [ioWaitOutput(defaultWait)])];
   const contexts: ModelStepContext[] = [];
   const histories: HistoryItem[][] = [];
   const consumedCalls: Array<{ runId: string; afterEventId?: string }> = [];
@@ -156,10 +152,11 @@ function makeRun(options?: {
         return [
           { role: "system", content: "system" },
           { role: "user", content: task },
-          ...history.map((entry) => ({
-            role: "observation" as const,
-            content: JSON.stringify(entry),
-          })),
+          ...history.map((entry) =>
+            entry.type === "environment_reminder"
+              ? { role: "system" as const, content: entry.content }
+              : { role: "observation" as const, content: JSON.stringify(entry) },
+          ),
         ];
       },
     },
@@ -207,15 +204,33 @@ function readTranscript(store: TranscriptStore): RunEvent[] {
 }
 
 describe("RunOrchestrator", () => {
-  it("completes a run when the model returns final", async () => {
+  it("stops with max_steps when model returns io_wait", async () => {
+    const wait: IoWaitRequest = {
+      reason: "awaiting next instruction",
+      condition: { kind: "new_user_message", channel: "default" },
+    };
+    const waitEvent: EnvironmentEvent = {
+      id: "msg-env-001",
+      kind: "user_message_received",
+      source: "im",
+      timestamp: "2026-05-25T12:00:00.000Z",
+      message: {
+        id: "msg-001",
+        channel: "default",
+        role: "user",
+        text: "ok",
+        createdAt: "2026-05-25T12:00:00.000Z",
+      },
+    };
     const { orchestrator, transcript, contexts } = makeRun({
-      outputs: [finalOutput("finished")],
+      outputs: [ioWaitOutput(wait)],
+      maxSteps: 1,
+      waitEvent,
     });
 
-    const finalState = await orchestrator.run();
+    const endState = await orchestrator.run();
 
-    expect(finalState.status).toBe("completed");
-    expect(finalState.data.final).toBe("finished");
+    expect(endState.status).toBe("failed");
     expect(contexts).toHaveLength(1);
 
     const events = readTranscript(transcript);
@@ -223,12 +238,13 @@ describe("RunOrchestrator", () => {
       "run_started",
       "model_requested",
       "model_output_received",
+      "io_wait_started",
+      "io_wait_satisfied",
       "run_finished",
     ]);
     expect(events.at(-1)).toMatchObject({
       type: "run_finished",
-      status: "completed",
-      final: "finished",
+      status: "failed",
     });
   });
 
@@ -238,13 +254,32 @@ describe("RunOrchestrator", () => {
       name: "bash",
       arguments: { session: "default", command: "pwd" },
     };
+    const wait: IoWaitRequest = {
+      reason: "awaiting next instruction",
+      condition: { kind: "new_user_message", channel: "default" },
+    };
+    const waitEvent: EnvironmentEvent = {
+      id: "msg-env-001",
+      kind: "user_message_received",
+      source: "im",
+      timestamp: "2026-05-25T12:00:00.000Z",
+      message: {
+        id: "msg-001",
+        channel: "default",
+        role: "user",
+        text: "ok",
+        createdAt: "2026-05-25T12:00:00.000Z",
+      },
+    };
     const { orchestrator, transcript, histories, reviewCalls, bashCalls } = makeRun({
-      outputs: [toolOutput(toolCall), finalOutput("after bash")],
+      outputs: [toolOutput(toolCall), ioWaitOutput(wait)],
+      maxSteps: 2,
+      waitEvent,
     });
 
-    const finalState = await orchestrator.run();
+    const endState = await orchestrator.run();
 
-    expect(finalState.status).toBe("completed");
+    expect(endState.status).toBe("failed");
     expect(reviewCalls).toHaveLength(1);
     expect(bashCalls).toEqual([
       {
@@ -282,19 +317,39 @@ describe("RunOrchestrator", () => {
       "tool_execution_finished",
       "model_requested",
       "model_output_received",
+      "io_wait_started",
+      "io_wait_satisfied",
       "run_finished",
     ]);
   });
 
   it("appends a synthetic observation after invalid model output and recovers on the next model step", async () => {
+    const wait: IoWaitRequest = {
+      reason: "awaiting next instruction",
+      condition: { kind: "new_user_message", channel: "default" },
+    };
+    const waitEvent: EnvironmentEvent = {
+      id: "msg-env-001",
+      kind: "user_message_received",
+      source: "im",
+      timestamp: "2026-05-25T12:00:00.000Z",
+      message: {
+        id: "msg-001",
+        channel: "default",
+        role: "user",
+        text: "ok",
+        createdAt: "2026-05-25T12:00:00.000Z",
+      },
+    };
     const { orchestrator, transcript, histories } = makeRun({
-      outputs: [invalidOutput("bad native frame"), finalOutput("recovered")],
+      outputs: [invalidOutput("bad native frame"), ioWaitOutput(wait)],
+      maxSteps: 2,
+      waitEvent,
     });
 
-    const finalState = await orchestrator.run();
+    const endState = await orchestrator.run();
 
-    expect(finalState.status).toBe("completed");
-    expect(finalState.data.final).toBe("recovered");
+    expect(endState.status).toBe("failed");
     expect(histories[1]).toEqual([
       {
         type: "observation",
@@ -322,8 +377,25 @@ describe("RunOrchestrator", () => {
       outputLogPath: ".tiny-agent/sessions/default/output.log",
     };
     const { orchestrator, transcript, contexts, consumedCalls } = makeRun({
-      outputs: [finalOutput("ok")],
+      outputs: [ioWaitOutput({
+        reason: "awaiting",
+        condition: { kind: "new_user_message", channel: "default" },
+      })],
+      maxSteps: 1,
       envEvents: [envEvent],
+      waitEvent: {
+        id: "msg-env-wait",
+        kind: "user_message_received",
+        source: "im",
+        timestamp: "2026-05-25T12:00:01.000Z",
+        message: {
+          id: "msg-wait",
+          channel: "default",
+          role: "user",
+          text: "ok",
+          createdAt: "2026-05-25T12:00:01.000Z",
+        },
+      },
       activeSkillRuns: [
         {
           skillRunId: "skillrun-001",
@@ -385,15 +457,16 @@ describe("RunOrchestrator", () => {
       },
     };
     const { orchestrator, transcript, waitCalls } = makeRun({
-      outputs: [ioWaitOutput(wait), finalOutput("done after wait")],
+      outputs: [ioWaitOutput(wait), ioWaitOutput(wait)],
+      maxSteps: 2,
       waitEvent: event,
     });
 
-    const finalState = await orchestrator.run();
+    const endState = await orchestrator.run();
 
-    expect(finalState.status).toBe("completed");
-    expect(finalState.data.stepIndex).toBe(1);
-    expect(waitCalls).toEqual([{ runId: "run-001", wait }]);
+    expect(endState.status).toBe("failed");
+    expect(endState.data.stepIndex).toBe(2);
+    expect(waitCalls).toHaveLength(2);
     expect(readTranscript(transcript)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: "io_wait_started", wait }),
@@ -406,7 +479,7 @@ describe("RunOrchestrator", () => {
     );
   });
 
-  it("persists user_message_received environment events into history for subsequent model calls", async () => {
+  it("persists user_message_received environment events as environment_reminder in history for subsequent model calls", async () => {
     const toolCall: InternalToolCall = {
       id: "call-1",
       name: "bash",
@@ -427,21 +500,35 @@ describe("RunOrchestrator", () => {
     };
 
     const { orchestrator, histories } = makeRun({
-      outputs: [toolOutput(toolCall), finalOutput("done")],
+      outputs: [toolOutput(toolCall), ioWaitOutput({
+        reason: "awaiting",
+        condition: { kind: "new_user_message", channel: "default" },
+      })],
+      maxSteps: 2,
       envEvents: [userEvent],
+      waitEvent: {
+        id: "msg-env-wait",
+        kind: "user_message_received",
+        source: "im",
+        timestamp: "2026-05-25T12:02:00.000Z",
+        message: {
+          id: "msg-wait",
+          channel: "default",
+          role: "user",
+          text: "ok",
+          createdAt: "2026-05-25T12:02:00.000Z",
+        },
+      },
     });
 
     await orchestrator.run();
 
-    // First call: envEvents consumed, history should include user_message
-    // Second call: history should still contain the user_message alongside tool history
     expect(histories).toHaveLength(2);
     expect(histories[1]).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          type: "user_message",
-          text: "请帮我看一下文件",
-          channel: "default",
+          type: "environment_reminder",
+          content: expect.stringContaining("[user@default] 请帮我看一下文件"),
         }),
       ]),
     );

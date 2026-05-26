@@ -32,7 +32,7 @@ export interface PromptPort {
 export type HistoryItem =
   | { type: "tool_call"; toolCall: InternalToolCall }
   | { type: "observation"; observation: BashObservation | AgentObservation }
-  | { type: "user_message"; text: string; channel: string; timestamp: string };
+  | { type: "environment_reminder"; content: string };
 
 export interface RunPorts {
   model: ModelPort;
@@ -99,15 +99,12 @@ export class RunOrchestrator {
             timestamp: this.now(),
           });
 
-          for (const evt of envEvents) {
-            if (evt.kind === "user_message_received") {
-              this.history.push({
-                type: "user_message",
-                text: evt.message.text,
-                channel: evt.message.channel,
-                timestamp: evt.timestamp,
-              });
-            }
+          const envReminder = Environment.renderReminder(envEvents);
+          if (envReminder) {
+            this.history.push({
+              type: "environment_reminder",
+              content: envReminder,
+            });
           }
         }
 
@@ -115,14 +112,6 @@ export class RunOrchestrator {
           this.state.data.task,
           this.history,
         );
-
-        // Render consumed environment events as system reminder
-        if (envEvents.length > 0) {
-          const envReminder = Environment.renderReminder(envEvents);
-          if (envReminder) {
-            messages.push({ role: "system", content: envReminder });
-          }
-        }
 
         // Render active skill runs as persistent reminder
         const activeSkillRuns = this.ports.listActiveSkillRuns();
@@ -257,22 +246,18 @@ export class RunOrchestrator {
 
       if (effect.type === "stop") {
         const finalStatus =
-          this.state.status === "completed"
-            ? "completed" as const
-            : this.state.status === "cancelled"
-              ? "cancelled" as const
-              : "failed" as const;
+          this.state.status === "cancelled"
+            ? "cancelled" as const
+            : "failed" as const;
 
         const event: RunEvent = {
           type: "run_finished",
           status: finalStatus,
-          final: this.state.data.final,
           error: this.state.data.error,
           timestamp: this.now(),
         };
 
         if (
-          this.state.status === "completed" ||
           this.state.status === "cancelled" ||
           this.state.status === "failed"
         ) {

@@ -43,7 +43,7 @@ export type ConversationItem =
       kind: "agent";
       timestamp: string;
       text: string;
-      messageKind: "status" | "final" | "error";
+      messageKind: "status" | "error";
     }
   | {
       kind: "system";

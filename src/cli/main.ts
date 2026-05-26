@@ -86,11 +86,10 @@ function convertHistoryItems(items: HistoryItem[]): HistoryEntry[] {
         toolCallId: "",
         observation: item.observation,
       });
-    } else if (item.type === "user_message") {
+    } else if (item.type === "environment_reminder") {
       entries.push({
-        role: "user_message",
-        text: item.text,
-        channel: item.channel,
+        role: "environment_reminder",
+        content: item.content,
       });
     }
   }
@@ -309,8 +308,12 @@ async function waitForFirstMessage(
   environment: Environment,
   channel: string,
 ): Promise<string> {
+  // Skip messages already in inbox from previous runs
+  const existing = await transport.receive({ channel });
+  let cursor = existing.nextCursor;
+
   while (true) {
-    const result = await transport.receive({ channel });
+    const result = await transport.receive({ channel, cursor });
     if (result.messages.length > 0) {
       const msg = result.messages[0]!;
       environment.appendEvent({
@@ -415,6 +418,10 @@ async function main(): Promise<void> {
       die("Usage: tiny-agent run --channel <channel> [--task <task>]");
     }
   } else if (args[0]) {
+    const reserved = ["io_wait", "io-wait", "final"];
+    if (reserved.includes(args[0])) {
+      die(`"${args[0]}" is a tool call, not a CLI command. Do not run it via bash.`);
+    }
     taskArg = args[0];
   } else {
     die(
@@ -582,12 +589,6 @@ async function main(): Promise<void> {
 
     console.log();
     console.log(`[tiny-agent] Run ${runId} finished — status: ${finalState.status}`);
-
-    if (finalState.data.final) {
-      console.log();
-      console.log("=== Agent Response ===");
-      console.log(finalState.data.final);
-    }
 
     if (finalState.data.error) {
       console.error();

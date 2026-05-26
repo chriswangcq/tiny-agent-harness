@@ -70,22 +70,6 @@ export class ViewModelBuilder {
       case "model_output_received": {
         const turn = event.turn;
         switch (turn.kind) {
-          case "final":
-            this.conversation.push({
-              kind: "agent",
-              timestamp: event.timestamp,
-              text: turn.content,
-              messageKind: "final",
-            });
-            this.pushFrame({
-              stepIndex: event.stepIndex,
-              timestamp: event.timestamp,
-              phase: "decision",
-              status: "ok",
-              title: "final",
-              summary: turn.content.slice(0, 100),
-            });
-            break;
           case "tool_call": {
             const args = turn.toolCall.arguments;
             const session =
@@ -268,7 +252,7 @@ export class ViewModelBuilder {
           stepIndex: this.header.stepIndex,
           timestamp: event.timestamp,
           phase: "environment",
-          status: event.status === "completed" ? "ok" : "error",
+          status: event.status === "cancelled" ? "ok" : "error",
           title: "run finished",
           summary: event.status,
         });

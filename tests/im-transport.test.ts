@@ -34,7 +34,7 @@ function makeAgentMessage(channel = "default"): AgentMessage {
   return {
     channel,
     role: "agent",
-    kind: "final",
+    kind: "status",
     text: "done",
     runId: "run-001",
     createdAt: "2026-05-25T12:00:01.000Z",

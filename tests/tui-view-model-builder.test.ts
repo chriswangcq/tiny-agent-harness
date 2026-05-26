@@ -28,14 +28,6 @@ function makeThinking() {
   return { content: "thinking about it" };
 }
 
-function makeFinalTurn(): ModelTurn {
-  return { kind: "final", content: "The answer is 42", thinking: makeThinking(), rawDecision: "final answer" };
-}
-
-function makeFinalOutput(): FimStepOutput {
-  return { thinking: makeThinking(), rawDecision: "final answer", turn: makeFinalTurn() };
-}
-
 function makeToolCallTurn(tc?: InternalToolCall): ModelTurn {
   const toolCall = tc ?? makeToolCall();
   return { kind: "tool_call", toolCall, thinking: makeThinking(), rawDecision: "tool_call" };
@@ -88,7 +80,7 @@ function makeUserMessage(): UserMessage {
   return { id: "msg-1", channel: "cli", role: "user", text: "hello", createdAt: NOW };
 }
 
-function makeAgentMessage(kind: "status" | "final" | "error" = "status"): AgentMessage {
+function makeAgentMessage(kind: "status" | "error" = "status"): AgentMessage {
   return { channel: "cli", role: "agent", kind, text: "processing...", createdAt: NOW };
 }
 
@@ -157,31 +149,6 @@ describe("ViewModelBuilder", () => {
   });
 
   // 3
-  it("model_output_received final creates ConversationItem and decision LoopFrame", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "model_output_received",
-      stepIndex: 0,
-      output: makeFinalOutput(),
-      turn: makeFinalTurn(),
-      timestamp: LATER,
-    });
-    const vm = b.getViewModel();
-    // Conversation item
-    expect(vm.conversation).toHaveLength(1);
-    expect(vm.conversation[0].kind).toBe("agent");
-    if (vm.conversation[0].kind === "agent") {
-      expect(vm.conversation[0].messageKind).toBe("final");
-      expect(vm.conversation[0].text).toBe("The answer is 42");
-    }
-    // Loop frame
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("decision");
-    expect(frame.status).toBe("ok");
-    expect(frame.title).toBe("final");
-  });
-
-  // 4
   it("model_output_received tool_call creates decision LoopFrame", () => {
     const b = builderWithRunStarted();
     b.applyEvent({
@@ -487,17 +454,17 @@ describe("ViewModelBuilder", () => {
     const b = builderWithRunStarted();
     b.applyEvent({
       type: "run_finished",
-      status: "completed",
+      status: "cancelled",
       timestamp: LATER,
     });
     const vm = b.getViewModel();
-    expect(vm.run.status).toBe("completed");
+    expect(vm.run.status).toBe("cancelled");
     expect(vm.run.updatedAt).toBe(LATER);
     const frame = vm.loop[vm.loop.length - 1];
     expect(frame.phase).toBe("environment");
     expect(frame.status).toBe("ok");
     expect(frame.title).toBe("run finished");
-    expect(frame.summary).toBe("completed");
+    expect(frame.summary).toBe("cancelled");
   });
 
   // 21b - run_finished with failure

@@ -34,22 +34,16 @@ export type InternalToolCall = {
 /**
  * The normalized result of a single FIM decision pass.
  *
- * - `final`: the agent has produced its answer.
  * - `tool_call`: the agent wants to execute a bash command or control.
- * - `invalid_output`: the FIM output could not be parsed into either of the above.
+ * - `io_wait`: the agent is waiting for external input.
+ * - `invalid_output`: the FIM output could not be parsed.
  *
- * `thinking` and `rawDecision` are required on `final` and `tool_call` (they
- * always come from a completed FIM two-pass) but optional on `invalid_output`
- * (the thinking pass may have succeeded even when the decision is unparseable).
+ * `thinking` and `rawDecision` are required on `tool_call` and `io_wait`
+ * (they always come from a completed FIM two-pass) but optional on
+ * `invalid_output` (the thinking pass may have succeeded even when the
+ * decision is unparseable).
  */
 export type ModelTurn =
-  | {
-      kind: "final";
-      content: string;
-      thinking: AgentThinking;
-      rawDecision: string;
-      raw?: unknown;
-    }
   | {
       kind: "tool_call";
       toolCall: InternalToolCall;

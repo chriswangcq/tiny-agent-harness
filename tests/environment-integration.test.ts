@@ -81,9 +81,7 @@ describe("Environment reminder rendering", () => {
     const reminder = Environment.renderReminder(events);
 
     expect(reminder).toContain("Environment reminder:");
-    expect(reminder).toContain("user_message_received");
-    expect(reminder).toContain('channel=default');
-    expect(reminder).toContain("continue with option B");
+    expect(reminder).toContain("[user@default] continue with option B");
     expect(reminder).toContain("session_state_changed");
     expect(reminder).toContain("running -> idle");
     expect(reminder).toContain("command_finished");

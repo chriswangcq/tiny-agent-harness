@@ -59,6 +59,7 @@ export class Environment implements EnvironmentPort {
     this.waiters = remaining;
 
     for (const waiter of matched) {
+      this._state.consumedByRun[waiter.runId] = event.id;
       waiter.resolve(event);
     }
   }
@@ -130,6 +131,7 @@ export class Environment implements EnvironmentPort {
     for (let i = startIndex; i < this._state.events.length; i++) {
       const event = this._state.events[i]!;
       if (this.eventMatchesWait(event, wait)) {
+        this._state.consumedByRun[runId] = event.id;
         return Promise.resolve(event);
       }
     }
@@ -150,32 +152,30 @@ export class Environment implements EnvironmentPort {
     }
 
     const lines = events.map((event) => {
-      const prefix = `- [${event.id}] ${event.timestamp}`;
-
       switch (event.kind) {
         case "user_message_received":
-          return `${prefix} im user_message_received channel=${event.message.channel} text="${truncate(event.message.text, 200)}"`;
+          return `[user@${event.message.channel}] ${event.message.text}`;
 
         case "session_state_changed":
-          return `${prefix} bash session_state_changed session=${event.session} ${event.previousState} -> ${event.nextState}`;
+          return `- [${event.id}] bash session_state_changed session=${event.session} ${event.previousState} -> ${event.nextState}`;
 
         case "command_finished":
-          return `${prefix} bash command_finished session=${event.session} command=${event.commandId} rc=${event.returnCode} log=${event.outputLogPath}`;
+          return `- [${event.id}] bash command_finished session=${event.session} command=${event.commandId} rc=${event.returnCode} log=${event.outputLogPath}`;
 
         case "command_timed_out":
-          return `${prefix} bash command_timed_out session=${event.session} command=${event.commandId} log=${event.outputLogPath}`;
+          return `- [${event.id}] bash command_timed_out session=${event.session} command=${event.commandId} log=${event.outputLogPath}`;
 
         case "skill_run_started":
-          return `${prefix} skill skill_run_started skillRun=${event.skillRunId} skill=${event.skill} state=${event.statePath} log=${event.executionLogPath ?? ""}`;
+          return `- [${event.id}] skill skill_run_started skillRun=${event.skillRunId} skill=${event.skill} state=${event.statePath} log=${event.executionLogPath ?? ""}`;
 
         case "skill_run_closed":
-          return `${prefix} skill skill_run_closed skillRun=${event.skillRunId} skill=${event.skill} state=${event.statePath}`;
+          return `- [${event.id}] skill skill_run_closed skillRun=${event.skillRunId} skill=${event.skill} state=${event.statePath}`;
 
         case "skill_review_pending":
-          return `${prefix} skill skill_review_pending skillRun=${event.skillRunId} skill=${event.skill} state=${event.statePath} task=${event.reviewTaskPath ?? ""}`;
+          return `- [${event.id}] skill skill_review_pending skillRun=${event.skillRunId} skill=${event.skill} state=${event.statePath} task=${event.reviewTaskPath ?? ""}`;
 
         case "skill_review_completed":
-          return `${prefix} skill skill_review_completed skillRun=${event.skillRunId} skill=${event.skill} state=${event.statePath} lessons=${event.lessonsPath ?? ""}`;
+          return `- [${event.id}] skill skill_review_completed skillRun=${event.skillRunId} skill=${event.skill} state=${event.statePath} lessons=${event.lessonsPath ?? ""}`;
       }
     });
 

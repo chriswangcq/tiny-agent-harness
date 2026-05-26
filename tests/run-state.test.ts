@@ -40,24 +40,6 @@ function makeThinking() {
   return { content: "thinking about it" };
 }
 
-function makeFinalTurn(): ModelTurn {
-  return {
-    kind: "final",
-    content: "done",
-    thinking: makeThinking(),
-    rawDecision: '{"type":"final","content":"done"}',
-  };
-}
-
-function makeFinalOutput(): FimStepOutput {
-  const turn = makeFinalTurn();
-  return {
-    thinking: makeThinking(),
-    rawDecision: '{"type":"final","content":"done"}',
-    turn,
-  };
-}
-
 function makeToolCallTurn(tc?: InternalToolCall): ModelTurn {
   const toolCall = tc ?? makeToolCall();
   return {
@@ -179,19 +161,6 @@ describe("AgentRunState transitions", () => {
       timestamp: NOW,
     });
     expect(waiting.status).toBe("waiting_for_model");
-  });
-
-  it("waiting_for_model + model_output_received(final) -> completed", () => {
-    const waiting = toWaitingForModel(initial);
-    const completed = waiting.apply({
-      type: "model_output_received",
-      stepIndex: 0,
-      output: makeFinalOutput(),
-      turn: makeFinalTurn(),
-      timestamp: NOW,
-    });
-    expect(completed.status).toBe("completed");
-    expect(completed.data.final).toBe("done");
   });
 
   it("waiting_for_model + model_output_received(tool_call) -> running with pendingToolCall", () => {
@@ -518,29 +487,6 @@ describe("AgentRunState transitions", () => {
 // ===========================================================================
 
 describe("AgentRunState illegal transitions", () => {
-  it("completed + model_output_received -> Error", () => {
-    let s = createState();
-    s = toWaitingForModel(s);
-    s = s.apply({
-      type: "model_output_received",
-      stepIndex: 0,
-      output: makeFinalOutput(),
-      turn: makeFinalTurn(),
-      timestamp: NOW,
-    });
-    expect(s.status).toBe("completed");
-
-    expect(() =>
-      s.apply({
-        type: "model_output_received",
-        stepIndex: 0,
-        output: makeFinalOutput(),
-        turn: makeFinalTurn(),
-        timestamp: NOW,
-      }),
-    ).toThrow(/Invalid transition/);
-  });
-
   it("waiting_for_tool + model_output_received -> Error", () => {
     let s = createState();
     s = toWaitingForModel(s);
@@ -584,8 +530,8 @@ describe("AgentRunState illegal transitions", () => {
       s.apply({
         type: "model_output_received",
         stepIndex: 0,
-        output: makeFinalOutput(),
-        turn: makeFinalTurn(),
+        output: makeToolCallOutput(),
+        turn: makeToolCallTurn(),
         timestamp: NOW,
       }),
     ).toThrow(/Invalid transition/);
@@ -605,26 +551,6 @@ describe("AgentRunState illegal transitions", () => {
     ).toThrow(/Invalid transition/);
   });
 
-  it("completed + run_finished -> Error (terminal to terminal)", () => {
-    let s = createState();
-    s = toWaitingForModel(s);
-    s = s.apply({
-      type: "model_output_received",
-      stepIndex: 0,
-      output: makeFinalOutput(),
-      turn: makeFinalTurn(),
-      timestamp: NOW,
-    });
-    expect(s.status).toBe("completed");
-
-    expect(() =>
-      s.apply({
-        type: "run_finished",
-        status: "completed",
-        timestamp: NOW,
-      }),
-    ).toThrow(/Invalid transition/);
-  });
 });
 
 // ===========================================================================
@@ -716,24 +642,6 @@ describe("AgentRunState.nextEffect()", () => {
 
     const effect = s.nextEffect();
     expect(effect.type).toBe("execute_tool");
-  });
-
-  it("completed -> stop(final)", () => {
-    let s = createState();
-    s = toWaitingForModel(s);
-    s = s.apply({
-      type: "model_output_received",
-      stepIndex: 0,
-      output: makeFinalOutput(),
-      turn: makeFinalTurn(),
-      timestamp: NOW,
-    });
-
-    const effect = s.nextEffect();
-    expect(effect.type).toBe("stop");
-    if (effect.type === "stop") {
-      expect(effect.reason).toBe("final");
-    }
   });
 
   it("running at maxSteps -> stop(max_steps)", () => {
@@ -972,8 +880,8 @@ describe("io_wait transitions", () => {
       s.apply({
         type: "model_output_received",
         stepIndex: 0,
-        output: makeFinalOutput(),
-        turn: makeFinalTurn(),
+        output: makeToolCallOutput(),
+        turn: makeToolCallTurn(),
         timestamp: NOW,
       }),
     ).toThrow(/Invalid transition/);

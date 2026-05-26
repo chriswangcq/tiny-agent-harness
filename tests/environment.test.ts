@@ -190,9 +190,7 @@ describe("Environment", () => {
     const reminder = Environment.renderReminder(events);
 
     expect(reminder).toContain("Environment reminder:");
-    expect(reminder).toContain("[env-001]");
-    expect(reminder).toContain("user_message_received");
-    expect(reminder).toContain("continue with option B");
+    expect(reminder).toContain("[user@default] continue with option B");
     expect(reminder).toContain("[env-002]");
     expect(reminder).toContain("command_finished");
     expect(reminder).toContain("rc=1");

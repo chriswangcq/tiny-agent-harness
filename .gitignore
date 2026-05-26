@@ -3,4 +3,5 @@ dist/
 .DS_Store
 .complex-problems/
 .tiny-agent/
+agent-traces/
 ak.txt

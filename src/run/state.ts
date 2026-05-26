@@ -10,7 +10,6 @@ import type { ToolRequest, ToolReviewDecision, AgentObservation } from "../types
 import type { IoWaitRequest } from "../types/environment.js";
 
 const TERMINAL_STATUSES: Set<AgentRunStatus> = new Set([
-  "completed",
   "failed",
   "cancelled",
 ]);
@@ -49,9 +48,6 @@ export class AgentRunState {
   nextEffect(): NextEffect {
     const { status, stepIndex, maxSteps } = this.data;
 
-    if (status === "completed") {
-      return { type: "stop", reason: "final" };
-    }
     if (status === "failed") {
       return { type: "stop", reason: "failed" };
     }
@@ -161,20 +157,6 @@ export class AgentRunState {
       case "model_output_received": {
         this.assertStatus("waiting_for_model", event.type);
         const turn = event.turn;
-
-        if (turn.kind === "final") {
-          return this.next({
-            status: "completed",
-            final: turn.content,
-            pendingModelOutput: event.output,
-            pendingModelTurn: turn,
-            pendingToolCall: undefined,
-            pendingToolRequest: undefined,
-            pendingReview: undefined,
-            pendingIoWait: undefined,
-            updatedAt: now,
-          });
-        }
 
         if (turn.kind === "tool_call") {
           return this.next({
@@ -314,7 +296,6 @@ export class AgentRunState {
         const nextStatus = event.status;
         return this.next({
           status: nextStatus,
-          final: event.final,
           error: event.error,
           updatedAt: now,
         });

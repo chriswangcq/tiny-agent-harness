@@ -347,8 +347,6 @@ export class BlessedRenderer implements TuiRenderer {
       case "waiting_for_review":
       case "waiting_for_io":
         return "yellow";
-      case "completed":
-        return "green";
       case "failed":
         return "red";
       case "cancelled":

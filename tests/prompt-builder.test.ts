@@ -9,7 +9,7 @@ describe("PromptBuilder", () => {
     expect(prompt.messages).toHaveLength(2);
     expect(prompt.messages[0]).toMatchObject({
       role: "system",
-      content: expect.stringContaining("The only available tool is bash"),
+      content: expect.stringContaining("two tools: bash and io_wait"),
     });
     expect(prompt.messages[1]).toEqual({ role: "user", content: "fix tests" });
   });
@@ -82,7 +82,7 @@ describe("PromptBuilder", () => {
     });
   });
 
-  it("buildNextPrompt renders user_message entries as user role messages in chronological position", () => {
+  it("buildNextPrompt renders environment_reminder entries as system role messages in chronological position", () => {
     const history: HistoryEntry[] = [
       {
         role: "assistant_tool_call",
@@ -101,9 +101,8 @@ describe("PromptBuilder", () => {
         },
       },
       {
-        role: "user_message",
-        text: "你好",
-        channel: "default",
+        role: "environment_reminder",
+        content: "Environment reminder:\n- [env-im-001] user_message_received",
       },
     ];
 
@@ -114,8 +113,10 @@ describe("PromptBuilder", () => {
       "user",
       "assistant",
       "observation",
-      "user",
+      "system",
     ]);
-    expect(prompt.messages[4]!.content).toBe("[IM default] 你好");
+    expect(prompt.messages[4]!.content).toBe(
+      "Environment reminder:\n- [env-im-001] user_message_received",
+    );
   });
 });

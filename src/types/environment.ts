@@ -20,7 +20,7 @@ export type UserMessage = {
 export type AgentMessage = {
   channel: string;
   role: "agent";
-  kind: "status" | "final" | "error";
+  kind: "status" | "error";
   text: string;
   runId?: string;
   createdAt: string;

@@ -84,7 +84,7 @@ export async function runIm(argv: string[]): Promise<void> {
         "Usage: im <post|recv|send|ack|listen> [options]\n" +
           "  im post --channel <ch> --text <text> [--from <user>] [--json]\n" +
           "  im recv --channel <ch> [--cursor <cursor>] [--json]\n" +
-          "  im send --channel <ch> --kind <status|final|error> --text <text> [--run-id <id>] [--json]\n" +
+          "  im send --channel <ch> --kind <status|error> --text <text> [--run-id <id>] [--json]\n" +
           "  im ack --channel <ch> --message-id <id> [--json]\n" +
           "  im listen --channel <ch> [--cursor <cursor>] [--json]",
       );
@@ -146,13 +146,13 @@ async function cmdSend(
   json: boolean,
 ): Promise<void> {
   const channel = flags["channel"];
-  const kind = flags["kind"] as "status" | "final" | "error" | undefined;
+  const kind = flags["kind"] as "status" | "error" | undefined;
   const text = flags["text"];
   if (!channel || !kind || !text) {
     die("im send requires --channel, --kind, and --text");
   }
-  if (!["status", "final", "error"].includes(kind)) {
-    die("--kind must be one of: status, final, error");
+  if (!["status", "error"].includes(kind)) {
+    die("--kind must be one of: status, error");
   }
 
   const message = {

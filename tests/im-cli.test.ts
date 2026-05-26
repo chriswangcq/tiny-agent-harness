@@ -72,7 +72,7 @@ describe("ImCliTransport", () => {
     await transport.send({
       channel: "default",
       role: "agent",
-      kind: "final",
+      kind: "status",
       text: "done",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
@@ -81,7 +81,7 @@ describe("ImCliTransport", () => {
     expect(fs.existsSync(outboxPath)).toBe(true);
     const content = fs.readFileSync(outboxPath, "utf-8").trim();
     const parsed = JSON.parse(content);
-    expect(parsed.kind).toBe("final");
+    expect(parsed.kind).toBe("status");
     expect(parsed.text).toBe("done");
   });
 
@@ -216,12 +216,12 @@ describe("runIm CLI", () => {
     const stateDir = createStateDir();
 
     captureStdout();
-    await runIm(["send", "--channel", "default", "--kind", "final", "--text", "all done", "--state-dir", stateDir, "--json"]);
+    await runIm(["send", "--channel", "default", "--kind", "status", "--text", "all done", "--state-dir", stateDir, "--json"]);
     restoreStdout();
 
     const sendResult = JSON.parse(captured.join(""));
     expect(sendResult.ok).toBe(true);
-    expect(sendResult.kind).toBe("final");
+    expect(sendResult.kind).toBe("status");
 
     const outboxPath = path.join(stateDir, "im", "default.outbox.jsonl");
     expect(fs.existsSync(outboxPath)).toBe(true);

@@ -22,9 +22,8 @@ export type HistoryEntry =
       observation: BashObservation | AgentObservation;
     }
   | {
-      role: "user_message";
-      text: string;
-      channel: string;
+      role: "environment_reminder";
+      content: string;
     };
 
 // ---------------------------------------------------------------------------
@@ -32,10 +31,15 @@ export type HistoryEntry =
 // ---------------------------------------------------------------------------
 
 const SYSTEM_MESSAGE =
-  "All external actions must use the provided tools. The only available tool is bash. Return final content when the task is complete. " +
-  "If the user's task is unclear, too short, or ambiguous, use io_wait to ask for clarification instead of returning final immediately. " +
-  "The tiny-agent CLI is available in bash sessions via `npx tiny-agent` or `node dist/cli/main.js`. " +
-  "Run `npx tiny-agent --help` for all subcommands including im (messaging) and skill (skill management).";
+  "You are an AI agent with two tools: bash and io_wait.\n" +
+  "- bash: execute shell commands. Use it for ALL external actions.\n" +
+  "- io_wait: pause until the next external event. This is a TOOL CALL, not a shell command. " +
+  "Never run io_wait via bash — invoke it directly as a tool.\n\n" +
+  "User messages appear in environment reminders as [user@channel] lines.\n" +
+  "To reply: bash tool → node dist/cli/main.js im send --channel <channel> --kind status --text '<reply>'\n" +
+  "After replying or completing work: io_wait tool → wait for the next user message.\n\n" +
+  "Workflow: read user message → bash(work) → bash(im send reply) → io_wait.\n" +
+  "The tiny-agent CLI is available via `node dist/cli/main.js` (subcommands: im, skill).";
 
 // ---------------------------------------------------------------------------
 // PromptBuilder
@@ -79,10 +83,10 @@ export class PromptBuilder {
           role: "observation",
           content: JSON.stringify(entry.observation),
         });
-      } else if (entry.role === "user_message") {
+      } else if (entry.role === "environment_reminder") {
         messages.push({
-          role: "user",
-          content: `[IM ${entry.channel}] ${entry.text}`,
+          role: "system",
+          content: entry.content,
         });
       }
     }

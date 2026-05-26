@@ -65,7 +65,7 @@ describe("TUI IM integration", () => {
     const msg: AgentMessage = {
       channel: "default",
       role: "agent",
-      kind: "final",
+      kind: "status",
       text: "done",
       createdAt: "2026-01-01T00:00:01Z",
     };
@@ -77,7 +77,7 @@ describe("TUI IM integration", () => {
     expect(vm.conversation[0]).toMatchObject({
       kind: "agent",
       text: "done",
-      messageKind: "final",
+      messageKind: "status",
     });
   });
 
@@ -126,7 +126,7 @@ describe("TUI IM integration", () => {
     const outboxPath = path.join(baseDir, "default.outbox.jsonl");
     const msgs = [
       { channel: "default", role: "agent", kind: "status", text: "working", createdAt: "2026-01-01T00:00:00Z" },
-      { channel: "default", role: "agent", kind: "final", text: "done", createdAt: "2026-01-01T00:00:01Z" },
+      { channel: "default", role: "agent", kind: "status", text: "done", createdAt: "2026-01-01T00:00:01Z" },
     ];
     fs.writeFileSync(outboxPath, msgs.map((m) => JSON.stringify(m)).join("\n") + "\n");
 

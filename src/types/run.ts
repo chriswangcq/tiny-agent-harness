@@ -32,7 +32,6 @@ export type AgentRunStatus =
   | "waiting_for_review"
   | "waiting_for_tool"
   | "waiting_for_io"
-  | "completed"
   | "failed"
   | "cancelled";
 
@@ -62,7 +61,6 @@ export interface AgentRunStateData {
 
   activeSkillRuns?: ActiveSkillRunSummary[];
 
-  final?: string;
   error?: RunError;
 }
 
@@ -99,7 +97,7 @@ export type NextEffect =
     }
   | {
       type: "stop";
-      reason: "final" | "max_steps" | "failed" | "cancelled";
+      reason: "max_steps" | "failed" | "cancelled";
     };
 
 // ─── Run Events ─────────────────────────────────────────────────────
@@ -205,8 +203,7 @@ export type RunEvent =
     }
   | {
       type: "run_finished";
-      status: "completed" | "failed" | "cancelled";
-      final?: string;
+      status: "failed" | "cancelled";
       error?: RunError;
       timestamp: string;
     };
