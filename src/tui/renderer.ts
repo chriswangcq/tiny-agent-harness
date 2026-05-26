@@ -22,12 +22,14 @@ export class BlessedRenderer implements TuiRenderer {
   private screen: blessed.Widgets.Screen;
   private headerBox: blessed.Widgets.BoxElement;
   private conversationList: blessed.Widgets.ListElement;
+  private conversationDetailBox: blessed.Widgets.BoxElement;
   private loopList: blessed.Widgets.ListElement;
   private loopDetailBox: blessed.Widgets.BoxElement;
   private helpBox: blessed.Widgets.BoxElement;
   private inputBar: blessed.Widgets.BoxElement;
   private ui = new TuiInteractionState();
   private lastView: TuiViewModel | undefined;
+  private conversationLineIndexes = new Map<string, number>();
   private loopFrameLineIndexes = new Map<string, number>();
   private expandedFrames = new Set<string>();
   private keyHandler?: (key: TuiKey) => void;
@@ -67,6 +69,23 @@ export class BlessedRenderer implements TuiRenderer {
       },
       keys: false,
       mouse: false,
+    });
+
+    this.conversationDetailBox = blessed.box({
+      top: 1,
+      left: "60%",
+      width: "40%",
+      height: "50%-1",
+      border: { type: "line" },
+      label: " Conversation Detail ",
+      scrollable: true,
+      alwaysScroll: true,
+      scrollbar: { ch: "│", style: { fg: "cyan" } },
+      tags: true,
+      hidden: true,
+      style: {
+        border: { fg: "gray" },
+      },
     });
 
     this.loopList = blessed.list({
@@ -124,7 +143,7 @@ export class BlessedRenderer implements TuiRenderer {
         "{bold}Browse mode{/bold}:",
         "  Tab         switch loop/conversation",
         "  j/k         scroll up/down",
-        "  ←/→         move between loop list and detail",
+        "  ←/→         move between list and detail",
         "  g/G         jump to top/bottom",
         "  f           toggle follow mode",
         "  Enter       expand/collapse selected loop frame",
@@ -151,6 +170,7 @@ export class BlessedRenderer implements TuiRenderer {
 
     this.screen.append(this.headerBox);
     this.screen.append(this.conversationList);
+    this.screen.append(this.conversationDetailBox);
     this.screen.append(this.loopList);
     this.screen.append(this.loopDetailBox);
     this.screen.append(this.helpBox);
@@ -162,13 +182,21 @@ export class BlessedRenderer implements TuiRenderer {
 
   render(view: TuiViewModel): void {
     this.lastView = view;
+    this.ui.syncWithConversation(view.conversation);
     this.ui.syncWithFrames(view.loop);
     this.headerBox.setContent(this.renderHeader(view.run));
 
-    const convItems = view.conversation.map((item) =>
-      this.renderConversationItem(item),
+    const selectedConversationItem = this.ui.selectedConversationItem(
+      view.conversation,
     );
+    this.updateConversationDetailLayout(selectedConversationItem);
+
+    const convItems = this.renderConversationItems(view.conversation);
     this.conversationList.setItems(convItems);
+    this.conversationDetailBox.setContent(
+      this.renderConversationDetail(selectedConversationItem),
+    );
+    this.selectConversationListRow(selectedConversationItem?.id);
 
     const selectedLoopFrame = this.ui.selectedLoopFrame(view.loop);
     this.updateLoopDetailLayout(selectedLoopFrame);
@@ -288,9 +316,12 @@ export class BlessedRenderer implements TuiRenderer {
     key: blessed.Widgets.Events.IKeyEventArg,
   ): void {
     const frames = this.lastView?.loop ?? [];
+    const conversation = this.lastView?.conversation ?? [];
     const activeList =
       this.ui.pane === "conversation"
         ? this.conversationList
+        : this.ui.pane === "conversationDetail"
+          ? this.conversationDetailBox
         : this.ui.pane === "detail"
           ? this.loopDetailBox
           : this.loopList;
@@ -315,11 +346,22 @@ export class BlessedRenderer implements TuiRenderer {
           this.ui.enterDetail(frames);
           this.updateStyles();
           this.rerenderLastView();
+        } else if (
+          this.ui.pane === "conversation" &&
+          this.ui.selectedConversationItemId
+        ) {
+          this.ui.enterConversationDetail(conversation);
+          this.updateStyles();
+          this.rerenderLastView();
         }
         return;
       case "left":
         if (this.ui.pane === "detail") {
           this.ui.leaveDetail(frames);
+          this.updateStyles();
+          this.rerenderLastView();
+        } else if (this.ui.pane === "conversationDetail") {
+          this.ui.leaveConversationDetail(conversation);
           this.updateStyles();
           this.rerenderLastView();
         }
@@ -331,13 +373,13 @@ export class BlessedRenderer implements TuiRenderer {
           this.screen.render();
           return;
         }
-        this.ui.moveSelection(frames, 1);
-        if (this.ui.pane === "conversation") {
-          activeList.scroll(1);
+        if (this.ui.pane === "conversationDetail") {
+          this.conversationDetailBox.scroll(1);
           this.screen.render();
-        } else {
-          this.rerenderLastView();
+          return;
         }
+        this.ui.moveSelection(frames, 1, conversation);
+        this.rerenderLastView();
         return;
       case "k":
       case "up":
@@ -346,22 +388,22 @@ export class BlessedRenderer implements TuiRenderer {
           this.screen.render();
           return;
         }
-        this.ui.moveSelection(frames, -1);
-        if (this.ui.pane === "conversation") {
-          activeList.scroll(-1);
+        if (this.ui.pane === "conversationDetail") {
+          this.conversationDetailBox.scroll(-1);
           this.screen.render();
-        } else {
-          this.rerenderLastView();
+          return;
         }
+        this.ui.moveSelection(frames, -1, conversation);
+        this.rerenderLastView();
         return;
       case "g":
-        if (this.ui.pane === "detail") {
+        if (this.ui.pane === "detail" || this.ui.pane === "conversationDetail") {
           activeList.setScrollPerc(key.shift ? 100 : 0);
           this.screen.render();
           return;
         }
         if (!key.shift) {
-          this.ui.jumpTop(frames);
+          this.ui.jumpTop(frames, conversation);
           activeList.setScrollPerc(0);
         } else {
           this.ui.jumpBottom(frames);
@@ -370,7 +412,9 @@ export class BlessedRenderer implements TuiRenderer {
         this.rerenderLastView();
         return;
       case "f":
-        if (this.ui.pane === "detail") return;
+        if (this.ui.pane === "detail" || this.ui.pane === "conversationDetail") {
+          return;
+        }
         this.ui.toggleFollow(frames);
         if (this.ui.followBottom[this.ui.pane]) {
           activeList.setScrollPerc(100);
@@ -441,6 +485,16 @@ export class BlessedRenderer implements TuiRenderer {
     }
   }
 
+  private renderConversationItems(items: ConversationItem[]): string[] {
+    this.conversationLineIndexes.clear();
+    return items.map((item, index) => {
+      this.conversationLineIndexes.set(item.id, index);
+      const selected = item.id === this.ui.selectedConversationItemId;
+      const marker = selected ? "{blue-bg}{white-fg}>{/white-fg}{/blue-bg}" : " ";
+      return `${marker} ${this.renderConversationItem(item)}`;
+    });
+  }
+
   private renderLoopFrames(frames: LoopFrame[]): string[] {
     const lines: string[] = [];
     let currentStep = -1;
@@ -501,6 +555,67 @@ export class BlessedRenderer implements TuiRenderer {
     this.loopDetailBox.hide();
   }
 
+  private updateConversationDetailLayout(
+    selectedItem: ConversationItem | undefined,
+  ): void {
+    if (selectedItem) {
+      this.conversationList.width = "60%";
+      this.conversationDetailBox.show();
+      return;
+    }
+    this.conversationList.width = "100%";
+    this.conversationDetailBox.hide();
+  }
+
+  private renderConversationDetail(item: ConversationItem | undefined): string {
+    if (!item) return "";
+    const lines = [
+      `{bold}${this.escapeMarkup(this.conversationDetailTitle(item))}{/bold}`,
+      "",
+      `id: ${this.escapeMarkup(item.id)}`,
+      `kind: ${item.kind}`,
+      `time: ${this.escapeMarkup(item.timestamp)}`,
+    ];
+
+    switch (item.kind) {
+      case "user":
+        lines.push(
+          `channel: ${this.escapeMarkup(item.channel)}`,
+          ...(item.sourceEventId
+            ? [`sourceEventId: ${this.escapeMarkup(item.sourceEventId)}`]
+            : []),
+          "",
+          "{bold}Text{/bold}",
+          this.escapeMarkup(item.text),
+        );
+        break;
+      case "agent":
+        lines.push(
+          `messageKind: ${item.messageKind}`,
+          "",
+          "{bold}Text{/bold}",
+          this.escapeMarkup(item.text),
+        );
+        break;
+      case "system":
+        lines.push("", "{bold}Text{/bold}", this.escapeMarkup(item.text));
+        break;
+    }
+
+    return lines.join("\n");
+  }
+
+  private conversationDetailTitle(item: ConversationItem): string {
+    switch (item.kind) {
+      case "user":
+        return `[${item.channel}] user`;
+      case "agent":
+        return `agent [${item.messageKind}]`;
+      case "system":
+        return "system";
+    }
+  }
+
   private renderLoopDetail(frame: LoopFrame | undefined): string {
     if (!frame) return "";
     const lines = [
@@ -525,6 +640,20 @@ export class BlessedRenderer implements TuiRenderer {
       lines.push("", "{bold}Log{/bold}", this.escapeMarkup(frame.logPath));
     }
     return lines.join("\n");
+  }
+
+  private selectConversationListRow(itemId: string | undefined): void {
+    if (!itemId) return;
+    const row = this.conversationLineIndexes.get(itemId);
+    if (row === undefined) return;
+    const list = this.conversationList as blessed.Widgets.ListElement & {
+      select?: (index: number) => void;
+      scrollTo?: (offset: number) => void;
+    };
+    list.select?.(row);
+    if (!this.ui.followBottom.conversation) {
+      list.scrollTo?.(Math.max(0, row - 2));
+    }
   }
 
   private selectLoopListRow(frameId: string | undefined): void {
@@ -566,6 +695,10 @@ export class BlessedRenderer implements TuiRenderer {
 
   private updateStyles(): void {
     const convBorder = this.conversationList.style.border as Record<string, string>;
+    const convDetailBorder = this.conversationDetailBox.style.border as Record<
+      string,
+      string
+    >;
     const loopBorder = this.loopList.style.border as Record<string, string>;
     const inputBorder = this.inputBar.style.border as Record<string, string>;
 
@@ -573,12 +706,15 @@ export class BlessedRenderer implements TuiRenderer {
 
     if (this.ui.mode === "input") {
       convBorder.fg = "gray";
+      convDetailBorder.fg = "gray";
       loopBorder.fg = "gray";
       detailBorder.fg = "gray";
       inputBorder.fg = "cyan";
       this.inputBar.setLabel(" [INPUT] message> (Enter=send, Esc=browse) ");
     } else {
       convBorder.fg = this.ui.pane === "conversation" ? "white" : "gray";
+      convDetailBorder.fg =
+        this.ui.pane === "conversationDetail" ? "white" : "gray";
       loopBorder.fg = this.ui.pane === "loop" ? "white" : "gray";
       detailBorder.fg = this.ui.pane === "detail" ? "white" : "gray";
       inputBorder.fg = "gray";

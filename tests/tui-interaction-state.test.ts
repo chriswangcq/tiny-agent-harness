@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TuiInteractionState } from "../src/tui/interaction-state.js";
-import type { LoopFrame } from "../src/tui/types.js";
+import type { ConversationItem, LoopFrame } from "../src/tui/types.js";
 
 function frame(id: string, stepIndex: number): LoopFrame {
   return {
@@ -14,12 +14,23 @@ function frame(id: string, stepIndex: number): LoopFrame {
   };
 }
 
+function conversation(id: string, text: string): ConversationItem {
+  return {
+    id,
+    kind: "user",
+    timestamp: `2026-01-01T00:00:0${id}Z`,
+    channel: "default",
+    text,
+  };
+}
+
 describe("TuiInteractionState", () => {
   it("starts in input mode with both panes following bottom", () => {
     const state = new TuiInteractionState();
 
     expect(state.mode).toBe("input");
     expect(state.followBottom).toEqual({ conversation: true, loop: true });
+    expect(state.selectedConversationItemId).toBeUndefined();
     expect(state.selectedLoopFrameId).toBeUndefined();
   });
 
@@ -49,11 +60,20 @@ describe("TuiInteractionState", () => {
 
   it("conversation browsing disables only conversation follow", () => {
     const state = new TuiInteractionState();
+    const items = [
+      conversation("a", "first"),
+      conversation("b", "second"),
+      conversation("c", "third"),
+    ];
 
-    state.enterBrowse([], "conversation");
-    state.moveSelection([], 1);
+    state.enterBrowse([], "conversation", items);
+    state.moveSelection([], -1, items);
 
+    expect(state.selectedConversationItemId).toBe("b");
     expect(state.followBottom).toEqual({ conversation: false, loop: true });
+
+    state.moveSelection([], -99, items);
+    expect(state.selectedConversationItemId).toBe("a");
   });
 
   it("returning to input mode restores follow bottom and sync selects the latest frame", () => {
@@ -70,6 +90,22 @@ describe("TuiInteractionState", () => {
 
     state.syncWithFrames(frames);
     expect(state.selectedLoopFrameId).toBe("b");
+  });
+
+  it("returning to input mode restores follow bottom and sync selects the latest conversation item", () => {
+    const state = new TuiInteractionState();
+    const items = [conversation("a", "first"), conversation("b", "second")];
+
+    state.enterBrowse([], "conversation", items);
+    state.moveSelection([], -1, items);
+    state.enterInput();
+
+    expect(state.mode).toBe("input");
+    expect(state.selectedConversationItemId).toBeUndefined();
+    expect(state.followBottom).toEqual({ conversation: true, loop: true });
+
+    state.syncWithConversation(items);
+    expect(state.selectedConversationItemId).toBe("b");
   });
 
   it("syncs selection to the latest frame when following bottom", () => {
@@ -100,6 +136,23 @@ describe("TuiInteractionState", () => {
     expect(state.selectedLoopFrameId).toBe("b");
   });
 
+  it("right-detail focus preserves selected conversation item without changing follow state", () => {
+    const state = new TuiInteractionState();
+    const items = [conversation("a", "first"), conversation("b", "second")];
+
+    state.enterBrowse([], "conversation", items);
+    state.enterConversationDetail(items);
+    state.moveSelection([], -1, items);
+
+    expect(state.pane).toBe("conversationDetail");
+    expect(state.selectedConversationItemId).toBe("b");
+    expect(state.followBottom).toEqual({ conversation: true, loop: true });
+
+    state.leaveConversationDetail(items);
+    expect(state.pane).toBe("conversation");
+    expect(state.selectedConversationItemId).toBe("b");
+  });
+
   it("input mode keeps cursor on newest frame as frames append", () => {
     const state = new TuiInteractionState();
 
@@ -108,5 +161,18 @@ describe("TuiInteractionState", () => {
 
     state.syncWithFrames([frame("a", 0), frame("b", 1)]);
     expect(state.selectedLoopFrameId).toBe("b");
+  });
+
+  it("input mode keeps cursor on newest conversation item as messages append", () => {
+    const state = new TuiInteractionState();
+
+    state.syncWithConversation([conversation("a", "first")]);
+    expect(state.selectedConversationItemId).toBe("a");
+
+    state.syncWithConversation([
+      conversation("a", "first"),
+      conversation("b", "second"),
+    ]);
+    expect(state.selectedConversationItemId).toBe("b");
   });
 });
