@@ -5,7 +5,7 @@ import type {
   TerminalErrorCode,
   TerminalEvent,
   TerminalEventSummary,
-  TerminalOwner,
+  TerminalState,
 } from "./types.js";
 
 export type TerminalObservationLimits = {
@@ -65,7 +65,6 @@ export function summarizeTerminalEvent(
       };
     case "prompt":
     case "continuation_prompt":
-    case "silence_timeout":
     case "terminated":
     case "unsynced":
       return { kind: event.kind };
@@ -74,7 +73,7 @@ export function summarizeTerminalEvent(
 
 export function buildPtyObservation(input: {
   session: string;
-  owner: TerminalOwner;
+  terminal: TerminalState;
   action: PtyAction;
   result: PtyObservation["result"];
   events: readonly TerminalEvent[];
@@ -87,7 +86,7 @@ export function buildPtyObservation(input: {
   const limits = { ...DEFAULT_TERMINAL_OBSERVATION_LIMITS, ...input.limits };
   return {
     session: input.session,
-    owner: input.owner,
+    terminal: input.terminal,
     action: summarizePtyAction(input.action, limits),
     result: input.result,
     events: input.events.map((event) => summarizeTerminalEvent(event, limits)),

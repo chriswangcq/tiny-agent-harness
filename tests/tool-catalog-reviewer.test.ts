@@ -23,11 +23,12 @@ describe("static tool catalog", () => {
     expect(STATIC_TOOL_CATALOG).toHaveLength(1);
     expect(STATIC_TOOL_CATALOG[0]).toBe(BASH_TOOL_DEFINITION);
     expect(BASH_TOOL_DEFINITION.name).toBe("bash");
-    expect(BASH_TOOL_DEFINITION.description).toContain("owner/revision-guarded");
+    expect(BASH_TOOL_DEFINITION.description).toContain("inputSeq-guarded");
     expect(BASH_TOOL_DEFINITION.description).toContain("pure PTY interface");
     expect(BASH_TOOL_DEFINITION.description).toContain("Large write_text payloads are allowed");
     expect(BASH_TOOL_DEFINITION.description).toContain("cat > path");
-    expect(BASH_TOOL_DEFINITION.description).toContain("inputPolicy is writable or unknown");
+    expect(BASH_TOOL_DEFINITION.description).toContain("does not infer");
+    expect(BASH_TOOL_DEFINITION.description).toContain("terminal.inputSeq");
     expect(BASH_TOOL_DEFINITION.description).not.toContain(["rece", "iver"].join(""));
   });
 
@@ -49,13 +50,13 @@ describe("static tool catalog", () => {
     }
   });
 
-  it("makes owner revision explicit on write-like PTY actions", () => {
+  it("makes input sequence explicit on write-like PTY actions", () => {
     const schema = BASH_TOOL_DEFINITION.inputSchema as BashInputSchema;
     const writeText = schema.oneOf?.find(
       (variant) => variant.title === "PtyWriteTextAction",
     );
 
-    expect(writeText?.required).toEqual(["kind", "expectedOwnerRevision", "text"]);
+    expect(writeText?.required).toEqual(["kind", "expectedInputSeq", "text"]);
     expect(writeText?.properties?.kind).toEqual({ const: "write_text" });
     expect(schema.oneOf?.some((variant) => variant.title === "PtyInputFrameAction")).toBe(false);
     expect(schema.oneOf?.some((variant) => variant.title === "PtyEndInputAction")).toBe(false);
@@ -80,7 +81,7 @@ describe("AlwaysApproveReviewer", () => {
       toolCallId: "call-1",
       action: {
         kind: "write_text",
-        expectedOwnerRevision: 0,
+        expectedInputSeq: 0,
         text: "pwd",
       },
     };

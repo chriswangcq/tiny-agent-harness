@@ -9,7 +9,7 @@ describe("PromptBuilder", () => {
     expect(prompt.messages).toHaveLength(1);
     expect(prompt.messages[0]).toMatchObject({
       role: "system",
-      content: expect.stringContaining("owner/revision guarded actions"),
+      content: expect.stringContaining("inputSeq-guarded actions"),
     });
     expect(prompt.messages[0]!.content).toContain("PTY action kinds");
     expect(prompt.messages[0]!.content).toContain("write_text, key, poll");
@@ -19,7 +19,8 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("im send --channel");
     expect(prompt.messages[0]!.content).toContain("Large write_text payloads are allowed");
     expect(prompt.messages[0]!.content).toContain("cat > path");
-    expect(prompt.messages[0]!.content).toContain("inputPolicy is writable or unknown");
+    expect(prompt.messages[0]!.content).toContain("terminal.inputSeq");
+    expect(prompt.messages[0]!.content).toContain("does not infer whether");
     expect(prompt.messages[0]!.content).toContain("no file staging protocol");
     expect(prompt.messages[0]!.content).not.toContain("bash command fields");
     expect(prompt.messages[0]!.content).not.toContain("UnsupportedControlPayload");
@@ -36,20 +37,24 @@ describe("PromptBuilder", () => {
         role: "assistant_tool_call",
         toolCallId: "call-1",
         name: "bash",
-        arguments: { kind: "write_text", expectedOwnerRevision: 0, text: "pwd" },
+        arguments: { kind: "write_text", expectedInputSeq: 0, text: "pwd" },
       },
       {
         role: "tool_result",
         toolCallId: "call-1",
         observation: {
           session: "default",
-          owner: {
-            kind: "shell",
-            revision: 1,
-            cwd: "/repo",
-            promptSeq: 1,
-            lastReturnCode: 0,
-            promptNonce: "nonce",
+          terminal: {
+            inputSeq: 1,
+            alive: true,
+            syncStatus: { kind: "trusted" },
+            lastShellPrompt: {
+              cwd: "/repo",
+              promptSeq: 1,
+              lastReturnCode: 0,
+            },
+            lastContinuationPrompt: null,
+            termination: null,
           },
           action: { kind: "write_text", preview: "pwd" },
           result: "ok",
@@ -78,7 +83,7 @@ describe("PromptBuilder", () => {
         name: "bash",
         arguments: JSON.stringify({
           kind: "write_text",
-          expectedOwnerRevision: 0,
+          expectedInputSeq: 0,
           text: "pwd",
         }),
       },
@@ -89,13 +94,17 @@ describe("PromptBuilder", () => {
     expect(toolMsg.tool_call_id).toBe("call-1");
     expect(toolMsg.content).toBe(JSON.stringify({
       session: "default",
-      owner: {
-        kind: "shell",
-        revision: 1,
-        cwd: "/repo",
-        promptSeq: 1,
-        lastReturnCode: 0,
-        promptNonce: "nonce",
+      terminal: {
+        inputSeq: 1,
+        alive: true,
+        syncStatus: { kind: "trusted" },
+        lastShellPrompt: {
+          cwd: "/repo",
+          promptSeq: 1,
+          lastReturnCode: 0,
+        },
+        lastContinuationPrompt: null,
+        termination: null,
       },
       action: { kind: "write_text", preview: "pwd" },
       result: "ok",
@@ -138,7 +147,7 @@ describe("PromptBuilder", () => {
         arguments: {
           kind: "write_text",
           session: "default",
-          expectedOwnerRevision: 0,
+          expectedInputSeq: 0,
           text: "pwd\n",
         },
       },
@@ -174,7 +183,7 @@ describe("PromptBuilder", () => {
     );
   });
 
-  it("omits large write_text payloads from serialized tool-call history", () => {
+  it("preserves serialized tool-call history exactly", () => {
     const largeBase64 = `${"A".repeat(512)}\n`;
     const history: HistoryEntry[] = [
       {
@@ -183,8 +192,9 @@ describe("PromptBuilder", () => {
         name: "bash",
         arguments: {
           kind: "write_text",
-          expectedOwnerRevision: 5,
+          expectedInputSeq: 5,
           text: largeBase64,
+          unexpectedFromModel: "keep-for-debugging",
         },
       },
     ];
@@ -194,12 +204,11 @@ describe("PromptBuilder", () => {
     const toolCalls = assistantMsg.tool_calls as Array<Record<string, unknown>>;
     const fn = toolCalls[0]!.function as Record<string, unknown>;
     const args = JSON.parse(fn.arguments as string) as Record<string, unknown>;
-    expect(args.text).toBeUndefined();
-    expect(args.textOmittedFromHistory).toMatchObject({
-      kind: "redacted_write_text_payload",
-      bytes: Buffer.byteLength(largeBase64, "utf8"),
+    expect(args).toEqual({
+      kind: "write_text",
+      expectedInputSeq: 5,
+      text: largeBase64,
+      unexpectedFromModel: "keep-for-debugging",
     });
-    expect(fn.arguments).not.toContain(largeBase64.trim());
-    expect(fn.arguments).not.toContain("[redacted write_text payload");
   });
 });

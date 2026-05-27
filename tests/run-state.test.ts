@@ -32,7 +32,7 @@ function makeToolCall(id = "tc-1"): InternalToolCall {
   return {
     id,
     name: "bash",
-    arguments: { kind: "write_text", expectedOwnerRevision: 1, text: "echo hi\n" },
+    arguments: { kind: "write_text", expectedInputSeq: 1, text: "echo hi\n" },
   };
 }
 
@@ -81,7 +81,7 @@ function makePtyRequest(id = "tc-1"): ToolRequest {
     toolCallId: id,
     action: {
       kind: "write_text",
-      expectedOwnerRevision: 1,
+      expectedInputSeq: 1,
       text: "echo hi\n",
     },
   };
@@ -106,13 +106,17 @@ function makeRejection(): ToolReviewDecision {
 function makePtyObservation(): PtyObservation {
   return {
     session: "default",
-    owner: {
-      kind: "shell",
-      revision: 2,
-      cwd: "/tmp",
-      promptSeq: 2,
-      lastReturnCode: 0,
-      promptNonce: "nonce",
+    terminal: {
+      inputSeq: 2,
+      alive: true,
+      syncStatus: { kind: "trusted" },
+      lastShellPrompt: {
+        cwd: "/tmp",
+        promptSeq: 2,
+        lastReturnCode: 0,
+      },
+      lastContinuationPrompt: null,
+      termination: null,
     },
     action: { kind: "write_text", preview: "echo hi\n" },
     result: "ok",

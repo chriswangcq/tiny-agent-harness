@@ -5,16 +5,14 @@ import {
   summarizePtyAction,
   summarizeTerminalEvent,
 } from "../../src/terminal/observation.js";
-import type { TerminalOwner } from "../../src/terminal/types.js";
+import { createTerminalState } from "../../src/terminal/state.js";
 
-const owner: TerminalOwner = {
-  kind: "shell",
-  revision: 1,
+const terminal = createTerminalState({
+  inputSeq: 1,
   cwd: "/repo",
   promptSeq: 1,
   lastReturnCode: 0,
-  promptNonce: "nonce",
-};
+});
 
 describe("terminal observation helpers", () => {
   it("summarizes type text with bounded preview and byte metadata", () => {
@@ -22,7 +20,7 @@ describe("terminal observation helpers", () => {
       summarizePtyAction(
         {
           kind: "write_text",
-          expectedOwnerRevision: 1,
+          expectedInputSeq: 1,
           text: "hello world",
         },
         { maxPreviewChars: 6 },
@@ -39,7 +37,7 @@ describe("terminal observation helpers", () => {
     expect(
       summarizePtyAction({
         kind: "write_text",
-        expectedOwnerRevision: 2,
+        expectedInputSeq: 2,
         text: "aGVsbG8=\n",
       }),
     ).toEqual({
@@ -67,10 +65,10 @@ describe("terminal observation helpers", () => {
   it("builds compact PTY observations", () => {
     const observation = buildPtyObservation({
       session: "default",
-      owner,
+      terminal,
       action: {
         kind: "write_text",
-        expectedOwnerRevision: 1,
+        expectedInputSeq: 1,
         text: "aGVsbG8=\n",
       },
       result: "ok",

@@ -1,26 +1,19 @@
 import { describe, expect, it } from "vitest";
-import type { TerminalOwner } from "../src/terminal/index.js";
+import { createTerminalState } from "../src/terminal/state.js";
 import type {
   TerminalRuntimeSnapshot,
   TerminalServicePorts,
 } from "../src/application/terminal-ports.js";
 
-function shellOwner(): TerminalOwner {
-  return {
-    kind: "shell",
-    revision: 0,
-    cwd: "/repo",
-    promptSeq: 1,
-    lastReturnCode: 0,
-    promptNonce: "nonce",
-  };
-}
-
 describe("terminal application ports", () => {
   it("supports fake ports and explicit snapshots", async () => {
     const snapshot: TerminalRuntimeSnapshot = {
       session: "default",
-      owner: shellOwner(),
+      terminal: createTerminalState({
+        cwd: "/repo",
+        promptSeq: 1,
+        lastReturnCode: 0,
+      }),
       parserState: { pending: "", totalBytes: 0 },
     };
     const saved: TerminalRuntimeSnapshot[] = [];

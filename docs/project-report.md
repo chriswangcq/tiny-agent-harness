@@ -5,7 +5,7 @@
 > 统计口径：基于当前工作区快照；排除 `node_modules/`、`dist/`、`.git/`、`.complex-problems/`、锁文件、日志文件、`package-lock.json` 和明显生成文件。行数统计覆盖 `.ts`、`.js`、`.mjs`、`.md`、`.json` 等源码、脚本、测试与文档文件；本报告自身未纳入统计。统计结果用于工程规模估算，不等同于最终发行包体积。
 >
 > Legacy note: this is a historical report for the pre-managed-PTY architecture.
-> Active guidance is the pure TerminalOwner PTY action runtime with internally paced `write_text`.
+> Active guidance is the pure PTY action runtime with terminal facts, `inputSeq`, and internally paced `write_text`.
 > Owner: P036. Removal condition: regenerate the report after the PTY cutover
 > fully replaces historical wording.
 

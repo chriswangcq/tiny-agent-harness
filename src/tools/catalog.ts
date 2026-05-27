@@ -9,10 +9,10 @@ const SessionProperty = {
   description: "Optional persistent PTY session id. Defaults to default when omitted.",
 };
 
-const ExpectedOwnerRevisionProperty = {
+const ExpectedInputSeqProperty = {
   type: "number",
   description:
-    "TerminalOwner revision observed before choosing this action. Stale revisions are rejected.",
+    "Terminal inputSeq observed before choosing this input action. Stale sequences are rejected.",
 };
 
 const BashToolInputSchema: JsonSchema = {
@@ -20,26 +20,26 @@ const BashToolInputSchema: JsonSchema = {
   oneOf: [
     {
       title: "PtyWriteTextAction",
-      required: ["kind", "expectedOwnerRevision", "text"],
+      required: ["kind", "expectedInputSeq", "text"],
       properties: {
         kind: { const: "write_text" },
         session: SessionProperty,
-        expectedOwnerRevision: ExpectedOwnerRevisionProperty,
+        expectedInputSeq: ExpectedInputSeqProperty,
         text: {
           type: "string",
           description:
-            "Text bytes to write to the current PTY owner. Include newline explicitly or use key enter.",
+            "Text bytes to write to the PTY. Include newline explicitly or use key enter.",
         },
       },
       additionalProperties: false,
     },
     {
       title: "PtyKeyAction",
-      required: ["kind", "expectedOwnerRevision", "key"],
+      required: ["kind", "expectedInputSeq", "key"],
       properties: {
         kind: { const: "key" },
         session: SessionProperty,
-        expectedOwnerRevision: ExpectedOwnerRevisionProperty,
+        expectedInputSeq: ExpectedInputSeqProperty,
         key: {
           enum: ["enter", "ctrl-c", "ctrl-d", "escape", "tab", "up", "down"],
         },
@@ -71,7 +71,7 @@ const BashToolInputSchema: JsonSchema = {
       properties: {
         kind: { const: "interrupt" },
         session: SessionProperty,
-        expectedOwnerRevision: ExpectedOwnerRevisionProperty,
+        expectedInputSeq: ExpectedInputSeqProperty,
       },
       additionalProperties: false,
     },
@@ -104,12 +104,12 @@ const BashToolInputSchema: JsonSchema = {
 export const BASH_TOOL_DEFINITION: ToolDefinition = {
   name: "bash",
   description:
-    "Operate a persistent PTY session with owner/revision-guarded actions. " +
-    "This is a pure PTY interface: write_text writes exact bytes to the current foreground terminal owner and never appends Enter for you; include \\n explicitly or use key enter. Large write_text payloads are allowed and internally paced. " +
+    "Operate a persistent PTY session with inputSeq-guarded actions. " +
+    "This is a pure PTY interface: write_text writes exact bytes to the terminal and never appends Enter for you; include \\n explicitly or use key enter. Large write_text payloads are allowed and internally paced, which solves PTY transport but not shell parsing. " +
     "Use key only for terminal keys such as enter, ctrl-c, ctrl-d, escape, tab, up, and down. " +
-    "Use poll/status to observe and interrupt/terminate/restart to recover. After sending a multi-line heredoc or script, keep polling until the shell prompt returns; shell_continuation means the shell is still waiting for input. " +
-    "When owner.kind is process, write_text is accepted if inputPolicy is writable or unknown, and rejected only when inputPolicy is blocked. Treat unknown as a foreground PTY process that may accept stdin; write only when you deliberately started it or it is clearly waiting for input. " +
-    "For large generated text/code files, avoid shell parsing by starting a foreground stdin consumer such as `cat > path\\n`, polling until owner.kind is process, writing the file text directly, then sending ctrl-d and polling until the shell prompt returns. End text payloads with \\n; if not, ctrl-d may need to be sent twice. " +
+    "Use poll/status to observe and interrupt/terminate/restart to recover. The runtime reports terminal facts such as lastShellPrompt, lastContinuationPrompt, syncStatus, alive, and inputSeq; it does not infer whether shell, Python, ssh, cat, vim, or another foreground program should receive the next bytes. The agent must inspect the PTY output and terminal facts before deciding what to type. " +
+    "Every write_text/key action must include the latest terminal.inputSeq from the prior observation. The sequence only prevents stale input; it is not a foreground process claim. " +
+    "Do not put a large generated file in a shell heredoc or script string literal. For large generated text/code files, avoid shell parsing by starting a foreground stdin consumer such as `cat > path\\n`, polling until it is clearly waiting for input, writing the file text directly, then sending ctrl-d and polling until the shell prompt returns. End text payloads with \\n; if not, ctrl-d may need to be sent twice. " +
     "For short IM replies, write an IM send command such as `node dist/cli/main.js im send --channel <channel> --kind status --text <reply>\\n`. " +
     "For small/simple generated text files or code, shell heredocs or small scripts through write_text are also fine; the runtime paces large writes internally. " +
     "There is no model-visible file staging protocol, frame action, or binary payload channel. " +

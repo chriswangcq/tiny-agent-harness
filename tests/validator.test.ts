@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { ToolCallValidator } from "../src/tools/validator.js";
 import type { InternalToolCall } from "../src/types/model.js";
-import type { TerminalOwner } from "../src/terminal/types.js";
+import { createTerminalState } from "../src/terminal/state.js";
+import type { TerminalState } from "../src/terminal/types.js";
 
 function makeCall(
   overrides: Partial<InternalToolCall> & { arguments: InternalToolCall["arguments"] },
@@ -13,15 +14,13 @@ function makeCall(
   };
 }
 
-function shell(revision = 1): TerminalOwner {
-  return {
-    kind: "shell",
-    revision,
+function terminal(inputSeq = 1): TerminalState {
+  return createTerminalState({
+    inputSeq,
     cwd: "/repo",
     promptSeq: 1,
     lastReturnCode: 0,
-    promptNonce: "nonce",
-  };
+  });
 }
 
 describe("ToolCallValidator PTY actions", () => {
@@ -30,7 +29,7 @@ describe("ToolCallValidator PTY actions", () => {
       makeCall({
         arguments: {
           kind: "write_text",
-          expectedOwnerRevision: 1,
+          expectedInputSeq: 1,
           text: "pwd",
         },
       }),
@@ -44,7 +43,7 @@ describe("ToolCallValidator PTY actions", () => {
         toolCallId: "tc-1",
         action: {
           kind: "write_text",
-          expectedOwnerRevision: 1,
+          expectedInputSeq: 1,
           text: "pwd",
         },
       });
@@ -52,11 +51,11 @@ describe("ToolCallValidator PTY actions", () => {
   });
 
   it("validates long write_text actions as ordinary PTY text", () => {
-    const result = new ToolCallValidator({ terminalOwner: shell(3) }).validate(
+    const result = new ToolCallValidator({ terminal: terminal(3) }).validate(
       makeCall({
         arguments: {
           kind: "write_text",
-          expectedOwnerRevision: 3,
+          expectedInputSeq: 3,
           text: "hello".repeat(2000),
         },
       }),
@@ -76,7 +75,7 @@ describe("ToolCallValidator PTY actions", () => {
       makeCall({
         arguments: {
           kind: "write_text",
-          expectedOwnerRevision: 1,
+          expectedInputSeq: 1,
           text: "hello".repeat(2000),
         },
       }),
@@ -85,12 +84,12 @@ describe("ToolCallValidator PTY actions", () => {
     expect(result.status).toBe("valid");
   });
 
-  it("rejects stale owner revisions when owner context is injected", () => {
-    const result = new ToolCallValidator({ terminalOwner: shell(2) }).validate(
+  it("rejects stale input sequences when terminal context is injected", () => {
+    const result = new ToolCallValidator({ terminal: terminal(2) }).validate(
       makeCall({
         arguments: {
           kind: "write_text",
-          expectedOwnerRevision: 1,
+          expectedInputSeq: 1,
           text: "echo stale",
         },
       }),
@@ -98,16 +97,16 @@ describe("ToolCallValidator PTY actions", () => {
 
     expect(result.status).toBe("invalid");
     if (result.status === "invalid") {
-      expect(result.observation.message).toContain("OWNER_MISMATCH");
+      expect(result.observation.message).toContain("INPUT_SEQ_MISMATCH");
     }
   });
 
-  it("accepts owner-guarded shell writes when owner context is injected", () => {
-    const result = new ToolCallValidator({ terminalOwner: shell(3) }).validate(
+  it("accepts inputSeq-guarded writes when terminal context is injected", () => {
+    const result = new ToolCallValidator({ terminal: terminal(3) }).validate(
       makeCall({
         arguments: {
           kind: "write_text",
-          expectedOwnerRevision: 3,
+          expectedInputSeq: 3,
           text: "pwd\n",
         },
       }),
@@ -121,7 +120,7 @@ describe("ToolCallValidator PTY actions", () => {
       makeCall({
         arguments: {
           kind: "paste_text",
-          expectedOwnerRevision: 1,
+          expectedInputSeq: 1,
           text: "hello",
         },
       }),
@@ -166,7 +165,7 @@ describe("ToolCallValidator tool names", () => {
     const result = new ToolCallValidator().validate({
       id: "tc-1",
       name: "python" as any,
-      arguments: { kind: "write_text", expectedOwnerRevision: 1, text: "pwd" } as any,
+      arguments: { kind: "write_text", expectedInputSeq: 1, text: "pwd" } as any,
     });
 
     expect(result.status).toBe("invalid");

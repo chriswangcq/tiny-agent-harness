@@ -75,7 +75,7 @@ describe("ManagedPtySession", () => {
     expect(ptyMock.spawned[0]?.writes[0]).not.toContain("__TAH_COMMAND_DONE__");
   });
 
-  it("updates snapshot owner from prompt output", () => {
+  it("updates terminal facts from prompt output", () => {
     const session = new ManagedPtySession({
       id: "managed",
       promptNonce: "nonce",
@@ -92,15 +92,18 @@ describe("ManagedPtySession", () => {
       })}\n`,
     );
 
-    expect(session.snapshot.owner).toMatchObject({
-      kind: "shell",
-      revision: 1,
-      cwd: "/repo/next",
-      promptSeq: 1,
+    expect(session.snapshot.terminal).toMatchObject({
+      inputSeq: 1,
+      alive: true,
+      lastShellPrompt: {
+        cwd: "/repo/next",
+        promptSeq: 1,
+      },
+      lastContinuationPrompt: null,
     });
   });
 
-  it("updates snapshot owner from continuation output", () => {
+  it("updates terminal facts from continuation output", () => {
     const session = new ManagedPtySession({
       id: "managed",
       promptNonce: "nonce",
@@ -116,36 +119,32 @@ describe("ManagedPtySession", () => {
       })}\n`,
     );
 
-    expect(session.snapshot.owner).toEqual({
-      kind: "shell_continuation",
-      revision: 1,
-      reason: "quote",
-      promptSeq: 2,
-      promptNonce: "nonce",
+    expect(session.snapshot.terminal).toMatchObject({
+      inputSeq: 1,
+      lastContinuationPrompt: {
+        reason: "quote",
+        promptSeq: 2,
+      },
     });
   });
 
-  it("transitions to process owner from explicit silence timeout", () => {
+  it("marks the terminal as terminated when the PTY is killed", () => {
     const session = new ManagedPtySession({
       id: "managed",
       promptNonce: "nonce",
       cwd: "/repo",
     });
+    session.spawn();
 
-    const snapshot = session.applySilenceTimeout({
-      elapsedMs: 30_000,
-      commandLine: "sleep 60",
-      startedAt: "2026-05-27T00:00:00.000Z",
-      inputPolicy: "unknown",
-    });
+    session.terminate();
 
-    expect(snapshot.owner).toEqual({
-      kind: "process",
-      revision: 1,
-      commandLine: "sleep 60",
-      inputPolicy: "unknown",
-      startedAt: "2026-05-27T00:00:00.000Z",
-      lastOutputAt: null,
+    expect(session.snapshot.terminal).toMatchObject({
+      inputSeq: 1,
+      alive: false,
+      termination: {
+        exitCode: null,
+        reason: "terminated",
+      },
     });
   });
 });

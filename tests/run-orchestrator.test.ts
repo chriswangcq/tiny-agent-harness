@@ -11,7 +11,7 @@ import {
 } from "../src/run/orchestrator.js";
 import { TranscriptStore } from "../src/transcript/store.js";
 import { STATIC_TOOL_CATALOG } from "../src/tools/catalog.js";
-import type { PtyObservation } from "../src/terminal/types.js";
+import type { PtyObservation, TerminalState } from "../src/terminal/types.js";
 import type { EnvironmentEvent, IoWaitRequest } from "../src/types/environment.js";
 import type { FimStepOutput, InternalToolCall, ModelStepContext, ModelTurn } from "../src/types/model.js";
 import type { RunEvent } from "../src/types/run.js";
@@ -32,6 +32,21 @@ afterEach(() => {
   }
   tmpDirs = [];
 });
+
+function terminal(inputSeq: number): TerminalState {
+  return {
+    inputSeq,
+    alive: true,
+    syncStatus: { kind: "trusted" },
+    lastShellPrompt: {
+      cwd: "/repo",
+      promptSeq: 2,
+      lastReturnCode: 0,
+    },
+    lastContinuationPrompt: null,
+    termination: null,
+  };
+}
 
 function toolOutput(toolCall: InternalToolCall): FimStepOutput {
   const turn: ModelTurn = {
@@ -125,7 +140,7 @@ function makeRun(options?: {
           toolCallId: toolCall.id,
           action: {
             kind: "write_text",
-            expectedOwnerRevision: 1,
+            expectedInputSeq: 1,
             text: "pwd",
           },
         },
@@ -149,14 +164,7 @@ function makeRun(options?: {
         return (
           options?.terminalObservation ?? {
             session: request.action.session ?? "default",
-            owner: {
-              kind: "shell",
-              revision: 2,
-              cwd: "/repo",
-              promptSeq: 2,
-              lastReturnCode: 0,
-              promptNonce: "nonce",
-            },
+            terminal: terminal(2),
             action: {
               kind: request.action.kind,
               preview: request.action.kind === "write_text" ? request.action.text : undefined,
@@ -348,7 +356,7 @@ describe("RunOrchestrator", () => {
       name: "bash",
       arguments: {
         kind: "write_text",
-        expectedOwnerRevision: 1,
+        expectedInputSeq: 1,
         text: "pwd",
       },
     };
@@ -367,7 +375,7 @@ describe("RunOrchestrator", () => {
           toolCallId: "call-pty",
           action: {
             kind: "write_text",
-            expectedOwnerRevision: 1,
+            expectedInputSeq: 1,
             text: "pwd",
           },
         },
@@ -396,7 +404,7 @@ describe("RunOrchestrator", () => {
         toolCallId: "call-pty",
         action: {
           kind: "write_text",
-          expectedOwnerRevision: 1,
+          expectedInputSeq: 1,
           text: "pwd",
         },
       },
@@ -420,7 +428,7 @@ describe("RunOrchestrator", () => {
       name: "bash",
       arguments: {
         kind: "write_text",
-        expectedOwnerRevision: 1,
+        expectedInputSeq: 1,
         text: "pwd",
       },
     };
@@ -430,12 +438,15 @@ describe("RunOrchestrator", () => {
     };
     const rejected: PtyObservation = {
       session: "default",
-      owner: { kind: "unknown", revision: 4, reason: "state_gap" },
+      terminal: {
+        ...terminal(4),
+        syncStatus: { kind: "unsynced", reason: "state_gap" },
+      },
       action: { kind: "write_text", preview: "pwd" },
       result: "rejected",
       events: [],
       errorCode: "TERMINAL_UNSYNCED",
-      message: "Terminal owner is unknown.",
+      message: "Terminal state is unsynced.",
     };
     const { orchestrator, histories, terminalCalls } = makeRun({
       outputs: [toolOutput(toolCall), ioWaitOutput(wait)],
@@ -448,7 +459,7 @@ describe("RunOrchestrator", () => {
           toolCallId: "call-pty-reject",
           action: {
             kind: "write_text",
-            expectedOwnerRevision: 1,
+            expectedInputSeq: 1,
             text: "pwd",
           },
         },

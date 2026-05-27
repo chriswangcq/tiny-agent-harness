@@ -1,12 +1,8 @@
 import * as nodePty from "node-pty";
 import { buildManagedShellInitSnippet } from "../application/managed-shell.js";
-import {
-  applyPtyChunkToSnapshot,
-  applySilenceTimeoutToSnapshot,
-} from "../application/pty-owner-adapter.js";
+import { applyPtyChunkToSnapshot } from "../application/terminal-state-adapter.js";
 import type { TerminalRuntimeSnapshot } from "../application/terminal-ports.js";
-import { createShellOwner } from "../terminal/fsm.js";
-import type { ProcessInputPolicy } from "../terminal/index.js";
+import { createTerminalState, markTerminalTerminated } from "../terminal/index.js";
 
 export type ManagedPtySessionOptions = {
   id: string;
@@ -20,7 +16,7 @@ export type ManagedPtySessionOptions = {
 };
 
 /**
- * Managed PTY session for the TerminalOwner protocol.
+ * Managed PTY session for the terminal-state protocol.
  */
 export class ManagedPtySession {
   readonly id: string;
@@ -44,11 +40,10 @@ export class ManagedPtySession {
     this.env = { ...(options.env ?? {}), TERM: "dumb" };
     this.currentSnapshot = {
       session: this.id,
-      owner: createShellOwner({
+      terminal: createTerminalState({
         cwd: this.cwd,
         promptSeq: 0,
         lastReturnCode: null,
-        promptNonce: this.promptNonce,
       }),
       parserState: { pending: "", totalBytes: 0 },
     };
@@ -89,20 +84,13 @@ export class ManagedPtySession {
     }
     this.pty.kill();
     this.pty = null;
-  }
-
-  applySilenceTimeout(input: {
-    elapsedMs: number;
-    commandLine: string | null;
-    startedAt: string;
-    inputPolicy?: ProcessInputPolicy;
-  }): TerminalRuntimeSnapshot {
-    const result = applySilenceTimeoutToSnapshot({
-      snapshot: this.currentSnapshot,
-      ...input,
-    });
-    this.currentSnapshot = result.snapshot;
-    return this.currentSnapshot;
+    this.currentSnapshot = {
+      ...this.currentSnapshot,
+      terminal: markTerminalTerminated(this.currentSnapshot.terminal, {
+        exitCode: null,
+        reason: "terminated",
+      }),
+    };
   }
 
   get snapshot(): TerminalRuntimeSnapshot {

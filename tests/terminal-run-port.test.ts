@@ -7,13 +7,17 @@ describe("createTerminalRunPort", () => {
     const calls: unknown[] = [];
     const observation: PtyObservation = {
       session: "default",
-      owner: {
-        kind: "shell",
-        revision: 2,
-        cwd: "/repo",
-        promptSeq: 2,
-        lastReturnCode: 0,
-        promptNonce: "nonce",
+      terminal: {
+        inputSeq: 2,
+        alive: true,
+        syncStatus: { kind: "trusted" },
+        lastShellPrompt: {
+          cwd: "/repo",
+          promptSeq: 2,
+          lastReturnCode: 0,
+        },
+        lastContinuationPrompt: null,
+        termination: null,
       },
       action: { kind: "write_text", preview: "pwd" },
       result: "ok",
@@ -30,7 +34,7 @@ describe("createTerminalRunPort", () => {
       port.execute({
         action: {
           kind: "write_text",
-          expectedOwnerRevision: 1,
+          expectedInputSeq: 1,
           text: "pwd",
         },
       }),
@@ -38,7 +42,7 @@ describe("createTerminalRunPort", () => {
     expect(calls).toEqual([
       {
         kind: "write_text",
-        expectedOwnerRevision: 1,
+        expectedInputSeq: 1,
         text: "pwd",
       },
     ]);

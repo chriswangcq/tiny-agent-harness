@@ -72,9 +72,9 @@ describe("ManagedTerminalRuntime", () => {
 
     expect(first).toMatchObject({
       result: "ok",
-      owner: {
-        kind: "shell",
-        revision: 0,
+      terminal: {
+        inputSeq: 0,
+        alive: true,
       },
     });
     expect(ptyMock.spawn).toHaveBeenCalledTimes(1);
@@ -92,10 +92,11 @@ describe("ManagedTerminalRuntime", () => {
 
     expect(second).toMatchObject({
       result: "ok",
-      owner: {
-        kind: "shell",
-        revision: 1,
-        promptSeq: 1,
+      terminal: {
+        inputSeq: 1,
+        lastShellPrompt: {
+          promptSeq: 1,
+        },
       },
       events: [{ kind: "prompt" }],
     });
@@ -108,7 +109,7 @@ describe("ManagedTerminalRuntime", () => {
     const observation = await port.execute({
       action: {
         kind: "write_text",
-        expectedOwnerRevision: 0,
+        expectedInputSeq: 0,
         text: "pwd\n",
       },
     });
@@ -125,7 +126,7 @@ describe("ManagedTerminalRuntime", () => {
     const observation = await port.execute({
       action: {
         kind: "write_text",
-        expectedOwnerRevision: 0,
+        expectedInputSeq: 0,
         text: largeText,
       },
     });
@@ -159,9 +160,8 @@ describe("ManagedTerminalRuntime", () => {
     );
     expect(observation).toMatchObject({
       result: "ok",
-      owner: {
-        kind: "shell",
-        revision: 0,
+      terminal: {
+        inputSeq: 0,
       },
     });
   });

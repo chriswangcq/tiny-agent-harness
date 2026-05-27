@@ -191,7 +191,7 @@ function dsmlBash(params: Record<string, DsmlParam>): string {
 function writeText(text: string): Record<string, DsmlParam> {
   return {
     kind: "write_text",
-    expectedOwnerRevision: 0,
+    expectedInputSeq: 0,
     text,
   };
 }
@@ -439,7 +439,7 @@ describe("DeepSeekFimAdapter", () => {
     const decisionPrefix = [
       `bash">`,
       `<${DSML}parameter name="kind" string="true">write_text</${DSML}parameter>`,
-      `<${DSML}parameter name="expectedOwnerRevision" string="false">0</${DSML}parameter>`,
+      `<${DSML}parameter name="expectedInputSeq" string="false">0</${DSML}parameter>`,
       `<${DSML}parameter name="text" string="true">ec`,
     ].join("\n");
     const decisionSuffix = `ho hi</${DSML}parameter>`;
@@ -509,7 +509,7 @@ describe("DeepSeekFimAdapter", () => {
       "Need answer in IM.",
       "</think>",
       `<${DSML}tool_calls>`,
-      `bash<｜tool▁sep｜>{"kind":"write_text","expectedOwnerRevision":0,"text":"pwd"}`,
+      `bash<｜tool▁sep｜>{"kind":"write_text","expectedInputSeq":0,"text":"pwd"}`,
       `</${DSML}tool_calls>`,
     ].join("\n");
     const fetchMock = stubFimResponses(
@@ -553,7 +553,7 @@ describe("DeepSeekFimAdapter", () => {
   it("rejects legacy V3 format with separator", async () => {
     stubFimResponses(
       "Thinking",
-      'bash<｜tool▁sep｜>{"kind":"write_text","expectedOwnerRevision":0,"text":"pwd"}',
+      'bash<｜tool▁sep｜>{"kind":"write_text","expectedInputSeq":0,"text":"pwd"}',
     );
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
@@ -569,7 +569,7 @@ describe("DeepSeekFimAdapter", () => {
   it("rejects ambiguous brace-split output when DSML is missing", async () => {
     stubFimResponses(
       "Thinking",
-      'bash {"kind":"write_text","expectedOwnerRevision":0,"text":"pwd"}',
+      'bash {"kind":"write_text","expectedInputSeq":0,"text":"pwd"}',
     );
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
@@ -583,7 +583,7 @@ describe("DeepSeekFimAdapter", () => {
   });
 
   it("returns invalid_output when no JSON is found in decision", async () => {
-    stubFimResponses("Thinking", "I should inspect the terminal owner");
+    stubFimResponses("Thinking", "I should inspect the terminal output");
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
       tools: [...STATIC_TOOL_CATALOG],
@@ -627,7 +627,7 @@ describe("DeepSeekFimAdapter", () => {
   it("rejects legacy V3 boundary tokens with separator", async () => {
     stubFimResponses(
       "Thinking",
-      '</end▁of▁sentence｜>bash<｜tool▁sep｜>{"kind":"write_text","expectedOwnerRevision":0,"text":"ls"}',
+      '</end▁of▁sentence｜>bash<｜tool▁sep｜>{"kind":"write_text","expectedInputSeq":0,"text":"ls"}',
     );
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
@@ -758,7 +758,7 @@ describe("parseDsmlDecision", () => {
     const raw =
       `<${DSML}invoke name="bash">\n` +
       `<${DSML}parameter name="kind" string="true">write_text</${DSML}parameter>\n` +
-      `<${DSML}parameter name="expectedOwnerRevision" string="false">0</${DSML}parameter>\n` +
+      `<${DSML}parameter name="expectedInputSeq" string="false">0</${DSML}parameter>\n` +
       `<${DSML}parameter name="text" string="true">echo hi</${DSML}parameter>`;
     const result = parseDsmlDecision(raw);
     expect(result).toEqual({
@@ -771,7 +771,7 @@ describe("parseDsmlDecision", () => {
   });
 
   it("rejects DSML name with JSON body instead of parameter tags", () => {
-    const raw = 'bash">\n{"kind":"write_text","expectedOwnerRevision":0,"text":"pwd"}';
+    const raw = 'bash">\n{"kind":"write_text","expectedInputSeq":0,"text":"pwd"}';
     const result = parseDsmlDecision(raw);
     expect(result).toMatchObject({
       status: "invalid",
@@ -794,7 +794,7 @@ describe("parseDsmlDecision", () => {
     const raw = [
       `bash">`,
       `<${DSML}parameter name="kind" string="true">write_text</${DSML}parameter>`,
-      `<${DSML}parameter name="expectedOwnerRevision" string="false">not-json</${DSML}parameter>`,
+      `<${DSML}parameter name="expectedInputSeq" string="false">not-json</${DSML}parameter>`,
     ].join("\n");
     const result = parseDsmlDecision(raw);
     expect(result).toMatchObject({
@@ -816,7 +816,7 @@ describe("parseDsmlDecision", () => {
   });
 
   it("rejects V3 separator format", () => {
-    const raw = 'bash<｜tool▁sep｜>{"kind":"write_text","expectedOwnerRevision":0,"text":"pwd"}';
+    const raw = 'bash<｜tool▁sep｜>{"kind":"write_text","expectedInputSeq":0,"text":"pwd"}';
     const result = parseDsmlDecision(raw);
     expect(result).toMatchObject({
       status: "invalid",
@@ -826,7 +826,7 @@ describe("parseDsmlDecision", () => {
 
   it("rejects V3 function<sep>name format", () => {
     const raw =
-      'function<｜tool▁sep｜>bash\n```json\n{"kind":"write_text","expectedOwnerRevision":0,"text":"pwd"}\n```';
+      'function<｜tool▁sep｜>bash\n```json\n{"kind":"write_text","expectedInputSeq":0,"text":"pwd"}\n```';
     const result = parseDsmlDecision(raw);
     expect(result).toMatchObject({
       status: "invalid",
@@ -836,7 +836,7 @@ describe("parseDsmlDecision", () => {
 
   it("rejects double separator: id=...<sep>bash<sep>{json}", () => {
     const raw =
-      'id=fim-call-1<｜tool▁sep｜>bash<｜tool▁sep｜>{"kind":"write_text","expectedOwnerRevision":0,"text":"pwd"}';
+      'id=fim-call-1<｜tool▁sep｜>bash<｜tool▁sep｜>{"kind":"write_text","expectedInputSeq":0,"text":"pwd"}';
     const result = parseDsmlDecision(raw);
     expect(result).toMatchObject({
       status: "invalid",
@@ -846,7 +846,7 @@ describe("parseDsmlDecision", () => {
 
   it("rejects trailing </tool_call> XML tag fallback", () => {
     const raw =
-      'bash<｜tool▁sep｜>{"kind":"write_text","expectedOwnerRevision":0,"text":"pwd"}</tool_call>';
+      'bash<｜tool▁sep｜>{"kind":"write_text","expectedInputSeq":0,"text":"pwd"}</tool_call>';
     const result = parseDsmlDecision(raw);
     expect(result).toMatchObject({
       status: "invalid",
@@ -856,7 +856,7 @@ describe("parseDsmlDecision", () => {
 
   it("rejects tool_call prefix format without DSML or V3 separator", () => {
     const raw =
-      'tool_call id=fim-call-1 name=bash arguments={"kind":"write_text","expectedOwnerRevision":0,"text":"pwd"}';
+      'tool_call id=fim-call-1 name=bash arguments={"kind":"write_text","expectedInputSeq":0,"text":"pwd"}';
     const result = parseDsmlDecision(raw);
     expect(result).toMatchObject({
       status: "invalid",
@@ -878,7 +878,7 @@ describe("parseDsmlDecision", () => {
     const raw =
       `invoke name="bash">\n` +
       `<${DSML}parameter name="kind" string="true">write_text</${DSML}parameter>\n` +
-      `<${DSML}parameter name="expectedOwnerRevision" string="false">0</${DSML}parameter>\n` +
+      `<${DSML}parameter name="expectedInputSeq" string="false">0</${DSML}parameter>\n` +
       `<${DSML}parameter name="text" string="true">pwd</${DSML}parameter>`;
     const result = parseDsmlDecision(raw);
     expect(result).toEqual({
@@ -894,7 +894,7 @@ describe("parseDsmlDecision", () => {
     const raw = [
       `bash">`,
       `<${DSML}parameter name="kind" string="true">write_text</${DSML}parameter>`,
-      `<${DSML}parameter name="expectedOwnerRevision" string="false">0</${DSML}parameter>`,
+      `<${DSML}parameter name="expectedInputSeq" string="false">0</${DSML}parameter>`,
       `<${DSML}parameter name="text" string="true">echo 'hello world' | grep "hello"</${DSML}parameter>`,
     ].join("\n");
     const result = parseDsmlDecision(raw);

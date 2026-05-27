@@ -1,7 +1,7 @@
 import type {
   ContinuationReason,
   TerminalEvent,
-  UnknownOwner,
+  TerminalUnsyncedReason,
 } from "./types.js";
 
 export type TerminalMarkers = {
@@ -165,7 +165,7 @@ function decodeField(value: string): string {
   }
 }
 
-function unsynced(reason: UnknownOwner["reason"]): TerminalEvent {
+function unsynced(reason: TerminalUnsyncedReason): TerminalEvent {
   return { kind: "unsynced", reason };
 }
 

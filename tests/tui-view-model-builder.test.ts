@@ -10,7 +10,7 @@ import type {
   ModelTurn,
 } from "../src/types/model.js";
 import type { ToolRequest, ToolReviewDecision, ToolCallValidation, AgentObservation } from "../src/types/tools.js";
-import type { PtyObservation } from "../src/terminal/types.js";
+import type { PtyObservation, TerminalState } from "../src/terminal/types.js";
 import type { IoWaitRequest, UserMessage, AgentMessage, EnvironmentEvent } from "../src/types/environment.js";
 
 // ---------------------------------------------------------------------------
@@ -24,7 +24,7 @@ function makeToolCall(id = "tc-1"): InternalToolCall {
   return {
     id,
     name: "bash",
-    arguments: { kind: "write_text", expectedOwnerRevision: 2, text: "echo hi\n" },
+    arguments: { kind: "write_text", expectedInputSeq: 2, text: "echo hi\n" },
   };
 }
 
@@ -67,7 +67,7 @@ function makePtyActionRequest(id = "tc-pty"): ToolRequest {
     toolCallId: id,
     action: {
       kind: "write_text",
-      expectedOwnerRevision: 2,
+      expectedInputSeq: 2,
       text: "pwd",
     },
   };
@@ -84,14 +84,7 @@ function makeRejection(): ToolReviewDecision {
 function makePtyObservation(result: PtyObservation["result"] = "ok"): PtyObservation {
   return {
     session: "default",
-    owner: {
-      kind: "shell",
-      revision: 3,
-      cwd: "/repo",
-      promptSeq: 2,
-      lastReturnCode: 0,
-      promptNonce: "nonce",
-    },
+    terminal: terminal(3),
     action: { kind: "write_text", preview: "pwd" },
     result,
     events: [],
@@ -102,9 +95,12 @@ function makePtyObservation(result: PtyObservation["result"] = "ok"): PtyObserva
 function makeRejectedPtyObservation(): PtyObservation {
   return {
     ...makePtyObservation("rejected"),
-    owner: { kind: "unknown", revision: 4, reason: "state_gap" },
+    terminal: {
+      ...terminal(4),
+      syncStatus: { kind: "unsynced", reason: "state_gap" },
+    },
     errorCode: "TERMINAL_UNSYNCED",
-    message: "Terminal owner is unknown.",
+    message: "Terminal state is unsynced.",
   };
 }
 
@@ -115,7 +111,7 @@ function makeLargeWriteRequest(): ToolRequest {
     toolCallId: "tc-large",
     action: {
       kind: "write_text",
-      expectedOwnerRevision: 4,
+      expectedInputSeq: 4,
       text: `${"a".repeat(512)}\n`,
     },
   };
@@ -124,14 +120,7 @@ function makeLargeWriteRequest(): ToolRequest {
 function makeLargeWriteObservation(): PtyObservation {
   return {
     session: "default",
-    owner: {
-      kind: "shell",
-      revision: 5,
-      cwd: "/repo",
-      promptSeq: 2,
-      lastReturnCode: 0,
-      promptNonce: "nonce",
-    },
+    terminal: terminal(5),
     action: {
       kind: "write_text",
       bytes: 513,
@@ -140,6 +129,21 @@ function makeLargeWriteObservation(): PtyObservation {
     },
     result: "ok",
     events: [{ kind: "prompt" }],
+  };
+}
+
+function terminal(inputSeq: number): TerminalState {
+  return {
+    inputSeq,
+    alive: true,
+    syncStatus: { kind: "trusted" },
+    lastShellPrompt: {
+      cwd: "/repo",
+      promptSeq: 2,
+      lastReturnCode: 0,
+    },
+    lastContinuationPrompt: null,
+    termination: null,
   };
 }
 
@@ -529,7 +533,7 @@ describe("ViewModelBuilder", () => {
     expect(frame.status).toBe("running");
     expect(frame.title).toBe("bash started");
     expect(frame.detail).toContain("## request");
-    expect(frame.detail).toContain('"expectedOwnerRevision": 2');
+    expect(frame.detail).toContain('"expectedInputSeq": 2');
   });
 
   // 13
@@ -606,11 +610,11 @@ describe("ViewModelBuilder", () => {
     expect(frame.phase).toBe("tool");
     expect(frame.status).toBe("warn");
     expect(frame.title).toBe("pty rejected TERMINAL_UNSYNCED");
-    expect(frame.summary).toContain("Terminal owner is unknown");
+    expect(frame.summary).toContain("Terminal state is unsynced");
     expect(frame.detail).toContain('"errorCode": "TERMINAL_UNSYNCED"');
   });
 
-  it("tool_execution_finished with PTY observation shows owner and action", () => {
+  it("tool_execution_finished with PTY observation shows terminal state and action", () => {
     const b = builderWithRunStarted();
     b.applyEvent({
       type: "tool_execution_finished",
@@ -626,7 +630,8 @@ describe("ViewModelBuilder", () => {
     expect(frame.status).toBe("ok");
     expect(frame.title).toBe("pty ok write_text");
     expect(frame.summary).toContain("action=write_text");
-    expect(frame.summary).toContain("owner=shell#3");
+    expect(frame.summary).toContain("inputSeq=3");
+    expect(frame.summary).toContain("alive=true");
     expect(frame.detail).toContain('"kind": "pty_action"');
   });
 
@@ -638,9 +643,12 @@ describe("ViewModelBuilder", () => {
       request: makePtyActionRequest(),
       observation: {
         ...makePtyObservation("rejected"),
-        owner: { kind: "unknown", revision: 5, reason: "state_gap" },
+        terminal: {
+          ...terminal(5),
+          syncStatus: { kind: "unsynced", reason: "state_gap" },
+        },
         errorCode: "TERMINAL_UNSYNCED",
-        message: "Terminal owner is unknown.",
+        message: "Terminal state is unsynced.",
       },
       timestamp: LATER,
     });
@@ -650,8 +658,9 @@ describe("ViewModelBuilder", () => {
     expect(frame.phase).toBe("tool");
     expect(frame.status).toBe("warn");
     expect(frame.title).toBe("pty rejected TERMINAL_UNSYNCED");
-    expect(frame.summary).toContain("owner=unknown#5");
-    expect(frame.summary).toContain("Terminal owner is unknown.");
+    expect(frame.summary).toContain("inputSeq=5");
+    expect(frame.summary).toContain("sync=unsynced:state_gap");
+    expect(frame.summary).toContain("Terminal state is unsynced.");
   });
 
   it("tool_execution_finished with large write_text redacts payload detail", () => {
@@ -668,7 +677,7 @@ describe("ViewModelBuilder", () => {
     const frame = vm.loop[vm.loop.length - 1];
     expect(frame.phase).toBe("tool");
     expect(frame.status).toBe("ok");
-    expect(frame.summary).toContain("owner=shell#5");
+    expect(frame.summary).toContain("inputSeq=5");
     expect(frame.summary).toContain("bytes=513");
     expect(frame.summary).toContain("redacted=true");
     expect(frame.detail).toContain("[redacted write_text payload 513 bytes]");

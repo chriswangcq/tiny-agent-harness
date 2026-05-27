@@ -175,7 +175,7 @@ function parseCursor(cursor: string | undefined): number {
 function cloneSnapshot(snapshot: TerminalRuntimeSnapshot): TerminalRuntimeSnapshot {
   return {
     ...snapshot,
-    owner: structuredClone(snapshot.owner),
+    terminal: structuredClone(snapshot.terminal),
     parserState: { ...snapshot.parserState },
     outputLog: snapshot.outputLog === undefined ? undefined : { ...snapshot.outputLog },
   };

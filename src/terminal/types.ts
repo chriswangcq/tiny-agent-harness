@@ -1,66 +1,42 @@
-export type TerminalOwnerKind =
-  | "shell"
-  | "shell_continuation"
-  | "process"
-  | "unknown"
-  | "terminated";
-
 export type ContinuationReason =
   | "quote"
   | "heredoc"
   | "line_continuation"
   | "unknown";
 
-export type ProcessInputPolicy = "unknown" | "writable" | "blocked";
+export type TerminalUnsyncedReason =
+  | "unparsed_output"
+  | "prompt_spoof_suspected"
+  | "adapter_restart"
+  | "state_gap";
 
-export type TerminalOwner =
-  | ShellOwner
-  | ShellContinuationOwner
-  | ProcessOwner
-  | UnknownOwner
-  | TerminatedOwner;
-
-export type ShellOwner = {
-  kind: "shell";
-  revision: number;
+export type ShellPromptSnapshot = {
   cwd: string;
   promptSeq: number;
   lastReturnCode: number | null;
-  promptNonce: string;
 };
 
-export type ShellContinuationOwner = {
-  kind: "shell_continuation";
-  revision: number;
+export type ContinuationPromptSnapshot = {
   reason: ContinuationReason;
   promptSeq: number;
-  promptNonce: string;
 };
 
-export type ProcessOwner = {
-  kind: "process";
-  revision: number;
-  commandLine: string | null;
-  inputPolicy: ProcessInputPolicy;
-  startedAt: string;
-  lastOutputAt: string | null;
-};
+export type TerminalSyncStatus =
+  | { kind: "trusted" }
+  | { kind: "unsynced"; reason: TerminalUnsyncedReason };
 
-export type UnknownOwner = {
-  kind: "unknown";
-  revision: number;
-  reason:
-    | "unparsed_output"
-    | "prompt_spoof_suspected"
-    | "adapter_restart"
-    | "state_gap";
-};
-
-export type TerminatedOwner = {
-  kind: "terminated";
-  revision: number;
+export type TerminalTermination = {
   exitCode: number | null;
   reason: string;
+};
+
+export type TerminalState = {
+  inputSeq: number;
+  alive: boolean;
+  syncStatus: TerminalSyncStatus;
+  lastShellPrompt: ShellPromptSnapshot | null;
+  lastContinuationPrompt: ContinuationPromptSnapshot | null;
+  termination: TerminalTermination | null;
 };
 
 export type TerminalKey =
@@ -76,13 +52,13 @@ export type PtyAction =
   | {
       kind: "write_text";
       session?: string;
-      expectedOwnerRevision: number;
+      expectedInputSeq: number;
       text: string;
     }
   | {
       kind: "key";
       session?: string;
-      expectedOwnerRevision: number;
+      expectedInputSeq: number;
       key: TerminalKey;
     }
   | { kind: "poll"; session?: string; sinceSeq?: number }
@@ -90,7 +66,7 @@ export type PtyAction =
   | {
       kind: "interrupt";
       session?: string;
-      expectedOwnerRevision?: number;
+      expectedInputSeq?: number;
     }
   | { kind: "terminate"; session?: string }
   | { kind: "restart"; session?: string; cwd?: string };
@@ -116,15 +92,8 @@ export type TerminalEvent =
       logRef?: string;
     }
   | {
-      kind: "silence_timeout";
-      elapsedMs: number;
-      commandLine: string | null;
-      startedAt: string;
-      inputPolicy?: ProcessInputPolicy;
-    }
-  | {
       kind: "unsynced";
-      reason: UnknownOwner["reason"];
+      reason: TerminalUnsyncedReason;
     }
   | {
       kind: "terminated";
@@ -133,8 +102,7 @@ export type TerminalEvent =
     };
 
 export type TerminalErrorCode =
-  | "OWNER_MISMATCH"
-  | "OWNER_REJECTED"
+  | "INPUT_SEQ_MISMATCH"
   | "TERMINAL_UNSYNCED"
   | "TERMINAL_TERMINATED";
 
@@ -144,7 +112,7 @@ export type ValidationResult =
       ok: false;
       code: TerminalErrorCode;
       message: string;
-      owner: TerminalOwner;
+      terminal: TerminalState;
     };
 
 export type LogRef = {
@@ -171,7 +139,7 @@ export type TerminalEventSummary = {
 
 export type PtyObservation = {
   session: string;
-  owner: TerminalOwner;
+  terminal: TerminalState;
   action: PtyActionSummary;
   result: "ok" | "rejected" | "timeout" | "interrupted";
   events: TerminalEventSummary[];
@@ -183,7 +151,7 @@ export type PtyObservation = {
 
 export type TerminalSessionSnapshot = {
   session: string;
-  owner: TerminalOwner;
+  terminal: TerminalState;
   parserCursor?: string;
   outputLog?: LogRef;
 };

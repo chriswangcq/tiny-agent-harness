@@ -3,37 +3,28 @@ import {
   DEFAULT_PTY_ACTION_LIMITS,
   validatePtyAction,
 } from "../../src/terminal/validator.js";
-import type { TerminalOwner } from "../../src/terminal/types.js";
+import {
+  createTerminalState,
+  markTerminalTerminated,
+} from "../../src/terminal/state.js";
+import type { TerminalState } from "../../src/terminal/types.js";
 
-function shell(revision = 1): TerminalOwner {
-  return {
-    kind: "shell",
-    revision,
+function terminal(inputSeq = 1): TerminalState {
+  return createTerminalState({
+    inputSeq,
     cwd: "/repo",
     promptSeq: 1,
     lastReturnCode: 0,
-    promptNonce: "nonce",
-  };
-}
-
-function processOwner(inputPolicy: "blocked" | "writable" | "unknown" = "unknown"): TerminalOwner {
-  return {
-    kind: "process",
-    revision: 2,
-    commandLine: "node repl.js",
-    inputPolicy,
-    startedAt: "2026-05-27T00:00:00.000Z",
-    lastOutputAt: null,
-  };
+  });
 }
 
 describe("terminal action validator", () => {
-  it("accepts shell text input with explicit newline when owner revision matches", () => {
+  it("accepts text input when inputSeq matches", () => {
     const result = validatePtyAction({
-      owner: shell(7),
+      terminal: terminal(7),
       action: {
         kind: "write_text",
-        expectedOwnerRevision: 7,
+        expectedInputSeq: 7,
         text: "echo ok\n",
       },
     });
@@ -41,36 +32,36 @@ describe("terminal action validator", () => {
     expect(result).toEqual({ ok: true });
   });
 
-  it("rejects stale owner revisions before writing", () => {
+  it("rejects stale input sequences before writing", () => {
     const result = validatePtyAction({
-      owner: shell(7),
+      terminal: terminal(7),
       action: {
         kind: "write_text",
-        expectedOwnerRevision: 6,
+        expectedInputSeq: 6,
         text: "echo stale",
       },
     });
 
     expect(result).toMatchObject({
       ok: false,
-      code: "OWNER_MISMATCH",
+      code: "INPUT_SEQ_MISMATCH",
     });
   });
 
-  it("allows continuation text while shell continuation owns the terminal", () => {
-    const owner: TerminalOwner = {
-      kind: "shell_continuation",
-      revision: 4,
-      reason: "quote",
-      promptSeq: 2,
-      promptNonce: "nonce",
+  it("does not reject input based on shell/process guesses", () => {
+    const state: TerminalState = {
+      ...terminal(4),
+      lastContinuationPrompt: {
+        reason: "quote",
+        promptSeq: 2,
+      },
     };
 
     const result = validatePtyAction({
-      owner,
+      terminal: state,
       action: {
         kind: "write_text",
-        expectedOwnerRevision: 4,
+        expectedInputSeq: 4,
         text: "closing quote'",
       },
     });
@@ -78,85 +69,65 @@ describe("terminal action validator", () => {
     expect(result).toEqual({ ok: true });
   });
 
-  it("allows process text input when stdin mode is unknown", () => {
+  it("allows writes while sync status is unsynced because the agent owns recovery choice", () => {
     const result = validatePtyAction({
-      owner: processOwner("unknown"),
+      terminal: {
+        ...terminal(5),
+        syncStatus: { kind: "unsynced", reason: "state_gap" },
+      },
       action: {
         kind: "write_text",
-        expectedOwnerRevision: 2,
-        text: "ls",
+        expectedInputSeq: 5,
+        text: "\u0003",
       },
     });
 
     expect(result).toEqual({ ok: true });
   });
 
-  it("allows explicit process text input when process input policy is writable", () => {
+  it("rejects writes after terminal termination", () => {
     const result = validatePtyAction({
-      owner: processOwner("writable"),
+      terminal: markTerminalTerminated(terminal(5), {
+        exitCode: null,
+        reason: "terminated",
+      }),
       action: {
         kind: "write_text",
-        expectedOwnerRevision: 2,
-        text: "y\n",
-      },
-    });
-
-    expect(result).toEqual({ ok: true });
-  });
-
-  it("rejects process text input when process input policy is blocked", () => {
-    const result = validatePtyAction({
-      owner: processOwner("blocked"),
-      action: {
-        kind: "write_text",
-        expectedOwnerRevision: 2,
-        text: "y\n",
-      },
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      code: "OWNER_REJECTED",
-    });
-  });
-
-  it("rejects writes while owner is unknown", () => {
-    const result = validatePtyAction({
-      owner: { kind: "unknown", revision: 5, reason: "state_gap" },
-      action: {
-        kind: "write_text",
-        expectedOwnerRevision: 5,
+        expectedInputSeq: 6,
         text: "hello",
       },
     });
 
     expect(result).toMatchObject({
       ok: false,
-      code: "TERMINAL_UNSYNCED",
+      code: "TERMINAL_TERMINATED",
     });
   });
 
-  it("allows status, poll, restart, terminate, and interrupt without shell ownership", () => {
-    const owner: TerminalOwner = { kind: "unknown", revision: 5, reason: "state_gap" };
+  it("allows status, poll, restart, and terminate without inputSeq", () => {
+    const state = terminal(5);
 
-    expect(validatePtyAction({ owner, action: { kind: "status" } })).toEqual({ ok: true });
-    expect(validatePtyAction({ owner, action: { kind: "poll" } })).toEqual({ ok: true });
-    expect(validatePtyAction({ owner, action: { kind: "restart" } })).toEqual({ ok: true });
-    expect(validatePtyAction({ owner, action: { kind: "terminate" } })).toEqual({ ok: true });
+    expect(validatePtyAction({ terminal: state, action: { kind: "status" } })).toEqual({ ok: true });
+    expect(validatePtyAction({ terminal: state, action: { kind: "poll" } })).toEqual({ ok: true });
+    expect(validatePtyAction({ terminal: state, action: { kind: "restart" } })).toEqual({ ok: true });
+    expect(validatePtyAction({ terminal: state, action: { kind: "terminate" } })).toEqual({ ok: true });
+  });
+
+  it("allows interrupt with a matching optional inputSeq", () => {
     expect(
       validatePtyAction({
-        owner,
-        action: { kind: "interrupt", expectedOwnerRevision: 5 },
+        terminal: terminal(5),
+        action: { kind: "interrupt", expectedInputSeq: 5 },
       }),
     ).toEqual({ ok: true });
   });
 
-  it("does not impose a harness length limit on shell write_text", () => {
+  it("does not impose a harness length limit on write_text", () => {
     const result = validatePtyAction({
-      owner: shell(),
+      terminal: terminal(),
       action: {
         kind: "write_text",
-        expectedOwnerRevision: 1,
+        expectedInputSeq: 1,
         text: "hello".repeat(2000),
       },
     });
@@ -164,12 +135,12 @@ describe("terminal action validator", () => {
     expect(result).toEqual({ ok: true });
   });
 
-  it("accepts terminal keys while shell owns the terminal", () => {
+  it("accepts terminal keys when inputSeq matches", () => {
     const result = validatePtyAction({
-      owner: shell(3),
+      terminal: terminal(3),
       action: {
         kind: "key",
-        expectedOwnerRevision: 3,
+        expectedInputSeq: 3,
         key: "enter",
       },
     });

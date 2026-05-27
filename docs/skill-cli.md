@@ -10,7 +10,7 @@ Skill 不是 harness 内置工具，也不是模型可见的第二套 tool regis
 
 ```text
 Model visible action surface: bash PTY actions only
-External capabilities: called as CLI commands through write_text when TerminalOwner is shell
+External capabilities: called as CLI commands through write_text when the terminal output shows a shell prompt
 ```
 
 所以 skill 的入口是一个普通命令：
@@ -21,7 +21,7 @@ skill show coding-review --json
 skill run coding-review --json '{"path":"src"}'
 ```
 
-Agent 如果想使用 skill，本质上是在 shell-owner PTY action 里执行 `skill ...`。因此 skill 执行前仍然经过 tool review，执行结果也通过 PTY observation 返回。
+Agent 如果想使用 skill，本质上是在 PTY 里确认 shell prompt 后执行 `skill ...`。因此 skill 执行前仍然经过 tool review，执行结果也通过 PTY observation 返回。
 
 ## Responsibilities
 
@@ -530,7 +530,7 @@ skill accept <proposal-id> --json
 推荐只在工具说明里告诉 agent：
 
 ```text
-All external capabilities are available through shell-owner PTY actions.
+All external capabilities are available through PTY actions after the agent has inspected the terminal output.
 Use `skill list --json`, `skill search <query> --json`, and `skill show <name> --json`
 to discover reusable local skills.
 Run a skill with `skill run <name> --json '<args>'`.

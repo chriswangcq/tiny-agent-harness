@@ -1,15 +1,16 @@
 import {
   buildPtyObservation,
-  nextOwnerRevision,
   parseTerminalChunk,
-  transitionOwnerMany,
+  transitionTerminalStateMany,
   validatePtyAction,
+  createUnsyncedTerminalState,
+  markTerminalTerminated,
 } from "../terminal/index.js";
 import type {
   PtyAction,
   PtyObservation,
   TerminalEvent,
-  TerminalOwner,
+  TerminalState,
 } from "../terminal/index.js";
 import type {
   TerminalRuntimeSnapshot,
@@ -30,12 +31,12 @@ export class TerminalService {
       if (action.kind === "restart") {
         const restarted = await this.ports.pty.restart(session, { cwd: action.cwd });
         await this.ports.sessions.save(restarted);
-        return this.okObservation(session, restarted.owner, action, []);
+        return this.okObservation(session, restarted.terminal, action, []);
       }
 
       return this.rejectedObservation(
         session,
-        unknownOwner(),
+        createUnsyncedTerminalState("state_gap"),
         action,
         "TERMINAL_UNSYNCED",
         `No terminal snapshot found for session \"${session}\".`,
@@ -45,18 +46,18 @@ export class TerminalService {
     if (action.kind === "restart") {
       const restarted = await this.ports.pty.restart(session, { cwd: action.cwd });
       await this.ports.sessions.save(restarted);
-      return this.okObservation(session, restarted.owner, action, []);
+      return this.okObservation(session, restarted.terminal, action, []);
     }
 
     const validation = validatePtyAction({
       action,
-      owner: snapshot.owner,
+      terminal: snapshot.terminal,
       limits: this.config.actionLimits,
     });
     if (!validation.ok) {
       return this.rejectedObservation(
         session,
-        snapshot.owner,
+        snapshot.terminal,
         action,
         validation.code,
         validation.message,
@@ -72,15 +73,13 @@ export class TerminalService {
       };
       const nextSnapshot: TerminalRuntimeSnapshot = {
         ...snapshot,
-        owner: {
-          kind: "terminated",
-          revision: nextOwnerRevision(snapshot.owner),
+        terminal: markTerminalTerminated(snapshot.terminal, {
           exitCode: null,
           reason: "terminated_by_action",
-        },
+        }),
       };
       await this.ports.sessions.save(nextSnapshot);
-      return this.okObservation(session, nextSnapshot.owner, action, [event]);
+      return this.okObservation(session, nextSnapshot.terminal, action, [event]);
     }
 
     if (action.kind === "interrupt") {
@@ -96,12 +95,19 @@ export class TerminalService {
     const parsed = parseTerminalChunk({
       chunk: read.chunk,
       state: snapshot.parserState,
-      promptNonce: promptNonceFor(snapshot.owner, this.config.promptNonce),
+      promptNonce: this.config.promptNonce,
     });
-    const transition = transitionOwnerMany(snapshot.owner, parsed.events);
+    const transition = transitionTerminalStateMany(
+      snapshot.terminal,
+      parsed.events,
+      {
+        inputAccepted:
+          write !== null || action.kind === "interrupt" || read.chunk.length > 0,
+      },
+    );
     const nextSnapshot: TerminalRuntimeSnapshot = {
       ...snapshot,
-      owner: transition.owner,
+      terminal: transition.terminal,
       parserState: parsed.state,
       outputLog: read.logRef ?? snapshot.outputLog,
     };
@@ -110,11 +116,11 @@ export class TerminalService {
 
     const observation = buildPtyObservation({
       session,
-      owner: transition.owner,
+      terminal: transition.terminal,
       action,
       result: "ok",
       events: parsed.events,
-      outputPreview: outputPreview(parsed.events),
+      outputPreview: outputPreview(parsed.events, read.chunk),
       logRef: read.logRef?.ref,
       limits: this.config.observationLimits,
     });
@@ -129,13 +135,13 @@ export class TerminalService {
 
   private okObservation(
     session: string,
-    owner: TerminalOwner,
+    terminal: TerminalState,
     action: PtyAction,
     events: readonly TerminalEvent[],
   ): PtyObservation {
     const observation = buildPtyObservation({
       session,
-      owner,
+      terminal,
       action,
       result: "ok",
       events,
@@ -153,14 +159,14 @@ export class TerminalService {
 
   private rejectedObservation(
     session: string,
-    owner: TerminalOwner,
+    terminal: TerminalState,
     action: PtyAction,
     errorCode: PtyObservation["errorCode"],
     message: string,
   ): PtyObservation {
     const observation = buildPtyObservation({
       session,
-      owner,
+      terminal,
       action,
       result: "rejected",
       events: [],
@@ -213,25 +219,17 @@ function renderKey(key: Extract<PtyAction, { kind: "key" }>["key"]): string {
   }
 }
 
-function promptNonceFor(owner: TerminalOwner, fallback: string): string {
-  if (owner.kind === "shell" || owner.kind === "shell_continuation") {
-    return owner.promptNonce;
-  }
-
-  return fallback;
-}
-
-function outputPreview(events: readonly TerminalEvent[]): string | undefined {
+function outputPreview(
+  events: readonly TerminalEvent[],
+  rawChunk?: string,
+): string | undefined {
   const chunks = events
     .filter((event): event is Extract<TerminalEvent, { kind: "output" }> => event.kind === "output")
     .map((event) => event.preview);
-  return chunks.length === 0 ? undefined : chunks.join("\n");
-}
-
-function unknownOwner(): TerminalOwner {
-  return {
-    kind: "unknown",
-    revision: 0,
-    reason: "state_gap",
-  };
+  if (chunks.length > 0) {
+    return chunks.join("\n");
+  }
+  return events.length === 0 && rawChunk !== undefined && rawChunk.length > 0
+    ? rawChunk
+    : undefined;
 }

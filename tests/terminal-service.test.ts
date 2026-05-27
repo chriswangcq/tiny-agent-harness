@@ -5,23 +5,22 @@ import type {
   TerminalServiceConfig,
   TerminalServicePorts,
 } from "../src/application/terminal-ports.js";
-import type { TerminalOwner } from "../src/terminal/index.js";
+import { createTerminalState } from "../src/terminal/state.js";
+import type { TerminalState } from "../src/terminal/index.js";
 
-function shell(revision = 1): TerminalOwner {
-  return {
-    kind: "shell",
-    revision,
+function terminal(inputSeq = 1): TerminalState {
+  return createTerminalState({
+    inputSeq,
     cwd: "/repo",
     promptSeq: 1,
     lastReturnCode: 0,
-    promptNonce: "nonce",
-  };
+  });
 }
 
-function makeSnapshot(owner: TerminalOwner = shell()): TerminalRuntimeSnapshot {
+function makeSnapshot(state: TerminalState = terminal()): TerminalRuntimeSnapshot {
   return {
     session: "default",
-    owner,
+    terminal: state,
     parserState: { pending: "", totalBytes: 0 },
   };
 }
@@ -73,7 +72,7 @@ function makePorts(options: {
         }),
         interrupt: async () => {},
         terminate: async () => {},
-        restart: async () => makeSnapshot(shell(0)),
+        restart: async () => makeSnapshot(terminal(0)),
       },
       sessions: {
         load: async () => options.snapshot ?? makeSnapshot(),
@@ -91,50 +90,54 @@ function makePorts(options: {
 }
 
 describe("TerminalService", () => {
-  it("rejects stale owner actions without writing or saving", async () => {
-    const { ports, writes, saves } = makePorts({ snapshot: makeSnapshot(shell(2)) });
+  it("rejects stale input sequences without writing or saving", async () => {
+    const { ports, writes, saves } = makePorts({ snapshot: makeSnapshot(terminal(2)) });
     const service = new TerminalService(ports, makeConfig());
 
     const observation = await service.handleAction({
       kind: "write_text",
-      expectedOwnerRevision: 1,
+      expectedInputSeq: 1,
       text: "echo stale",
     });
 
     expect(observation).toMatchObject({
       result: "rejected",
-      errorCode: "OWNER_MISMATCH",
+      errorCode: "INPUT_SEQ_MISMATCH",
     });
     expect(writes).toEqual([]);
     expect(saves).toEqual([]);
   });
 
-  it("writes shell input, parses prompt output, saves snapshot, and returns compact observation", async () => {
+  it("writes input, parses prompt output, saves snapshot, and returns compact observation", async () => {
     const { ports, writes, saves } = makePorts({
-      snapshot: makeSnapshot(shell(1)),
+      snapshot: makeSnapshot(terminal(1)),
       readChunk: "__TAH_PROMPT__ nonce=nonce rc=0 cwd=%2Frepo%2Fnext seq=2\n",
     });
     const service = new TerminalService(ports, makeConfig());
 
     const observation = await service.handleAction({
       kind: "write_text",
-      expectedOwnerRevision: 1,
+      expectedInputSeq: 1,
       text: "echo ok\n",
     });
 
     expect(writes).toEqual(["echo ok\n"]);
     expect(saves).toHaveLength(1);
-    expect(saves[0]?.owner).toMatchObject({
-      kind: "shell",
-      revision: 2,
-      cwd: "/repo/next",
-      promptSeq: 2,
+    expect(saves[0]?.terminal).toMatchObject({
+      inputSeq: 2,
+      lastShellPrompt: {
+        cwd: "/repo/next",
+        promptSeq: 2,
+      },
     });
     expect(observation).toMatchObject({
       result: "ok",
-      owner: {
-        kind: "shell",
-        revision: 2,
+      terminal: {
+        inputSeq: 2,
+        lastShellPrompt: {
+          cwd: "/repo/next",
+          promptSeq: 2,
+        },
       },
       action: {
         kind: "write_text",
@@ -144,9 +147,32 @@ describe("TerminalService", () => {
     });
   });
 
+  it("surfaces partial PTY output without waiting for a newline", async () => {
+    const { ports, saves } = makePorts({
+      snapshot: makeSnapshot(terminal(1)),
+      readChunk: ">>> ",
+    });
+    const service = new TerminalService(ports, makeConfig());
+
+    const observation = await service.handleAction({
+      kind: "poll",
+    });
+
+    expect(saves[0]?.terminal.inputSeq).toBe(2);
+    expect(saves[0]?.parserState.pending).toBe(">>> ");
+    expect(observation).toMatchObject({
+      result: "ok",
+      terminal: {
+        inputSeq: 2,
+      },
+      events: [],
+      outputPreview: ">>> ",
+    });
+  });
+
   it("restarts through the PTY port and saves the fresh snapshot", async () => {
-    const restarted = makeSnapshot(shell(0));
-    const { ports, saves } = makePorts({ snapshot: makeSnapshot(shell(3)) });
+    const restarted = makeSnapshot(terminal(0));
+    const { ports, saves } = makePorts({ snapshot: makeSnapshot(terminal(3)) });
     let restartCall: unknown;
     ports.pty.restart = async (session, options) => {
       restartCall = { session, options };
@@ -163,9 +189,8 @@ describe("TerminalService", () => {
     expect(saves).toEqual([restarted]);
     expect(observation).toMatchObject({
       result: "ok",
-      owner: {
-        kind: "shell",
-        revision: 0,
+      terminal: {
+        inputSeq: 0,
       },
       action: {
         kind: "restart",
@@ -173,8 +198,8 @@ describe("TerminalService", () => {
     });
   });
 
-  it("terminates through the PTY port and saves a terminated owner", async () => {
-    const { ports, saves } = makePorts({ snapshot: makeSnapshot(shell(3)) });
+  it("terminates through the PTY port and saves a terminated terminal", async () => {
+    const { ports, saves } = makePorts({ snapshot: makeSnapshot(terminal(3)) });
     let terminatedSession: string | undefined;
     ports.pty.terminate = async (session) => {
       terminatedSession = session;
@@ -186,11 +211,13 @@ describe("TerminalService", () => {
     });
 
     expect(terminatedSession).toBe("default");
-    expect(saves[0]?.owner).toEqual({
-      kind: "terminated",
-      revision: 4,
-      exitCode: null,
-      reason: "terminated_by_action",
+    expect(saves[0]?.terminal).toMatchObject({
+      inputSeq: 4,
+      alive: false,
+      termination: {
+        exitCode: null,
+        reason: "terminated_by_action",
+      },
     });
     expect(observation.events).toEqual([{ kind: "terminated" }]);
   });

@@ -3,7 +3,7 @@ import type {
   LogRef,
   PtyAction,
   PtyObservation,
-  TerminalOwner,
+  TerminalState,
 } from "../terminal/types.js";
 import type { PtyActionLimits } from "../terminal/validator.js";
 import type { TerminalObservationLimits } from "../terminal/observation.js";
@@ -17,7 +17,7 @@ export type TerminalServiceConfig = {
 
 export type TerminalRuntimeSnapshot = {
   session: string;
-  owner: TerminalOwner;
+  terminal: TerminalState;
   parserState: ParserState;
   outputLog?: LogRef;
 };

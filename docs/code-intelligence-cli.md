@@ -10,10 +10,10 @@
 
 ```text
 Model visible action surface: bash PTY actions only
-External capabilities: called as CLI commands through write_text when TerminalOwner is shell
+External capabilities: called as CLI commands through write_text when the terminal output shows a shell prompt
 ```
 
-Agent 如果需要代码智能，本质上仍然是在 shell-owner PTY action 里执行：
+Agent 如果需要代码智能，本质上仍然是在 PTY 里确认 shell prompt 后执行：
 
 ```bash
 codeq diagnostics --workspace --json

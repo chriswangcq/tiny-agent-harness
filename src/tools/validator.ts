@@ -4,7 +4,7 @@ import type {
   ToolRequest,
   AgentObservation,
 } from "../types/index.js";
-import type { PtyAction, TerminalOwner } from "../terminal/types.js";
+import type { PtyAction, TerminalState } from "../terminal/types.js";
 import {
   validatePtyAction,
   type PtyActionLimits,
@@ -36,7 +36,7 @@ function isNonEmptyString(v: unknown): v is string {
 // ---------------------------------------------------------------------------
 
 export type ToolCallValidatorOptions = {
-  terminalOwner?: TerminalOwner;
+  terminal?: TerminalState;
   actionLimits?: Partial<PtyActionLimits>;
 };
 
@@ -75,10 +75,10 @@ export class ToolCallValidator {
       return invalid(action);
     }
 
-    if (this.options.terminalOwner !== undefined) {
+    if (this.options.terminal !== undefined) {
       const validation = validatePtyAction({
         action,
-        owner: this.options.terminalOwner,
+        terminal: this.options.terminal,
         limits: this.options.actionLimits,
       });
       if (!validation.ok) {
@@ -109,7 +109,7 @@ function parsePtyAction(args: Record<string, unknown>): PtyAction | string {
 
   switch (args.kind) {
     case "write_text": {
-      const common = parseExpectedOwnerRevision(args);
+      const common = parseExpectedInputSeq(args);
       if (typeof common === "string") return common;
       if (!isString(args.text)) {
         return "Invalid bash tool arguments: write_text requires text.";
@@ -117,7 +117,7 @@ function parsePtyAction(args: Record<string, unknown>): PtyAction | string {
       return { kind: "write_text", session, ...common, text: args.text };
     }
     case "key": {
-      const common = parseExpectedOwnerRevision(args);
+      const common = parseExpectedInputSeq(args);
       if (typeof common === "string") return common;
       if (!isTerminalKey(args.key)) {
         return "Invalid bash tool arguments: key requires a supported terminal key.";
@@ -135,8 +135,8 @@ function parsePtyAction(args: Record<string, unknown>): PtyAction | string {
     case "status":
       return { kind: "status", session };
     case "interrupt": {
-      if (args.expectedOwnerRevision !== undefined) {
-        const common = parseExpectedOwnerRevision(args);
+      if (args.expectedInputSeq !== undefined) {
+        const common = parseExpectedInputSeq(args);
         if (typeof common === "string") return common;
         return { kind: "interrupt", session, ...common };
       }
@@ -155,14 +155,14 @@ function parsePtyAction(args: Record<string, unknown>): PtyAction | string {
   }
 }
 
-function parseExpectedOwnerRevision(
+function parseExpectedInputSeq(
   args: Record<string, unknown>,
-): { expectedOwnerRevision: number } | string {
-  const value = args.expectedOwnerRevision;
+): { expectedInputSeq: number } | string {
+  const value = args.expectedInputSeq;
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    return "Invalid bash tool arguments: expectedOwnerRevision must be a non-negative integer.";
+    return "Invalid bash tool arguments: expectedInputSeq must be a non-negative integer.";
   }
-  return { expectedOwnerRevision: value };
+  return { expectedInputSeq: value };
 }
 
 function parseOptionalSession(value: unknown): string | undefined {

@@ -32,7 +32,7 @@ TUI reads those facts and renders them.
 │ Agent Loop Player                                                          │
 │ step 000 model_requested                                                   │
 │ step 000 thinking_received                                                 │
-│ step 000 decision tool_call bash(action=write_text owner=shell#3)           │
+│ step 000 decision tool_call bash(action=write_text inputSeq=3)              │
 │ step 000 review approved                                                   │
 │ step 000 bash finished rc=0 log=.tiny-agent/sessions/default.log           │
 │ step 001 environment reminder ...                                          │
@@ -507,7 +507,7 @@ q            quit TUI only
 后续可加控制键：
 
 ```text
-i            type text/key into selected PTY owner when accepted
+i            type text/key into the selected PTY when accepted
 Ctrl-C       request interrupt selected session
 R            request restart selected session
 ```

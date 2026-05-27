@@ -541,8 +541,8 @@ function formatToolCallSummary(toolCall: { name?: string; arguments: unknown }):
     if (actionKind) {
       const session = typeof args.session === "string" ? args.session : "default";
       const parts = [`action=${actionKind}`, `session=${session}`];
-      if (typeof args.expectedOwnerRevision === "number") {
-        parts.push(`rev=${args.expectedOwnerRevision}`);
+      if (typeof args.expectedInputSeq === "number") {
+        parts.push(`inputSeq=${args.expectedInputSeq}`);
       }
       if (typeof args.seq === "number") {
         parts.push(`seq=${args.seq}`);
@@ -604,7 +604,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isPtyObservation(value: unknown): value is PtyObservation {
   return (
     isRecord(value) &&
-    "owner" in value &&
+    "terminal" in value &&
     "action" in value &&
     "result" in value &&
     "events" in value
@@ -612,8 +612,14 @@ function isPtyObservation(value: unknown): value is PtyObservation {
 }
 
 function formatPtyObservationSummary(observation: PtyObservation): string {
-  const owner = `${observation.owner.kind}#${observation.owner.revision}`;
-  const parts = [`action=${observation.action.kind}`, `owner=${owner}`];
+  const parts = [
+    `action=${observation.action.kind}`,
+    `inputSeq=${observation.terminal.inputSeq}`,
+    `alive=${observation.terminal.alive}`,
+  ];
+  if (observation.terminal.syncStatus.kind === "unsynced") {
+    parts.push(`sync=unsynced:${observation.terminal.syncStatus.reason}`);
+  }
   if (observation.action.bytes !== undefined) {
     parts.push(`bytes=${observation.action.bytes}`);
   }
