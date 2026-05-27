@@ -30,9 +30,7 @@ function makeConfig(): TerminalServiceConfig {
   return {
     defaultSessionId: "default",
     promptNonce: "nonce",
-    actionLimits: {
-      maxFrameBytes: 4096,
-    },
+    actionLimits: {},
     observationLimits: {
       maxPreviewChars: 80,
     },
@@ -144,41 +142,6 @@ describe("TerminalService", () => {
       },
       events: [{ kind: "prompt" }],
     });
-  });
-
-  it("writes receiver stdin text through the PTY and advances on ack markers", async () => {
-    const receiver: TerminalOwner = {
-      kind: "receiver",
-      revision: 4,
-      receiverId: "rx-1",
-      commandLine: "receiver start",
-      mode: "base64",
-      nextSeq: 0,
-      bytesReceived: 0,
-      maxFrameBytes: 4096,
-    };
-    const { ports, writes } = makePorts({
-      snapshot: makeSnapshot(receiver),
-      readChunk: "__TAH_RECEIVER_ACK__ nonce=nonce id=rx-1 seq=0 bytes=5\n",
-    });
-    const service = new TerminalService(ports, makeConfig());
-
-    const observation = await service.handleAction({
-      kind: "write_text",
-      expectedOwnerRevision: 4,
-      text: "aGVsbG8=\n",
-    });
-
-    expect(writes).toEqual(["aGVsbG8=\n"]);
-    expect(observation.owner).toMatchObject({
-      kind: "receiver",
-      revision: 5,
-      nextSeq: 1,
-      bytesReceived: 5,
-    });
-    expect(observation.events).toEqual([
-      { kind: "receiver_ack", receiverId: "rx-1", seq: 0, bytes: 5 },
-    ]);
   });
 
   it("restarts through the PTY port and saves the fresh snapshot", async () => {

@@ -5,7 +5,7 @@
 > 统计口径：基于当前工作区快照；排除 `node_modules/`、`dist/`、`.git/`、`.complex-problems/`、锁文件、日志文件、`package-lock.json` 和明显生成文件。行数统计覆盖 `.ts`、`.js`、`.mjs`、`.md`、`.json` 等源码、脚本、测试与文档文件；本报告自身未纳入统计。统计结果用于工程规模估算，不等同于最终发行包体积。
 >
 > Legacy note: this is a historical report for the pre-managed-PTY architecture.
-> Active guidance is the pure TerminalOwner PTY action runtime plus the in-PTY receiver stdin protocol.
+> Active guidance is the pure TerminalOwner PTY action runtime with internally paced `write_text`.
 > Owner: P036. Removal condition: regenerate the report after the PTY cutover
 > fully replaces historical wording.
 
@@ -15,14 +15,14 @@
 
 项目当前可以概括为：
 
-> tiny-agent-harness 是一个以 bash 为唯一外部动作面、以显式状态机、PTY 内 receiver payload transport 和 durable artifacts 为核心的 coding agent runtime 骨架。
+> tiny-agent-harness 是一个以 bash 为唯一外部动作面、以显式状态机、纯 PTY 输入和 durable artifacts 为核心的 coding agent runtime 骨架。
 
 从产品和工程形态看，它覆盖三类能力：
 
 | 能力 | 说明 |
 | --- | --- |
 | Agent ReAct loop | `AgentRunState` 决定下一步 effect，`RunOrchestrator` 执行模型调用、工具校验、审核、bash 执行和 transcript 写入。 |
-| 统一外部动作面 | 外部动作只通过 `bash`；大 payload 由 PTY 内前台 receiver 程序读取 stdin，MCP、memory、skills、sub-agent、code intelligence、测试、git 等能力都通过 CLI 进入 bash session。 |
+| 统一外部动作面 | 外部动作只通过 `bash`；大段文本/代码由 `write_text` 写入 PTY 并由 runtime 内部分块，MCP、memory、skills、sub-agent、code intelligence、测试、git 等能力都通过 CLI 进入 bash session。 |
 | 可观察与可恢复执行 | run state、transcript JSONL、session log、environment events、skill run state、TUI view model 共同构成可审计执行轨迹。 |
 
 ## 2. 系统整体架构
@@ -130,7 +130,7 @@ Decision pass 允许的 function name 是：
 | function | 含义 |
 | --- | --- |
 | `bash` | 唯一外部动作工具，执行命令或 session control。 |
-| in-PTY receiver | 终端内前台 receiver 进程，通过 stdin 接收 base64 frame line，并在校验后提交目标。 |
+| pure PTY input | `write_text` 和 `key` 是唯一输入路径；长文本写入由 runtime 内部 pacing。 |
 | `io_wait` | 内部等待请求，不是外部工具。 |
 
 这种做法既利用 DeepSeek V4 tool-call post-training 的输出形式，又不把 provider-native tool calling 变成 harness 的核心协议。orchestrator 只消费归一化后的 `ModelTurn`。当任务完成时，Agent 仍然通过 `bash` 调用 IM CLI 发送用户可见答复，然后返回 `io_wait` 等待下一条环境事件。
@@ -309,7 +309,7 @@ TUI 不拥有 agent 状态，不参与模型决策，也不直接改写 run stat
 
 | 差异点 | 说明 |
 | --- | --- |
-| bash external action boundary | 不把能力注册成一组 provider tools，而是把外部动作统一收敛到 bash session；大 payload 也通过 PTY 内 receiver 进程完成。 |
+| bash external action boundary | 不把能力注册成一组 provider tools，而是把外部动作统一收敛到 bash session；大段文本/代码也通过 `write_text` 进入 PTY。 |
 | FIM two-pass decision | 用 FIM 控制 thinking 与 decision 的生成边界，并贴近 DeepSeek V4 native tool-call 格式。 |
 | explicit run state | pending model/tool/review/io 都是 state，不靠 orchestrator 临时变量。 |
 | durable artifacts | state、transcript、session log、skill run state、environment events 都是可读文件。 |
@@ -324,7 +324,7 @@ TUI 不拥有 agent 状态，不参与模型决策，也不直接改写 run stat
 
 | 优势 | 说明 |
 | --- | --- |
-| 核心约束简单 | bash 是唯一外部动作面，receiver 只是一个 PTY 内 CLI 协议，降低模型工具协议和 harness 内核复杂度。 |
+| 核心约束简单 | bash 是唯一外部动作面，模型只需要掌握 PTY byte/key/control action，避免第二套 payload 协议。 |
 | 调试友好 | state、JSONL、log path、offset、TUI view model 让执行过程可检查。 |
 | 长任务友好 | PTY session 支持 timeout 后继续运行、poll、interactive PTY input、interrupt 和 restart。 |
 | 可审计 | tool review 位于所有 bash request 前，未来可接权限策略和人工审批。 |
@@ -339,7 +339,7 @@ TUI 不拥有 agent 状态，不参与模型决策，也不直接改写 run stat
 | 持续验证要跟上 | 最新审计中 `npm run build` 和全量 `npm test` 已通过；后续改动仍要保持这条线常绿。 | 把 build/test/diff check 固定为提交前检查。 |
 | 文档与实现快速变化 | README 已包含 codeq/state/IM/skill 新能力，部分实现仍在未提交工作区中快速演进。 | 每次功能落地后同步更新对应设计文档和 project report。 |
 | 状态持久化仍需闭环 | 设计中有 `.tiny-agent/`、locks、JSONL ledger，但所有 CLI 是否都完全使用同一 resolver 还需要持续验证。 | 用集成测试覆盖多 CLI 共用 state root、并发写、resume/replay。 |
-| bash 外部动作约束对模型要求高 | 模型必须学会通过 bash 调 skill/codeq/im 等 CLI，并用 PTY 内 receiver stdin 协议处理大文件，而不是直接获得 typed business tool affordance。 | 在 system prompt 和 examples 中强化常见 CLI 使用路径。 |
+| bash 外部动作约束对模型要求高 | 模型必须学会通过 bash 调 skill/codeq/im 等 CLI，并用 heredoc 或脚本处理大文本/代码，而不是直接获得 typed business tool affordance。 | 在 system prompt 和 examples 中强化常见 CLI 使用路径。 |
 | review 目前默认 approve | 安全边界存在，但策略能力还未产品化。 | 增加危险命令分类、workspace policy、网络/文件权限和人工确认模式。 |
 | TUI 仍偏观察 | 当前 TUI 更像 transcript player，控制动作和 session tail 仍可增强。 | 增加 session log tail、active skill、review pending、approval 操作和 replay/follow。 |
 
@@ -387,19 +387,19 @@ capability as CLI
 
 建议对外表达可以聚焦为：
 
-1. tiny-agent-harness keeps bash as the only external action surface, with large payloads handled by an in-PTY receiver stdin protocol.
+1. tiny-agent-harness keeps bash as the only external action surface, with large text/code writes paced internally through the PTY runtime.
 2. tiny-agent-harness turns agent execution into explicit state and durable logs.
 3. tiny-agent-harness lets skills, code intelligence, IM, and future tools evolve as CLIs without bloating the core runtime.
 
 中文版本：
 
-1. tiny-agent-harness 让 bash 成为唯一外部动作面，并用 PTY 内 receiver stdin 协议处理大 payload。
+1. tiny-agent-harness 让 bash 成为唯一外部动作面，并通过 runtime 内部 pacing 处理大段 PTY 文本/代码输入。
 2. tiny-agent-harness 把 agent 执行过程变成显式状态和可持久化日志。
 3. tiny-agent-harness 让 skill、代码智能、IM 和未来工具以 CLI 生态演进，而不是膨胀内核。
 
 ## 11. 结论
 
-`tiny-agent-harness` 已经形成一个清晰的 coding agent runtime 骨架：DeepSeek V4 FIM two-pass model adapter、显式 run state、orchestrator effect loop、bash 外部动作边界、PTY 内 receiver stdin payload transport、PTY session manager、environment event model、skill lifecycle、code intelligence CLI、state storage、transcript 和 TUI player。
+`tiny-agent-harness` 已经形成一个清晰的 coding agent runtime 骨架：DeepSeek V4 FIM two-pass model adapter、显式 run state、orchestrator effect loop、bash 外部动作边界、纯 PTY 输入模型、PTY session manager、environment event model、skill lifecycle、code intelligence CLI、state storage、transcript 和 TUI player。
 
 按当前快照估算，项目约 1.95 万行统计源码/文档/测试，其中测试约 6 千行、文档约 5 千行。它的工程投入重点不是堆功能，而是把 agent 执行过程变得可解释、可审计、可恢复。
 

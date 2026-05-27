@@ -13,11 +13,12 @@ describe("PromptBuilder", () => {
     });
     expect(prompt.messages[0]!.content).toContain("PTY action kinds");
     expect(prompt.messages[0]!.content).toContain("write_text, key, poll");
-    expect(prompt.messages[0]!.content).not.toContain("input_frame");
-    expect(prompt.messages[0]!.content).not.toContain("end_input");
+    expect(prompt.messages[0]!.content).not.toContain(["input", "_frame"].join(""));
+    expect(prompt.messages[0]!.content).not.toContain(["end", "_input"].join(""));
+    expect(prompt.messages[0]!.content).not.toContain(["rece", "iver"].join(""));
     expect(prompt.messages[0]!.content).toContain("im send --channel");
-    expect(prompt.messages[0]!.content).toContain("receiver start --target im");
-    expect(prompt.messages[0]!.content).toContain("__TAH_RECEIVER_END__");
+    expect(prompt.messages[0]!.content).toContain("Large write_text payloads are allowed");
+    expect(prompt.messages[0]!.content).toContain("no file staging protocol");
     expect(prompt.messages[0]!.content).not.toContain("bash command fields");
     expect(prompt.messages[0]!.content).not.toContain("UnsupportedControlPayload");
     expect(prompt.messages[0]!.content).not.toContain("artifact write");
@@ -171,7 +172,7 @@ describe("PromptBuilder", () => {
     );
   });
 
-  it("redacts large write_text payloads from serialized tool-call history", () => {
+  it("omits large write_text payloads from serialized tool-call history", () => {
     const largeBase64 = `${"A".repeat(512)}\n`;
     const history: HistoryEntry[] = [
       {
@@ -190,7 +191,13 @@ describe("PromptBuilder", () => {
     const assistantMsg = prompt.messages[1]! as Record<string, unknown>;
     const toolCalls = assistantMsg.tool_calls as Array<Record<string, unknown>>;
     const fn = toolCalls[0]!.function as Record<string, unknown>;
-    expect(fn.arguments).toContain("[redacted write_text payload");
+    const args = JSON.parse(fn.arguments as string) as Record<string, unknown>;
+    expect(args.text).toBeUndefined();
+    expect(args.textOmittedFromHistory).toMatchObject({
+      kind: "redacted_write_text_payload",
+      bytes: Buffer.byteLength(largeBase64, "utf8"),
+    });
     expect(fn.arguments).not.toContain(largeBase64.trim());
+    expect(fn.arguments).not.toContain("[redacted write_text payload");
   });
 });

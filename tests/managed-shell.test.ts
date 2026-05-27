@@ -3,7 +3,6 @@ import {
   buildManagedShellInitSnippet,
   formatContinuationMarker,
   formatPromptMarker,
-  formatReceiverReadyMarker,
 } from "../src/application/managed-shell.js";
 import { parseTerminalChunk } from "../src/terminal/parser.js";
 
@@ -50,37 +49,6 @@ describe("managed shell marker formatting", () => {
         reason: "quote",
         promptSeq: 4,
         promptNonce: "nonce with spaces",
-      },
-    ]);
-  });
-
-  it("formats receiver ready markers that the parser can read", () => {
-    const marker = formatReceiverReadyMarker({
-      nonce: "nonce",
-      receiverId: "rx-1",
-      mode: "base64",
-      maxFrameBytes: 4096,
-      nextSeq: 2,
-      commandLine: "node dist/cli/main.js receiver start",
-      bytesReceived: 12,
-      expectedSha256: "hash",
-    });
-
-    const parsed = parseTerminalChunk({
-      promptNonce: "nonce",
-      chunk: `${marker}\n`,
-    });
-
-    expect(parsed.events).toEqual([
-      {
-        kind: "receiver_ready",
-        receiverId: "rx-1",
-        commandLine: "node dist/cli/main.js receiver start",
-        mode: "base64",
-        maxFrameBytes: 4096,
-        nextSeq: 2,
-        bytesReceived: 12,
-        expectedSha256: "hash",
       },
     ]);
   });

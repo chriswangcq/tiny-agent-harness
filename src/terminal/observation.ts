@@ -63,26 +63,6 @@ export function summarizeTerminalEvent(
         preview: preview(event.preview, resolved.maxPreviewChars),
         logRef: event.logRef,
       };
-    case "receiver_ready":
-      return {
-        kind: "receiver_ready",
-        receiverId: event.receiverId,
-        bytes: event.bytesReceived,
-      };
-    case "receiver_ack":
-      return {
-        kind: "receiver_ack",
-        receiverId: event.receiverId,
-        seq: event.seq,
-        bytes: event.bytes,
-      };
-    case "receiver_done":
-      return {
-        kind: "receiver_done",
-        receiverId: event.receiverId,
-        bytes: event.bytes,
-        sha256: event.sha256,
-      };
     case "prompt":
     case "continuation_prompt":
     case "silence_timeout":

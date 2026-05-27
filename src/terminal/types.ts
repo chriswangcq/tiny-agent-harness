@@ -2,7 +2,6 @@ export type TerminalOwnerKind =
   | "shell"
   | "shell_continuation"
   | "process"
-  | "receiver"
   | "unknown"
   | "terminated";
 
@@ -14,13 +13,10 @@ export type ContinuationReason =
 
 export type ProcessStdinMode = "none" | "interactive" | "unknown";
 
-export type ReceiverMode = "text" | "base64";
-
 export type TerminalOwner =
   | ShellOwner
   | ShellContinuationOwner
   | ProcessOwner
-  | ReceiverOwner
   | UnknownOwner
   | TerminatedOwner;
 
@@ -48,18 +44,6 @@ export type ProcessOwner = {
   stdinMode: ProcessStdinMode;
   startedAt: string;
   lastOutputAt: string | null;
-};
-
-export type ReceiverOwner = {
-  kind: "receiver";
-  revision: number;
-  receiverId: string;
-  commandLine: string;
-  mode: ReceiverMode;
-  nextSeq: number;
-  bytesReceived: number;
-  maxFrameBytes: number;
-  expectedSha256?: string;
 };
 
 export type UnknownOwner = {
@@ -126,28 +110,6 @@ export type TerminalEvent =
       promptNonce: string;
     }
   | {
-      kind: "receiver_ready";
-      receiverId: string;
-      commandLine: string;
-      mode: ReceiverMode;
-      maxFrameBytes: number;
-      nextSeq: number;
-      bytesReceived?: number;
-      expectedSha256?: string;
-    }
-  | {
-      kind: "receiver_ack";
-      receiverId: string;
-      seq: number;
-      bytes: number;
-    }
-  | {
-      kind: "receiver_done";
-      receiverId: string;
-      bytes: number;
-      sha256: string;
-    }
-  | {
       kind: "output";
       bytes: number;
       preview: string;
@@ -173,11 +135,6 @@ export type TerminalEvent =
 export type TerminalErrorCode =
   | "OWNER_MISMATCH"
   | "OWNER_REJECTED"
-  | "RECEIVER_SEQ_MISMATCH"
-  | "RECEIVER_HASH_MISMATCH"
-  | "RECEIVER_BYTES_MISMATCH"
-  | "RECEIVER_FRAME_TOO_LARGE"
-  | "RECEIVER_INVALID_BASE64"
   | "TERMINAL_UNSYNCED"
   | "TERMINAL_TERMINATED";
 
@@ -200,20 +157,14 @@ export type LogRef = {
 export type PtyActionSummary = {
   kind: PtyAction["kind"];
   session?: string;
-  receiverId?: string;
-  seq?: number;
   bytes?: number;
-  sha256?: string;
   preview?: string;
   redacted?: boolean;
 };
 
 export type TerminalEventSummary = {
   kind: TerminalEvent["kind"];
-  receiverId?: string;
-  seq?: number;
   bytes?: number;
-  sha256?: string;
   preview?: string;
   logRef?: string;
 };

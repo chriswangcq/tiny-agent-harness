@@ -9,7 +9,6 @@ export const DEFAULT_TERMINAL_HISTORY_LIMITS: TerminalHistoryLimits = {
 };
 
 const PAYLOAD_KEYS = new Set([
-  "dataBase64",
   "payload",
   "content",
   "input",
@@ -21,7 +20,6 @@ const PAYLOAD_KEYS = new Set([
 const STABLE_STRING_KEYS = new Set([
   "kind",
   "session",
-  "receiverId",
   "sha256",
   "code",
   "errorCode",

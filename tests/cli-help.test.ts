@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 describe("main CLI help", () => {
-  it("documents receiver file and IM target forms", () => {
+  it("documents supported subcommands without removed payload transport", () => {
     const help = execFileSync(
       process.execPath,
       ["--loader", "ts-node/esm", "src/cli/main.ts", "--help"],
@@ -12,8 +12,9 @@ describe("main CLI help", () => {
       },
     );
 
-    expect(help).toContain("tiny-agent receiver <subcommand>");
-    expect(help).toContain("start  --target file --path <path>");
-    expect(help).toContain("start  --target im --channel <ch> --kind <status|error>");
+    expect(help).toContain("tiny-agent im  <subcommand>");
+    expect(help).toContain("tiny-agent skill <subcommand>");
+    expect(help).not.toContain(["rece", "iver"].join(""));
+    expect(help).not.toContain(["max", "-frame-bytes"].join(""));
   });
 });

@@ -53,9 +53,7 @@ function makeRuntime(): ManagedTerminalRuntime {
     defaultSessionId: "default",
     cwd: "/repo",
     promptNonce: "nonce",
-    actionLimits: {
-      maxFrameBytes: 4096,
-    },
+    actionLimits: {},
     observationLimits: {
       maxPreviewChars: 80,
     },
@@ -117,6 +115,28 @@ describe("ManagedTerminalRuntime", () => {
 
     expect(observation.result).toBe("ok");
     expect(ptyMock.spawned[0]?.writes.at(-1)).toBe("pwd\n");
+  });
+
+  it("paces large write_text input into PTY chunks without dropping bytes", async () => {
+    const port = makeRuntime().createRunPort();
+    await port.execute({ action: { kind: "status" } });
+    const largeText = `${"a".repeat(1300)}${"你".repeat(300)}\n`;
+
+    const observation = await port.execute({
+      action: {
+        kind: "write_text",
+        expectedOwnerRevision: 0,
+        text: largeText,
+      },
+    });
+
+    const writes = ptyMock.spawned[0]?.writes.slice(1) ?? [];
+    expect(observation.result).toBe("ok");
+    expect(writes.length).toBeGreaterThan(1);
+    expect(writes.join("")).toBe(largeText);
+    for (const chunk of writes) {
+      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(1024);
+    }
   });
 
   it("restarts by killing the old PTY and spawning a fresh shell", async () => {

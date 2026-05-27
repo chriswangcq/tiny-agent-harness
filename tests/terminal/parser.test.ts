@@ -41,51 +41,6 @@ describe("terminal marker parser", () => {
     ]);
   });
 
-  it("parses receiver ready markers", () => {
-    const command = encodeURIComponent("node dist/cli/main.js receiver start");
-    const result = parseTerminalChunk({
-      promptNonce: nonce,
-      chunk: `__TAH_RECEIVER_READY__ nonce=nonce-1 id=rx-1 mode=base64 max=3072 next=0 command=${command} sha256=abc123\n`,
-    });
-
-    expect(result.events).toEqual([
-      {
-        kind: "receiver_ready",
-        receiverId: "rx-1",
-        commandLine: "node dist/cli/main.js receiver start",
-        mode: "base64",
-        maxFrameBytes: 3072,
-        nextSeq: 0,
-        bytesReceived: undefined,
-        expectedSha256: "abc123",
-      },
-    ]);
-  });
-
-  it("parses receiver ack and done markers", () => {
-    const result = parseTerminalChunk({
-      promptNonce: nonce,
-      chunk:
-        "__TAH_RECEIVER_ACK__ nonce=nonce-1 id=rx-1 seq=2 bytes=128\n" +
-        "__TAH_RECEIVER_DONE__ nonce=nonce-1 id=rx-1 bytes=256 sha256=hash\n",
-    });
-
-    expect(result.events).toEqual([
-      {
-        kind: "receiver_ack",
-        receiverId: "rx-1",
-        seq: 2,
-        bytes: 128,
-      },
-      {
-        kind: "receiver_done",
-        receiverId: "rx-1",
-        bytes: 256,
-        sha256: "hash",
-      },
-    ]);
-  });
-
   it("emits output events for ordinary output lines", () => {
     const result = parseTerminalChunk({
       promptNonce: nonce,

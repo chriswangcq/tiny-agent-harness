@@ -320,7 +320,6 @@ Usage:
   tiny-agent tui --run <runId|latest>                 Attach TUI to existing run
   tiny-agent im  <subcommand> [options]               IM message operations
   tiny-agent skill <subcommand> [options]             Skill management
-  tiny-agent receiver <subcommand> [options]          PTY stdin receiver for large payloads
   tiny-agent --help                                   Show this help
 
 IM subcommands:
@@ -339,19 +338,13 @@ Skill subcommands:
   review-complete <runId>       Complete skill review
   validate <name>               Validate skill structure
 
-Receiver subcommands:
-  start  --target file --path <path> --nonce <n> --max-frame-bytes <n>
-  start  --target im --channel <ch> --kind <status|error> --nonce <n> --max-frame-bytes <n>
-  After start, write one base64 frame per stdin line, then:
-  __TAH_RECEIVER_END__ frames=<n> bytes=<n> [sha256=<hash>]
-
 Environment variables:
   DEEPSEEK_API_KEY   (required) API key for DeepSeek
   DEEPSEEK_BASE_URL  Base URL (default: https://api.deepseek.com/beta)
   MODEL_NAME         Model name (default: deepseek-v4-pro)
   TAH_IM_CHANNEL     Default IM channel (default: "default")
 
-Most CLI subcommands accept --json for machine-readable output; receiver start is a PTY marker protocol and does not support --json. Use --state-dir to override .tiny-agent location.
+Most CLI subcommands accept --json for machine-readable output. Use --state-dir to override .tiny-agent location.
 `;
 
 async function main(): Promise<void> {
@@ -383,12 +376,6 @@ async function main(): Promise<void> {
   if (firstArg === "skill") {
     const { runSkill } = await import("./skill.js");
     await runSkill(process.argv.slice(3));
-    return;
-  }
-
-  if (firstArg === "receiver") {
-    const { runReceiver } = await import("./receiver.js");
-    await runReceiver(process.argv.slice(3));
     return;
   }
 

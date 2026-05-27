@@ -6,7 +6,6 @@ import {
 import {
   formatContinuationMarker,
   formatPromptMarker,
-  formatReceiverReadyMarker,
 } from "../src/application/managed-shell.js";
 import type { TerminalRuntimeSnapshot } from "../src/application/terminal-ports.js";
 import type { TerminalOwner } from "../src/terminal/index.js";
@@ -79,55 +78,6 @@ describe("fake PTY owner parsing adapter", () => {
       reason: "quote",
       promptSeq: 3,
       promptNonce: nonce,
-    });
-  });
-
-  it("maps receiver-ready chunks to receiver owner snapshots", () => {
-    const result = applyPtyChunkToSnapshot({
-      snapshot: snapshot(shell(2)),
-      promptNonce: nonce,
-      chunk: `${formatReceiverReadyMarker({
-        nonce,
-        receiverId: "rx-1",
-        mode: "base64",
-        maxFrameBytes: 4096,
-        nextSeq: 0,
-        commandLine: "receiver start",
-      })}\n`,
-    });
-
-    expect(result.snapshot.owner).toMatchObject({
-      kind: "receiver",
-      revision: 3,
-      receiverId: "rx-1",
-      nextSeq: 0,
-      bytesReceived: 0,
-      maxFrameBytes: 4096,
-    });
-  });
-
-  it("does not guess shell readiness after receiver done", () => {
-    const receiver: TerminalOwner = {
-      kind: "receiver",
-      revision: 3,
-      receiverId: "rx-1",
-      commandLine: "receiver start",
-      mode: "base64",
-      nextSeq: 1,
-      bytesReceived: 5,
-      maxFrameBytes: 4096,
-    };
-
-    const result = applyPtyChunkToSnapshot({
-      snapshot: snapshot(receiver),
-      promptNonce: nonce,
-      chunk: "__TAH_RECEIVER_DONE__ nonce=nonce id=rx-1 bytes=5 sha256=hash\n",
-    });
-
-    expect(result.snapshot.owner).toEqual({
-      kind: "unknown",
-      revision: 4,
-      reason: "state_gap",
     });
   });
 

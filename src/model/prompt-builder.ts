@@ -35,24 +35,23 @@ const SYSTEM_MESSAGE =
   "- bash: operate a persistent PTY using owner/revision guarded actions. " +
   "Every write action must use the latest TerminalOwner revision from the previous observation.\n" +
   "  PTY action kinds: write_text, key, poll, status, interrupt, terminate, restart.\n" +
-  "  Use write_text to write exact bytes to the current PTY owner; it does not append Enter, so include `\\n` explicitly or use key enter.\n" +
+  "  Use write_text to write exact bytes to the current PTY owner; it does not append Enter, so include `\\n` explicitly or use key enter. Large write_text payloads are allowed and paced by the runtime.\n" +
+  "  After a multi-line heredoc or script, poll until a shell prompt appears; shell_continuation means the shell is still waiting for input, not that you should terminate.\n" +
   "  For process owners, write text only when stdinMode is interactive; otherwise poll/status or recover with interrupt/terminate/restart.\n" +
-  "  If owner.kind is receiver, write only receiver stdin protocol lines; if owner.kind is unknown or terminated, poll/status or recover with interrupt/terminate/restart.\n" +
+  "  If owner.kind is unknown or terminated, poll/status or recover with interrupt/terminate/restart.\n" +
   "  For short IM replies, run `node dist/cli/main.js im send --channel <channel> --kind status --text <reply>` through write_text.\n" +
-  "  For generated files, long replies, code blocks, or any multi-KB payload, start the receiver CLI inside the PTY with write_text, then feed base64 frame lines using write_text, and close with `__TAH_RECEIVER_END__ frames=<n> bytes=<n>\\n`. You may include `sha256=<hash>` only when you already know an expected hash; the receiver always computes and reports the actual sha256.\n" +
-  "  Receiver examples: target file with `node dist/cli/main.js receiver start --target file --path <path> --nonce <owner.promptNonce> --max-frame-bytes 4000`; " +
-  "target IM with `node dist/cli/main.js receiver start --target im --channel <channel> --kind status --nonce <owner.promptNonce> --max-frame-bytes 4000`.\n" +
-  "  While receiver owns the PTY, each write_text should contain exactly one base64 frame plus `\\n`, or the final `__TAH_RECEIVER_END__ ...\\n` line. Receiver frame lines must fit the receiver max-frame-bytes value.\n" +
+  "  For generated text files or code, use shell heredocs or small scripts through write_text. There is no file staging protocol, frame protocol, or separate payload tool in the model-visible action surface.\n" +
   "- io_wait: pause until the next external event. This is a TOOL CALL, not a shell command. " +
   "Never run io_wait via bash; invoke it directly as a tool.\n\n" +
   "Thinking is reasoning-only. During thinking, do not emit tool-call markup, raw tool arguments, shell heredocs, or final user-facing prose. Describe the intended next action in words only.\n\n" +
+  "History may omit or redact previous write_text payloads. Never copy omitted/redacted history markers as real payload text.\n\n" +
   "There is no special User main message. User input is part of the environment and appears only in environment reminders as [user@channel] lines.\n" +
   "Environment reminders may be serialized with role=user for chat-template compatibility; only [user@channel] lines are user-authored input.\n" +
   "Treat new [user@channel] events as current user intent, not as background chatter.\n" +
-  "To reply, prefer IM send for short text and use the in-PTY receiver flow only for large payload bytes that should avoid shell quoting.\n" +
+  "To reply, use IM send through bash. Keep large generated text/code in PTY writes; the runtime handles pacing.\n" +
   "After replying or completing work: io_wait tool -> wait for the next user message.\n\n" +
-  "Workflow: read [user@channel] intent -> inspect owner -> bash PTY actions/work -> in-PTY receiver for large output -> io_wait.\n" +
-  "The tiny-agent CLI is available via `node dist/cli/main.js` (subcommands: im, receiver, skill, artifact).";
+  "Workflow: read [user@channel] intent -> inspect owner -> bash PTY actions/work -> IM send reply -> io_wait.\n" +
+  "The tiny-agent CLI is available via `node dist/cli/main.js` (subcommands: im, skill, artifact).";
 
 // ---------------------------------------------------------------------------
 // PromptBuilder
@@ -125,9 +124,14 @@ function compactToolArguments(argumentsValue: unknown): unknown {
     typeof argumentsValue.text === "string" &&
     shouldRedactWriteText(argumentsValue.text)
   ) {
+    const { text: _omittedText, ...rest } = argumentsValue;
     return {
-      ...argumentsValue,
-      text: `[redacted write_text payload ${Buffer.byteLength(argumentsValue.text, "utf8")} bytes]`,
+      ...rest,
+      textOmittedFromHistory: {
+        kind: "redacted_write_text_payload",
+        bytes: Buffer.byteLength(argumentsValue.text, "utf8"),
+        note: "Payload omitted from prompt history and must not be replayed.",
+      },
     };
   }
 
@@ -140,10 +144,6 @@ function shouldRedactWriteText(text: string): boolean {
   }
 
   const line = text.trim();
-  if (line.startsWith("__TAH_RECEIVER_END__")) {
-    return false;
-  }
-
   return line.length >= 128 && line.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/u.test(line);
 }
 

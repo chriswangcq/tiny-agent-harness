@@ -27,19 +27,6 @@ function processOwner(stdinMode: "none" | "interactive" | "unknown" = "unknown")
   };
 }
 
-function receiver(revision = 3): TerminalOwner {
-  return {
-    kind: "receiver",
-    revision,
-    receiverId: "rx-1",
-    commandLine: "receiver start",
-    mode: "base64",
-    nextSeq: 2,
-    bytesReceived: 12,
-    maxFrameBytes: 1024,
-  };
-}
-
 describe("terminal action validator", () => {
   it("accepts shell text input with explicit newline when owner revision matches", () => {
     const result = validatePtyAction({
@@ -180,22 +167,9 @@ describe("terminal action validator", () => {
     expect(result).toEqual({ ok: true });
   });
 
-  it("accepts receiver stdin text with explicit newline", () => {
+  it("accepts terminal keys while shell owns the terminal", () => {
     const result = validatePtyAction({
-      owner: receiver(),
-      action: {
-        kind: "write_text",
-        expectedOwnerRevision: 3,
-        text: "YWJj\n",
-      },
-    });
-
-    expect(result).toEqual({ ok: true });
-  });
-
-  it("accepts terminal keys while receiver owns the foreground PTY", () => {
-    const result = validatePtyAction({
-      owner: receiver(),
+      owner: shell(3),
       action: {
         kind: "key",
         expectedOwnerRevision: 3,
@@ -206,52 +180,7 @@ describe("terminal action validator", () => {
     expect(result).toEqual({ ok: true });
   });
 
-  it("rejects receiver stdin writes that are not one base64 line", () => {
-    expect(
-      validatePtyAction({
-        owner: receiver(),
-        action: {
-          kind: "write_text",
-          expectedOwnerRevision: 3,
-          text: "pwd\n",
-        },
-      }),
-    ).toMatchObject({
-      ok: false,
-      code: "RECEIVER_INVALID_BASE64",
-    });
-
-    expect(
-      validatePtyAction({
-        owner: receiver(),
-        action: {
-          kind: "write_text",
-          expectedOwnerRevision: 3,
-          text: "YQ==\nYg==\n",
-        },
-      }),
-    ).toMatchObject({
-      ok: false,
-      code: "OWNER_REJECTED",
-    });
-  });
-
-  it("accepts receiver end marker lines", () => {
-    const result = validatePtyAction({
-      owner: receiver(),
-      action: {
-        kind: "write_text",
-        expectedOwnerRevision: 3,
-        text: "__TAH_RECEIVER_END__ frames=2 bytes=12\n",
-      },
-    });
-
-    expect(result).toEqual({ ok: true });
-  });
-
-  it("exposes conservative default limits", () => {
-    expect(DEFAULT_PTY_ACTION_LIMITS).toEqual({
-      maxFrameBytes: 4096,
-    });
+  it("does not expose payload-specific default limits", () => {
+    expect(DEFAULT_PTY_ACTION_LIMITS).toEqual({});
   });
 });

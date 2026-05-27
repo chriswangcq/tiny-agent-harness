@@ -7,7 +7,7 @@
 1. 模型可见的外部动作面只有 `bash`。
 2. `bash` arguments 必须是 PTY action，不存在命令级双轨。
 3. PTY 是字节和按键流，不是 shell line API；Enter 是 `\n` 或 `key: "enter"`。
-4. 长文本、生成文件和 IM 回复使用 PTY 内前台 receiver，而不是 shell heredoc、额外暂存工具或 model-visible frame action。
+4. 长文本、生成文件和 IM 回复都通过纯 PTY 动作完成：文本/代码使用 `write_text`，短答复使用 PTY 内的 `im send` CLI；不存在额外暂存工具或 model-visible frame action。
 5. Tool review 仍位于执行前；demo 模式可以默认 approve。
 6. Observation 返回 owner、action summary、terminal events、log ref 和错误码；完整输出留在 session log。
 
@@ -60,25 +60,14 @@ Example key input:
 }
 ```
 
-Example receiver stdin flow:
-
-```json
-{
-  "kind": "write_text",
-  "session": "default",
-  "expectedOwnerRevision": 9,
-  "text": "PGh0bWw+\\n"
-}
-```
-
-Final receiver line:
+Example heredoc write:
 
 ```json
 {
   "kind": "write_text",
   "session": "default",
   "expectedOwnerRevision": 10,
-  "text": "__TAH_RECEIVER_END__ frames=1 bytes=6\\n"
+  "text": "cat > app.html <<'EOF'\\n<!doctype html>\\n<title>App</title>\\nEOF\\n"
 }
 ```
 

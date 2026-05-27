@@ -44,9 +44,11 @@ type BashToolInput =
 Important semantics:
 
 - `write_text` writes exact text bytes. It does not append Enter. Include `\n` explicitly or use `{ kind: "key", key: "enter" }`.
+- Large `write_text` payloads are accepted by the tool and internally paced into PTY writes so the model does not need to chunk ordinary shell input.
 - `key` is for terminal keys such as Enter, Ctrl-C, Ctrl-D, Escape, Tab, Up, and Down.
 - `poll`, `status`, `interrupt`, `terminate`, and `restart` are control actions over the PTY session, not shell commands.
 - Every write-like action carries `expectedOwnerRevision`; stale revisions are rejected.
+- After sending a heredoc or multi-line script, keep polling until the shell prompt returns. A `shell_continuation` owner means the shell is still waiting for input.
 
 ## Large Payloads
 
@@ -56,14 +58,9 @@ Short IM replies should be sent with the IM CLI through the PTY, for example:
 node dist/cli/main.js im send --channel default --kind status --text "Done"
 ```
 
-Generated files, long IM replies, code blocks, and other multi-KB payloads must use the in-PTY receiver protocol:
+Generated text files and code should use shell heredocs or small scripts through `write_text`. Large `write_text` payloads are accepted by the tool and paced internally by the runtime, so the model does not need to invent a second payload protocol or manually split ordinary shell input.
 
-1. Use `write_text` to start a receiver CLI in the shell owner.
-2. Wait for the observation to report owner kind `receiver` and a `receiverId`.
-3. Send one base64 frame line per `write_text`; include the trailing `\n`.
-4. Close by writing `__TAH_RECEIVER_END__ frames=<n> bytes=<n>\n`.
-
-This keeps payload bytes out of shell quoting while preserving a pure PTY action surface. The receiver process validates frame order and byte count before committing the target, then emits the actual sha256. If an expected hash is already known, pass `sha256=<hash>` on `receiver start` or the end line and the receiver will verify it.
+There is no model-visible file staging protocol, frame action, or binary payload channel. Binary or opaque transfer should be redesigned as a separate explicit feature if it becomes necessary later.
 
 ## Non Goals
 

@@ -9,6 +9,8 @@ import type { PtyActionLimits } from "../terminal/validator.js";
 import type { TerminalObservationLimits } from "../terminal/observation.js";
 import { ManagedPtySession } from "./managed-session.js";
 
+const PTY_WRITE_CHUNK_BYTES = 1024;
+
 export type ManagedTerminalRuntimeOptions = {
   defaultSessionId: string;
   cwd: string;
@@ -56,7 +58,11 @@ export class ManagedTerminalRuntime {
       },
       pty: {
         write: async (session, data) => {
-          this.ensureSession(session).pty.write(data);
+          const pty = this.ensureSession(session).pty;
+          for (const chunk of chunkTextByUtf8Bytes(data, PTY_WRITE_CHUNK_BYTES)) {
+            pty.write(chunk);
+            await yieldToPty();
+          }
         },
         read: async (session, cursor) => {
           const entry = this.ensureSession(session);
@@ -125,6 +131,38 @@ export class ManagedTerminalRuntime {
     this.sessions.set(session, entry);
     return entry;
   }
+}
+
+function chunkTextByUtf8Bytes(text: string, maxBytes: number): string[] {
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) {
+    return [text];
+  }
+
+  const chunks: string[] = [];
+  let current = "";
+  let currentBytes = 0;
+
+  for (const char of text) {
+    const charBytes = Buffer.byteLength(char, "utf8");
+    if (current.length > 0 && currentBytes + charBytes > maxBytes) {
+      chunks.push(current);
+      current = "";
+      currentBytes = 0;
+    }
+
+    current += char;
+    currentBytes += charBytes;
+  }
+
+  if (current.length > 0) {
+    chunks.push(current);
+  }
+
+  return chunks;
+}
+
+function yieldToPty(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 function parseCursor(cursor: string | undefined): number {

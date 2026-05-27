@@ -866,7 +866,7 @@ describe("parseDsmlDecision", () => {
 
   it("rejects raw text after V3 separator instead of wrapping it as bash JSON", () => {
     const raw =
-      "bash<｜tool▁sep｜>node dist/cli/main.js receiver start --target im --channel default --kind status --nonce nonce --max-frame-bytes 4096";
+      "bash<｜tool▁sep｜>node dist/cli/main.js im send --channel default --kind status --text Done";
     const result = parseDsmlDecision(raw);
     expect(result).toMatchObject({
       status: "invalid",

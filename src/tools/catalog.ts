@@ -105,13 +105,12 @@ export const BASH_TOOL_DEFINITION: ToolDefinition = {
   name: "bash",
   description:
     "Operate a persistent PTY session with owner/revision-guarded actions. " +
-    "This is a pure PTY interface: write_text writes exact bytes to the current foreground terminal owner and never appends Enter for you; include \\n explicitly or use key enter. " +
+    "This is a pure PTY interface: write_text writes exact bytes to the current foreground terminal owner and never appends Enter for you; include \\n explicitly or use key enter. Large write_text payloads are allowed and internally paced. " +
     "Use key only for terminal keys such as enter, ctrl-c, ctrl-d, escape, tab, up, and down. " +
-    "Use poll/status to observe and interrupt/terminate/restart to recover. " +
+    "Use poll/status to observe and interrupt/terminate/restart to recover. After sending a multi-line heredoc or script, keep polling until the shell prompt returns; shell_continuation means the shell is still waiting for input. " +
     "For short IM replies, write an IM send command such as `node dist/cli/main.js im send --channel <channel> --kind status --text <reply>\\n`. " +
-    "For large generated files or long IM replies, start the in-terminal receiver program with write_text, for example `node dist/cli/main.js receiver start --target file --path <path> --nonce <owner.promptNonce> --max-frame-bytes 4000\\n` or `node dist/cli/main.js receiver start --target im --channel <channel> --kind status --nonce <owner.promptNonce> --max-frame-bytes 4000\\n`. " +
-    "After owner.kind becomes receiver, feed one base64 frame line per write_text, each ending in \\n and below the receiver max-frame-bytes value; finish with `__TAH_RECEIVER_END__ frames=<n> bytes=<n>\\n`. " +
-    "Only include sha256=<hash> in receiver start or end when an expected hash is already known; receiver_done reports the actual sha256. " +
+    "For generated text files or code, use shell heredocs or small scripts through write_text; the runtime paces large writes internally. " +
+    "There is no model-visible file staging protocol, frame action, or binary payload channel. " +
     "Do not call non-PTY payload actions; the only bytes you can send are PTY bytes.",
   inputSchema: BashToolInputSchema,
 };

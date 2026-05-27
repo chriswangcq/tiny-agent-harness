@@ -24,19 +24,6 @@ function shell(revision = 1): TerminalOwner {
   };
 }
 
-function receiver(revision = 3): TerminalOwner {
-  return {
-    kind: "receiver",
-    revision,
-    receiverId: "rx-1",
-    commandLine: "receiver start",
-    mode: "base64",
-    nextSeq: 0,
-    bytesReceived: 0,
-    maxFrameBytes: 4096,
-  };
-}
-
 describe("ToolCallValidator PTY actions", () => {
   it("validates write_text actions as pty_action requests", () => {
     const result = new ToolCallValidator().validate(
@@ -64,13 +51,13 @@ describe("ToolCallValidator PTY actions", () => {
     }
   });
 
-  it("validates receiver stdin writes as ordinary PTY text", () => {
-    const result = new ToolCallValidator({ terminalOwner: receiver() }).validate(
+  it("validates long write_text actions as ordinary PTY text", () => {
+    const result = new ToolCallValidator({ terminalOwner: shell(3) }).validate(
       makeCall({
         arguments: {
           kind: "write_text",
           expectedOwnerRevision: 3,
-          text: `${Buffer.from("hello").toString("base64")}\n`,
+          text: "hello".repeat(2000),
         },
       }),
     );
@@ -115,13 +102,13 @@ describe("ToolCallValidator PTY actions", () => {
     }
   });
 
-  it("accepts receiver stdin writes when owner context is injected", () => {
-    const result = new ToolCallValidator({ terminalOwner: receiver() }).validate(
+  it("accepts owner-guarded shell writes when owner context is injected", () => {
+    const result = new ToolCallValidator({ terminalOwner: shell(3) }).validate(
       makeCall({
         arguments: {
           kind: "write_text",
           expectedOwnerRevision: 3,
-          text: `${Buffer.from("pwd").toString("base64")}\n`,
+          text: "pwd\n",
         },
       }),
     );
@@ -129,15 +116,13 @@ describe("ToolCallValidator PTY actions", () => {
     expect(result.status).toBe("valid");
   });
 
-  it("rejects removed receiver frame tool actions", () => {
+  it("rejects unknown PTY action kinds", () => {
     const result = new ToolCallValidator().validate(
       makeCall({
         arguments: {
-          kind: "input_frame",
+          kind: "paste_text",
           expectedOwnerRevision: 1,
-          receiverId: "rx-1",
-          seq: 0,
-          dataBase64: Buffer.from("hello").toString("base64"),
+          text: "hello",
         },
       }),
     );

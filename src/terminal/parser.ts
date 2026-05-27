@@ -1,6 +1,5 @@
 import type {
   ContinuationReason,
-  ReceiverMode,
   TerminalEvent,
   UnknownOwner,
 } from "./types.js";
@@ -8,9 +7,6 @@ import type {
 export type TerminalMarkers = {
   prompt: string;
   continuation: string;
-  receiverReady: string;
-  receiverAck: string;
-  receiverDone: string;
 };
 
 export type ParserState = {
@@ -33,9 +29,6 @@ export type ParseTerminalChunkResult = {
 export const DEFAULT_TERMINAL_MARKERS: TerminalMarkers = {
   prompt: "__TAH_PROMPT__",
   continuation: "__TAH_CONT__",
-  receiverReady: "__TAH_RECEIVER_READY__",
-  receiverAck: "__TAH_RECEIVER_ACK__",
-  receiverDone: "__TAH_RECEIVER_DONE__",
 };
 
 export function parseTerminalChunk(input: ParseTerminalChunkInput): ParseTerminalChunkResult {
@@ -103,79 +96,6 @@ function parseLine(
     };
   }
 
-  if (line.startsWith(markers.receiverReady)) {
-    const fields = parseFields(line, markers.receiverReady);
-    if (!hasTrustedNonce(fields, promptNonce)) {
-      return unsynced("prompt_spoof_suspected");
-    }
-
-    const mode = parseReceiverMode(fields.mode);
-    const maxFrameBytes = parseInteger(fields.max);
-    const nextSeq = parseInteger(fields.next);
-    const bytesReceived = fields.bytes === undefined ? undefined : parseInteger(fields.bytes);
-    const receiverId = fields.id;
-    const commandLine = fields.command === undefined ? undefined : decodeField(fields.command);
-    if (
-      receiverId === undefined ||
-      commandLine === undefined ||
-      mode === undefined ||
-      maxFrameBytes === undefined ||
-      nextSeq === undefined
-    ) {
-      return unsynced("unparsed_output");
-    }
-
-    return {
-      kind: "receiver_ready",
-      receiverId,
-      commandLine,
-      mode,
-      maxFrameBytes,
-      nextSeq,
-      bytesReceived,
-      expectedSha256: fields.sha256,
-    };
-  }
-
-  if (line.startsWith(markers.receiverAck)) {
-    const fields = parseFields(line, markers.receiverAck);
-    if (!hasTrustedNonce(fields, promptNonce)) {
-      return unsynced("prompt_spoof_suspected");
-    }
-
-    const seq = parseInteger(fields.seq);
-    const bytes = parseInteger(fields.bytes);
-    if (fields.id === undefined || seq === undefined || bytes === undefined) {
-      return unsynced("unparsed_output");
-    }
-
-    return {
-      kind: "receiver_ack",
-      receiverId: fields.id,
-      seq,
-      bytes,
-    };
-  }
-
-  if (line.startsWith(markers.receiverDone)) {
-    const fields = parseFields(line, markers.receiverDone);
-    if (!hasTrustedNonce(fields, promptNonce)) {
-      return unsynced("prompt_spoof_suspected");
-    }
-
-    const bytes = parseInteger(fields.bytes);
-    if (fields.id === undefined || bytes === undefined || fields.sha256 === undefined) {
-      return unsynced("unparsed_output");
-    }
-
-    return {
-      kind: "receiver_done",
-      receiverId: fields.id,
-      bytes,
-      sha256: fields.sha256,
-    };
-  }
-
   return {
     kind: "output",
     bytes: utf8Bytes(line),
@@ -231,14 +151,6 @@ function parseContinuationReason(value: string | undefined): ContinuationReason 
     value === "line_continuation" ||
     value === "unknown"
   ) {
-    return value;
-  }
-
-  return undefined;
-}
-
-function parseReceiverMode(value: string | undefined): ReceiverMode | undefined {
-  if (value === "text" || value === "base64") {
     return value;
   }
 

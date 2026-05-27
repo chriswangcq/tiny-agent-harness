@@ -1,4 +1,3 @@
-export * from "./frame.js";
 export * from "./fsm.js";
 export * from "./history.js";
 export * from "./observation.js";

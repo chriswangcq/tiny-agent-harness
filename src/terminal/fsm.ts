@@ -1,7 +1,6 @@
 import type {
   ContinuationReason,
   ProcessStdinMode,
-  ReceiverMode,
   TerminalEvent,
   TerminalOwner,
 } from "./types.js";
@@ -48,8 +47,6 @@ export function transitionOwner(
   switch (event.kind) {
     case "output":
       return { owner, changed: false };
-    case "receiver_ack":
-      return toReceiverAck(owner, event);
     case "prompt":
       return toOwner(owner, {
         kind: "shell",
@@ -65,18 +62,6 @@ export function transitionOwner(
         promptSeq: event.promptSeq,
         promptNonce: event.promptNonce,
       });
-    case "receiver_ready":
-      return toReceiver(owner, {
-        receiverId: event.receiverId,
-        commandLine: event.commandLine,
-        mode: event.mode,
-        maxFrameBytes: event.maxFrameBytes,
-        nextSeq: event.nextSeq,
-        bytesReceived: event.bytesReceived ?? 0,
-        expectedSha256: event.expectedSha256,
-      });
-    case "receiver_done":
-      return toUnknown(owner, "state_gap");
     case "silence_timeout":
       return toProcess(owner, {
         commandLine: event.commandLine,
@@ -93,22 +78,6 @@ export function transitionOwner(
         reason: event.reason,
       });
   }
-}
-
-function toReceiverAck(
-  owner: TerminalOwner,
-  event: Extract<TerminalEvent, { kind: "receiver_ack" }>,
-): OwnerTransition {
-  if (owner.kind !== "receiver" || owner.receiverId !== event.receiverId) {
-    return { owner, changed: false };
-  }
-
-  return toOwner(owner, {
-    ...owner,
-    revision: nextOwnerRevision(owner),
-    nextSeq: event.seq + 1,
-    bytesReceived: event.bytes,
-  });
 }
 
 export function transitionOwnerMany(
@@ -138,31 +107,6 @@ export function toContinuation(
     reason: input.reason,
     promptSeq: input.promptSeq,
     promptNonce: input.promptNonce,
-  });
-}
-
-export function toReceiver(
-  owner: TerminalOwner,
-  input: {
-    receiverId: string;
-    commandLine: string;
-    mode: ReceiverMode;
-    nextSeq: number;
-    bytesReceived: number;
-    maxFrameBytes: number;
-    expectedSha256?: string;
-  },
-): OwnerTransition {
-  return toOwner(owner, {
-    kind: "receiver",
-    revision: nextOwnerRevision(owner),
-    receiverId: input.receiverId,
-    commandLine: input.commandLine,
-    mode: input.mode,
-    nextSeq: input.nextSeq,
-    bytesReceived: input.bytesReceived,
-    maxFrameBytes: input.maxFrameBytes,
-    expectedSha256: input.expectedSha256,
   });
 }
 

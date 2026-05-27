@@ -544,9 +544,6 @@ function formatToolCallSummary(toolCall: { name?: string; arguments: unknown }):
       if (typeof args.expectedOwnerRevision === "number") {
         parts.push(`rev=${args.expectedOwnerRevision}`);
       }
-      if (typeof args.receiverId === "string") {
-        parts.push(`receiver=${args.receiverId}`);
-      }
       if (typeof args.seq === "number") {
         parts.push(`seq=${args.seq}`);
       }
@@ -583,7 +580,7 @@ function formatDetail(
 
 function formatDetailValue(value: unknown): string {
   if (typeof value === "string") return value;
-  return JSON.stringify(redactReceiverPayloads(value), null, 2);
+  return JSON.stringify(redactLargePayloads(value), null, 2);
 }
 
 function compactLongText(value: string | undefined, maxLength = 2400): string | undefined {
@@ -617,12 +614,6 @@ function isPtyObservation(value: unknown): value is PtyObservation {
 function formatPtyObservationSummary(observation: PtyObservation): string {
   const owner = `${observation.owner.kind}#${observation.owner.revision}`;
   const parts = [`action=${observation.action.kind}`, `owner=${owner}`];
-  if (observation.action.receiverId) {
-    parts.push(`receiver=${observation.action.receiverId}`);
-  }
-  if (observation.action.seq !== undefined) {
-    parts.push(`seq=${observation.action.seq}`);
-  }
   if (observation.action.bytes !== undefined) {
     parts.push(`bytes=${observation.action.bytes}`);
   }
@@ -635,9 +626,9 @@ function formatPtyObservationSummary(observation: PtyObservation): string {
   return parts.join(" ");
 }
 
-function redactReceiverPayloads(value: unknown): unknown {
+function redactLargePayloads(value: unknown): unknown {
   if (Array.isArray(value)) {
-    return value.map((item) => redactReceiverPayloads(item));
+    return value.map((item) => redactLargePayloads(item));
   }
   if (!isRecord(value)) {
     return value;
@@ -645,9 +636,7 @@ function redactReceiverPayloads(value: unknown): unknown {
 
   const next: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
-    if (key === "dataBase64" && typeof child === "string") {
-      next[key] = `[redacted base64 frame ${child.length} chars]`;
-    } else if (
+    if (
       key === "text" &&
       typeof child === "string" &&
       value.kind === "write_text" &&
@@ -662,7 +651,7 @@ function redactReceiverPayloads(value: unknown): unknown {
     ) {
       next[key] = "[redacted write_text preview]";
     } else {
-      next[key] = redactReceiverPayloads(child);
+      next[key] = redactLargePayloads(child);
     }
   }
   return next;

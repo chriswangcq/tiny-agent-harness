@@ -35,7 +35,7 @@ describe("terminal observation helpers", () => {
     });
   });
 
-  it("summarizes receiver stdin writes like normal PTY text", () => {
+  it("summarizes payload-like writes like normal PTY text", () => {
     expect(
       summarizePtyAction({
         kind: "write_text",
@@ -50,19 +50,17 @@ describe("terminal observation helpers", () => {
     });
   });
 
-  it("keeps receiver done metadata without payload content", () => {
+  it("summarizes prompt events without payload metadata", () => {
     expect(
       summarizeTerminalEvent({
-        kind: "receiver_done",
-        receiverId: "rx-1",
-        bytes: 1024,
-        sha256: "hash",
+        kind: "prompt",
+        returnCode: 0,
+        cwd: "/repo",
+        promptSeq: 2,
+        promptNonce: "nonce",
       }),
     ).toEqual({
-      kind: "receiver_done",
-      receiverId: "rx-1",
-      bytes: 1024,
-      sha256: "hash",
+      kind: "prompt",
     });
   });
 

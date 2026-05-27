@@ -108,11 +108,11 @@ function makeRejectedPtyObservation(): PtyObservation {
   };
 }
 
-function makeReceiverWriteRequest(): ToolRequest {
+function makeLargeWriteRequest(): ToolRequest {
   return {
     kind: "pty_action",
     toolName: "bash",
-    toolCallId: "tc-frame",
+    toolCallId: "tc-large",
     action: {
       kind: "write_text",
       expectedOwnerRevision: 4,
@@ -121,18 +121,16 @@ function makeReceiverWriteRequest(): ToolRequest {
   };
 }
 
-function makeReceiverWriteObservation(): PtyObservation {
+function makeLargeWriteObservation(): PtyObservation {
   return {
     session: "default",
     owner: {
-      kind: "receiver",
+      kind: "shell",
       revision: 5,
-      receiverId: "rx-1",
-      commandLine: "receiver start",
-      mode: "base64",
-      nextSeq: 1,
-      bytesReceived: 5,
-      maxFrameBytes: 4096,
+      cwd: "/repo",
+      promptSeq: 2,
+      lastReturnCode: 0,
+      promptNonce: "nonce",
     },
     action: {
       kind: "write_text",
@@ -141,7 +139,7 @@ function makeReceiverWriteObservation(): PtyObservation {
       redacted: true,
     },
     result: "ok",
-    events: [{ kind: "receiver_ack", receiverId: "rx-1", seq: 0, bytes: 5 }],
+    events: [{ kind: "prompt" }],
   };
 }
 
@@ -656,13 +654,13 @@ describe("ViewModelBuilder", () => {
     expect(frame.summary).toContain("Terminal owner is unknown.");
   });
 
-  it("tool_execution_finished with receiver stdin write redacts payload detail", () => {
+  it("tool_execution_finished with large write_text redacts payload detail", () => {
     const b = builderWithRunStarted();
     b.applyEvent({
       type: "tool_execution_finished",
       stepIndex: 0,
-      request: makeReceiverWriteRequest(),
-      observation: makeReceiverWriteObservation(),
+      request: makeLargeWriteRequest(),
+      observation: makeLargeWriteObservation(),
       timestamp: LATER,
     });
 
@@ -670,7 +668,7 @@ describe("ViewModelBuilder", () => {
     const frame = vm.loop[vm.loop.length - 1];
     expect(frame.phase).toBe("tool");
     expect(frame.status).toBe("ok");
-    expect(frame.summary).toContain("owner=receiver#5");
+    expect(frame.summary).toContain("owner=shell#5");
     expect(frame.summary).toContain("bytes=513");
     expect(frame.summary).toContain("redacted=true");
     expect(frame.detail).toContain("[redacted write_text payload 513 bytes]");
