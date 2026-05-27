@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { Readable } from "node:stream";
 import { ImCliTransport } from "../src/im/transport.js";
 import { runIm } from "../src/cli/im.js";
 
@@ -226,6 +227,26 @@ describe("runIm CLI", () => {
 
     const outboxPath = path.join(stateDir, "im", "default.outbox.jsonl");
     expect(fs.existsSync(outboxPath)).toBe(true);
+  });
+
+  it("send reads multiline agent message with --text-stdin", async () => {
+    const stateDir = createStateDir();
+    const text = "## report\n\n- `cli/` stays literal\n- done\n";
+
+    captureStdout();
+    await runIm(
+      ["send", "--channel", "default", "--kind", "status", "--text-stdin", "--state-dir", stateDir, "--json"],
+      { stdin: Readable.from([text]) },
+    );
+    restoreStdout();
+
+    const sendResult = JSON.parse(captured.join(""));
+    expect(sendResult.ok).toBe(true);
+
+    const outboxPath = path.join(stateDir, "im", "default.outbox.jsonl");
+    const messages = fs.readFileSync(outboxPath, "utf-8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(messages).toHaveLength(1);
+    expect(messages[0].text).toBe(text);
   });
 
   it("post rejects reserved agent sender labels", async () => {

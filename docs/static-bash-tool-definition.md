@@ -56,11 +56,23 @@ Important semantics:
 
 ## Large Payloads
 
-Short IM replies should be sent with the IM CLI through the PTY, for example:
+Short single-line IM replies should be sent with the IM CLI through the PTY, for example:
 
 ```bash
-node dist/cli/main.js im send --channel default --kind status --text "Done"
+node dist/cli/main.js im send --channel default --kind status --text 'Done'
 ```
+
+Multiline or Markdown IM replies should use stdin so shell quoting, backticks, pipes, and `$` do not rewrite the message:
+
+```bash
+node dist/cli/main.js im send --channel default --kind status --text-stdin <<'EOF'
+## Report
+
+- `cli/` stays literal.
+EOF
+```
+
+After sending an IM reply, poll until the shell prompt returns and the command output indicates success before choosing `io_wait`.
 
 Generated text files and code can use shell heredocs or small scripts through `write_text` when the content is small and simple. Do not put a large generated file in a shell heredoc or script string literal. For large generated text/code, prefer a foreground stdin consumer so the payload does not go through shell parsing:
 

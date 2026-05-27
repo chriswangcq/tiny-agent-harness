@@ -51,6 +51,9 @@ Recommended command shape:
 ```bash
 im recv --channel default --cursor <cursor> --json
 im send --channel default --kind status --text "Working..."
+im send --channel default --kind status --text-stdin <<'EOF'
+Multiline Markdown reply with `literal backticks`.
+EOF
 im ack --channel default --message-id <id>
 ```
 

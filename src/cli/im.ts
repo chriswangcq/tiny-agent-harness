@@ -1,6 +1,8 @@
 import * as crypto from "node:crypto";
 import { ImCliTransport } from "../im/transport.js";
 
+type StdinSource = AsyncIterable<string | Buffer | Uint8Array>;
+
 function die(message: string, errorCode = "IM_ERROR"): never {
   process.stderr.write(JSON.stringify({ ok: false, errorCode, error: message }) + "\n");
   process.exit(1);
@@ -52,11 +54,15 @@ function flatten(data: unknown, prefix = ""): string[] {
   return [prefix ? `${prefix}=${String(data)}` : String(data)];
 }
 
-export async function runIm(argv: string[]): Promise<void> {
+export async function runIm(
+  argv: string[],
+  options: { stdin?: StdinSource } = {},
+): Promise<void> {
   const subcommand = argv[0];
   const rest = argv.slice(1);
   const jsonMode = hasFlag(rest, "json");
-  const { flags } = parseArgs(rest.filter((a) => a !== "--json"));
+  const textStdin = hasFlag(rest, "text-stdin");
+  const { flags } = parseArgs(rest.filter((a) => a !== "--json" && a !== "--text-stdin"));
 
   const stateDir = flags["state-dir"];
   const baseDir = stateDir
@@ -73,7 +79,13 @@ export async function runIm(argv: string[]): Promise<void> {
       await cmdRecv(transport, flags, jsonMode);
       break;
     case "send":
-      await cmdSend(transport, flags, jsonMode);
+      await cmdSend(
+        transport,
+        flags,
+        jsonMode,
+        textStdin,
+        options.stdin ?? (process.stdin as unknown as StdinSource),
+      );
       break;
     case "ack":
       await cmdAck(transport, flags, jsonMode);
@@ -86,7 +98,7 @@ export async function runIm(argv: string[]): Promise<void> {
         "Usage: im <post|recv|send|ack|listen> [options]\n" +
           "  im post --channel <ch> --text <text> [--from <user-label>] [--json]\n" +
           "  im recv --channel <ch> [--cursor <cursor>] [--json]\n" +
-          "  im send --channel <ch> --kind <status|error> --text <text> [--run-id <id>] [--json]\n" +
+          "  im send --channel <ch> --kind <status|error> (--text <text>|--text-stdin) [--run-id <id>] [--json]\n" +
           "  im ack --channel <ch> --message-id <id> [--json]\n" +
           "  im listen --channel <ch> [--cursor <cursor>] [--json]",
       );
@@ -157,12 +169,17 @@ async function cmdSend(
   transport: ImCliTransport,
   flags: Record<string, string>,
   json: boolean,
+  textStdin: boolean,
+  stdin: StdinSource,
 ): Promise<void> {
   const channel = flags["channel"];
   const kind = flags["kind"] as "status" | "error" | undefined;
-  const text = flags["text"];
-  if (!channel || !kind || !text) {
-    die("im send requires --channel, --kind, and --text");
+  if (flags["text"] !== undefined && textStdin) {
+    die("im send accepts either --text or --text-stdin, not both");
+  }
+  const text = flags["text"] ?? (textStdin ? await readStdinText(stdin) : undefined);
+  if (!channel || !kind || text === undefined || text.length === 0) {
+    die("im send requires --channel, --kind, and --text or --text-stdin");
   }
   if (!["status", "error"].includes(kind)) {
     die("--kind must be one of: status, error");
@@ -182,6 +199,14 @@ async function cmdSend(
   await transport.send(message);
 
   output({ ok: true, id, channel, kind }, json);
+}
+
+async function readStdinText(stdin: StdinSource): Promise<string> {
+  let text = "";
+  for await (const chunk of stdin) {
+    text += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+  }
+  return text;
 }
 
 async function cmdAck(

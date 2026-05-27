@@ -17,6 +17,7 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).not.toContain(["end", "_input"].join(""));
     expect(prompt.messages[0]!.content).not.toContain(["rece", "iver"].join(""));
     expect(prompt.messages[0]!.content).toContain("im send --channel");
+    expect(prompt.messages[0]!.content).toContain("--text-stdin");
     expect(prompt.messages[0]!.content).toContain("Large write_text payloads are allowed");
     expect(prompt.messages[0]!.content).toContain("cat > path");
     expect(prompt.messages[0]!.content).toContain("terminal.inputSeq");

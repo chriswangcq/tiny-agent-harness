@@ -260,6 +260,21 @@ export class RunOrchestrator {
       }
 
       if (effect.type === "wait_io") {
+        const unsettledMessage = pendingImSendMessage(this.history);
+        if (unsettledMessage !== undefined) {
+          await this.record({
+            type: "observation_appended",
+            stepIndex: this.state.data.stepIndex,
+            observation: {
+              kind: "io_wait",
+              message: unsettledMessage,
+              recoverable: true,
+            },
+            timestamp: this.now(),
+          });
+          continue;
+        }
+
         await this.record({
           type: "io_wait_started",
           stepIndex: this.state.data.stepIndex,
@@ -332,4 +347,44 @@ function renderActiveSkillReminder(runs: ActiveSkillRunSummary[]): string {
     lines.push(line);
   }
   return lines.join("\n");
+}
+
+function pendingImSendMessage(history: readonly HistoryItem[]): string | undefined {
+  const latestObservation = [...history].reverse().find(
+    (entry): entry is Extract<HistoryItem, { type: "observation" }> =>
+      entry.type === "observation",
+  );
+  if (latestObservation === undefined) {
+    return undefined;
+  }
+
+  const observation = latestObservation.observation;
+  if (!isPtyObservation(observation)) {
+    return undefined;
+  }
+  if (observation.result !== "ok" || observation.action.kind !== "write_text") {
+    return undefined;
+  }
+  if (!isImSendPreview(observation.action.preview)) {
+    return undefined;
+  }
+  if (observation.events.some((event) => event.kind === "prompt")) {
+    return undefined;
+  }
+
+  return "Cannot wait for user input yet: the latest IM send write_text has not returned to a shell prompt. Poll until the command finishes and the prompt returns, then call io_wait.";
+}
+
+function isPtyObservation(value: PtyObservation | AgentObservation): value is PtyObservation {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "terminal" in value &&
+    "action" in value &&
+    "events" in value
+  );
+}
+
+function isImSendPreview(preview: string | undefined): boolean {
+  return preview !== undefined && /\bim\s+send\b/u.test(preview);
 }

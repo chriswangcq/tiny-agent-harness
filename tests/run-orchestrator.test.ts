@@ -533,6 +533,55 @@ describe("RunOrchestrator", () => {
     );
   });
 
+  it("does not enter io_wait after an IM send write that has not returned to prompt", async () => {
+    const toolCall: InternalToolCall = {
+      id: "call-im-send",
+      name: "bash",
+      arguments: {
+        kind: "write_text",
+        expectedInputSeq: 1,
+        text: "node dist/cli/main.js im send --channel default --kind status --text-stdin <<'EOF'\nreport\nEOF\n",
+      },
+    };
+    const wait: IoWaitRequest = {
+      reason: "done",
+      condition: { kind: "new_user_message", channel: "default" },
+    };
+    const terminalObservation: PtyObservation = {
+      session: "default",
+      terminal: terminal(2),
+      action: {
+        kind: "write_text",
+        preview: "node dist/cli/main.js im send --channel default --kind status --text-stdin <<'EOF'\n",
+        redacted: false,
+      },
+      result: "ok",
+      eventCount: 0,
+      events: [],
+      outputPreview: "node dist/cli/main.js im send --ch",
+    };
+    const { orchestrator, transcript, waitCalls } = makeRun({
+      outputs: [toolOutput(toolCall), ioWaitOutput(wait)],
+      maxSteps: 2,
+      terminalObservation,
+    });
+
+    await orchestrator.run();
+
+    expect(waitCalls).toEqual([]);
+    expect(readTranscript(transcript)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "observation_appended",
+          observation: expect.objectContaining({
+            kind: "io_wait",
+            message: expect.stringContaining("prompt"),
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("records consumed environment events and injects both environment reminder and skill reminder into model context", async () => {
     const envEvent: EnvironmentEvent = {
       id: "env-001",

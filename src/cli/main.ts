@@ -326,7 +326,8 @@ Usage:
 IM subcommands:
   post   --channel <ch> --text <text>          Inject user message to inbox
   recv   --channel <ch> [--cursor <id>]        Receive user messages from inbox
-  send   --channel <ch> --text <t> --kind <k>  Send agent message to outbox
+  send   --channel <ch> --text <t>|--text-stdin --kind <k>
+                                                 Send agent message to outbox
   ack    --channel <ch> --message-id <id>      Acknowledge (advance cursor)
   listen --channel <ch> [--cursor <id>]        Poll for new messages
 
