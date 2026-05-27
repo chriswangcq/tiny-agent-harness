@@ -61,6 +61,39 @@ describe("terminal marker parser", () => {
     ]);
   });
 
+  it("parses prompt markers after terminal control residue", () => {
+    const result = parseTerminalChunk({
+      promptNonce: nonce,
+      chunk: "\u0004\b\b__TAH_PROMPT__ nonce=nonce-1 rc=0 cwd=%2Frepo seq=3\n",
+    });
+
+    expect(result.events).toEqual([
+      {
+        kind: "prompt",
+        returnCode: 0,
+        cwd: "/repo",
+        promptSeq: 3,
+        promptNonce: nonce,
+      },
+    ]);
+  });
+
+  it("does not parse markers hidden behind ordinary output text", () => {
+    const line = "user output __TAH_PROMPT__ nonce=nonce-1 rc=0 cwd=%2Frepo seq=3";
+    const result = parseTerminalChunk({
+      promptNonce: nonce,
+      chunk: `${line}\n`,
+    });
+
+    expect(result.events).toEqual([
+      {
+        kind: "output",
+        bytes: Buffer.byteLength(line, "utf8"),
+        preview: line,
+      },
+    ]);
+  });
+
   it("preserves incomplete trailing chunks", () => {
     const first = parseTerminalChunk({
       promptNonce: nonce,

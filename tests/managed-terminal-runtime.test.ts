@@ -50,6 +50,7 @@ afterEach(() => {
 
 function makeRuntime(options: {
   postWriteReadDelayMs?: number;
+  startupReadDelayMs?: number;
 } = {}): ManagedTerminalRuntime {
   return new ManagedTerminalRuntime({
     defaultSessionId: "default",
@@ -61,6 +62,7 @@ function makeRuntime(options: {
       maxEvents: 50,
     },
     postWriteReadDelayMs: options.postWriteReadDelayMs ?? 0,
+    startupReadDelayMs: options.startupReadDelayMs ?? 0,
     nowIso: () => "2026-05-27T00:00:00.000Z",
     monotonicMs: () => 1,
     newId: (prefix) => `${prefix}-1`,
@@ -104,6 +106,41 @@ describe("ManagedTerminalRuntime", () => {
       },
       events: [{ kind: "prompt" }],
     });
+  });
+
+  it("drains managed shell startup output before the first observation", async () => {
+    const port = makeRuntime({ startupReadDelayMs: 20 }).createRunPort();
+
+    const pending = port.execute({ action: { kind: "status" } });
+    setTimeout(() => {
+      ptyMock.spawned[0]?.emit(
+        [
+          "export TAH_PROMPT_NONCE='nonce'",
+          formatPromptMarker({
+            nonce: "nonce",
+            returnCode: 0,
+            cwd: "/repo",
+            promptSeq: 1,
+          }),
+          "",
+        ].join("\n"),
+      );
+    }, 5);
+
+    const observation = await pending;
+
+    expect(observation).toMatchObject({
+      result: "ok",
+      terminal: {
+        inputSeq: 1,
+        lastShellPrompt: {
+          cwd: "/repo",
+          promptSeq: 1,
+        },
+      },
+      events: [],
+    });
+    expect(observation.outputPreview).toBeUndefined();
   });
 
   it("writes write_text input through the managed PTY", async () => {

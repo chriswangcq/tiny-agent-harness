@@ -11,6 +11,7 @@ import { ManagedPtySession } from "./managed-session.js";
 
 const PTY_WRITE_CHUNK_BYTES = 1024;
 const DEFAULT_POST_WRITE_READ_DELAY_MS = 100;
+const DEFAULT_STARTUP_READ_DELAY_MS = 100;
 
 export type ManagedTerminalRuntimeOptions = {
   defaultSessionId: string;
@@ -22,6 +23,7 @@ export type ManagedTerminalRuntimeOptions = {
   actionLimits: PtyActionLimits;
   observationLimits: TerminalObservationLimits;
   postWriteReadDelayMs?: number;
+  startupReadDelayMs?: number;
   nowIso?: () => string;
   monotonicMs?: () => number;
   newId?: (prefix: string) => string;
@@ -31,6 +33,7 @@ export type ManagedTerminalRuntimeOptions = {
 type RuntimeSession = {
   pty: ManagedPtySession;
   snapshot: TerminalRuntimeSnapshot;
+  startupDrained: boolean;
 };
 
 export class ManagedTerminalRuntime {
@@ -60,7 +63,9 @@ export class ManagedTerminalRuntime {
       },
       pty: {
         write: async (session, data) => {
-          const pty = this.ensureSession(session).pty;
+          const entry = this.ensureSession(session);
+          await this.drainStartup(entry);
+          const pty = entry.pty;
           for (const chunk of chunkTextByUtf8Bytes(data, PTY_WRITE_CHUNK_BYTES)) {
             pty.write(chunk);
             await yieldToPty();
@@ -69,6 +74,7 @@ export class ManagedTerminalRuntime {
         },
         read: async (session, cursor) => {
           const entry = this.ensureSession(session);
+          await this.drainStartup(entry);
           const start = parseCursor(cursor);
           const output = entry.pty.readOutputSince(start);
           return {
@@ -89,11 +95,16 @@ export class ManagedTerminalRuntime {
         },
         restart: async (session, options) => {
           const restarted = this.restartSession(session, options?.cwd);
+          await this.drainStartup(restarted);
           return cloneSnapshot(restarted.snapshot);
         },
       },
       sessions: {
-        load: async (session) => cloneSnapshot(this.ensureSession(session).snapshot),
+        load: async (session) => {
+          const entry = this.ensureSession(session);
+          await this.drainStartup(entry);
+          return cloneSnapshot(entry.snapshot);
+        },
         save: async (snapshot) => {
           const entry = this.ensureSession(snapshot.session);
           entry.snapshot = cloneSnapshot(snapshot);
@@ -130,9 +141,25 @@ export class ManagedTerminalRuntime {
     const entry: RuntimeSession = {
       pty,
       snapshot: cloneSnapshot(pty.snapshot),
+      startupDrained: false,
     };
     this.sessions.set(session, entry);
     return entry;
+  }
+
+  private async drainStartup(entry: RuntimeSession): Promise<void> {
+    if (entry.startupDrained) {
+      return;
+    }
+
+    await waitUntil(
+      () => hasObservedStartupPrompt(entry.pty.snapshot),
+      this.options.startupReadDelayMs ?? DEFAULT_STARTUP_READ_DELAY_MS,
+    );
+    if (hasObservedStartupPrompt(entry.pty.snapshot)) {
+      entry.snapshot = cloneSnapshot(entry.pty.snapshot);
+    }
+    entry.startupDrained = true;
   }
 }
 
@@ -173,6 +200,27 @@ function delay(ms: number): Promise<void> {
     return Promise.resolve();
   }
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitUntil(condition: () => boolean, timeoutMs: number): Promise<void> {
+  if (condition() || timeoutMs <= 0) {
+    return;
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await delay(Math.min(5, deadline - Date.now()));
+    if (condition()) {
+      return;
+    }
+  }
+}
+
+function hasObservedStartupPrompt(snapshot: TerminalRuntimeSnapshot): boolean {
+  return (
+    snapshot.parserState.totalBytes > 0 &&
+    snapshot.terminal.lastShellPrompt?.lastReturnCode !== null
+  );
 }
 
 function parseCursor(cursor: string | undefined): number {

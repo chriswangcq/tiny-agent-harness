@@ -37,7 +37,7 @@ export function parseTerminalChunk(input: ParseTerminalChunkInput): ParseTermina
   const combined = `${previous.pending}${input.chunk}`;
   const totalBytes = previous.totalBytes + utf8Bytes(input.chunk);
   const { completeLines, pending } = splitCompleteLines(combined);
-  const events = completeLines.map((line) =>
+  const events = completeLines.flatMap((line) =>
     parseLine(line, input.promptNonce, markers),
   );
 
@@ -51,56 +51,81 @@ function parseLine(
   rawLine: string,
   promptNonce: string,
   markers: TerminalMarkers,
-): TerminalEvent {
+): TerminalEvent[] {
   const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+  const promptLine = markerLine(line, markers.prompt);
 
-  if (line.startsWith(markers.prompt)) {
-    const fields = parseFields(line, markers.prompt);
+  if (promptLine !== undefined) {
+    const fields = parseFields(promptLine, markers.prompt);
     if (!hasTrustedNonce(fields, promptNonce)) {
-      return unsynced("prompt_spoof_suspected");
+      return [unsynced("prompt_spoof_suspected")];
     }
 
     const returnCode = parseInteger(fields.rc);
     const promptSeq = parseInteger(fields.seq);
     const cwd = fields.cwd === undefined ? undefined : decodeField(fields.cwd);
     if (returnCode === undefined || promptSeq === undefined || cwd === undefined) {
-      return unsynced("unparsed_output");
+      return [unsynced("unparsed_output")];
     }
 
-    return {
+    return [{
       kind: "prompt",
       returnCode,
       cwd,
       promptSeq,
       promptNonce,
-    };
+    }];
   }
+  const continuationLine = markerLine(line, markers.continuation);
 
-  if (line.startsWith(markers.continuation)) {
-    const fields = parseFields(line, markers.continuation);
+  if (continuationLine !== undefined) {
+    const fields = parseFields(continuationLine, markers.continuation);
     if (!hasTrustedNonce(fields, promptNonce)) {
-      return unsynced("prompt_spoof_suspected");
+      return [unsynced("prompt_spoof_suspected")];
     }
 
     const promptSeq = parseInteger(fields.seq);
     const reason = parseContinuationReason(fields.reason);
     if (promptSeq === undefined || reason === undefined) {
-      return unsynced("unparsed_output");
+      return [unsynced("unparsed_output")];
     }
 
-    return {
+    return [{
       kind: "continuation_prompt",
       reason,
       promptSeq,
       promptNonce,
-    };
+    }];
   }
 
-  return {
+  return [{
     kind: "output",
     bytes: utf8Bytes(line),
     preview: line,
-  };
+  }];
+}
+
+function markerLine(line: string, marker: string): string | undefined {
+  if (line.startsWith(marker)) {
+    return line;
+  }
+
+  const index = line.indexOf(marker);
+  if (index <= 0) {
+    return undefined;
+  }
+
+  const prefix = line.slice(0, index);
+  return isIgnorableMarkerPrefix(prefix) ? line.slice(index) : undefined;
+}
+
+function isIgnorableMarkerPrefix(prefix: string): boolean {
+  const normalized = prefix
+    .replace(/\x1B\[[0-?]*[ -/]*[@-~]/gu, "")
+    .replace(/[\u0000-\u001F\u007F]/gu, "")
+    .replace(/\^(?:C|D)/gu, "")
+    .trim();
+  return normalized.length === 0;
 }
 
 function parseFields(line: string, marker: string): Record<string, string> {
