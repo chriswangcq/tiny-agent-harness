@@ -318,7 +318,7 @@ Usage:
   tiny-agent tui --run <runId|latest>                 Attach TUI to existing run
   tiny-agent im  <subcommand> [options]               IM message operations
   tiny-agent skill <subcommand> [options]             Skill management
-  tiny-agent receiver <subcommand> [options]          PTY receiver payload frames
+  tiny-agent receiver <subcommand> [options]          PTY stdin receiver for large payloads
   tiny-agent --help                                   Show this help
 
 IM subcommands:
@@ -340,8 +340,8 @@ Skill subcommands:
 Receiver subcommands:
   start  --target file --path <path> --nonce <n> --max-frame-bytes <n>
   start  --target im --channel <ch> --kind <status|error> --nonce <n> --max-frame-bytes <n>
-  frame  --id <id> --seq <n> --data-base64 <b64>
-  end    --id <id> --frames <n> --bytes <n> --sha256 <hash>
+  After start, write one base64 frame per stdin line, then:
+  __TAH_RECEIVER_END__ frames=<n> bytes=<n> sha256=<hash>
 
 Environment variables:
   DEEPSEEK_API_KEY   (required) API key for DeepSeek
@@ -349,7 +349,7 @@ Environment variables:
   MODEL_NAME         Model name (default: deepseek-v4-pro)
   TAH_IM_CHANNEL     Default IM channel (default: "default")
 
-All flags accept --json for machine-readable output and --state-dir to override .tiny-agent location.
+Most CLI subcommands accept --json for machine-readable output; receiver start is a PTY marker protocol and does not support --json. Use --state-dir to override .tiny-agent location.
 `;
 
 async function main(): Promise<void> {

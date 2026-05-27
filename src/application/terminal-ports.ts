@@ -1,7 +1,6 @@
 import type { ParserState } from "../terminal/parser.js";
 import type {
   LogRef,
-  PayloadRef,
   PtyAction,
   PtyObservation,
   TerminalOwner,
@@ -27,24 +26,6 @@ export type PtyReadResult = {
   chunk: string;
   cursor?: string;
   logRef?: LogRef;
-};
-
-export type PayloadMeta = {
-  session: string;
-  receiverId?: string;
-  kind: "terminal-frame" | "terminal-output" | "receiver-target";
-  bytes: number;
-  sha256?: string;
-};
-
-export type PayloadTarget =
-  | { kind: "im"; channel: string }
-  | { kind: "file"; path: string }
-  | { kind: "temp"; name: string };
-
-export type PayloadCommitResult = {
-  ref: PayloadRef;
-  target: PayloadTarget;
 };
 
 export type StructuredLogEvent = {
@@ -81,11 +62,6 @@ export interface TerminalSessionStore {
   save(snapshot: TerminalRuntimeSnapshot): Promise<void>;
 }
 
-export interface PayloadStore {
-  put(bytes: Uint8Array, meta: PayloadMeta): Promise<PayloadRef>;
-  commit(ref: PayloadRef, target: PayloadTarget): Promise<PayloadCommitResult>;
-}
-
 export interface TerminalLogger {
   event(event: StructuredLogEvent): void;
 }
@@ -95,6 +71,5 @@ export type TerminalServicePorts = {
   ids: TerminalIdGenerator;
   pty: PtyPort;
   sessions: TerminalSessionStore;
-  payloads: PayloadStore;
   logger: TerminalLogger;
 };

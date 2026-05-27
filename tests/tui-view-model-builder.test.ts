@@ -108,27 +108,25 @@ function makeRejectedPtyObservation(): PtyObservation {
   };
 }
 
-function makeReceiverFrameRequest(): ToolRequest {
+function makeReceiverWriteRequest(): ToolRequest {
   return {
     kind: "pty_action",
     toolName: "bash",
     toolCallId: "tc-frame",
     action: {
-      kind: "input_frame",
+      kind: "write_text",
       expectedOwnerRevision: 4,
-      receiverId: "rx-1",
-      seq: 0,
-      dataBase64: "aGVsbG8=",
+      text: `${"a".repeat(512)}\n`,
     },
   };
 }
 
-function makeReceiverFrameObservation(): PtyObservation {
+function makeReceiverWriteObservation(): PtyObservation {
   return {
     session: "default",
     owner: {
       kind: "receiver",
-      revision: 4,
+      revision: 5,
       receiverId: "rx-1",
       commandLine: "receiver start",
       mode: "base64",
@@ -137,10 +135,9 @@ function makeReceiverFrameObservation(): PtyObservation {
       maxFrameBytes: 4096,
     },
     action: {
-      kind: "input_frame",
-      receiverId: "rx-1",
-      seq: 0,
-      bytes: 8,
+      kind: "write_text",
+      bytes: 513,
+      preview: "aaaaaaaaaa",
       redacted: true,
     },
     result: "ok",
@@ -659,13 +656,13 @@ describe("ViewModelBuilder", () => {
     expect(frame.summary).toContain("Terminal owner is unknown.");
   });
 
-  it("tool_execution_finished with receiver frame redacts frame payload detail", () => {
+  it("tool_execution_finished with receiver stdin write redacts payload detail", () => {
     const b = builderWithRunStarted();
     b.applyEvent({
       type: "tool_execution_finished",
       stepIndex: 0,
-      request: makeReceiverFrameRequest(),
-      observation: makeReceiverFrameObservation(),
+      request: makeReceiverWriteRequest(),
+      observation: makeReceiverWriteObservation(),
       timestamp: LATER,
     });
 
@@ -673,11 +670,11 @@ describe("ViewModelBuilder", () => {
     const frame = vm.loop[vm.loop.length - 1];
     expect(frame.phase).toBe("tool");
     expect(frame.status).toBe("ok");
-    expect(frame.summary).toContain("receiver=rx-1");
-    expect(frame.summary).toContain("seq=0");
+    expect(frame.summary).toContain("owner=receiver#5");
+    expect(frame.summary).toContain("bytes=513");
     expect(frame.summary).toContain("redacted=true");
-    expect(frame.detail).toContain("[redacted base64 frame 8 chars]");
-    expect(frame.detail).not.toContain("aGVsbG8=");
+    expect(frame.detail).toContain("[redacted write_text payload 513 bytes]");
+    expect(frame.detail).not.toContain("aaaaaaaaaa");
   });
 
   // 15

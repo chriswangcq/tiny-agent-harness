@@ -9,7 +9,7 @@ Skill 不是 harness 内置工具，也不是模型可见的第二套 tool regis
 第一版仍然坚持：
 
 ```text
-Model visible action surface: bash PTY actions plus receiver frames
+Model visible action surface: bash PTY actions only
 External capabilities: called as CLI commands through write_text when TerminalOwner is shell
 ```
 

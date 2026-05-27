@@ -184,75 +184,73 @@ describe("terminal action validator", () => {
     });
   });
 
-  it("accepts matching receiver frames", () => {
+  it("accepts receiver stdin text with explicit newline", () => {
     const result = validatePtyAction({
       owner: receiver(),
       action: {
-        kind: "input_frame",
+        kind: "write_text",
         expectedOwnerRevision: 3,
-        receiverId: "rx-1",
-        seq: 2,
-        dataBase64: "YWJj",
+        text: "YWJj\n",
       },
     });
 
     expect(result).toEqual({ ok: true });
   });
 
-  it("rejects receiver frame sequence mismatches", () => {
+  it("accepts terminal keys while receiver owns the foreground PTY", () => {
     const result = validatePtyAction({
       owner: receiver(),
       action: {
-        kind: "input_frame",
+        kind: "key",
         expectedOwnerRevision: 3,
-        receiverId: "rx-1",
-        seq: 1,
-        dataBase64: "YWJj",
+        key: "enter",
       },
     });
 
-    expect(result).toMatchObject({
-      ok: false,
-      code: "RECEIVER_SEQ_MISMATCH",
-    });
+    expect(result).toEqual({ ok: true });
   });
 
-  it("rejects receiver id mismatches", () => {
-    const result = validatePtyAction({
-      owner: receiver(),
-      action: {
-        kind: "end_input",
-        expectedOwnerRevision: 3,
-        receiverId: "rx-2",
-        frames: 2,
-        bytes: 12,
-        sha256: "hash",
-      },
+  it("rejects receiver stdin writes that are not one base64 line", () => {
+    expect(
+      validatePtyAction({
+        owner: receiver(),
+        action: {
+          kind: "write_text",
+          expectedOwnerRevision: 3,
+          text: "pwd\n",
+        },
+      }),
+    ).toMatchObject({
+      ok: false,
+      code: "RECEIVER_INVALID_BASE64",
     });
 
-    expect(result).toMatchObject({
+    expect(
+      validatePtyAction({
+        owner: receiver(),
+        action: {
+          kind: "write_text",
+          expectedOwnerRevision: 3,
+          text: "YQ==\nYg==\n",
+        },
+      }),
+    ).toMatchObject({
       ok: false,
       code: "OWNER_REJECTED",
     });
   });
 
-  it("rejects oversized receiver frames", () => {
+  it("accepts receiver end marker lines", () => {
     const result = validatePtyAction({
       owner: receiver(),
-      limits: { maxFrameBytes: 4 },
       action: {
-        kind: "input_frame",
+        kind: "write_text",
         expectedOwnerRevision: 3,
-        receiverId: "rx-1",
-        seq: 2,
-        dataBase64: "YWJjZA==",
+        text: "__TAH_RECEIVER_END__ frames=2 bytes=12 sha256=hash\n",
       },
     });
 
-    expect(result).toMatchObject({
-      ok: false,
-      code: "RECEIVER_FRAME_TOO_LARGE",
-    });
+    expect(result).toEqual({ ok: true });
   });
 
   it("exposes conservative default limits", () => {

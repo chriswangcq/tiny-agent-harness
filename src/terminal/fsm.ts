@@ -47,8 +47,9 @@ export function transitionOwner(
 ): OwnerTransition {
   switch (event.kind) {
     case "output":
-    case "receiver_ack":
       return { owner, changed: false };
+    case "receiver_ack":
+      return toReceiverAck(owner, event);
     case "prompt":
       return toOwner(owner, {
         kind: "shell",
@@ -92,6 +93,22 @@ export function transitionOwner(
         reason: event.reason,
       });
   }
+}
+
+function toReceiverAck(
+  owner: TerminalOwner,
+  event: Extract<TerminalEvent, { kind: "receiver_ack" }>,
+): OwnerTransition {
+  if (owner.kind !== "receiver" || owner.receiverId !== event.receiverId) {
+    return { owner, changed: false };
+  }
+
+  return toOwner(owner, {
+    ...owner,
+    revision: nextOwnerRevision(owner),
+    nextSeq: event.seq + 1,
+    bytesReceived: event.bytes,
+  });
 }
 
 export function transitionOwnerMany(

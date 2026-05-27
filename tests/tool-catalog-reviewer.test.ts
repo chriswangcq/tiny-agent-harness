@@ -24,7 +24,8 @@ describe("static tool catalog", () => {
     expect(STATIC_TOOL_CATALOG[0]).toBe(BASH_TOOL_DEFINITION);
     expect(BASH_TOOL_DEFINITION.name).toBe("bash");
     expect(BASH_TOOL_DEFINITION.description).toContain("owner/revision-guarded");
-    expect(BASH_TOOL_DEFINITION.description).toContain("receiver input_frame/end_input");
+    expect(BASH_TOOL_DEFINITION.description).toContain("pure PTY interface");
+    expect(BASH_TOOL_DEFINITION.description).toContain("receiver program");
   });
 
   it("documents PTY actions in the bash input schema", () => {
@@ -33,8 +34,6 @@ describe("static tool catalog", () => {
     expect(schema.oneOf?.map((variant) => variant.title)).toEqual([
       "PtyWriteTextAction",
       "PtyKeyAction",
-      "PtyInputFrameAction",
-      "PtyEndInputAction",
       "PtyPollAction",
       "PtyStatusAction",
       "PtyInterruptAction",
@@ -52,19 +51,11 @@ describe("static tool catalog", () => {
     const writeText = schema.oneOf?.find(
       (variant) => variant.title === "PtyWriteTextAction",
     );
-    const inputFrame = schema.oneOf?.find(
-      (variant) => variant.title === "PtyInputFrameAction",
-    );
 
     expect(writeText?.required).toEqual(["kind", "expectedOwnerRevision", "text"]);
     expect(writeText?.properties?.kind).toEqual({ const: "write_text" });
-    expect(inputFrame?.required).toEqual([
-      "kind",
-      "expectedOwnerRevision",
-      "receiverId",
-      "seq",
-      "dataBase64",
-    ]);
+    expect(schema.oneOf?.some((variant) => variant.title === "PtyInputFrameAction")).toBe(false);
+    expect(schema.oneOf?.some((variant) => variant.title === "PtyEndInputAction")).toBe(false);
   });
 
   it("does not expose command or control variants as schema titles", () => {
@@ -73,6 +64,8 @@ describe("static tool catalog", () => {
 
     expect(serialized).not.toContain("BashCommandInput");
     expect(serialized).not.toContain("UnsupportedControlPayload");
+    expect(serialized).not.toContain("input_frame");
+    expect(serialized).not.toContain("end_input");
   });
 });
 

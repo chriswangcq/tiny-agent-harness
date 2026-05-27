@@ -47,37 +47,6 @@ const BashToolInputSchema: JsonSchema = {
       additionalProperties: false,
     },
     {
-      title: "PtyInputFrameAction",
-      required: ["kind", "expectedOwnerRevision", "receiverId", "seq", "dataBase64"],
-      properties: {
-        kind: { const: "input_frame" },
-        session: SessionProperty,
-        expectedOwnerRevision: ExpectedOwnerRevisionProperty,
-        receiverId: { type: "string" },
-        seq: { type: "number" },
-        dataBase64: {
-          type: "string",
-          description:
-            "One base64 frame for the active receiver. Do not put decoded payload bytes in the tool call.",
-        },
-      },
-      additionalProperties: false,
-    },
-    {
-      title: "PtyEndInputAction",
-      required: ["kind", "expectedOwnerRevision", "receiverId", "frames", "bytes", "sha256"],
-      properties: {
-        kind: { const: "end_input" },
-        session: SessionProperty,
-        expectedOwnerRevision: ExpectedOwnerRevisionProperty,
-        receiverId: { type: "string" },
-        frames: { type: "number" },
-        bytes: { type: "number" },
-        sha256: { type: "string" },
-      },
-      additionalProperties: false,
-    },
-    {
       title: "PtyPollAction",
       required: ["kind"],
       properties: {
@@ -136,10 +105,12 @@ export const BASH_TOOL_DEFINITION: ToolDefinition = {
   name: "bash",
   description:
     "Operate a persistent PTY session with owner/revision-guarded actions. " +
-    "Use write_text to write exact text bytes, including explicit newlines when desired. " +
-    "Use key for terminal keys. " +
-    "Use receiver input_frame/end_input for large files, IM replies, generated code, or other multi-KB payloads. " +
-    "Use poll/status/interrupt/terminate/restart to observe or recover terminal state.",
+    "This is a pure PTY interface: write_text writes exact bytes to the current foreground terminal owner and never appends Enter for you; include \\n explicitly or use key enter. " +
+    "Use key only for terminal keys such as enter, ctrl-c, ctrl-d, escape, tab, up, and down. " +
+    "Use poll/status to observe and interrupt/terminate/restart to recover. " +
+    "For large generated files or long IM replies, start the in-terminal receiver program with write_text, for example `node dist/cli/main.js receiver start --target file --path <path> --nonce <owner.promptNonce> --max-frame-bytes 4000 --sha256 <hash>\\n` or `node dist/cli/main.js receiver start --target im --channel <channel> --kind status --nonce <owner.promptNonce> --max-frame-bytes 4000 --sha256 <hash>\\n`. " +
+    "After owner.kind becomes receiver, feed one base64 frame line per write_text, each ending in \\n and below the PTY small-input limit; finish with `__TAH_RECEIVER_END__ frames=<n> bytes=<n> sha256=<hash>\\n`. " +
+    "Do not call non-PTY payload actions; the only bytes you can send are PTY bytes.",
   inputSchema: BashToolInputSchema,
 };
 

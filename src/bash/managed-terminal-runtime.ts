@@ -1,14 +1,10 @@
 import { TerminalService } from "../application/terminal-service.js";
 import { createTerminalRunPort } from "../application/terminal-run-port.js";
 import type {
-  PayloadCommitResult,
-  PayloadMeta,
-  PayloadTarget,
   TerminalRuntimeSnapshot,
   TerminalServicePorts,
 } from "../application/terminal-ports.js";
 import type { TerminalPort } from "../run/orchestrator.js";
-import type { PayloadRef } from "../terminal/types.js";
 import type { PtyActionLimits } from "../terminal/validator.js";
 import type { TerminalObservationLimits } from "../terminal/observation.js";
 import { ManagedPtySession } from "./managed-session.js";
@@ -35,11 +31,6 @@ type RuntimeSession = {
 
 export class ManagedTerminalRuntime {
   private readonly sessions = new Map<string, RuntimeSession>();
-  private readonly payloadRef: PayloadRef = {
-    kind: "payload",
-    ref: "managed-terminal-runtime",
-    bytes: 0,
-  };
 
   constructor(private readonly options: ManagedTerminalRuntimeOptions) {}
 
@@ -98,18 +89,6 @@ export class ManagedTerminalRuntime {
           const entry = this.ensureSession(snapshot.session);
           entry.snapshot = cloneSnapshot(snapshot);
         },
-      },
-      payloads: {
-        put: async (_bytes: Uint8Array, meta: PayloadMeta): Promise<PayloadRef> => ({
-          ...this.payloadRef,
-          ref: `managed-terminal-runtime://${meta.session}/${meta.kind}`,
-          bytes: meta.bytes,
-          sha256: meta.sha256,
-        }),
-        commit: async (ref: PayloadRef, target: PayloadTarget): Promise<PayloadCommitResult> => ({
-          ref,
-          target,
-        }),
       },
       logger: {
         event: () => {},

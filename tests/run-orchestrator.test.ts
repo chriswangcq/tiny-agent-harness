@@ -160,7 +160,9 @@ function makeRun(options?: {
             action: {
               kind: request.action.kind,
               preview: request.action.kind === "write_text" ? request.action.text : undefined,
-              redacted: request.action.kind === "input_frame",
+              redacted:
+                request.action.kind === "write_text" &&
+                request.action.text.length > 512,
             },
             result: "ok",
             events: [],

@@ -1,10 +1,4 @@
-import type {
-  PtyAction,
-  ReceiverOwner,
-  TerminalErrorCode,
-  TerminalOwner,
-  ValidationResult,
-} from "./types.js";
+import type { PtyAction, TerminalErrorCode, TerminalOwner, ValidationResult } from "./types.js";
 
 export type PtyActionLimits = {
   maxWriteTextBytes: number;
@@ -15,10 +9,6 @@ export const DEFAULT_PTY_ACTION_LIMITS: PtyActionLimits = {
   maxWriteTextBytes: 4096,
   maxFrameBytes: 4096,
 };
-
-type ReceiverValidationResult =
-  | { ok: true; receiver: ReceiverOwner }
-  | Extract<ValidationResult, { ok: false }>;
 
 export function validatePtyAction(input: {
   action: PtyAction;
@@ -64,10 +54,6 @@ export function validatePtyAction(input: {
       return validateWriteText(owner, action.text, limits.maxWriteTextBytes);
     case "key":
       return validateKey(owner);
-    case "input_frame":
-      return validateInputFrame(owner, action.receiverId, action.seq, action.dataBase64, limits);
-    case "end_input":
-      return validateEndInput(owner, action.receiverId);
   }
 }
 
@@ -80,8 +66,12 @@ function validateWriteText(
     return reject(
       owner,
       "PAYLOAD_TOO_LARGE_FOR_ACTION",
-      "write_text exceeds the PTY small-input limit; start a receiver and send frames.",
+      "write_text exceeds the PTY small-input limit; start the receiver CLI and send smaller stdin frame lines.",
     );
+  }
+
+  if (owner.kind === "receiver") {
+    return validateReceiverWriteText(owner, text);
   }
 
   if (owner.kind === "shell" || owner.kind === "shell_continuation") {
@@ -107,8 +97,48 @@ function validateWriteText(
   );
 }
 
+function validateReceiverWriteText(
+  owner: Extract<TerminalOwner, { kind: "receiver" }>,
+  text: string,
+): ValidationResult {
+  if (!text.endsWith("\n")) {
+    return reject(
+      owner,
+      "OWNER_REJECTED",
+      "Receiver stdin writes must contain exactly one complete line ending in newline.",
+    );
+  }
+
+  const line = text.slice(0, -1);
+  if (line.includes("\n") || line.includes("\r")) {
+    return reject(
+      owner,
+      "OWNER_REJECTED",
+      "Receiver stdin writes must contain exactly one line.",
+    );
+  }
+
+  if (line.startsWith("__TAH_RECEIVER_END__")) {
+    return { ok: true };
+  }
+
+  if (line.length === 0) {
+    return reject(owner, "RECEIVER_INVALID_BASE64", "Receiver frame line is empty.");
+  }
+
+  if (utf8Bytes(line) > owner.maxFrameBytes) {
+    return reject(owner, "RECEIVER_FRAME_TOO_LARGE", "Receiver frame exceeds maxFrameBytes.");
+  }
+
+  if (!isBase64(line)) {
+    return reject(owner, "RECEIVER_INVALID_BASE64", "Receiver frame is not valid base64.");
+  }
+
+  return { ok: true };
+}
+
 function validateKey(owner: TerminalOwner): ValidationResult {
-  if (owner.kind === "shell" || owner.kind === "shell_continuation") {
+  if (owner.kind === "shell" || owner.kind === "shell_continuation" || owner.kind === "receiver") {
     return { ok: true };
   }
 
@@ -121,65 +151,6 @@ function validateKey(owner: TerminalOwner): ValidationResult {
   }
 
   return reject(owner, "OWNER_REJECTED", "Key input is not accepted by the current owner.");
-}
-
-function validateInputFrame(
-  owner: TerminalOwner,
-  receiverId: string,
-  seq: number,
-  dataBase64: string,
-  limits: PtyActionLimits,
-): ValidationResult {
-  const receiver = expectReceiver(owner, receiverId);
-  if (!receiver.ok) {
-    return receiver;
-  }
-
-  if (seq !== receiver.receiver.nextSeq) {
-    return reject(
-      owner,
-      "RECEIVER_SEQ_MISMATCH",
-      `Expected receiver frame seq ${receiver.receiver.nextSeq}, got ${seq}.`,
-    );
-  }
-
-  if (utf8Bytes(dataBase64) > limits.maxFrameBytes) {
-    return reject(owner, "RECEIVER_FRAME_TOO_LARGE", "Receiver frame exceeds maxFrameBytes.");
-  }
-
-  return { ok: true };
-}
-
-function validateEndInput(owner: TerminalOwner, receiverId: string): ValidationResult {
-  const receiver = expectReceiver(owner, receiverId);
-  if (!receiver.ok) {
-    return receiver;
-  }
-
-  return { ok: true };
-}
-
-function expectReceiver(
-  owner: TerminalOwner,
-  receiverId: string,
-): ReceiverValidationResult {
-  if (owner.kind === "unknown") {
-    return reject(owner, "TERMINAL_UNSYNCED", "Terminal owner is unknown.");
-  }
-
-  if (owner.kind !== "receiver") {
-    return reject(owner, "OWNER_REJECTED", "Current terminal owner is not a receiver.");
-  }
-
-  if (owner.receiverId !== receiverId) {
-    return reject(
-      owner,
-      "OWNER_REJECTED",
-      `Receiver id mismatch: expected ${owner.receiverId}, got ${receiverId}.`,
-    );
-  }
-
-  return { ok: true, receiver: owner };
 }
 
 function reject(
@@ -197,7 +168,7 @@ function utf8Bytes(value: string): number {
 function rejectedTextMessage(owner: TerminalOwner): string {
   switch (owner.kind) {
     case "receiver":
-      return "write_text cannot be sent while a receiver owns the terminal.";
+      return "write_text is not accepted by the current receiver.";
     case "unknown":
       return "Terminal owner is unknown; poll, interrupt, or restart before writing.";
     case "terminated":
@@ -207,4 +178,12 @@ function rejectedTextMessage(owner: TerminalOwner): string {
     case "process":
       return "write_text is not accepted by the current terminal owner.";
   }
+}
+
+function isBase64(value: string): boolean {
+  if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(value)) {
+    return false;
+  }
+  const firstPadding = value.indexOf("=");
+  return firstPadding === -1 || /^=+$/u.test(value.slice(firstPadding));
 }

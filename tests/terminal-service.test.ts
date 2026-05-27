@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { TerminalService } from "../src/application/terminal-service.js";
 import type {
-  PayloadCommitResult,
   TerminalRuntimeSnapshot,
   TerminalServiceConfig,
   TerminalServicePorts,
 } from "../src/application/terminal-ports.js";
-import type { PayloadRef, TerminalOwner } from "../src/terminal/index.js";
+import type { TerminalOwner } from "../src/terminal/index.js";
 
 function shell(revision = 1): TerminalOwner {
   return {
@@ -53,7 +52,6 @@ function makePorts(options: {
   const writes: string[] = [];
   const saves: TerminalRuntimeSnapshot[] = [];
   const logs: unknown[] = [];
-  const payloadRef: PayloadRef = { kind: "payload", ref: "payload-1", bytes: 0 };
 
   return {
     writes,
@@ -85,10 +83,6 @@ function makePorts(options: {
         save: async (snapshot) => {
           saves.push(snapshot);
         },
-      },
-      payloads: {
-        put: async () => payloadRef,
-        commit: async (ref, target): Promise<PayloadCommitResult> => ({ ref, target }),
       },
       logger: {
         event: (event) => {
@@ -153,7 +147,7 @@ describe("TerminalService", () => {
     });
   });
 
-  it("keeps receiver frame payload out of observations", async () => {
+  it("writes receiver stdin text through the PTY and advances on ack markers", async () => {
     const receiver: TerminalOwner = {
       kind: "receiver",
       revision: 4,
@@ -171,22 +165,21 @@ describe("TerminalService", () => {
     const service = new TerminalService(ports, makeConfig());
 
     const observation = await service.handleAction({
-      kind: "input_frame",
+      kind: "write_text",
       expectedOwnerRevision: 4,
-      receiverId: "rx-1",
-      seq: 0,
-      dataBase64: "aGVsbG8=",
+      text: "aGVsbG8=\n",
     });
 
     expect(writes).toEqual(["aGVsbG8=\n"]);
-    expect(observation.action).toEqual({
-      kind: "input_frame",
-      receiverId: "rx-1",
-      seq: 0,
-      bytes: 8,
-      redacted: true,
+    expect(observation.owner).toMatchObject({
+      kind: "receiver",
+      revision: 5,
+      nextSeq: 1,
+      bytesReceived: 5,
     });
-    expect(JSON.stringify(observation)).not.toContain("aGVsbG8=");
+    expect(observation.events).toEqual([
+      { kind: "receiver_ack", receiverId: "rx-1", seq: 0, bytes: 5 },
+    ]);
   });
 
   it("restarts through the PTY port and saves the fresh snapshot", async () => {

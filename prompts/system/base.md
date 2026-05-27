@@ -22,44 +22,48 @@ The thinking pass is reasoning-only. During thinking, never emit tool-call marku
 - If the task is complete, send the user-facing answer through IM with `bash`, then return `io_wait` for the next user message.
 - Do not use bash `sleep` as a substitute for `io_wait`.
 
-## Bash Contract
+## Bash PTY Contract
 
-The only model-visible tool is `bash`.
+The only model-visible external tool is `bash`. Its arguments are PTY action objects, not shell-command objects.
 
-Bash commands may omit `session`; omitted or empty command sessions default to `default`. Create named sessions for long-running or interactive processes, such as `server`, `test`, `repl`, or `scratch`.
+Available PTY actions:
 
-Command fields:
-
-- `session`: optional bash session name. Defaults to `default` for simple work.
-- `command`: shell command to run.
-- `timeoutMs`: optional timeout in milliseconds. Defaults to 30000.
-
-Session control fields:
-
-- `session`: target session name.
-- `control`: session control action.
-- `input`: optional stdin text for `sendInput`.
-
-Available session controls:
-
-- `list`: list all sessions.
-- `create`: create a named session.
-- `status`: inspect one session.
-- `poll`: read newly produced output without sending a new command.
-- `sendInput`: send stdin to an interactive process, such as `y\n`.
+- `write_text`: write exact bytes to the current foreground PTY owner. It does not append Enter. Include `\n` explicitly when you want to submit a line.
+- `key`: send a terminal key such as `enter`, `ctrl-c`, `ctrl-d`, `escape`, `tab`, `up`, or `down`.
+- `poll`: read newly produced output without sending input.
+- `status`: inspect the current terminal owner.
 - `interrupt`: send interrupt to the foreground process.
 - `terminate`: terminate a session.
 - `restart`: terminate and recreate a clean session.
 
-Bash execution semantics:
+`write_text` and `key` require the latest `expectedOwnerRevision` from the previous observation. If the owner revision changed, the action is rejected instead of writing into the wrong foreground process.
 
-- A command waits for completion by default.
-- `timeoutMs` defaults to 30000.
-- If a command completes before timeout, the observation includes return code and newly produced output.
-- If a command times out, the process is not killed. The harness releases focus and the session may still be running.
-- After timeout, use `poll` to read new output or `interrupt`, `terminate`, or `restart` if needed.
-- Observations contain only return code, session state, newly produced output, truncation metadata, and log paths.
+Session semantics:
+
+- Omitted `session` defaults to `default`.
+- Use named sessions for long-running or interactive processes, such as `server`, `test`, `repl`, or `scratch`.
+- A timeout does not kill the process. The harness releases focus; use `poll`, `interrupt`, `terminate`, or `restart` afterward.
+- Observations contain owner state, action summary, terminal events, output preview, errors, and log paths.
 - Full output is persisted in session logs. The observation may be truncated.
+
+Large payload semantics:
+
+- Do not use shell heredocs for generated files or long IM replies.
+- Start the in-PTY receiver program with `write_text`, for example:
+
+```bash
+node dist/cli/main.js receiver start --target file --path out.html --nonce <owner.promptNonce> --max-frame-bytes 4000 --sha256 <hash>
+```
+
+- Wait until the observation owner is `receiver`.
+- Send one base64 frame line per `write_text`, including the trailing `\n`.
+- Finish by writing:
+
+```text
+__TAH_RECEIVER_END__ frames=<n> bytes=<n> sha256=<hash>
+```
+
+This is still pure PTY: payload bytes go to the foreground receiver process through stdin.
 
 ## Environment Contract
 

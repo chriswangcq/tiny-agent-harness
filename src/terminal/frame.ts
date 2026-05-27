@@ -1,18 +1,23 @@
-import type {
-  PtyAction,
-  ReceiverOwner,
-  TerminalErrorCode,
-  ValidationResult,
-} from "./types.js";
+import type { ReceiverOwner, TerminalErrorCode, ValidationResult } from "./types.js";
 
 export type ReceiverFrameLimits = {
   maxFrameBytes: number;
 };
 
-export type ReceiverFrameAction = Extract<
-  PtyAction,
-  { kind: "input_frame" } | { kind: "end_input" }
->;
+export type ReceiverFrameAction =
+  | {
+      kind: "frame";
+      receiverId: string;
+      seq: number;
+      dataBase64: string;
+    }
+  | {
+      kind: "end";
+      receiverId: string;
+      frames: number;
+      bytes: number;
+      sha256: string;
+    };
 
 export type ReceiverFrameResult =
   | {
@@ -48,7 +53,7 @@ export function applyReceiverFrame(input: {
     );
   }
 
-  if (input.action.kind === "input_frame") {
+  if (input.action.kind === "frame") {
     return applyInputFrame(input.receiver, input.action, limits);
   }
 
@@ -57,7 +62,7 @@ export function applyReceiverFrame(input: {
 
 function applyInputFrame(
   receiver: ReceiverOwner,
-  action: Extract<PtyAction, { kind: "input_frame" }>,
+  action: Extract<ReceiverFrameAction, { kind: "frame" }>,
   limits: ReceiverFrameLimits,
 ): ReceiverFrameResult {
   if (action.seq !== receiver.nextSeq) {
@@ -91,7 +96,7 @@ function applyInputFrame(
 
 function applyEndInput(
   receiver: ReceiverOwner,
-  action: Extract<PtyAction, { kind: "end_input" }>,
+  action: Extract<ReceiverFrameAction, { kind: "end" }>,
 ): ReceiverFrameResult {
   if (action.frames !== receiver.nextSeq) {
     return reject(

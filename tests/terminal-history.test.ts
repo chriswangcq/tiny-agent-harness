@@ -22,8 +22,8 @@ describe("terminal compact history helper", () => {
       {
         session: "default",
         action: {
-          kind: "input_frame",
-          dataBase64: "secret-payload",
+          kind: "write_text",
+          text: `${"a".repeat(512)}\n`,
         },
         fullOutput: "full output should not survive",
         nested: {
@@ -39,8 +39,8 @@ describe("terminal compact history helper", () => {
       observation: {
         session: "default",
         action: {
-          kind: "input_frame",
-          dataBase64: "[redacted]",
+          kind: "write_text",
+          text: "[redacted write_text payload 513 bytes]",
         },
         fullOutput: "[redacted]",
         nested: {
@@ -49,7 +49,7 @@ describe("terminal compact history helper", () => {
         message: "mmmmmmmmm…",
       },
     });
-    expect(JSON.stringify(entry)).not.toContain("secret-payload");
+    expect(JSON.stringify(entry)).not.toContain("aaaaaaaaaa");
     expect(JSON.stringify(entry)).not.toContain("full output should not survive");
   });
 });

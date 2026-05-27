@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { TerminalOwner } from "../src/terminal/index.js";
 import type {
-  PayloadRef,
-  TerminalOwner,
-} from "../src/terminal/index.js";
-import type {
-  PayloadCommitResult,
   TerminalRuntimeSnapshot,
   TerminalServicePorts,
 } from "../src/application/terminal-ports.js";
@@ -28,12 +24,6 @@ describe("terminal application ports", () => {
       parserState: { pending: "", totalBytes: 0 },
     };
     const saved: TerminalRuntimeSnapshot[] = [];
-    const payloadRef: PayloadRef = {
-      kind: "payload",
-      ref: "payload-1",
-      bytes: 3,
-      sha256: "hash",
-    };
 
     const ports: TerminalServicePorts = {
       clock: {
@@ -56,10 +46,6 @@ describe("terminal application ports", () => {
           saved.push(next);
         },
       },
-      payloads: {
-        put: async () => payloadRef,
-        commit: async (ref, target): Promise<PayloadCommitResult> => ({ ref, target }),
-      },
       logger: {
         event: () => {},
       },
@@ -69,11 +55,5 @@ describe("terminal application ports", () => {
     await ports.sessions.save(snapshot);
     expect(saved).toEqual([snapshot]);
     await expect(ports.pty.read("default")).resolves.toEqual({ chunk: "hello\n" });
-    await expect(
-      ports.payloads.commit(payloadRef, { kind: "temp", name: "payload" }),
-    ).resolves.toEqual({
-      ref: payloadRef,
-      target: { kind: "temp", name: "payload" },
-    });
   });
 });

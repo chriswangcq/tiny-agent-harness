@@ -64,15 +64,13 @@ describe("ToolCallValidator PTY actions", () => {
     }
   });
 
-  it("validates receiver frame actions", () => {
+  it("validates receiver stdin writes as ordinary PTY text", () => {
     const result = new ToolCallValidator({ terminalOwner: receiver() }).validate(
       makeCall({
         arguments: {
-          kind: "input_frame",
+          kind: "write_text",
           expectedOwnerRevision: 3,
-          receiverId: "rx-1",
-          seq: 0,
-          dataBase64: Buffer.from("hello").toString("base64"),
+          text: `${Buffer.from("hello").toString("base64")}\n`,
         },
       }),
     );
@@ -81,12 +79,12 @@ describe("ToolCallValidator PTY actions", () => {
     if (result.status === "valid") {
       expect(result.request.kind).toBe("pty_action");
       if (result.request.kind === "pty_action") {
-        expect(result.request.action.kind).toBe("input_frame");
+        expect(result.request.action.kind).toBe("write_text");
       }
     }
   });
 
-  it("rejects oversized direct text with receiver-frame guidance", () => {
+  it("rejects oversized direct text with in-PTY receiver guidance", () => {
     const result = new ToolCallValidator({ actionLimits: { maxWriteTextBytes: 4 } }).validate(
       makeCall({
         arguments: {
@@ -100,7 +98,7 @@ describe("ToolCallValidator PTY actions", () => {
     expect(result.status).toBe("invalid");
     if (result.status === "invalid") {
       expect(result.observation.message).toContain("PTY small-input limit");
-      expect(result.observation.message).toContain("input_frame");
+      expect(result.observation.message).toContain("receiver CLI");
       expect(result.observation.message).not.toContain("stash_file");
     }
   });
@@ -122,24 +120,21 @@ describe("ToolCallValidator PTY actions", () => {
     }
   });
 
-  it("rejects owner/action mismatches when owner context is injected", () => {
+  it("accepts receiver stdin writes when owner context is injected", () => {
     const result = new ToolCallValidator({ terminalOwner: receiver() }).validate(
       makeCall({
         arguments: {
           kind: "write_text",
           expectedOwnerRevision: 3,
-          text: "pwd",
+          text: `${Buffer.from("pwd").toString("base64")}\n`,
         },
       }),
     );
 
-    expect(result.status).toBe("invalid");
-    if (result.status === "invalid") {
-      expect(result.observation.message).toContain("OWNER_REJECTED");
-    }
+    expect(result.status).toBe("valid");
   });
 
-  it("rejects invalid receiver frame base64", () => {
+  it("rejects removed receiver frame tool actions", () => {
     const result = new ToolCallValidator().validate(
       makeCall({
         arguments: {
@@ -147,14 +142,14 @@ describe("ToolCallValidator PTY actions", () => {
           expectedOwnerRevision: 1,
           receiverId: "rx-1",
           seq: 0,
-          dataBase64: "not base64",
+          dataBase64: Buffer.from("hello").toString("base64"),
         },
       }),
     );
 
     expect(result.status).toBe("invalid");
     if (result.status === "invalid") {
-      expect(result.observation.message).toContain("valid base64");
+      expect(result.observation.message).toContain("unknown PTY action kind");
     }
   });
 

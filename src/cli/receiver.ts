@@ -12,6 +12,23 @@ type ParsedArgs = {
   flags: Map<string, string | true>;
 };
 
+type ReceiverCliOptions = {
+  stdin?: AsyncIterable<string | Uint8Array>;
+  stdout?: ReceiverOutput;
+};
+
+type ReceiverOutput = {
+  write(chunk: string): unknown;
+};
+
+type ReceiverEnd = {
+  frames: number;
+  bytes: number;
+  sha256: string;
+};
+
+const RECEIVER_END_MARKER = "__TAH_RECEIVER_END__";
+
 export class ReceiverCliError extends Error {
   constructor(message: string) {
     super(message);
@@ -19,17 +36,25 @@ export class ReceiverCliError extends Error {
   }
 }
 
-export async function runReceiver(argv: string[]): Promise<void> {
+export async function runReceiver(
+  argv: string[],
+  options: ReceiverCliOptions = {},
+): Promise<void> {
   const parsed = parseArgs(argv);
   const subcommand = parsed.positional[0];
   const stateDir = flagValue(parsed, "state-dir");
   const baseStateDir = path.resolve(stateDir ?? ".tiny-agent");
   const json = hasFlag(parsed, "json");
+  const stdout = options.stdout ?? process.stdout;
   const store = new ReceiverStore({
     rootDir: path.join(baseStateDir, "receiver"),
   });
 
   if (subcommand === "start") {
+    if (json) {
+      throw new ReceiverCliError("receiver start is a PTY stdin protocol; --json is not supported");
+    }
+
     const result = store.start({
       receiverId: flagValue(parsed, "id"),
       promptNonce: requiredFlag(parsed, "nonce"),
@@ -43,91 +68,112 @@ export async function runReceiver(argv: string[]): Promise<void> {
       target: parseTarget(parsed),
     });
 
-    writeOutput(
-      {
-        ok: true,
-        receiverId: result.state.receiverId,
-        mode: result.state.mode,
-        maxFrameBytes: result.state.maxFrameBytes,
-        nextSeq: result.state.nextSeq,
-        bytesReceived: result.state.bytesReceived,
-        target: result.state.target,
-        readyMarker: result.readyMarker,
-      },
-      json,
-      result.readyMarker,
-    );
-    return;
-  }
-
-  if (subcommand === "frame") {
-    const receiverId = requiredFlag(parsed, "id");
-    const seq = parseNonNegativeInteger(requiredFlag(parsed, "seq"), "seq");
-    const state = store.appendFrame({
-      receiverId,
-      seq,
-      dataBase64: requiredFlag(parsed, "data-base64"),
+    writeMarker(result.readyMarker, stdout);
+    await receiveFromStdin({
+      store,
+      baseStateDir,
+      receiverId: result.state.receiverId,
+      input: options.stdin ?? process.stdin,
+      stdout,
     });
-    const ackMarker = formatReceiverAckMarker({
-      nonce: state.promptNonce,
-      receiverId: state.receiverId,
-      seq,
-      bytes: state.bytesReceived,
-    });
-
-    writeOutput(
-      {
-        ok: true,
-        receiverId: state.receiverId,
-        seq,
-        nextSeq: state.nextSeq,
-        bytesReceived: state.bytesReceived,
-        ackMarker,
-      },
-      json,
-      ackMarker,
-    );
-    return;
-  }
-
-  if (subcommand === "end") {
-    const finalized = store.finalize({
-      receiverId: requiredFlag(parsed, "id"),
-      frames: parseNonNegativeInteger(requiredFlag(parsed, "frames"), "frames"),
-      bytes: parseNonNegativeInteger(requiredFlag(parsed, "bytes"), "bytes"),
-      sha256: requiredFlag(parsed, "sha256"),
-    });
-    const commit = await commitTarget(finalized, baseStateDir);
-    const doneMarker = formatReceiverDoneMarker({
-      nonce: finalized.state.promptNonce,
-      receiverId: finalized.state.receiverId,
-      bytes: finalized.bytes.byteLength,
-      sha256: finalized.sha256,
-    });
-
-    writeOutput(
-      {
-        ok: true,
-        receiverId: finalized.state.receiverId,
-        target: finalized.state.target,
-        ...commit,
-        bytes: finalized.bytes.byteLength,
-        sha256: finalized.sha256,
-        doneMarker,
-      },
-      json,
-      doneMarker,
-    );
     return;
   }
 
   throw new ReceiverCliError(
     "Usage:\n" +
-      "  receiver start --target file --path <path> --nonce <n> --max-frame-bytes <n> [--id <id>] [--sha256 <hash>] [--json]\n" +
-      "  receiver start --target im --channel <ch> --kind <status|error> --nonce <n> --max-frame-bytes <n> [--run-id <id>] [--json]\n" +
-      "  receiver frame --id <id> --seq <n> --data-base64 <b64> [--json]\n" +
-      "  receiver end --id <id> --frames <n> --bytes <n> --sha256 <hash> [--json]",
+      "  receiver start --target file --path <path> --nonce <n> --max-frame-bytes <n> [--id <id>] [--sha256 <hash>]\n" +
+      "  receiver start --target im --channel <ch> --kind <status|error> --nonce <n> --max-frame-bytes <n> [--run-id <id>]\n\n" +
+      `After start, write one base64 frame per stdin line, then write ${RECEIVER_END_MARKER} frames=<n> bytes=<n> sha256=<hash>.`,
   );
+}
+
+async function receiveFromStdin(input: {
+  store: ReceiverStore;
+  baseStateDir: string;
+  receiverId: string;
+  input: AsyncIterable<string | Uint8Array>;
+  stdout: ReceiverOutput;
+}): Promise<void> {
+  const tty = asRawModeInput(input.input);
+  const restoreRawMode = enableRawMode(tty);
+  let buffer = "";
+
+  try {
+    for await (const chunk of input.input) {
+      buffer += chunkToString(chunk);
+      const lines = splitInputLines(buffer);
+      buffer = lines.pending;
+
+      for (const line of lines.completeLines) {
+        if (line.length === 0) {
+          continue;
+        }
+
+        const end = parseReceiverEndLine(line);
+        if (end !== undefined) {
+          await finalizeReceiver({
+            store: input.store,
+            baseStateDir: input.baseStateDir,
+            receiverId: input.receiverId,
+            end,
+            stdout: input.stdout,
+          });
+          return;
+        }
+
+        const state = input.store.readState(input.receiverId);
+        if (state.mode !== "base64") {
+          throw new ReceiverCliError(`unsupported receiver stdin mode: ${state.mode}`);
+        }
+        const seq = state.nextSeq;
+        const next = input.store.appendFrame({
+          receiverId: input.receiverId,
+          seq,
+          dataBase64: line,
+        });
+        const ackMarker = formatReceiverAckMarker({
+          nonce: next.promptNonce,
+          receiverId: next.receiverId,
+          seq,
+          bytes: next.bytesReceived,
+        });
+
+        writeMarker(ackMarker, input.stdout);
+      }
+    }
+
+    if (buffer.length > 0) {
+      throw new ReceiverCliError("receiver stdin ended with a partial line");
+    }
+  } finally {
+    restoreRawMode();
+  }
+
+  throw new ReceiverCliError(`receiver stdin ended before ${RECEIVER_END_MARKER}`);
+}
+
+async function finalizeReceiver(input: {
+  store: ReceiverStore;
+  baseStateDir: string;
+  receiverId: string;
+  end: ReceiverEnd;
+  stdout: ReceiverOutput;
+}): Promise<void> {
+  const finalized = input.store.finalize({
+    receiverId: input.receiverId,
+    frames: input.end.frames,
+    bytes: input.end.bytes,
+    sha256: input.end.sha256,
+  });
+  await commitTarget(finalized, input.baseStateDir);
+  const doneMarker = formatReceiverDoneMarker({
+    nonce: finalized.state.promptNonce,
+    receiverId: finalized.state.receiverId,
+    bytes: finalized.bytes.byteLength,
+    sha256: finalized.sha256,
+  });
+
+  writeMarker(doneMarker, input.stdout);
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -156,6 +202,88 @@ function parseArgs(argv: string[]): ParsedArgs {
   }
 
   return { positional, flags };
+}
+
+function parseReceiverEndLine(line: string): ReceiverEnd | undefined {
+  if (!line.startsWith(RECEIVER_END_MARKER)) {
+    return undefined;
+  }
+
+  const fields = parseLineFields(line.slice(RECEIVER_END_MARKER.length).trim());
+  return {
+    frames: parseNonNegativeInteger(requiredField(fields, "frames"), "frames"),
+    bytes: parseNonNegativeInteger(requiredField(fields, "bytes"), "bytes"),
+    sha256: requiredField(fields, "sha256"),
+  };
+}
+
+function parseLineFields(value: string): Map<string, string> {
+  const fields = new Map<string, string>();
+  if (value.length === 0) {
+    return fields;
+  }
+
+  for (const token of value.split(/\s+/u)) {
+    const equalsIndex = token.indexOf("=");
+    if (equalsIndex <= 0) {
+      throw new ReceiverCliError(`invalid receiver end token: ${token}`);
+    }
+    fields.set(token.slice(0, equalsIndex), token.slice(equalsIndex + 1));
+  }
+  return fields;
+}
+
+function requiredField(fields: Map<string, string>, name: string): string {
+  const value = fields.get(name);
+  if (value === undefined || value.length === 0) {
+    throw new ReceiverCliError(`${RECEIVER_END_MARKER} requires ${name}=...`);
+  }
+  return value;
+}
+
+function chunkToString(chunk: string | Uint8Array): string {
+  return typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+}
+
+function splitInputLines(value: string): {
+  completeLines: string[];
+  pending: string;
+} {
+  const normalized = value.replace(/\r\n/gu, "\n").replace(/\r/gu, "\n");
+  const lines = normalized.split("\n");
+  if (!normalized.endsWith("\n")) {
+    return {
+      completeLines: lines.slice(0, -1),
+      pending: lines.at(-1) ?? "",
+    };
+  }
+
+  return {
+    completeLines: lines.slice(0, -1),
+    pending: "",
+  };
+}
+
+type RawModeInput = {
+  isTTY?: boolean;
+  isRaw?: boolean;
+  setRawMode?: (mode: boolean) => void;
+};
+
+function asRawModeInput(input: AsyncIterable<string | Uint8Array>): RawModeInput {
+  return input as RawModeInput;
+}
+
+function enableRawMode(input: RawModeInput): () => void {
+  if (input.isTTY !== true || typeof input.setRawMode !== "function") {
+    return () => {};
+  }
+
+  const wasRaw = input.isRaw === true;
+  input.setRawMode(true);
+  return () => {
+    input.setRawMode?.(wasRaw);
+  };
 }
 
 function parseTarget(parsed: ParsedArgs): ReceiverTarget {
@@ -278,14 +406,6 @@ function atomicWriteBytes(filePath: string, bytes: Buffer): void {
   fs.renameSync(tempPath, filePath);
 }
 
-function writeOutput(
-  value: Record<string, unknown>,
-  json: boolean,
-  marker: string,
-): void {
-  if (json) {
-    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
-    return;
-  }
-  process.stdout.write(`${marker}\n`);
+function writeMarker(marker: string, stdout: ReceiverOutput): void {
+  stdout.write(`${marker}\n`);
 }

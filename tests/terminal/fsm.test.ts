@@ -129,6 +129,34 @@ describe("terminal owner FSM", () => {
     });
   });
 
+  it("advances receiver owner state on ack events", () => {
+    const receiver: TerminalOwner = {
+      kind: "receiver",
+      revision: 2,
+      receiverId: "rx-1",
+      commandLine: "receiver start",
+      mode: "base64",
+      nextSeq: 0,
+      bytesReceived: 0,
+      maxFrameBytes: 1024,
+    };
+
+    const result = transitionOwner(receiver, {
+      kind: "receiver_ack",
+      receiverId: "rx-1",
+      seq: 0,
+      bytes: 5,
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.owner).toEqual({
+      ...receiver,
+      revision: 3,
+      nextSeq: 1,
+      bytesReceived: 5,
+    });
+  });
+
   it("moves to process after a silence timeout", () => {
     const result = transitionOwner(shell(8), {
       kind: "silence_timeout",

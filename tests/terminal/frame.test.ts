@@ -22,8 +22,7 @@ describe("receiver frame validation", () => {
     const result = applyReceiverFrame({
       receiver: receiver(),
       action: {
-        kind: "input_frame",
-        expectedOwnerRevision: 3,
+        kind: "frame",
         receiverId: "rx-1",
         seq: 0,
         dataBase64: "aGVsbG8=",
@@ -46,8 +45,7 @@ describe("receiver frame validation", () => {
     const result = applyReceiverFrame({
       receiver: receiver(),
       action: {
-        kind: "input_frame",
-        expectedOwnerRevision: 3,
+        kind: "frame",
         receiverId: "rx-2",
         seq: 0,
         dataBase64: "YQ==",
@@ -64,8 +62,7 @@ describe("receiver frame validation", () => {
     const result = applyReceiverFrame({
       receiver: receiver({ nextSeq: 2 }),
       action: {
-        kind: "input_frame",
-        expectedOwnerRevision: 3,
+        kind: "frame",
         receiverId: "rx-1",
         seq: 1,
         dataBase64: "YQ==",
@@ -83,8 +80,7 @@ describe("receiver frame validation", () => {
       receiver: receiver(),
       limits: { maxFrameBytes: 4 },
       action: {
-        kind: "input_frame",
-        expectedOwnerRevision: 3,
+        kind: "frame",
         receiverId: "rx-1",
         seq: 0,
         dataBase64: "aGVsbG8=",
@@ -101,8 +97,7 @@ describe("receiver frame validation", () => {
     const result = applyReceiverFrame({
       receiver: receiver(),
       action: {
-        kind: "input_frame",
-        expectedOwnerRevision: 3,
+        kind: "frame",
         receiverId: "rx-1",
         seq: 0,
         dataBase64: "not base64",
@@ -120,8 +115,7 @@ describe("receiver frame validation", () => {
     const result = applyReceiverFrame({
       receiver: owner,
       action: {
-        kind: "end_input",
-        expectedOwnerRevision: 3,
+        kind: "end",
         receiverId: "rx-1",
         frames: 2,
         bytes: 8,
@@ -142,8 +136,7 @@ describe("receiver frame validation", () => {
     const result = applyReceiverFrame({
       receiver: receiver({ nextSeq: 2, bytesReceived: 8 }),
       action: {
-        kind: "end_input",
-        expectedOwnerRevision: 3,
+        kind: "end",
         receiverId: "rx-1",
         frames: 1,
         bytes: 8,
@@ -161,8 +154,7 @@ describe("receiver frame validation", () => {
     const result = applyReceiverFrame({
       receiver: receiver({ nextSeq: 2, bytesReceived: 8 }),
       action: {
-        kind: "end_input",
-        expectedOwnerRevision: 3,
+        kind: "end",
         receiverId: "rx-1",
         frames: 2,
         bytes: 7,
@@ -180,8 +172,7 @@ describe("receiver frame validation", () => {
     const result = applyReceiverFrame({
       receiver: receiver({ nextSeq: 2, bytesReceived: 8 }),
       action: {
-        kind: "end_input",
-        expectedOwnerRevision: 3,
+        kind: "end",
         receiverId: "rx-1",
         frames: 2,
         bytes: 8,

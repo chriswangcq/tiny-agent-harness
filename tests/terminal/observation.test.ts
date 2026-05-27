@@ -35,21 +35,18 @@ describe("terminal observation helpers", () => {
     });
   });
 
-  it("redacts input frame payloads from action summaries", () => {
+  it("summarizes receiver stdin writes like normal PTY text", () => {
     expect(
       summarizePtyAction({
-        kind: "input_frame",
+        kind: "write_text",
         expectedOwnerRevision: 2,
-        receiverId: "rx-1",
-        seq: 4,
-        dataBase64: "aGVsbG8=",
+        text: "aGVsbG8=\n",
       }),
     ).toEqual({
-      kind: "input_frame",
-      receiverId: "rx-1",
-      seq: 4,
-      bytes: 8,
-      redacted: true,
+      kind: "write_text",
+      bytes: 9,
+      preview: "aGVsbG8=\n",
+      redacted: false,
     });
   });
 
@@ -74,11 +71,9 @@ describe("terminal observation helpers", () => {
       session: "default",
       owner,
       action: {
-        kind: "input_frame",
+        kind: "write_text",
         expectedOwnerRevision: 1,
-        receiverId: "rx-1",
-        seq: 0,
-        dataBase64: "aGVsbG8=",
+        text: "aGVsbG8=\n",
       },
       result: "ok",
       events: [
@@ -97,8 +92,8 @@ describe("terminal observation helpers", () => {
       session: "default",
       result: "ok",
       action: {
-        kind: "input_frame",
-        receiverId: "rx-1",
+        kind: "write_text",
+        preview: "aGVs…",
         redacted: true,
       },
       events: [
@@ -121,8 +116,8 @@ describe("terminal observation helpers", () => {
         observation: {
           session: "default",
           action: {
-            kind: "input_frame",
-            dataBase64: "a".repeat(100),
+            kind: "write_text",
+            text: `${"a".repeat(512)}\n`,
           },
           fullOutput: "x".repeat(100),
           nested: [{ content: "secret" }],
@@ -137,8 +132,8 @@ describe("terminal observation helpers", () => {
       observation: {
         session: "default",
         action: {
-          kind: "input_frame",
-          dataBase64: "[redacted]",
+          kind: "write_text",
+          text: "[redacted write_text payload 513 bytes]",
         },
         fullOutput: "[redacted]",
         nested: [{ content: "[redacted]" }],

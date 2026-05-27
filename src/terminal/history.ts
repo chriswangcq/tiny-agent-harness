@@ -67,7 +67,17 @@ function redactPayloadFieldsInner(value: unknown, limits: TerminalHistoryLimits)
   }
 
   const result: Record<string, unknown> = {};
+  const record = value as Record<string, unknown>;
   for (const [key, nested] of Object.entries(value)) {
+    if (
+      key === "text" &&
+      typeof nested === "string" &&
+      record.kind === "write_text" &&
+      shouldRedactWriteText(nested)
+    ) {
+      result[key] = `[redacted write_text payload ${utf8Bytes(nested)} bytes]`;
+      continue;
+    }
     if (PAYLOAD_KEYS.has(key)) {
       result[key] = "[redacted]";
       continue;
@@ -88,4 +98,17 @@ function compactString(value: string, maxChars: number): string {
   }
 
   return `${value.slice(0, Math.max(0, maxChars - 1))}…`;
+}
+
+function shouldRedactWriteText(text: string): boolean {
+  if (text.length > 512) {
+    return true;
+  }
+
+  const line = text.trim();
+  return line.length >= 128 && line.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/u.test(line);
+}
+
+function utf8Bytes(value: string): number {
+  return Buffer.byteLength(value, "utf8");
 }

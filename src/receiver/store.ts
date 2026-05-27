@@ -108,8 +108,7 @@ export class ReceiverStore {
     const validation = applyReceiverFrame({
       receiver: toReceiverOwner(state),
       action: {
-        kind: "input_frame",
-        expectedOwnerRevision: 0,
+        kind: "frame",
         receiverId: input.receiverId,
         seq: input.seq,
         dataBase64: input.dataBase64,
@@ -144,8 +143,7 @@ export class ReceiverStore {
     const validation = applyReceiverFrame({
       receiver: toReceiverOwner(state),
       action: {
-        kind: "end_input",
-        expectedOwnerRevision: 0,
+        kind: "end",
         receiverId: input.receiverId,
         frames: input.frames,
         bytes: input.bytes,

@@ -66,7 +66,7 @@ export class ToolCallValidator {
     if ("command" in args || "control" in args) {
       return invalid(
         "Invalid bash tool arguments: payload must be a PTY action object. " +
-          "Use PTY actions such as write_text, key, input_frame, end_input, poll, status, interrupt, terminate, or restart.",
+          "Use PTY actions such as write_text, key, poll, status, interrupt, terminate, or restart.",
       );
     }
 
@@ -136,49 +136,6 @@ function parsePtyAction(args: Record<string, unknown>): PtyAction | string {
       }
       return { kind: "key", session, ...common, key: args.key };
     }
-    case "input_frame": {
-      const common = parseExpectedOwnerRevision(args);
-      if (typeof common === "string") return common;
-      if (!isNonEmptyString(args.receiverId)) {
-        return "Invalid bash tool arguments: input_frame requires receiverId.";
-      }
-      const seq = parseNonNegativeInteger(args.seq, "seq");
-      if (typeof seq === "string") return seq;
-      if (!isString(args.dataBase64) || !isBase64(args.dataBase64)) {
-        return "Invalid bash tool arguments: input_frame requires valid base64 dataBase64.";
-      }
-      return {
-        kind: "input_frame",
-        session,
-        ...common,
-        receiverId: args.receiverId,
-        seq,
-        dataBase64: args.dataBase64,
-      };
-    }
-    case "end_input": {
-      const common = parseExpectedOwnerRevision(args);
-      if (typeof common === "string") return common;
-      if (!isNonEmptyString(args.receiverId)) {
-        return "Invalid bash tool arguments: end_input requires receiverId.";
-      }
-      const frames = parseNonNegativeInteger(args.frames, "frames");
-      if (typeof frames === "string") return frames;
-      const bytes = parseNonNegativeInteger(args.bytes, "bytes");
-      if (typeof bytes === "string") return bytes;
-      if (!isNonEmptyString(args.sha256)) {
-        return "Invalid bash tool arguments: end_input requires sha256.";
-      }
-      return {
-        kind: "end_input",
-        session,
-        ...common,
-        receiverId: args.receiverId,
-        frames,
-        bytes,
-        sha256: args.sha256,
-      };
-    }
     case "poll": {
       const sinceSeq =
         args.sinceSeq === undefined
@@ -242,16 +199,11 @@ function gateSmallPayload(
   limits: Partial<PtyActionLimits> | undefined,
 ): string | undefined {
   const maxWriteTextBytes = limits?.maxWriteTextBytes ?? MAX_PTY_INPUT_BYTES;
-  const maxFrameBytes = limits?.maxFrameBytes ?? DEFAULT_PTY_ACTION_LIMITS.maxFrameBytes;
   if (action.kind === "write_text" && utf8Bytes(action.text) > maxWriteTextBytes) {
     return (
       `Invalid bash tool arguments: write_text is above the ${maxWriteTextBytes}-byte PTY small-input limit. ` +
-      "Start a receiver, then use input_frame and end_input for large payloads."
+      "Start the receiver CLI inside the PTY and feed it smaller base64 lines with write_text."
     );
-  }
-
-  if (action.kind === "input_frame" && utf8Bytes(action.dataBase64) > maxFrameBytes) {
-    return `Invalid bash tool arguments: input_frame is above the ${maxFrameBytes}-byte receiver frame limit.`;
   }
 
   return undefined;
@@ -267,15 +219,4 @@ function isTerminalKey(value: unknown): value is Extract<PtyAction, { kind: "key
     value === "up" ||
     value === "down"
   );
-}
-
-function isBase64(value: string): boolean {
-  if (value.length === 0) {
-    return true;
-  }
-  if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(value)) {
-    return false;
-  }
-  const firstPadding = value.indexOf("=");
-  return firstPadding === -1 || /^=+$/u.test(value.slice(firstPadding));
 }

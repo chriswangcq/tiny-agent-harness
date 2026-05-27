@@ -101,23 +101,6 @@ export type PtyAction =
       expectedOwnerRevision: number;
       key: TerminalKey;
     }
-  | {
-      kind: "input_frame";
-      session?: string;
-      expectedOwnerRevision: number;
-      receiverId: string;
-      seq: number;
-      dataBase64: string;
-    }
-  | {
-      kind: "end_input";
-      session?: string;
-      expectedOwnerRevision: number;
-      receiverId: string;
-      frames: number;
-      bytes: number;
-      sha256: string;
-    }
   | { kind: "poll"; session?: string; sinceSeq?: number }
   | { kind: "status"; session?: string }
   | {
@@ -208,13 +191,6 @@ export type ValidationResult =
       owner: TerminalOwner;
     };
 
-export type PayloadRef = {
-  kind: "payload";
-  ref: string;
-  bytes: number;
-  sha256?: string;
-};
-
 export type LogRef = {
   kind: "log";
   ref: string;
@@ -236,6 +212,7 @@ export type PtyActionSummary = {
 export type TerminalEventSummary = {
   kind: TerminalEvent["kind"];
   receiverId?: string;
+  seq?: number;
   bytes?: number;
   sha256?: string;
   preview?: string;
@@ -250,7 +227,6 @@ export type PtyObservation = {
   events: TerminalEventSummary[];
   outputPreview?: string;
   logRef?: string;
-  payloadRef?: PayloadRef;
   errorCode?: TerminalErrorCode;
   message?: string;
 };

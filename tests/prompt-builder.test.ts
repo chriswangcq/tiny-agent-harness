@@ -12,8 +12,11 @@ describe("PromptBuilder", () => {
       content: expect.stringContaining("owner/revision guarded actions"),
     });
     expect(prompt.messages[0]!.content).toContain("PTY action kinds");
-    expect(prompt.messages[0]!.content).toContain("input_frame");
+    expect(prompt.messages[0]!.content).toContain("write_text, key, poll");
+    expect(prompt.messages[0]!.content).not.toContain("input_frame");
+    expect(prompt.messages[0]!.content).not.toContain("end_input");
     expect(prompt.messages[0]!.content).toContain("receiver start --target im");
+    expect(prompt.messages[0]!.content).toContain("__TAH_RECEIVER_END__");
     expect(prompt.messages[0]!.content).not.toContain("bash command fields");
     expect(prompt.messages[0]!.content).not.toContain("im send --text");
     expect(prompt.messages[0]!.content).not.toContain("UnsupportedControlPayload");
@@ -129,7 +132,12 @@ describe("PromptBuilder", () => {
         role: "assistant_tool_call",
         toolCallId: "call-1",
         name: "bash",
-        arguments: { session: "default", command: "pwd" },
+        arguments: {
+          kind: "write_text",
+          session: "default",
+          expectedOwnerRevision: 0,
+          text: "pwd\n",
+        },
       },
       {
         role: "tool_result",
@@ -161,5 +169,28 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[3]!.content).toContain(
       "Environment reminder:\n- [env-im-001] user_message_received",
     );
+  });
+
+  it("redacts large write_text payloads from serialized tool-call history", () => {
+    const largeBase64 = `${"A".repeat(512)}\n`;
+    const history: HistoryEntry[] = [
+      {
+        role: "assistant_tool_call",
+        toolCallId: "call-1",
+        name: "bash",
+        arguments: {
+          kind: "write_text",
+          expectedOwnerRevision: 5,
+          text: largeBase64,
+        },
+      },
+    ];
+
+    const prompt = new PromptBuilder().buildNextPrompt("send frame", history);
+    const assistantMsg = prompt.messages[1]! as Record<string, unknown>;
+    const toolCalls = assistantMsg.tool_calls as Array<Record<string, unknown>>;
+    const fn = toolCalls[0]!.function as Record<string, unknown>;
+    expect(fn.arguments).toContain("[redacted write_text payload");
+    expect(fn.arguments).not.toContain(largeBase64.trim());
   });
 });

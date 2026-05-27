@@ -1,5 +1,4 @@
 import type {
-  PayloadRef,
   PtyAction,
   PtyActionSummary,
   PtyObservation,
@@ -31,23 +30,6 @@ export function summarizePtyAction(
         bytes: utf8Bytes(action.text),
         preview: preview(action.text, resolved.maxPreviewChars),
         redacted: action.text.length > resolved.maxPreviewChars,
-      };
-    case "input_frame":
-      return {
-        kind: "input_frame",
-        session: action.session,
-        receiverId: action.receiverId,
-        seq: action.seq,
-        bytes: asciiBytes(action.dataBase64),
-        redacted: true,
-      };
-    case "end_input":
-      return {
-        kind: "end_input",
-        session: action.session,
-        receiverId: action.receiverId,
-        bytes: action.bytes,
-        sha256: action.sha256,
       };
     case "key":
       return {
@@ -91,6 +73,7 @@ export function summarizeTerminalEvent(
       return {
         kind: "receiver_ack",
         receiverId: event.receiverId,
+        seq: event.seq,
         bytes: event.bytes,
       };
     case "receiver_done":
@@ -117,7 +100,6 @@ export function buildPtyObservation(input: {
   events: readonly TerminalEvent[];
   outputPreview?: string;
   logRef?: string;
-  payloadRef?: PayloadRef;
   errorCode?: TerminalErrorCode;
   message?: string;
   limits?: Partial<TerminalObservationLimits>;
@@ -134,7 +116,6 @@ export function buildPtyObservation(input: {
         ? undefined
         : preview(input.outputPreview, limits.maxPreviewChars),
     logRef: input.logRef,
-    payloadRef: input.payloadRef,
     errorCode: input.errorCode,
     message: input.message,
   };
@@ -150,8 +131,4 @@ function preview(value: string, maxChars: number): string {
 
 function utf8Bytes(value: string): number {
   return new TextEncoder().encode(value).byteLength;
-}
-
-function asciiBytes(value: string): number {
-  return value.length;
 }

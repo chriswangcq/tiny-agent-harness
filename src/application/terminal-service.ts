@@ -185,10 +185,6 @@ function renderPtyInput(action: PtyAction): string | null {
       return action.text;
     case "key":
       return renderKey(action.key);
-    case "input_frame":
-      return `${action.dataBase64}\n`;
-    case "end_input":
-      return "";
     case "poll":
     case "interrupt":
     case "restart":

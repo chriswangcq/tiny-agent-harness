@@ -642,15 +642,34 @@ function redactReceiverPayloads(value: unknown): unknown {
 
   const next: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
-    if (
-      key === "dataBase64" &&
-      typeof child === "string" &&
-      value.kind === "input_frame"
-    ) {
+    if (key === "dataBase64" && typeof child === "string") {
       next[key] = `[redacted base64 frame ${child.length} chars]`;
+    } else if (
+      key === "text" &&
+      typeof child === "string" &&
+      value.kind === "write_text" &&
+      shouldRedactWriteTextDetail(child)
+    ) {
+      next[key] = `[redacted write_text payload ${Buffer.byteLength(child, "utf8")} bytes]`;
+    } else if (
+      key === "preview" &&
+      typeof child === "string" &&
+      value.kind === "write_text" &&
+      value.redacted === true
+    ) {
+      next[key] = "[redacted write_text preview]";
     } else {
       next[key] = redactReceiverPayloads(child);
     }
   }
   return next;
+}
+
+function shouldRedactWriteTextDetail(text: string): boolean {
+  if (text.length > 512) {
+    return true;
+  }
+
+  const line = text.trim();
+  return line.length >= 128 && line.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/u.test(line);
 }
