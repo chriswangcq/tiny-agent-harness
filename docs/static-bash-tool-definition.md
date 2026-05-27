@@ -50,7 +50,13 @@ Important semantics:
 
 ## Large Payloads
 
-Generated files, IM replies, code blocks, and other multi-KB payloads must use the in-PTY receiver protocol:
+Short IM replies should be sent with the IM CLI through the PTY, for example:
+
+```bash
+node dist/cli/main.js im send --channel default --kind status --text "Done"
+```
+
+Generated files, long IM replies, code blocks, and other multi-KB payloads must use the in-PTY receiver protocol:
 
 1. Use `write_text` to start a receiver CLI in the shell owner.
 2. Wait for the observation to report owner kind `receiver` and a `receiverId`.

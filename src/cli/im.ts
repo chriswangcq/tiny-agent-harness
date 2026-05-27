@@ -1,10 +1,12 @@
 import * as crypto from "node:crypto";
 import { ImCliTransport } from "../im/transport.js";
 
-function die(message: string): never {
-  process.stderr.write(JSON.stringify({ ok: false, error: message }) + "\n");
+function die(message: string, errorCode = "IM_ERROR"): never {
+  process.stderr.write(JSON.stringify({ ok: false, errorCode, error: message }) + "\n");
   process.exit(1);
 }
+
+const RESERVED_POST_SENDERS = new Set(["agent", "assistant", "system", "tool"]);
 
 function parseArgs(argv: string[]): { flags: Record<string, string>; positional: string[] } {
   const flags: Record<string, string> = {};
@@ -82,7 +84,7 @@ export async function runIm(argv: string[]): Promise<void> {
     default:
       die(
         "Usage: im <post|recv|send|ack|listen> [options]\n" +
-          "  im post --channel <ch> --text <text> [--from <user>] [--json]\n" +
+          "  im post --channel <ch> --text <text> [--from <user-label>] [--json]\n" +
           "  im recv --channel <ch> [--cursor <cursor>] [--json]\n" +
           "  im send --channel <ch> --kind <status|error> --text <text> [--run-id <id>] [--json]\n" +
           "  im ack --channel <ch> --message-id <id> [--json]\n" +
@@ -99,6 +101,13 @@ async function cmdPost(
   const channel = flags["channel"];
   const text = flags["text"];
   if (!channel || !text) die("im post requires --channel and --text");
+  const from = flags["from"];
+  if (from && RESERVED_POST_SENDERS.has(from.toLowerCase())) {
+    die(
+      `im post creates user inbox messages; use im send for agent replies instead of --from ${from}`,
+      "IM_POST_RESERVED_SENDER",
+    );
+  }
 
   const id = `msg-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
   const message = {
@@ -107,7 +116,7 @@ async function cmdPost(
     role: "user" as const,
     text,
     createdAt: new Date().toISOString(),
-    metadata: flags["from"] ? { from: flags["from"] } : undefined,
+    metadata: from ? { from } : undefined,
   };
 
   await transport.post(message);
@@ -123,10 +132,14 @@ async function cmdRecv(
   const channel = flags["channel"];
   if (!channel) die("im recv requires --channel");
 
+  const cursor = flags["cursor"] ?? transport.readCursorSync(channel);
   const result = await transport.receive({
     channel,
-    cursor: flags["cursor"],
+    cursor,
   });
+  if (result.cursorFound === false) {
+    die(`im recv cursor was not found: ${cursor}`, "IM_CURSOR_NOT_FOUND");
+  }
 
   output(
     {
@@ -155,7 +168,9 @@ async function cmdSend(
     die("--kind must be one of: status, error");
   }
 
+  const id = `agent-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
   const message = {
+    id,
     channel,
     role: "agent" as const,
     kind,
@@ -166,7 +181,7 @@ async function cmdSend(
 
   await transport.send(message);
 
-  output({ ok: true, channel, kind }, json);
+  output({ ok: true, id, channel, kind }, json);
 }
 
 async function cmdAck(
@@ -191,7 +206,7 @@ async function cmdListen(
   const channel = flags["channel"];
   if (!channel) die("im listen requires --channel");
 
-  let cursor = flags["cursor"];
+  let cursor = flags["cursor"] ?? transport.readCursorSync(channel);
 
   if (!json) {
     process.stdout.write(`[im] Listening on channel: ${channel}\n`);
@@ -204,6 +219,9 @@ async function cmdListen(
 
   while (true) {
     const result = await transport.receive({ channel, cursor });
+    if (result.cursorFound === false) {
+      die(`im listen cursor was not found: ${cursor}`, "IM_CURSOR_NOT_FOUND");
+    }
 
     for (const msg of result.messages) {
       if (json) {

@@ -29,7 +29,7 @@ cd ~/Documents/DeepSeek
 node dist/cli/main.js ui --channel default
 ```
 
-进入 TUI 后按 `m` 输入第一条真实任务，agent 会从同一个 `default` channel 收到消息并开始执行。不需要先 `im post hello`。
+进入 TUI 后按 `m` 输入第一条真实任务，agent 会从同一个 `default` channel 收到消息并开始执行。不需要先 `im post hello`。`im post` 只用于注入用户消息；agent 回复走 `im send` 写入 outbox。
 
 如果已经执行过 `npm link`，也可以写成短命令：
 

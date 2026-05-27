@@ -498,6 +498,9 @@ function userConversationId(message: UserMessage): string {
 }
 
 function agentConversationId(message: AgentMessage): string {
+  if (message.id) {
+    return `agent:${message.id}`;
+  }
   return `agent:${message.createdAt}:${message.kind}:${message.text}`;
 }
 

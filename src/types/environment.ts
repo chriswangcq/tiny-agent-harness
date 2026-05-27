@@ -15,6 +15,7 @@ export type UserMessage = {
 };
 
 export type AgentMessage = {
+  id?: string;
   channel: string;
   role: "agent";
   kind: "status" | "error";
@@ -93,6 +94,7 @@ export type EnvironmentPort = {
 export type ReceivedUserMessages = {
   messages: UserMessage[];
   nextCursor?: string;
+  cursorFound?: false;
 };
 
 export type UserMessageTransport = {

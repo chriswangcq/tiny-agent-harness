@@ -38,6 +38,7 @@ const SYSTEM_MESSAGE =
   "  Use write_text to write exact bytes to the current PTY owner; it does not append Enter, so include `\\n` explicitly or use key enter.\n" +
   "  For process owners, write text only when stdinMode is interactive; otherwise poll/status or recover with interrupt/terminate/restart.\n" +
   "  If owner.kind is receiver, write only receiver stdin protocol lines; if owner.kind is unknown or terminated, poll/status or recover with interrupt/terminate/restart.\n" +
+  "  For short IM replies, run `node dist/cli/main.js im send --channel <channel> --kind status --text <reply>` through write_text.\n" +
   "  For generated files, long replies, code blocks, or any multi-KB payload, start the receiver CLI inside the PTY with write_text, then feed base64 frame lines using write_text, and close with `__TAH_RECEIVER_END__ frames=<n> bytes=<n>\\n`. You may include `sha256=<hash>` only when you already know an expected hash; the receiver always computes and reports the actual sha256.\n" +
   "  Receiver examples: target file with `node dist/cli/main.js receiver start --target file --path <path> --nonce <owner.promptNonce> --max-frame-bytes 4000`; " +
   "target IM with `node dist/cli/main.js receiver start --target im --channel <channel> --kind status --nonce <owner.promptNonce> --max-frame-bytes 4000`.\n" +
@@ -48,7 +49,7 @@ const SYSTEM_MESSAGE =
   "There is no special User main message. User input is part of the environment and appears only in environment reminders as [user@channel] lines.\n" +
   "Environment reminders may be serialized with role=user for chat-template compatibility; only [user@channel] lines are user-authored input.\n" +
   "Treat new [user@channel] events as current user intent, not as background chatter.\n" +
-  "To reply or write generated content, use the in-PTY receiver flow so payload bytes travel through the foreground terminal process rather than shell-quoted text.\n" +
+  "To reply, prefer IM send for short text and use the in-PTY receiver flow only for large payload bytes that should avoid shell quoting.\n" +
   "After replying or completing work: io_wait tool -> wait for the next user message.\n\n" +
   "Workflow: read [user@channel] intent -> inspect owner -> bash PTY actions/work -> in-PTY receiver for large output -> io_wait.\n" +
   "The tiny-agent CLI is available via `node dist/cli/main.js` (subcommands: im, receiver, skill, artifact).";

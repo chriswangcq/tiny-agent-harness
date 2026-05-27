@@ -108,6 +108,7 @@ export const BASH_TOOL_DEFINITION: ToolDefinition = {
     "This is a pure PTY interface: write_text writes exact bytes to the current foreground terminal owner and never appends Enter for you; include \\n explicitly or use key enter. " +
     "Use key only for terminal keys such as enter, ctrl-c, ctrl-d, escape, tab, up, and down. " +
     "Use poll/status to observe and interrupt/terminate/restart to recover. " +
+    "For short IM replies, write an IM send command such as `node dist/cli/main.js im send --channel <channel> --kind status --text <reply>\\n`. " +
     "For large generated files or long IM replies, start the in-terminal receiver program with write_text, for example `node dist/cli/main.js receiver start --target file --path <path> --nonce <owner.promptNonce> --max-frame-bytes 4000\\n` or `node dist/cli/main.js receiver start --target im --channel <channel> --kind status --nonce <owner.promptNonce> --max-frame-bytes 4000\\n`. " +
     "After owner.kind becomes receiver, feed one base64 frame line per write_text, each ending in \\n and below the receiver max-frame-bytes value; finish with `__TAH_RECEIVER_END__ frames=<n> bytes=<n>\\n`. " +
     "Only include sha256=<hash> in receiver start or end when an expected hash is already known; receiver_done reports the actual sha256. " +

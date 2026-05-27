@@ -283,7 +283,7 @@ async function waitForFirstMessage(
   transport: ImCliTransport,
   environment: Environment,
   channel: string,
-): Promise<string> {
+): Promise<{ task: string; cursor?: string }> {
   // Skip messages already in inbox from previous runs
   const existing = await transport.receive({ channel });
   let cursor = existing.nextCursor;
@@ -292,14 +292,16 @@ async function waitForFirstMessage(
     const result = await transport.receive({ channel, cursor });
     if (result.messages.length > 0) {
       const msg = result.messages[0]!;
-      environment.appendEvent({
-        id: `env-im-${msg.id}`,
-        kind: "user_message_received",
-        source: "im",
-        timestamp: msg.createdAt,
-        message: msg,
-      });
-      return msg.text;
+      for (const message of result.messages) {
+        environment.appendEvent({
+          id: `env-im-${message.id}`,
+          kind: "user_message_received",
+          source: "im",
+          timestamp: message.createdAt,
+          message,
+        });
+      }
+      return { task: msg.text, cursor: result.nextCursor };
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
@@ -322,7 +324,7 @@ Usage:
   tiny-agent --help                                   Show this help
 
 IM subcommands:
-  post   --channel <ch> --text <text>          Post user message to inbox
+  post   --channel <ch> --text <text>          Inject user message to inbox
   recv   --channel <ch> [--cursor <id>]        Receive user messages from inbox
   send   --channel <ch> --text <t> --kind <k>  Send agent message to outbox
   ack    --channel <ch> --message-id <id>      Acknowledge (advance cursor)
@@ -494,7 +496,10 @@ async function main(): Promise<void> {
 
   // --- Wait for first IM message if no --task ---
   let task: string;
+  let imCursor: string | undefined;
   if (taskArg) {
+    const initial = await imTransport.receive({ channel });
+    imCursor = initial.nextCursor;
     task = taskArg;
     const createdAt = new Date().toISOString();
     environment.appendEvent({
@@ -512,19 +517,13 @@ async function main(): Promise<void> {
     });
   } else {
     console.log(`[tiny-agent] Waiting for user message on channel: ${channel}`);
-    task = await waitForFirstMessage(imTransport, environment, channel);
+    const firstMessage = await waitForFirstMessage(imTransport, environment, channel);
+    task = firstMessage.task;
+    imCursor = firstMessage.cursor;
     console.log(`[tiny-agent] Received task: ${task}`);
   }
 
   // --- IM → Environment bridge: poll inbox for new user messages ---
-  let imCursor: string | undefined;
-  // If we already consumed the first message, set cursor past it
-  {
-    const initial = await imTransport.receive({ channel });
-    if (initial.nextCursor) {
-      imCursor = initial.nextCursor;
-    }
-  }
   let imPollingActive = true;
   const imPollInterval = setInterval(async () => {
     if (!imPollingActive) return;

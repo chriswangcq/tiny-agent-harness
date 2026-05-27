@@ -221,10 +221,48 @@ describe("runIm CLI", () => {
 
     const sendResult = JSON.parse(captured.join(""));
     expect(sendResult.ok).toBe(true);
+    expect(sendResult.id).toMatch(/^agent-/);
     expect(sendResult.kind).toBe("status");
 
     const outboxPath = path.join(stateDir, "im", "default.outbox.jsonl");
     expect(fs.existsSync(outboxPath)).toBe(true);
+  });
+
+  it("post rejects reserved agent sender labels", async () => {
+    const stateDir = createStateDir();
+    const originalExit = process.exit;
+    const originalStderrWrite = process.stderr.write;
+    const capturedStderr: string[] = [];
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      capturedStderr.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
+      return true;
+    }) as typeof process.stderr.write;
+    process.exit = ((code?: string | number | null) => {
+      throw new Error(`process.exit ${code ?? 0}`);
+    }) as typeof process.exit;
+
+    try {
+      await expect(
+        runIm([
+          "post",
+          "--channel",
+          "default",
+          "--text",
+          "hello",
+          "--from",
+          "assistant",
+          "--state-dir",
+          stateDir,
+          "--json",
+        ]),
+      ).rejects.toThrow("process.exit 1");
+    } finally {
+      process.exit = originalExit;
+      process.stderr.write = originalStderrWrite;
+    }
+
+    const error = JSON.parse(capturedStderr.join(""));
+    expect(error.errorCode).toBe("IM_POST_RESERVED_SENDER");
   });
 
   it("ack writes cursor with --json", async () => {
@@ -237,6 +275,31 @@ describe("runIm CLI", () => {
     const ackResult = JSON.parse(captured.join(""));
     expect(ackResult.ok).toBe(true);
     expect(ackResult.messageId).toBe("msg-001");
+  });
+
+  it("recv uses the acknowledged cursor when --cursor is omitted", async () => {
+    const stateDir = createStateDir();
+
+    captureStdout();
+    await runIm(["post", "--channel", "ch", "--text", "first", "--state-dir", stateDir, "--json"]);
+    restoreStdout();
+    const postResult1 = JSON.parse(captured.join(""));
+
+    captureStdout();
+    await runIm(["post", "--channel", "ch", "--text", "second", "--state-dir", stateDir, "--json"]);
+    restoreStdout();
+
+    captureStdout();
+    await runIm(["ack", "--channel", "ch", "--message-id", postResult1.id, "--state-dir", stateDir, "--json"]);
+    restoreStdout();
+
+    captureStdout();
+    await runIm(["recv", "--channel", "ch", "--state-dir", stateDir, "--json"]);
+    restoreStdout();
+
+    const recvResult = JSON.parse(captured.join(""));
+    expect(recvResult.count).toBe(1);
+    expect(recvResult.messages[0].text).toBe("second");
   });
 
   it("recv with cursor filters old messages", async () => {

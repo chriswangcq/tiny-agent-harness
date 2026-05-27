@@ -61,7 +61,7 @@ im post --channel default --from user --text "fix the failing test"
 im listen --channel default
 ```
 
-`post` and `listen` are demo helpers. The harness itself only needs `recv`, `send`, and `ack`.
+`post` and `listen` are demo helpers. `post` only injects user-authored inbox messages; agent-visible replies must use `send` so they go to outbox and cannot be consumed again as user input. Reserved sender labels such as `assistant`, `agent`, `system`, and `tool` are rejected for `post`.
 
 ## Message Schema
 

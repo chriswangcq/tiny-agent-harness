@@ -95,7 +95,7 @@ describe("ImCliTransport", () => {
     });
   });
 
-  it("receive returns all messages when the supplied cursor is unknown", async () => {
+  it("receive does not replay messages when the supplied cursor is unknown", async () => {
     const baseDir = makeTmpDir();
     const transport = new ImCliTransport({ baseDir });
     const message = makeUserMessage("msg-1", "first");
@@ -104,8 +104,9 @@ describe("ImCliTransport", () => {
     await expect(
       transport.receive({ channel: "default", cursor: "missing" }),
     ).resolves.toEqual({
-      messages: [message],
-      nextCursor: "msg-1",
+      messages: [],
+      nextCursor: "missing",
+      cursorFound: false,
     });
   });
 
@@ -126,7 +127,10 @@ describe("ImCliTransport", () => {
     await transport.send(message);
 
     expect(readJsonl(path.join(baseDir, "default.outbox.jsonl"))).toEqual([
-      message,
+      expect.objectContaining({
+        ...message,
+        id: expect.stringMatching(/^agent-/),
+      }),
     ]);
   });
 
@@ -139,6 +143,7 @@ describe("ImCliTransport", () => {
     expect(
       fs.readFileSync(path.join(baseDir, "cursors", "default.cursor"), "utf-8"),
     ).toBe("msg-42");
+    expect(transport.readCursorSync("default")).toBe("msg-42");
   });
 
   it("pollNewMessages returns the receive message list", async () => {

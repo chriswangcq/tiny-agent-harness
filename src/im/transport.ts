@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as crypto from "node:crypto";
 import type {
   UserMessage,
   AgentMessage,
@@ -39,26 +40,7 @@ export class ImCliTransport implements UserMessageTransport {
   }): Promise<ReceivedUserMessages> {
     const inboxPath = this.inboxPath(options.channel);
     const messages = this.readJsonlMessages(inboxPath);
-
-    // Filter by cursor — return only messages after the cursor
-    let startIndex = 0;
-    if (options.cursor) {
-      const cursorIndex = messages.findIndex(
-        (m) => m.id === options.cursor,
-      );
-      if (cursorIndex !== -1) {
-        startIndex = cursorIndex + 1;
-      }
-    }
-
-    const filtered = messages.slice(startIndex);
-    const nextCursor =
-      filtered.length > 0 ? filtered[filtered.length - 1]!.id : options.cursor;
-
-    return {
-      messages: filtered,
-      nextCursor,
-    };
+    return sliceAfterCursor(messages, options.cursor, (message) => message.id);
   }
 
   // -----------------------------------------------------------------------
@@ -66,9 +48,13 @@ export class ImCliTransport implements UserMessageTransport {
   // -----------------------------------------------------------------------
 
   async send(message: AgentMessage): Promise<void> {
+    const storedMessage = {
+      ...message,
+      id: message.id ?? this.createAgentMessageId(),
+    };
     const outboxPath = this.outboxPath(message.channel);
     this.ensureDir(path.dirname(outboxPath));
-    fs.appendFileSync(outboxPath, JSON.stringify(message) + "\n", "utf-8");
+    fs.appendFileSync(outboxPath, JSON.stringify(storedMessage) + "\n", "utf-8");
   }
 
   // -----------------------------------------------------------------------
@@ -82,6 +68,15 @@ export class ImCliTransport implements UserMessageTransport {
     const cursorPath = this.cursorPath(options.channel);
     this.ensureDir(path.dirname(cursorPath));
     fs.writeFileSync(cursorPath, options.messageId, "utf-8");
+  }
+
+  readCursorSync(channel: string): string | undefined {
+    const cursorPath = this.cursorPath(channel);
+    if (!fs.existsSync(cursorPath)) {
+      return undefined;
+    }
+    const cursor = fs.readFileSync(cursorPath, "utf-8").trim();
+    return cursor.length > 0 ? cursor : undefined;
   }
 
   // -----------------------------------------------------------------------
@@ -107,20 +102,7 @@ export class ImCliTransport implements UserMessageTransport {
   }): { messages: UserMessage[]; nextCursor?: string } {
     const inboxPath = this.inboxPath(options.channel);
     const messages = this.readJsonlMessages(inboxPath);
-
-    let startIndex = 0;
-    if (options.cursor) {
-      const cursorIndex = messages.findIndex((m) => m.id === options.cursor);
-      if (cursorIndex !== -1) {
-        startIndex = cursorIndex + 1;
-      }
-    }
-
-    const filtered = messages.slice(startIndex);
-    const nextCursor =
-      filtered.length > 0 ? filtered[filtered.length - 1]!.id : options.cursor;
-
-    return { messages: filtered, nextCursor };
+    return sliceAfterCursor(messages, options.cursor, (message) => message.id);
   }
 
   // -----------------------------------------------------------------------
@@ -130,7 +112,7 @@ export class ImCliTransport implements UserMessageTransport {
   readOutboxSync(options: {
     channel: string;
     cursor?: string;
-  }): { messages: AgentMessage[]; nextCursor?: string } {
+  }): { messages: AgentMessage[]; nextCursor?: string; cursorFound?: false } {
     const outboxPath = this.outboxPath(options.channel);
     if (!fs.existsSync(outboxPath)) {
       return { messages: [], nextCursor: options.cursor };
@@ -148,23 +130,11 @@ export class ImCliTransport implements UserMessageTransport {
       }
     }
 
-    let startIndex = 0;
-    if (options.cursor) {
-      const cursorIndex = allMessages.findIndex(
-        (m) => m.createdAt === options.cursor,
-      );
-      if (cursorIndex !== -1) {
-        startIndex = cursorIndex + 1;
-      }
-    }
+    return sliceAfterCursor(allMessages, options.cursor, agentMessageCursor);
+  }
 
-    const filtered = allMessages.slice(startIndex);
-    const nextCursor =
-      filtered.length > 0
-        ? filtered[filtered.length - 1]!.createdAt
-        : options.cursor;
-
-    return { messages: filtered, nextCursor };
+  private createAgentMessageId(): string {
+    return `agent-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
   }
 
   // -----------------------------------------------------------------------
@@ -212,4 +182,34 @@ export class ImCliTransport implements UserMessageTransport {
 
     return messages;
   }
+}
+
+function sliceAfterCursor<T>(
+  messages: T[],
+  cursor: string | undefined,
+  cursorFor: (message: T) => string,
+): { messages: T[]; nextCursor?: string; cursorFound?: false } {
+  if (cursor === undefined) {
+    return {
+      messages,
+      nextCursor:
+        messages.length > 0 ? cursorFor(messages[messages.length - 1]!) : undefined,
+    };
+  }
+
+  const cursorIndex = messages.findIndex((message) => cursorFor(message) === cursor);
+  if (cursorIndex === -1) {
+    return { messages: [], nextCursor: cursor, cursorFound: false };
+  }
+
+  const filtered = messages.slice(cursorIndex + 1);
+  return {
+    messages: filtered,
+    nextCursor:
+      filtered.length > 0 ? cursorFor(filtered[filtered.length - 1]!) : cursor,
+  };
+}
+
+function agentMessageCursor(message: AgentMessage): string {
+  return message.id ?? message.createdAt;
 }

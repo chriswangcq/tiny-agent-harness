@@ -108,7 +108,7 @@ type AgentRunState = {
 model output -> optional tool validation -> optional tool review -> optional tool execution -> observation
 ```
 
-如果任务已经完成，模型仍然不直接返回用户可见正文；Agent 应通过 bash 调用 IM CLI 发送答复，然后返回 `io_wait`，让 run 等待下一条用户消息或环境事件。
+如果任务已经完成，模型仍然不直接返回用户可见正文；Agent 应通过 bash 调用 `im send` 发送短答复，或对大 payload 使用 receiver 的 IM target，然后返回 `io_wait`，让 run 等待下一条用户消息或环境事件。`im post` 只用于外部/本地 demo 注入用户消息，不能作为 agent 回复出口。
 
 ## Model Turn
 
