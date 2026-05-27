@@ -18,7 +18,7 @@
 ```text
 RunOrchestrator
   owns: loop, side effects, IO boundaries
-  calls: DeepSeekFimAdapter, Environment, ToolReviewer, BashSessionManager, ImCliTransport, TranscriptStore
+  calls: DeepSeekFimAdapter, Environment, ToolReviewer, ManagedTerminalRuntime, ImCliTransport, TranscriptStore
 
 AgentRunState
   owns: status, step index, transcript pointers, pending tool call/review, stop conditions
@@ -44,7 +44,7 @@ ToolCallValidator
 ToolReviewer
   owns: approve/reject decision before execution
 
-BashSessionManager
+ManagedTerminalRuntime
   owns: bash sessions and observations
 
 TranscriptStore
@@ -367,7 +367,7 @@ type RunEvent =
       type: "tool_execution_finished";
       stepIndex: number;
       request: ToolRequest;
-      observation: BashObservation;
+      observation: PtyObservation | AgentObservation;
       timestamp: string;
     }
   | {

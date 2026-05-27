@@ -11,11 +11,11 @@ import {
 } from "../src/run/orchestrator.js";
 import { TranscriptStore } from "../src/transcript/store.js";
 import { STATIC_TOOL_CATALOG } from "../src/tools/catalog.js";
-import type { BashObservation } from "../src/types/bash.js";
+import type { PtyObservation } from "../src/terminal/types.js";
 import type { EnvironmentEvent, IoWaitRequest } from "../src/types/environment.js";
 import type { FimStepOutput, InternalToolCall, ModelStepContext, ModelTurn } from "../src/types/model.js";
 import type { RunEvent } from "../src/types/run.js";
-import type { AgentObservation, StashFileToolRequest, ToolRequest, ToolReviewDecision } from "../src/types/tools.js";
+import type { ToolRequest, ToolReviewDecision } from "../src/types/tools.js";
 
 let tmpDirs: string[] = [];
 
@@ -71,8 +71,7 @@ function makeRun(options?: {
   environment?: RunPorts["environment"];
   validateResult?: RunPorts["validator"]["validate"];
   reviewDecision?: ToolReviewDecision;
-  bashObservation?: BashObservation;
-  artifactObservation?: AgentObservation;
+  terminalObservation?: PtyObservation;
   activeSkillRuns?: ReturnType<RunPorts["listActiveSkillRuns"]>;
   modelProgress?: string[];
 }) {
@@ -97,8 +96,7 @@ function makeRun(options?: {
   const consumedCalls: Array<{ runId: string; afterEventId?: string }> = [];
   const waitCalls: Array<{ runId: string; wait: IoWaitRequest }> = [];
   const reviewCalls: ToolRequest[] = [];
-  const bashCalls: ToolRequest[] = [];
-  const artifactCalls: StashFileToolRequest[] = [];
+  const terminalCalls: ToolRequest[] = [];
 
   const ports: RunPorts = {
     model: {
@@ -121,25 +119,16 @@ function makeRun(options?: {
     validator: {
       validate: options?.validateResult ?? ((toolCall) => ({
         status: "valid",
-        request:
-          toolCall.name === "stash_file"
-            ? {
-                kind: "stash_file",
-                toolName: "stash_file",
-                toolCallId: toolCall.id,
-                content: toolCall.arguments.content,
-                encoding: toolCall.arguments.encoding ?? "utf8",
-                name: toolCall.arguments.name,
-                description: toolCall.arguments.description,
-              }
-            : {
-                kind: "command",
-                toolName: "bash",
-                toolCallId: toolCall.id,
-                session: "default",
-                command: "pwd",
-                timeoutMs: 30_000,
-              },
+        request: {
+          kind: "pty_action",
+          toolName: "bash",
+          toolCallId: toolCall.id,
+          action: {
+            kind: "write_text",
+            expectedOwnerRevision: 1,
+            text: "pwd",
+          },
+        },
       })),
     },
     reviewer: {
@@ -154,35 +143,27 @@ function makeRun(options?: {
         );
       },
     },
-    bash: {
+    terminal: {
       async execute(request) {
-        bashCalls.push(request);
+        terminalCalls.push(request);
         return (
-          options?.bashObservation ?? {
-            session: "default",
-            state: "idle",
-            returnCode: 0,
-            output: "/repo\n",
-            outputTruncated: false,
-            outputLogPath: ".tiny-agent/sessions/default/output.log",
-          }
-        );
-      },
-    },
-    artifacts: {
-      async stash(request) {
-        artifactCalls.push(request);
-        return (
-          options?.artifactObservation ?? {
-            kind: "file_artifact",
-            recoverable: false,
-            message: "stashed file artifact file-call",
-            artifactId: "file-call",
-            name: "artifact.txt",
-            bytes: 5,
-            sha256: "abc123",
-            contentPath: ".tiny-agent/artifacts/files/file-call/content",
-            writeCommand: "node dist/cli/main.js artifact write file-call <target-path>",
+          options?.terminalObservation ?? {
+            session: request.action.session ?? "default",
+            owner: {
+              kind: "shell",
+              revision: 2,
+              cwd: "/repo",
+              promptSeq: 2,
+              lastReturnCode: 0,
+              promptNonce: "nonce",
+            },
+            action: {
+              kind: request.action.kind,
+              preview: request.action.kind === "write_text" ? request.action.text : undefined,
+              redacted: request.action.kind === "input_frame",
+            },
+            result: "ok",
+            events: [],
           }
         );
       },
@@ -231,8 +212,7 @@ function makeRun(options?: {
     consumedCalls,
     waitCalls,
     reviewCalls,
-    bashCalls,
-    artifactCalls,
+    terminalCalls,
   };
 }
 
@@ -360,97 +340,36 @@ describe("RunOrchestrator", () => {
     });
   });
 
-  it("executes an approved bash tool call and preserves tool history for the next model step", async () => {
+  it("dispatches approved PTY actions through the terminal port", async () => {
     const toolCall: InternalToolCall = {
-      id: "call-1",
+      id: "call-pty",
       name: "bash",
-      arguments: { session: "default", command: "pwd" },
-    };
-    const wait: IoWaitRequest = {
-      reason: "awaiting next instruction",
-      condition: { kind: "new_user_message", channel: "default" },
-    };
-    const waitEvent: EnvironmentEvent = {
-      id: "msg-env-001",
-      kind: "user_message_received",
-      source: "im",
-      timestamp: "2026-05-25T12:00:00.000Z",
-      message: {
-        id: "msg-001",
-        channel: "default",
-        role: "user",
-        text: "ok",
-        createdAt: "2026-05-25T12:00:00.000Z",
-      },
-    };
-    const { orchestrator, transcript, histories, reviewCalls, bashCalls } = makeRun({
-      outputs: [toolOutput(toolCall), ioWaitOutput(wait)],
-      maxSteps: 2,
-      waitEvent,
-    });
-
-    const endState = await orchestrator.run();
-
-    expect(endState.status).toBe("failed");
-    expect(reviewCalls).toHaveLength(1);
-    expect(bashCalls).toEqual([
-      {
-        kind: "command",
-        toolName: "bash",
-        toolCallId: "call-1",
-        session: "default",
-        command: "pwd",
-        timeoutMs: 30_000,
-      },
-    ]);
-
-    expect(histories).toHaveLength(2);
-    expect(histories[1]).toEqual([
-      { type: "tool_call", toolCall, thinking: { content: "need bash" } },
-      {
-        type: "observation",
-        observation: expect.objectContaining({
-          session: "default",
-          returnCode: 0,
-          output: "/repo\n",
-        }),
-      },
-    ]);
-
-    const eventTypes = readTranscript(transcript).map((event) => event.type);
-    expect(eventTypes).toEqual([
-      "run_started",
-      "model_requested",
-      "model_output_received",
-      "tool_call_validated",
-      "tool_review_requested",
-      "tool_reviewed",
-      "tool_execution_started",
-      "tool_execution_finished",
-      "model_requested",
-      "model_output_received",
-      "io_wait_started",
-      "io_wait_satisfied",
-      "run_finished",
-    ]);
-  });
-
-  it("executes an approved stash_file tool call through the artifact port", async () => {
-    const toolCall: InternalToolCall = {
-      id: "call-stash",
-      name: "stash_file",
       arguments: {
-        name: "snake.html",
-        content: "<!DOCTYPE html>",
+        kind: "write_text",
+        expectedOwnerRevision: 1,
+        text: "pwd",
       },
     };
     const wait: IoWaitRequest = {
       reason: "awaiting next instruction",
       condition: { kind: "new_user_message", channel: "default" },
     };
-    const { orchestrator, histories, artifactCalls, bashCalls } = makeRun({
+    const { orchestrator, histories, terminalCalls } = makeRun({
       outputs: [toolOutput(toolCall), ioWaitOutput(wait)],
       maxSteps: 2,
+      validateResult: () => ({
+        status: "valid",
+        request: {
+          kind: "pty_action",
+          toolName: "bash",
+          toolCallId: "call-pty",
+          action: {
+            kind: "write_text",
+            expectedOwnerRevision: 1,
+            text: "pwd",
+          },
+        },
+      }),
       waitEvent: {
         id: "msg-env-wait",
         kind: "user_message_received",
@@ -468,16 +387,16 @@ describe("RunOrchestrator", () => {
 
     await orchestrator.run();
 
-    expect(bashCalls).toHaveLength(0);
-    expect(artifactCalls).toEqual([
+    expect(terminalCalls).toEqual([
       {
-        kind: "stash_file",
-        toolName: "stash_file",
-        toolCallId: "call-stash",
-        name: "snake.html",
-        content: "<!DOCTYPE html>",
-        encoding: "utf8",
-        description: undefined,
+        kind: "pty_action",
+        toolName: "bash",
+        toolCallId: "call-pty",
+        action: {
+          kind: "write_text",
+          expectedOwnerRevision: 1,
+          text: "pwd",
+        },
       },
     ]);
     expect(histories[1]).toEqual([
@@ -485,12 +404,76 @@ describe("RunOrchestrator", () => {
       {
         type: "observation",
         observation: expect.objectContaining({
-          kind: "file_artifact",
-          artifactId: "file-call",
-          writeCommand: expect.stringContaining("artifact write"),
+          session: "default",
+          result: "ok",
+          action: expect.objectContaining({ kind: "write_text" }),
         }),
       },
     ]);
+  });
+
+  it("records rejected PTY observations from the terminal port", async () => {
+    const toolCall: InternalToolCall = {
+      id: "call-pty-reject",
+      name: "bash",
+      arguments: {
+        kind: "write_text",
+        expectedOwnerRevision: 1,
+        text: "pwd",
+      },
+    };
+    const wait: IoWaitRequest = {
+      reason: "awaiting next instruction",
+      condition: { kind: "new_user_message", channel: "default" },
+    };
+    const rejected: PtyObservation = {
+      session: "default",
+      owner: { kind: "unknown", revision: 4, reason: "state_gap" },
+      action: { kind: "write_text", preview: "pwd" },
+      result: "rejected",
+      events: [],
+      errorCode: "TERMINAL_UNSYNCED",
+      message: "Terminal owner is unknown.",
+    };
+    const { orchestrator, histories, terminalCalls } = makeRun({
+      outputs: [toolOutput(toolCall), ioWaitOutput(wait)],
+      maxSteps: 2,
+      validateResult: () => ({
+        status: "valid",
+        request: {
+          kind: "pty_action",
+          toolName: "bash",
+          toolCallId: "call-pty-reject",
+          action: {
+            kind: "write_text",
+            expectedOwnerRevision: 1,
+            text: "pwd",
+          },
+        },
+      }),
+      terminalObservation: rejected,
+      waitEvent: {
+        id: "msg-env-wait",
+        kind: "user_message_received",
+        source: "im",
+        timestamp: "2026-05-25T12:02:00.000Z",
+        message: {
+          id: "msg-wait",
+          channel: "default",
+          role: "user",
+          text: "ok",
+          createdAt: "2026-05-25T12:02:00.000Z",
+        },
+      },
+    });
+
+    await orchestrator.run();
+
+    expect(terminalCalls).toHaveLength(1);
+    expect(histories[1]).toContainEqual({
+      type: "observation",
+      observation: rejected,
+    });
   });
 
   it("appends a synthetic observation after invalid model output and recovers on the next model step", async () => {
@@ -538,13 +521,13 @@ describe("RunOrchestrator", () => {
   it("records consumed environment events and injects both environment reminder and skill reminder into model context", async () => {
     const envEvent: EnvironmentEvent = {
       id: "env-001",
-      kind: "command_finished",
-      source: "bash",
+      kind: "skill_run_started",
+      source: "skill",
       timestamp: "2026-05-25T12:00:00.000Z",
-      session: "default",
-      commandId: "cmd-001",
-      returnCode: 0,
-      outputLogPath: ".tiny-agent/sessions/default/output.log",
+      skillRunId: "skillrun-env-001",
+      skill: "review",
+      statePath: ".tiny-agent/skill-runs/skillrun-env-001/state.json",
+      executionLogPath: ".tiny-agent/skill-runs/skillrun-env-001/execution.txt",
     };
     const { orchestrator, transcript, contexts, consumedCalls } = makeRun({
       outputs: [ioWaitOutput({
@@ -588,9 +571,9 @@ describe("RunOrchestrator", () => {
       m.role === "user" && m.content.includes("Environment reminder:"),
     );
     expect(envReminder).toBeDefined();
-    expect(envReminder!.content).toContain("command_finished");
-    expect(envReminder!.content).toContain("cmd-001");
-    expect(envReminder!.content).toContain("rc=0");
+    expect(envReminder!.content).toContain("skill_run_started");
+    expect(envReminder!.content).toContain("skillrun-env-001");
+    expect(envReminder!.content).toContain("review");
 
     // Skill reminder should also be present
     const skillReminder = messages.find(

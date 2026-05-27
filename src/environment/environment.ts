@@ -154,15 +154,6 @@ export class Environment implements EnvironmentPort {
         case "user_message_received":
           return `[user@${event.message.channel}] ${event.message.text}`;
 
-        case "session_state_changed":
-          return `- [${event.id}] bash session_state_changed session=${event.session} ${event.previousState} -> ${event.nextState}`;
-
-        case "command_finished":
-          return `- [${event.id}] bash command_finished session=${event.session} command=${event.commandId} rc=${event.returnCode} log=${event.outputLogPath}`;
-
-        case "command_timed_out":
-          return `- [${event.id}] bash command_timed_out session=${event.session} command=${event.commandId} log=${event.outputLogPath}`;
-
         case "skill_run_started":
           return `- [${event.id}] skill skill_run_started skillRun=${event.skillRunId} skill=${event.skill} state=${event.statePath} log=${event.executionLogPath ?? ""}`;
 

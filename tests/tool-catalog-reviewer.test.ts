@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   BASH_TOOL_DEFINITION,
   STATIC_TOOL_CATALOG,
-  STASH_FILE_TOOL_DEFINITION,
 } from "../src/tools/catalog.js";
 import { AlwaysApproveReviewer } from "../src/tools/reviewer.js";
 import type { ToolRequest } from "../src/types/tools.js";
@@ -20,25 +19,27 @@ type BashInputSchema = {
 };
 
 describe("static tool catalog", () => {
-  it("exposes bash and stash_file as model-visible tools", () => {
-    expect(STATIC_TOOL_CATALOG).toHaveLength(2);
+  it("exposes bash as the only model-facing tool", () => {
+    expect(STATIC_TOOL_CATALOG).toHaveLength(1);
     expect(STATIC_TOOL_CATALOG[0]).toBe(BASH_TOOL_DEFINITION);
-    expect(STATIC_TOOL_CATALOG[1]).toBe(STASH_FILE_TOOL_DEFINITION);
     expect(BASH_TOOL_DEFINITION.name).toBe("bash");
-    expect(BASH_TOOL_DEFINITION.description).toContain("All external actions");
-    expect(STASH_FILE_TOOL_DEFINITION.name).toBe("stash_file");
-    expect(STASH_FILE_TOOL_DEFINITION.description).toContain("artifact write");
+    expect(BASH_TOOL_DEFINITION.description).toContain("owner/revision-guarded");
+    expect(BASH_TOOL_DEFINITION.description).toContain("receiver input_frame/end_input");
   });
 
-  it("documents all supported bash input variants in oneOf schema", () => {
+  it("documents PTY actions in the bash input schema", () => {
     const schema = BASH_TOOL_DEFINITION.inputSchema as BashInputSchema;
     expect(schema.type).toBe("object");
     expect(schema.oneOf?.map((variant) => variant.title)).toEqual([
-      "BashCommandInput",
-      "BashListControlInput",
-      "BashCreateControlInput",
-      "BashSessionControlInput",
-      "BashSendInputControlInput",
+      "PtyWriteTextAction",
+      "PtyKeyAction",
+      "PtyInputFrameAction",
+      "PtyEndInputAction",
+      "PtyPollAction",
+      "PtyStatusAction",
+      "PtyInterruptAction",
+      "PtyTerminateAction",
+      "PtyRestartAction",
     ]);
 
     for (const variant of schema.oneOf ?? []) {
@@ -46,45 +47,46 @@ describe("static tool catalog", () => {
     }
   });
 
-  it("lets command inputs omit session so the validator can default it", () => {
+  it("makes owner revision explicit on write-like PTY actions", () => {
     const schema = BASH_TOOL_DEFINITION.inputSchema as BashInputSchema;
-    const commandInput = schema.oneOf?.find(
-      (variant) => variant.title === "BashCommandInput",
+    const writeText = schema.oneOf?.find(
+      (variant) => variant.title === "PtyWriteTextAction",
+    );
+    const inputFrame = schema.oneOf?.find(
+      (variant) => variant.title === "PtyInputFrameAction",
     );
 
-    expect(commandInput?.required).toEqual(["command"]);
-    expect(commandInput?.properties?.session).toEqual({
-      type: "string",
-      description: "Optional persistent bash session id. Defaults to default when omitted.",
-    });
+    expect(writeText?.required).toEqual(["kind", "expectedOwnerRevision", "text"]);
+    expect(writeText?.properties?.kind).toEqual({ const: "write_text" });
+    expect(inputFrame?.required).toEqual([
+      "kind",
+      "expectedOwnerRevision",
+      "receiverId",
+      "seq",
+      "dataBase64",
+    ]);
   });
 
-  it("keeps session controls and sendInput separate in schema", () => {
+  it("does not expose command or control variants as schema titles", () => {
     const schema = BASH_TOOL_DEFINITION.inputSchema as BashInputSchema;
-    const sessionControl = schema.oneOf?.find(
-      (variant) => variant.title === "BashSessionControlInput",
-    );
-    const sendInput = schema.oneOf?.find(
-      (variant) => variant.title === "BashSendInputControlInput",
-    );
+    const serialized = JSON.stringify(schema);
 
-    expect(sessionControl?.properties?.control).toEqual({
-      enum: ["status", "poll", "interrupt", "terminate", "restart"],
-    });
-    expect(sendInput?.required).toEqual(["control", "session", "input"]);
-    expect(sendInput?.properties?.control).toEqual({ const: "sendInput" });
+    expect(serialized).not.toContain("BashCommandInput");
+    expect(serialized).not.toContain("UnsupportedControlPayload");
   });
 });
 
 describe("AlwaysApproveReviewer", () => {
-  it("approves command requests in demo mode", async () => {
+  it("approves PTY action requests in demo mode", async () => {
     const request: ToolRequest = {
-      kind: "command",
+      kind: "pty_action",
       toolName: "bash",
       toolCallId: "call-1",
-      session: "default",
-      command: "pwd",
-      timeoutMs: 30_000,
+      action: {
+        kind: "write_text",
+        expectedOwnerRevision: 0,
+        text: "pwd",
+      },
     };
 
     await expect(new AlwaysApproveReviewer().review(request)).resolves.toEqual({
@@ -94,17 +96,4 @@ describe("AlwaysApproveReviewer", () => {
     });
   });
 
-  it("approves control requests in demo mode", async () => {
-    const request: ToolRequest = {
-      kind: "control",
-      toolName: "bash",
-      toolCallId: "call-2",
-      control: "list",
-    };
-
-    await expect(new AlwaysApproveReviewer().review(request)).resolves.toMatchObject({
-      status: "approved",
-      reviewer: "always-approve",
-    });
-  });
 });

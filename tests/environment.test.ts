@@ -27,20 +27,6 @@ function makeUserMessageEvent(
   };
 }
 
-function makeCommandFinishedEvent(id: string, session: string): EnvironmentEvent {
-  const timestamp = "2026-05-25T12:00:00.000Z";
-  return {
-    id,
-    kind: "command_finished",
-    source: "bash",
-    timestamp,
-    session,
-    commandId: `cmd-${id}`,
-    returnCode: 0,
-    outputLogPath: `.tiny-agent/sessions/${session}.log`,
-  };
-}
-
 // ===========================================================================
 // Tests
 // ===========================================================================
@@ -213,13 +199,13 @@ describe("Environment", () => {
       },
       {
         id: "env-002",
-        kind: "command_finished",
-        source: "bash",
+        kind: "skill_run_started",
+        source: "skill",
         timestamp: ts,
-        session: "test",
-        commandId: "cmd-123",
-        returnCode: 1,
-        outputLogPath: ".tiny-agent/sessions/test.log",
+        skillRunId: "skillrun-123",
+        skill: "coding-review",
+        statePath: ".tiny-agent/skill-runs/skillrun-123/state.json",
+        executionLogPath: ".tiny-agent/skill-runs/skillrun-123/execution.txt",
       },
     ];
 
@@ -228,9 +214,9 @@ describe("Environment", () => {
     expect(reminder).toContain("Environment reminder:");
     expect(reminder).toContain("[user@default] continue with option B");
     expect(reminder).toContain("[env-002]");
-    expect(reminder).toContain("command_finished");
-    expect(reminder).toContain("rc=1");
-    expect(reminder).toContain("cmd-123");
+    expect(reminder).toContain("skill_run_started");
+    expect(reminder).toContain("skillrun-123");
+    expect(reminder).toContain("coding-review");
   });
 
   it("renderReminder formats skill events without undefined lines", () => {

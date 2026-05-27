@@ -86,16 +86,16 @@ tiny-agent ui --channel default
 ## 设计亮点
 
 - **DeepSeek V4 native tool-call FIM**：decision pass 使用 DeepSeek V4 native tool-call special token 边界，但仍由 harness 手工解析和归一化，不依赖 provider-native tool calling。
-- **静态 bash tool catalog**：第一版明确只有 `bash`，并用统一 `ToolDefinition` 和 JSON Schema 给模型、validator、orchestrator 共用，避免 tool registry 提前复杂化。
-- **PTY-backed bash session manager**：基于 `node-pty` 管理长期 session，支持 `create`、`poll`、`sendInput`、`interrupt`、`terminate`、`restart`，并用 completion marker 提取 return code 和 cwd。
-- **长任务不会被误杀**：命令 timeout 只释放 agent focus，不 kill 进程。Agent 后续可以 poll 新输出、发送输入、中断或重启 session。
+- **PTY action tool catalog**：模型可见外部动作只有 `bash`；小输入走 `write_text` 或 `key`，大 payload 走 receiver `input_frame` / `end_input`。
+- **Managed PTY runtime**：基于 `node-pty` 管理长期 session，支持 `status`、`poll`、`write_text`、`key`、`input_frame`、`end_input`、`interrupt`、`terminate`、`restart`，并用 prompt/receiver markers 维护 TerminalOwner。
+- **长任务不会被误杀**：timeout 只释放 agent focus，不 kill 进程。Agent 后续可以 poll 新输出、发送交互输入、中断或重启 session。
 - **可恢复 run artifacts**：每个 run 产出 `state.json` 和 `transcript.jsonl`；每个 session 有独立 log。审阅、debug、TUI、resume、eval 都可以围绕这些 artifact 展开。
 - **`io_wait` 是一等决策**：等待用户消息或外部事件不是 `sleep`，而是 run state machine 中可记录、可恢复、可回放的 `waiting_for_io` 状态。
 - **Environment 的 one-shot event 和 persistent fact 分层**：新事件只消费一次；active skill run 这类仍然成立的事实会持续提醒，直到状态关闭。
 - **Skill CLI 有生命周期闭环**：skill 可发现、可执行、可保持 active、可 close；agent 可以按需把 skill run 转入 review pending，复盘后把 lessons 追加到 skill 附件。
 - **Code Intelligence CLI 作为语义查询层**：LSP 能力不进入 harness 内核，而是通过 `codeq` CLI 暴露给 agent，用来查询 diagnostics、symbols、definition、references 和 hover。
 - **TUI 以 view model 播放 agent loop**：`TranscriptReader` 读 JSONL，`ViewModelBuilder` 纯逻辑归一化事件，renderer 只负责展示 conversation 和 loop frame。
-- **端口化协作边界**：model、prompt、validator、reviewer、bash、environment、skill 都通过明确接口连接，便于替换 adapter、接真实 IM、接策略 reviewer 或做单元测试。
+- **端口化协作边界**：model、prompt、validator、reviewer、terminal、environment、skill 都通过明确接口连接，便于替换 adapter、接真实 IM、接策略 reviewer 或做单元测试。
 - **测试覆盖架构骨架**：已有 run state、environment、validator、skill discovery/store、TUI transcript/view-model 等测试，优先保护状态转移和边界契约。
 
 ## 潜力与演进方向

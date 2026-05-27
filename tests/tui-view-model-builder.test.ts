@@ -10,7 +10,7 @@ import type {
   ModelTurn,
 } from "../src/types/model.js";
 import type { ToolRequest, ToolReviewDecision, ToolCallValidation, AgentObservation } from "../src/types/tools.js";
-import type { BashObservation } from "../src/types/bash.js";
+import type { PtyObservation } from "../src/terminal/types.js";
 import type { IoWaitRequest, UserMessage, AgentMessage, EnvironmentEvent } from "../src/types/environment.js";
 
 // ---------------------------------------------------------------------------
@@ -21,7 +21,11 @@ const NOW = "2026-01-01T00:00:00Z";
 const LATER = "2026-01-01T00:00:01Z";
 
 function makeToolCall(id = "tc-1"): InternalToolCall {
-  return { id, name: "bash", arguments: { session: "default", command: "echo hi" } };
+  return {
+    id,
+    name: "bash",
+    arguments: { kind: "write_text", expectedOwnerRevision: 2, text: "echo hi\n" },
+  };
 }
 
 function makeThinking() {
@@ -56,8 +60,17 @@ function makeInvalidOutput(): FimStepOutput {
   return { thinking: makeThinking(), rawDecision: "not json", turn: makeInvalidTurn() };
 }
 
-function makeCommandRequest(id = "tc-1"): ToolRequest {
-  return { kind: "command", toolName: "bash", toolCallId: id, session: "default", command: "echo hi", timeoutMs: 30000 };
+function makePtyActionRequest(id = "tc-pty"): ToolRequest {
+  return {
+    kind: "pty_action",
+    toolName: "bash",
+    toolCallId: id,
+    action: {
+      kind: "write_text",
+      expectedOwnerRevision: 2,
+      text: "pwd",
+    },
+  };
 }
 
 function makeApproval(): ToolReviewDecision {
@@ -68,34 +81,70 @@ function makeRejection(): ToolReviewDecision {
   return { status: "rejected", reason: "nope", reviewer: "test" };
 }
 
-function makeBashObservation(rc = 0): BashObservation {
-  return { session: "default", state: "idle", returnCode: rc, output: "hi\n", outputTruncated: false, outputLogPath: "/tmp/log.txt" };
-}
-
-function makeTimedOutBashObservation(): BashObservation {
+function makePtyObservation(result: PtyObservation["result"] = "ok"): PtyObservation {
   return {
     session: "default",
-    state: "running",
-    returnCode: null,
-    timedOut: true,
-    focusReleased: true,
-    output: "partial output\n",
-    outputTruncated: false,
-    outputLogPath: "/tmp/log.txt",
+    owner: {
+      kind: "shell",
+      revision: 3,
+      cwd: "/repo",
+      promptSeq: 2,
+      lastReturnCode: 0,
+      promptNonce: "nonce",
+    },
+    action: { kind: "write_text", preview: "pwd" },
+    result,
+    events: [],
+    logRef: "/tmp/log.txt",
   };
 }
 
-function makeBusyBashObservation(): BashObservation {
+function makeRejectedPtyObservation(): PtyObservation {
+  return {
+    ...makePtyObservation("rejected"),
+    owner: { kind: "unknown", revision: 4, reason: "state_gap" },
+    errorCode: "TERMINAL_UNSYNCED",
+    message: "Terminal owner is unknown.",
+  };
+}
+
+function makeReceiverFrameRequest(): ToolRequest {
+  return {
+    kind: "pty_action",
+    toolName: "bash",
+    toolCallId: "tc-frame",
+    action: {
+      kind: "input_frame",
+      expectedOwnerRevision: 4,
+      receiverId: "rx-1",
+      seq: 0,
+      dataBase64: "aGVsbG8=",
+    },
+  };
+}
+
+function makeReceiverFrameObservation(): PtyObservation {
   return {
     session: "default",
-    state: "running",
-    returnCode: null,
-    output: "",
-    outputTruncated: false,
-    outputLogPath: "/tmp/log.txt",
-    errorCode: "SESSION_BUSY",
-    message:
-      'Session "default" is already running a command; rejected the new command without writing to the PTY. Use poll, interrupt, terminate, or restart before sending another command.',
+    owner: {
+      kind: "receiver",
+      revision: 4,
+      receiverId: "rx-1",
+      commandLine: "receiver start",
+      mode: "base64",
+      nextSeq: 1,
+      bytesReceived: 5,
+      maxFrameBytes: 4096,
+    },
+    action: {
+      kind: "input_frame",
+      receiverId: "rx-1",
+      seq: 0,
+      bytes: 8,
+      redacted: true,
+    },
+    result: "ok",
+    events: [{ kind: "receiver_ack", receiverId: "rx-1", seq: 0, bytes: 5 }],
   };
 }
 
@@ -267,10 +316,9 @@ describe("ViewModelBuilder", () => {
     expect(frame.phase).toBe("decision");
     expect(frame.status).toBe("ok");
     expect(frame.title).toBe("tool call: bash");
-    expect(frame.summary).toContain("session=default");
-    expect(frame.summary).toContain("echo hi");
+    expect(frame.summary).toContain("action=write_text");
     expect(frame.detail).toContain("## tool call");
-    expect(frame.detail).toContain('"command": "echo hi"');
+    expect(frame.detail).toContain('"kind": "write_text"');
     expect(frame.detail).toContain("## thinking");
   });
 
@@ -371,7 +419,7 @@ describe("ViewModelBuilder", () => {
   // 7
   it("tool_call_validated valid creates ok validation LoopFrame", () => {
     const b = builderWithRunStarted();
-    const validResult: ToolCallValidation = { status: "valid", request: makeCommandRequest() };
+    const validResult: ToolCallValidation = { status: "valid", request: makePtyActionRequest() };
     b.applyEvent({
       type: "tool_call_validated",
       stepIndex: 0,
@@ -416,7 +464,7 @@ describe("ViewModelBuilder", () => {
     b.applyEvent({
       type: "tool_review_requested",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyActionRequest(),
       timestamp: LATER,
     });
     const vm = b.getViewModel();
@@ -426,7 +474,7 @@ describe("ViewModelBuilder", () => {
     expect(frame.status).toBe("running");
     expect(frame.title).toBe("review requested");
     expect(frame.detail).toContain("## request");
-    expect(frame.detail).toContain('"command": "echo hi"');
+    expect(frame.detail).toContain('"kind": "write_text"');
   });
 
   // 10
@@ -435,7 +483,7 @@ describe("ViewModelBuilder", () => {
     b.applyEvent({
       type: "tool_reviewed",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyActionRequest(),
       decision: makeApproval(),
       timestamp: LATER,
     });
@@ -456,7 +504,7 @@ describe("ViewModelBuilder", () => {
     b.applyEvent({
       type: "tool_reviewed",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyActionRequest(),
       decision: makeRejection(),
       timestamp: LATER,
     });
@@ -476,7 +524,7 @@ describe("ViewModelBuilder", () => {
     b.applyEvent({
       type: "tool_execution_started",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyActionRequest(),
       timestamp: LATER,
     });
     const vm = b.getViewModel();
@@ -486,55 +534,55 @@ describe("ViewModelBuilder", () => {
     expect(frame.status).toBe("running");
     expect(frame.title).toBe("bash started");
     expect(frame.detail).toContain("## request");
-    expect(frame.detail).toContain('"timeoutMs": 30000');
+    expect(frame.detail).toContain('"expectedOwnerRevision": 2');
   });
 
   // 13
-  it("tool_execution_finished rc=0 creates ok tool LoopFrame", () => {
+  it("tool_execution_finished PTY ok creates ok tool LoopFrame", () => {
     const b = builderWithRunStarted();
     b.applyEvent({
       type: "tool_execution_finished",
       stepIndex: 0,
-      request: makeCommandRequest(),
-      observation: makeBashObservation(0),
+      request: makePtyActionRequest(),
+      observation: makePtyObservation("ok"),
       timestamp: LATER,
     });
     const vm = b.getViewModel();
     const frame = vm.loop[vm.loop.length - 1];
     expect(frame.phase).toBe("tool");
     expect(frame.status).toBe("ok");
-    expect(frame.title).toBe("bash finished rc=0");
+    expect(frame.title).toBe("pty ok write_text");
     expect(frame.logPath).toBe("/tmp/log.txt");
     expect(frame.detail).toContain("## request");
     expect(frame.detail).toContain("## observation");
-    expect(frame.detail).toContain('"returnCode": 0');
-    expect(frame.detail).toContain('"outputLogPath": "/tmp/log.txt"');
+    expect(frame.detail).toContain('"result": "ok"');
+    expect(frame.detail).toContain('"logRef": "/tmp/log.txt"');
   });
 
   // 14
-  it("tool_execution_finished rc=1 creates error tool LoopFrame", () => {
+  it("tool_execution_finished PTY rejected creates warn tool LoopFrame", () => {
     const b = builderWithRunStarted();
     b.applyEvent({
       type: "tool_execution_finished",
       stepIndex: 0,
-      request: makeCommandRequest(),
-      observation: makeBashObservation(1),
+      request: makePtyActionRequest(),
+      observation: makeRejectedPtyObservation(),
       timestamp: LATER,
     });
     const vm = b.getViewModel();
     const frame = vm.loop[vm.loop.length - 1];
     expect(frame.phase).toBe("tool");
-    expect(frame.status).toBe("error");
-    expect(frame.title).toBe("bash finished rc=1");
+    expect(frame.status).toBe("warn");
+    expect(frame.title).toBe("pty rejected TERMINAL_UNSYNCED");
   });
 
-  it("tool_execution_finished timeout keeps the tool frame waiting instead of error", () => {
+  it("tool_execution_finished PTY timeout keeps the tool frame waiting", () => {
     const b = builderWithRunStarted();
     b.applyEvent({
       type: "tool_execution_finished",
       stepIndex: 0,
-      request: makeCommandRequest(),
-      observation: makeTimedOutBashObservation(),
+      request: makePtyActionRequest(),
+      observation: makePtyObservation("timeout"),
       timestamp: LATER,
     });
 
@@ -542,31 +590,94 @@ describe("ViewModelBuilder", () => {
     const frame = vm.loop[vm.loop.length - 1];
     expect(frame.phase).toBe("tool");
     expect(frame.status).toBe("waiting");
-    expect(frame.title).toBe("bash timed out, focus released");
-    expect(frame.summary).toBe("session=default still running");
+    expect(frame.title).toBe("pty timeout write_text");
+    expect(frame.summary).toContain("action=write_text");
     expect(frame.logPath).toBe("/tmp/log.txt");
-    expect(frame.detail).toContain('"timedOut": true');
-    expect(frame.detail).toContain('"focusReleased": true');
-    expect(frame.detail).toContain('"state": "running"');
+    expect(frame.detail).toContain('"result": "timeout"');
   });
 
-  it("tool_execution_finished with bash errorCode shows the actionable message", () => {
+  it("tool_execution_finished with PTY errorCode shows the actionable message", () => {
     const b = builderWithRunStarted();
     b.applyEvent({
       type: "tool_execution_finished",
       stepIndex: 0,
-      request: makeCommandRequest(),
-      observation: makeBusyBashObservation(),
+      request: makePtyActionRequest(),
+      observation: makeRejectedPtyObservation(),
       timestamp: LATER,
     });
 
     const vm = b.getViewModel();
     const frame = vm.loop[vm.loop.length - 1];
     expect(frame.phase).toBe("tool");
-    expect(frame.status).toBe("error");
-    expect(frame.title).toBe("bash rejected SESSION_BUSY");
-    expect(frame.summary).toContain("rejected the new command");
-    expect(frame.detail).toContain('"errorCode": "SESSION_BUSY"');
+    expect(frame.status).toBe("warn");
+    expect(frame.title).toBe("pty rejected TERMINAL_UNSYNCED");
+    expect(frame.summary).toContain("Terminal owner is unknown");
+    expect(frame.detail).toContain('"errorCode": "TERMINAL_UNSYNCED"');
+  });
+
+  it("tool_execution_finished with PTY observation shows owner and action", () => {
+    const b = builderWithRunStarted();
+    b.applyEvent({
+      type: "tool_execution_finished",
+      stepIndex: 0,
+      request: makePtyActionRequest(),
+      observation: makePtyObservation(),
+      timestamp: LATER,
+    });
+
+    const vm = b.getViewModel();
+    const frame = vm.loop[vm.loop.length - 1];
+    expect(frame.phase).toBe("tool");
+    expect(frame.status).toBe("ok");
+    expect(frame.title).toBe("pty ok write_text");
+    expect(frame.summary).toContain("action=write_text");
+    expect(frame.summary).toContain("owner=shell#3");
+    expect(frame.detail).toContain('"kind": "pty_action"');
+  });
+
+  it("tool_execution_finished with rejected PTY observation shows error code", () => {
+    const b = builderWithRunStarted();
+    b.applyEvent({
+      type: "tool_execution_finished",
+      stepIndex: 0,
+      request: makePtyActionRequest(),
+      observation: {
+        ...makePtyObservation("rejected"),
+        owner: { kind: "unknown", revision: 5, reason: "state_gap" },
+        errorCode: "TERMINAL_UNSYNCED",
+        message: "Terminal owner is unknown.",
+      },
+      timestamp: LATER,
+    });
+
+    const vm = b.getViewModel();
+    const frame = vm.loop[vm.loop.length - 1];
+    expect(frame.phase).toBe("tool");
+    expect(frame.status).toBe("warn");
+    expect(frame.title).toBe("pty rejected TERMINAL_UNSYNCED");
+    expect(frame.summary).toContain("owner=unknown#5");
+    expect(frame.summary).toContain("Terminal owner is unknown.");
+  });
+
+  it("tool_execution_finished with receiver frame redacts frame payload detail", () => {
+    const b = builderWithRunStarted();
+    b.applyEvent({
+      type: "tool_execution_finished",
+      stepIndex: 0,
+      request: makeReceiverFrameRequest(),
+      observation: makeReceiverFrameObservation(),
+      timestamp: LATER,
+    });
+
+    const vm = b.getViewModel();
+    const frame = vm.loop[vm.loop.length - 1];
+    expect(frame.phase).toBe("tool");
+    expect(frame.status).toBe("ok");
+    expect(frame.summary).toContain("receiver=rx-1");
+    expect(frame.summary).toContain("seq=0");
+    expect(frame.summary).toContain("redacted=true");
+    expect(frame.detail).toContain("[redacted base64 frame 8 chars]");
+    expect(frame.detail).not.toContain("aGVsbG8=");
   });
 
   // 15

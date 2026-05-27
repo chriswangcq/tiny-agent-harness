@@ -1,10 +1,7 @@
 // ─── Environment Event Model ────────────────────────────────────────
 //
-// Unified external event model. Environment collects events from IM,
-// bash sessions, and other external sources. The orchestrator consumes
-// them as system reminders at loop boundaries.
-
-import type { BashSessionState } from "./bash.js";
+// Unified external event model. Environment collects user and skill events.
+// Terminal facts are returned as PtyObservation through the tool result path.
 
 // ─── User / Agent Messages (IM) ────────────────────────────────────
 
@@ -36,34 +33,6 @@ export type EnvironmentEvent =
       source: "im";
       timestamp: string;
       message: UserMessage;
-    }
-  | {
-      id: string;
-      kind: "session_state_changed";
-      source: "bash";
-      timestamp: string;
-      session: string;
-      previousState: BashSessionState;
-      nextState: BashSessionState;
-    }
-  | {
-      id: string;
-      kind: "command_finished";
-      source: "bash";
-      timestamp: string;
-      session: string;
-      commandId: string;
-      returnCode: number;
-      outputLogPath: string;
-    }
-  | {
-      id: string;
-      kind: "command_timed_out";
-      source: "bash";
-      timestamp: string;
-      session: string;
-      commandId: string;
-      outputLogPath: string;
     }
   | {
       id: string;

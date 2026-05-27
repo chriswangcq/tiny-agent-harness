@@ -9,8 +9,8 @@ Skill 不是 harness 内置工具，也不是模型可见的第二套 tool regis
 第一版仍然坚持：
 
 ```text
-Model visible action surface: bash for external work, stash_file only for file-byte staging
-External capabilities: called as CLI commands inside bash
+Model visible action surface: bash PTY actions plus receiver frames
+External capabilities: called as CLI commands through write_text when TerminalOwner is shell
 ```
 
 所以 skill 的入口是一个普通命令：
@@ -21,7 +21,7 @@ skill show coding-review --json
 skill run coding-review --json '{"path":"src"}'
 ```
 
-Agent 如果想使用 skill，本质上是在 `bash` tool call 里执行 `skill ...`。因此 skill 执行前仍然经过 bash tool review，执行结果也通过 bash observation 返回。
+Agent 如果想使用 skill，本质上是在 shell-owner PTY action 里执行 `skill ...`。因此 skill 执行前仍然经过 tool review，执行结果也通过 PTY observation 返回。
 
 ## Responsibilities
 
@@ -30,7 +30,7 @@ Skill CLI
   owns: skill discovery, skill metadata, skill command invocation
   does not own: agent loop, model prompting, tool review, bash session runtime
 
-BashSessionManager
+ManagedTerminalRuntime
   owns: running `skill ...` as a shell command
   owns: return code, incremental output, session log
 
@@ -417,10 +417,10 @@ skill run coding-review --json '{"path":"src"}'
 事件流是：
 
 ```text
-bash command starts
+bash PTY action starts
 skill process runs inside the bash session
-bash command finishes or times out
-BashSessionManager appends command_finished or command_timed_out EnvironmentEvent
+bash PTY observation returns or requires polling
+ManagedTerminalRuntime returns PtyObservation through the tool-result path
 Skill CLI state keeps skillRun status as running until close
 next agent loop renders active skill run as persistent reminder
 ```
@@ -530,7 +530,7 @@ skill accept <proposal-id> --json
 推荐只在工具说明里告诉 agent：
 
 ```text
-All external capabilities are available through bash commands.
+All external capabilities are available through shell-owner PTY actions.
 Use `skill list --json`, `skill search <query> --json`, and `skill show <name> --json`
 to discover reusable local skills.
 Run a skill with `skill run <name> --json '<args>'`.

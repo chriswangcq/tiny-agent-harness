@@ -176,7 +176,9 @@ afterEach(() => {
 // Helper: build DSML tool call text
 // ---------------------------------------------------------------------------
 
-function dsmlBash(params: Record<string, string | object>): string {
+type DsmlParam = string | number | boolean | object;
+
+function dsmlBash(params: Record<string, DsmlParam>): string {
   const lines = Object.entries(params).map(([key, value]) => {
     if (typeof value === "string") {
       return `<${DSML}parameter name="${key}" string="true">${value}</${DSML}parameter>`;
@@ -186,14 +188,12 @@ function dsmlBash(params: Record<string, string | object>): string {
   return `bash">\n${lines.join("\n")}`;
 }
 
-function dsmlStashFile(params: Record<string, string | object>): string {
-  const lines = Object.entries(params).map(([key, value]) => {
-    if (typeof value === "string") {
-      return `<${DSML}parameter name="${key}" string="true">${value}</${DSML}parameter>`;
-    }
-    return `<${DSML}parameter name="${key}" string="false">${JSON.stringify(value)}</${DSML}parameter>`;
-  });
-  return `stash_file">\n${lines.join("\n")}`;
+function writeText(text: string): Record<string, DsmlParam> {
+  return {
+    kind: "write_text",
+    expectedOwnerRevision: 0,
+    text,
+  };
 }
 
 function dsmlIoWait(reason: string, condition: object): string {
@@ -210,10 +210,7 @@ function dsmlIoWait(reason: string, condition: object): string {
 
 describe("DeepSeekFimAdapter", () => {
   it("runs thinking and decision FIM passes and parses a DSML bash tool call", async () => {
-    const rawDecision = dsmlBash({
-      session: "default",
-      command: "pwd",
-    });
+    const rawDecision = dsmlBash(writeText("pwd"));
     const fetchMock = stubFimResponses("Need inspect cwd", rawDecision);
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
@@ -262,17 +259,14 @@ describe("DeepSeekFimAdapter", () => {
         expect.objectContaining({
           id: "fim-call-run-test-3",
           name: "bash",
-          arguments: { session: "default", command: "pwd" },
+          arguments: writeText("pwd"),
         }),
       );
     }
   });
 
   it("streams thinking deltas from one FIM string response", async () => {
-    const rawDecision = dsmlBash({
-      session: "default",
-      command: "pwd",
-    });
+    const rawDecision = dsmlBash(writeText("pwd"));
     const thinking = "Need inspect cwd carefully before choosing the next tool.";
     const fetchMock = stubFimStreamResponses(
       [
@@ -305,10 +299,7 @@ describe("DeepSeekFimAdapter", () => {
   });
 
   it("filters accidental thinking boundary markup across stream chunks", async () => {
-    const rawDecision = dsmlBash({
-      session: "default",
-      command: "pwd",
-    });
+    const rawDecision = dsmlBash(writeText("pwd"));
     const fetchMock = stubFimStreamResponses(
       [
         { text: "Need inspect", finishReason: null },
@@ -339,10 +330,7 @@ describe("DeepSeekFimAdapter", () => {
   });
 
   it("stops thinking continuation after accidental boundary markup", async () => {
-    const rawDecision = dsmlBash({
-      session: "default",
-      command: "pwd",
-    });
+    const rawDecision = dsmlBash(writeText("pwd"));
     const fetchMock = stubFimResponseChunks(
       {
         text: `Need inspect</think>\n<${DSML}tool_calls>bad`,
@@ -367,10 +355,7 @@ describe("DeepSeekFimAdapter", () => {
   });
 
   it("parses decision DSML split across streamed chunks", async () => {
-    const rawDecision = dsmlBash({
-      session: "default",
-      command: "pwd",
-    });
+    const rawDecision = dsmlBash(writeText("pwd"));
     stubFimStreamResponses(
       [{ text: "Need inspect cwd", finishReason: "stop" }],
       [
@@ -387,17 +372,13 @@ describe("DeepSeekFimAdapter", () => {
     expect(output.turn.kind).toBe("tool_call");
     if (output.turn.kind === "tool_call") {
       expect(output.turn.toolCall.arguments).toEqual({
-        session: "default",
-        command: "pwd",
+        ...writeText("pwd"),
       });
     }
   });
 
   it("parses SSE data split across network byte chunks", async () => {
-    const rawDecision = dsmlBash({
-      session: "default",
-      command: "pwd",
-    });
+    const rawDecision = dsmlBash(writeText("pwd"));
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -422,10 +403,7 @@ describe("DeepSeekFimAdapter", () => {
   });
 
   it("parses SSE events with multiple data lines and usage-only chunks", async () => {
-    const rawDecision = dsmlBash({
-      session: "default",
-      command: "pwd",
-    });
+    const rawDecision = dsmlBash(writeText("pwd"));
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -460,8 +438,9 @@ describe("DeepSeekFimAdapter", () => {
   it("continues FIM completions when the response hits the token limit", async () => {
     const decisionPrefix = [
       `bash">`,
-      `<${DSML}parameter name="session" string="true">default</${DSML}parameter>`,
-      `<${DSML}parameter name="command" string="true">ec`,
+      `<${DSML}parameter name="kind" string="true">write_text</${DSML}parameter>`,
+      `<${DSML}parameter name="expectedOwnerRevision" string="false">0</${DSML}parameter>`,
+      `<${DSML}parameter name="text" string="true">ec`,
     ].join("\n");
     const decisionSuffix = `ho hi</${DSML}parameter>`;
     const fetchMock = stubFimResponseChunks(
@@ -500,8 +479,7 @@ describe("DeepSeekFimAdapter", () => {
     expect(output.turn.kind).toBe("tool_call");
     if (output.turn.kind === "tool_call") {
       expect(output.turn.toolCall.arguments).toEqual({
-        session: "default",
-        command: "echo hi",
+        ...writeText("echo hi"),
       });
     }
   });
@@ -526,45 +504,17 @@ describe("DeepSeekFimAdapter", () => {
     }
   });
 
-  it("parses DSML stash_file decisions as internal tool calls", async () => {
-    const rawDecision = dsmlStashFile({
-      name: "snake.html",
-      content: "<!DOCTYPE html>\n<title>Snake</title>",
-      encoding: "utf8",
-    });
-    stubFimResponses("Need stage generated file", rawDecision);
-
-    const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
-      tools: [...STATIC_TOOL_CATALOG],
-    });
-
-    expect(output.turn.kind).toBe("tool_call");
-    if (output.turn.kind === "tool_call") {
-      expect(output.turn.toolCall).toEqual(
-        expect.objectContaining({
-          id: "fim-call-run-test-3",
-          name: "stash_file",
-          arguments: {
-            name: "snake.html",
-            content: "<!DOCTYPE html>\n<title>Snake</title>",
-            encoding: "utf8",
-          },
-        }),
-      );
-    }
-  });
-
   it("sanitizes thinking before injecting it into the decision prompt", async () => {
     const contaminatedThinking = [
       "Need answer in IM.",
       "</think>",
       `<${DSML}tool_calls>`,
-      `bash<｜tool▁sep｜>{"session":"default","command":"pwd"}`,
+      `bash<｜tool▁sep｜>{"kind":"write_text","expectedOwnerRevision":0,"text":"pwd"}`,
       `</${DSML}tool_calls>`,
     ].join("\n");
     const fetchMock = stubFimResponses(
       contaminatedThinking,
-      dsmlBash({ session: "default", command: "pwd" }),
+      dsmlBash(writeText("pwd")),
     );
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
@@ -603,7 +553,7 @@ describe("DeepSeekFimAdapter", () => {
   it("rejects legacy V3 format with separator", async () => {
     stubFimResponses(
       "Thinking",
-      'bash<｜tool▁sep｜>{"session":"default","command":"pwd"}',
+      'bash<｜tool▁sep｜>{"kind":"write_text","expectedOwnerRevision":0,"text":"pwd"}',
     );
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
@@ -619,7 +569,7 @@ describe("DeepSeekFimAdapter", () => {
   it("rejects ambiguous brace-split output when DSML is missing", async () => {
     stubFimResponses(
       "Thinking",
-      'bash {"session":"default","command":"pwd"}',
+      'bash {"kind":"write_text","expectedOwnerRevision":0,"text":"pwd"}',
     );
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
@@ -633,7 +583,7 @@ describe("DeepSeekFimAdapter", () => {
   });
 
   it("returns invalid_output when no JSON is found in decision", async () => {
-    stubFimResponses("Thinking", "I should run a command");
+    stubFimResponses("Thinking", "I should inspect the terminal owner");
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
       tools: [...STATIC_TOOL_CATALOG],
@@ -677,7 +627,7 @@ describe("DeepSeekFimAdapter", () => {
   it("rejects legacy V3 boundary tokens with separator", async () => {
     stubFimResponses(
       "Thinking",
-      '</end▁of▁sentence｜>bash<｜tool▁sep｜>{"session":"default","command":"ls"}',
+      '</end▁of▁sentence｜>bash<｜tool▁sep｜>{"kind":"write_text","expectedOwnerRevision":0,"text":"ls"}',
     );
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
@@ -731,7 +681,7 @@ describe("DeepSeekFimAdapter", () => {
 
     stubFimResponses(
       "thinking",
-      dsmlBash({ session: "default", command: "pwd" }),
+      dsmlBash(writeText("pwd")),
     );
 
     await makeAdapter().generateTurn(BASE_CONTEXT, {
@@ -743,7 +693,6 @@ describe("DeepSeekFimAdapter", () => {
     expect(thinkingSysMsg.role).toBe("system");
     expect(thinkingSysMsg.tools.map((tool: any) => tool.function.name)).toEqual([
       "bash",
-      "stash_file",
       "io_wait",
     ]);
     expect(thinkingInput.thinking_mode).toBe("thinking");
@@ -753,7 +702,6 @@ describe("DeepSeekFimAdapter", () => {
     expect(decisionSysMsg.role).toBe("system");
     expect(decisionSysMsg.tools.map((tool: any) => tool.function.name)).toEqual([
       "bash",
-      "stash_file",
       "io_wait",
     ]);
     expect(decisionInput.thinking_mode).toBe("thinking");
@@ -766,13 +714,13 @@ describe("DeepSeekFimAdapter", () => {
 
 describe("parseDsmlDecision", () => {
   it("parses standard DSML bash call", () => {
-    const raw = dsmlBash({ session: "default", command: "ls -la" });
+    const raw = dsmlBash(writeText("ls -la"));
     const result = parseDsmlDecision(raw);
     expect(result).toEqual({
       status: "valid",
       decision: {
         name: "bash",
-        arguments: { session: "default", command: "ls -la" },
+        arguments: writeText("ls -la"),
       },
     });
   });
@@ -797,7 +745,7 @@ describe("parseDsmlDecision", () => {
 
   it("strips trailing DSML close tokens echoed by the model", () => {
     const raw =
-      dsmlBash({ session: "default", command: "pwd" }) +
+      dsmlBash(writeText("pwd")) +
       `\n</${DSML}invoke>\n</${DSML}tool_calls><｜end▁of▁sentence｜>`;
     const result = parseDsmlDecision(raw);
     expect(result.status).toBe("valid");
@@ -809,20 +757,21 @@ describe("parseDsmlDecision", () => {
   it("handles model repeating invoke-open prefix", () => {
     const raw =
       `<${DSML}invoke name="bash">\n` +
-      `<${DSML}parameter name="session" string="true">default</${DSML}parameter>\n` +
-      `<${DSML}parameter name="command" string="true">echo hi</${DSML}parameter>`;
+      `<${DSML}parameter name="kind" string="true">write_text</${DSML}parameter>\n` +
+      `<${DSML}parameter name="expectedOwnerRevision" string="false">0</${DSML}parameter>\n` +
+      `<${DSML}parameter name="text" string="true">echo hi</${DSML}parameter>`;
     const result = parseDsmlDecision(raw);
     expect(result).toEqual({
       status: "valid",
       decision: {
         name: "bash",
-        arguments: { session: "default", command: "echo hi" },
+        arguments: writeText("echo hi"),
       },
     });
   });
 
   it("rejects DSML name with JSON body instead of parameter tags", () => {
-    const raw = 'bash">\n{"session":"default","command":"pwd"}';
+    const raw = 'bash">\n{"kind":"write_text","expectedOwnerRevision":0,"text":"pwd"}';
     const result = parseDsmlDecision(raw);
     expect(result).toMatchObject({
       status: "invalid",
@@ -832,8 +781,8 @@ describe("parseDsmlDecision", () => {
 
   it("rejects extra text outside DSML parameter tags", () => {
     const raw =
-      dsmlBash({ session: "default", command: "pwd" }) +
-      "\nI will now run this command.";
+      dsmlBash(writeText("pwd")) +
+      "\nI will now do this.";
     const result = parseDsmlDecision(raw);
     expect(result).toMatchObject({
       status: "invalid",
@@ -844,8 +793,8 @@ describe("parseDsmlDecision", () => {
   it("rejects non-string DSML parameters that are not valid JSON", () => {
     const raw = [
       `bash">`,
-      `<${DSML}parameter name="session" string="true">default</${DSML}parameter>`,
-      `<${DSML}parameter name="command" string="false">pwd</${DSML}parameter>`,
+      `<${DSML}parameter name="kind" string="true">write_text</${DSML}parameter>`,
+      `<${DSML}parameter name="expectedOwnerRevision" string="false">not-json</${DSML}parameter>`,
     ].join("\n");
     const result = parseDsmlDecision(raw);
     expect(result).toMatchObject({
@@ -857,7 +806,7 @@ describe("parseDsmlDecision", () => {
   it("rejects unclosed DSML parameter tags without falling back to JSON", () => {
     const raw =
       `bash">\n` +
-      `<${DSML}parameter name="command" string="true">cat > snake.html << 'HTMLEOF'\n` +
+      `<${DSML}parameter name="text" string="true">cat > snake.html << 'HTMLEOF'\n` +
       `<html></html>\nHTMLEOF\necho "OK"`;
     const result = parseDsmlDecision(raw);
     expect(result).toMatchObject({
@@ -867,7 +816,7 @@ describe("parseDsmlDecision", () => {
   });
 
   it("rejects V3 separator format", () => {
-    const raw = 'bash<｜tool▁sep｜>{"session":"default","command":"pwd"}';
+    const raw = 'bash<｜tool▁sep｜>{"kind":"write_text","expectedOwnerRevision":0,"text":"pwd"}';
     const result = parseDsmlDecision(raw);
     expect(result).toMatchObject({
       status: "invalid",
@@ -877,7 +826,7 @@ describe("parseDsmlDecision", () => {
 
   it("rejects V3 function<sep>name format", () => {
     const raw =
-      'function<｜tool▁sep｜>bash\n```json\n{"session":"default","command":"pwd"}\n```';
+      'function<｜tool▁sep｜>bash\n```json\n{"kind":"write_text","expectedOwnerRevision":0,"text":"pwd"}\n```';
     const result = parseDsmlDecision(raw);
     expect(result).toMatchObject({
       status: "invalid",
@@ -887,7 +836,7 @@ describe("parseDsmlDecision", () => {
 
   it("rejects double separator: id=...<sep>bash<sep>{json}", () => {
     const raw =
-      'id=fim-call-1<｜tool▁sep｜>bash<｜tool▁sep｜>{"session":"default","command":"pwd"}';
+      'id=fim-call-1<｜tool▁sep｜>bash<｜tool▁sep｜>{"kind":"write_text","expectedOwnerRevision":0,"text":"pwd"}';
     const result = parseDsmlDecision(raw);
     expect(result).toMatchObject({
       status: "invalid",
@@ -897,7 +846,7 @@ describe("parseDsmlDecision", () => {
 
   it("rejects trailing </tool_call> XML tag fallback", () => {
     const raw =
-      'bash<｜tool▁sep｜>{"session":"default","command":"pwd"}</tool_call>';
+      'bash<｜tool▁sep｜>{"kind":"write_text","expectedOwnerRevision":0,"text":"pwd"}</tool_call>';
     const result = parseDsmlDecision(raw);
     expect(result).toMatchObject({
       status: "invalid",
@@ -907,7 +856,7 @@ describe("parseDsmlDecision", () => {
 
   it("rejects tool_call prefix format without DSML or V3 separator", () => {
     const raw =
-      'tool_call id=fim-call-1 name=bash arguments={"session":"default","command":"pwd"}';
+      'tool_call id=fim-call-1 name=bash arguments={"kind":"write_text","expectedOwnerRevision":0,"text":"pwd"}';
     const result = parseDsmlDecision(raw);
     expect(result).toMatchObject({
       status: "invalid",
@@ -917,7 +866,7 @@ describe("parseDsmlDecision", () => {
 
   it("rejects raw text after V3 separator instead of wrapping it as bash JSON", () => {
     const raw =
-      "bash<｜tool▁sep｜>node dist/cli/main.js im send --channel default --text hello";
+      "bash<｜tool▁sep｜>node dist/cli/main.js receiver start --target im --channel default --kind status --nonce nonce --max-frame-bytes 4096";
     const result = parseDsmlDecision(raw);
     expect(result).toMatchObject({
       status: "invalid",
@@ -928,33 +877,32 @@ describe("parseDsmlDecision", () => {
   it("handles model echoing invoke-open without the DSML prefix", () => {
     const raw =
       `invoke name="bash">\n` +
-      `<${DSML}parameter name="session" string="true">default</${DSML}parameter>\n` +
-      `<${DSML}parameter name="command" string="true">pwd</${DSML}parameter>`;
+      `<${DSML}parameter name="kind" string="true">write_text</${DSML}parameter>\n` +
+      `<${DSML}parameter name="expectedOwnerRevision" string="false">0</${DSML}parameter>\n` +
+      `<${DSML}parameter name="text" string="true">pwd</${DSML}parameter>`;
     const result = parseDsmlDecision(raw);
     expect(result).toEqual({
       status: "valid",
       decision: {
         name: "bash",
-        arguments: { session: "default", command: "pwd" },
+        arguments: writeText("pwd"),
       },
     });
   });
 
-  it("handles commands with special characters in DSML parameters", () => {
+  it("handles PTY text with special characters in DSML parameters", () => {
     const raw = [
       `bash">`,
-      `<${DSML}parameter name="session" string="true">default</${DSML}parameter>`,
-      `<${DSML}parameter name="command" string="true">echo 'hello world' | grep "hello"</${DSML}parameter>`,
+      `<${DSML}parameter name="kind" string="true">write_text</${DSML}parameter>`,
+      `<${DSML}parameter name="expectedOwnerRevision" string="false">0</${DSML}parameter>`,
+      `<${DSML}parameter name="text" string="true">echo 'hello world' | grep "hello"</${DSML}parameter>`,
     ].join("\n");
     const result = parseDsmlDecision(raw);
     expect(result).toEqual({
       status: "valid",
       decision: {
         name: "bash",
-        arguments: {
-          session: "default",
-          command: `echo 'hello world' | grep "hello"`,
-        },
+        arguments: writeText(`echo 'hello world' | grep "hello"`),
       },
     });
   });

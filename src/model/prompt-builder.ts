@@ -1,8 +1,8 @@
 import type {
   V4ChatMessage,
-  BashObservation,
   AgentObservation,
 } from "../types/index.js";
+import type { PtyObservation } from "../terminal/types.js";
 
 // ---------------------------------------------------------------------------
 // History entries used by the prompt builder
@@ -19,7 +19,7 @@ export type HistoryEntry =
   | {
       role: "tool_result";
       toolCallId: string;
-      observation: BashObservation | AgentObservation;
+      observation: PtyObservation | AgentObservation;
     }
   | {
       role: "environment_reminder";
@@ -31,28 +31,26 @@ export type HistoryEntry =
 // ---------------------------------------------------------------------------
 
 const SYSTEM_MESSAGE =
-  "You are an AI agent with three tools: bash, stash_file, and io_wait.\n" +
-  "- bash: execute shell commands. Use it for ALL external actions, including writing staged artifacts with the tiny-agent CLI.\n" +
-  "  Do not put generated file contents, long heredocs, large node -e strings, or other multi-KB payloads in bash.\n" +
-  "  If a command would carry a complete file or more than about 2KB of literal content, call stash_file first and keep the bash command short.\n" +
-  "  If a bash command times out and the session state is running, do not send another command to that session. Use poll, interrupt, terminate, or restart first.\n" +
-  "  bash command fields: command, optional session, optional timeoutMs. Session defaults to default.\n" +
-  "  bash session-control fields: session, control, optional input.\n" +
-  "- stash_file: stage generated file bytes in harness state. This is internal staging only; it does not write the target filesystem. " +
-  "Use it for complete generated files, multi-line content, or payloads over about 2KB before materializing them with bash.\n" +
-  "  stash_file fields: content, optional name, optional encoding=utf8|base64, optional description.\n" +
+  "You are an AI agent with bash PTY actions and io_wait.\n" +
+  "- bash: operate a persistent PTY using owner/revision guarded actions. " +
+  "Every write action must use the latest TerminalOwner revision from the previous observation.\n" +
+  "  PTY action kinds: write_text, key, input_frame, end_input, poll, status, interrupt, terminate, restart.\n" +
+  "  Use write_text to write exact text bytes to the current PTY owner; include `\\n` explicitly or use key enter when you want Enter.\n" +
+  "  For process owners, write text only when stdinMode is interactive; otherwise poll/status or recover with interrupt/terminate/restart.\n" +
+  "  If owner.kind is receiver, unknown, or terminated, do not write ordinary text; poll/status or recover with interrupt/terminate/restart.\n" +
+  "  For generated files, long replies, code blocks, or any multi-KB payload, start a receiver with write_text, then send input_frame chunks and finish with end_input.\n" +
+  "  Receiver examples: target file with `node dist/cli/main.js receiver start --target file --path <path> --nonce <owner.promptNonce> --max-frame-bytes 4096 --sha256 <hash>`; " +
+  "target IM with `node dist/cli/main.js receiver start --target im --channel <channel> --kind status --nonce <owner.promptNonce> --max-frame-bytes 4096 --sha256 <hash>`.\n" +
   "- io_wait: pause until the next external event. This is a TOOL CALL, not a shell command. " +
   "Never run io_wait via bash; invoke it directly as a tool.\n\n" +
   "Thinking is reasoning-only. During thinking, do not emit tool-call markup, raw tool arguments, shell heredocs, or final user-facing prose. Describe the intended next action in words only.\n\n" +
   "There is no special User main message. User input is part of the environment and appears only in environment reminders as [user@channel] lines.\n" +
   "Environment reminders may be serialized with role=user for chat-template compatibility; only [user@channel] lines are user-authored input.\n" +
   "Treat new [user@channel] events as current user intent, not as background chatter.\n" +
-  "To reply: bash tool -> node dist/cli/main.js im send --channel <channel> --kind status --text '<reply>'\n" +
-  "To write a generated file: stash_file(content) -> bash tool -> node dist/cli/main.js artifact write <artifactId> <path>\n" +
-  "For generated files or multi-line payloads over about 2KB, do not put the content in a bash heredoc, node -e string, or sendInput. Use stash_file first.\n" +
+  "To reply or write generated content, use the receiver flow so payload bytes travel as frames rather than shell-quoted text.\n" +
   "After replying or completing work: io_wait tool -> wait for the next user message.\n\n" +
-  "Workflow: read user message -> bash/stash_file(work) -> bash(im send reply) -> io_wait.\n" +
-  "The tiny-agent CLI is available via `node dist/cli/main.js` (subcommands: im, skill, artifact).";
+  "Workflow: read [user@channel] intent -> inspect owner -> bash PTY actions/work -> receiver frames for large output -> io_wait.\n" +
+  "The tiny-agent CLI is available via `node dist/cli/main.js` (subcommands: im, receiver, skill, artifact).";
 
 // ---------------------------------------------------------------------------
 // PromptBuilder

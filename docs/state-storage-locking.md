@@ -338,7 +338,7 @@ runs.latest.lock
 
 ### Bash Session
 
-`tiny-agent` 内部的 BashSessionManager 是 session owner。
+`tiny-agent` 内部的 ManagedTerminalRuntime 是 session owner。
 
 它负责写：
 
@@ -369,7 +369,7 @@ Environment 是跨系统事件 ledger。
 写入者：
 
 - `im` CLI append `user_message_received`
-- BashSessionManager append `session_state_changed`、`command_finished`、`command_timed_out`
+- ManagedTerminalRuntime writes PTY observations through transcript tool-result events
 - `skill` CLI append `skill_run_started`、`skill_run_closed`、`skill_review_pending`、`skill_review_completed`
 
 文件：

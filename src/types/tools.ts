@@ -2,12 +2,12 @@
 //
 // Static tool catalog, tool request/review/result, and validation types.
 
-import type { BashObservation } from "./bash.js";
 import type { EnvironmentEvent } from "./environment.js";
+import type { PtyAction, PtyObservation } from "../terminal/types.js";
 
 // ─── Tool Catalog ───────────────────────────────────────────────────
 
-export type ToolName = "bash" | "stash_file";
+export type ToolName = "bash";
 
 /** A JSON Schema value (opaque to the harness). */
 export type JsonSchema = Record<string, unknown>;
@@ -19,59 +19,16 @@ export type ToolDefinition = {
   inputSchema: JsonSchema;
 };
 
-export type StashFileInput = {
-  name?: string;
-  content: string;
-  encoding?: "utf8" | "base64";
-  description?: string;
-};
-
 // ─── Tool Request (validated, ready for review) ─────────────────────
 
-export type BashToolRequest =
-  | {
-      kind: "command";
-      toolName: "bash";
-      toolCallId: string;
-      session: string;
-      command: string;
-      timeoutMs: number;
-    }
-  | {
-      kind: "control";
-      toolName: "bash";
-      toolCallId: string;
-      session?: string;
-      control:
-        | "list"
-        | "create"
-        | "status"
-        | "poll"
-        | "sendInput"
-        | "interrupt"
-        | "terminate"
-        | "restart";
-      input?: string;
-      createOptions?: {
-        cwd?: string;
-        shell?: string;
-        env?: Record<string, string>;
-        defaultTimeoutMs?: number;
-        maxObservationBytes?: number;
-      };
-    };
-
-export type StashFileToolRequest = {
-  kind: "stash_file";
-  toolName: "stash_file";
+export type BashToolRequest = {
+  kind: "pty_action";
+  toolName: "bash";
   toolCallId: string;
-  name?: string;
-  content: string;
-  encoding: "utf8" | "base64";
-  description?: string;
+  action: PtyAction;
 };
 
-export type ToolRequest = BashToolRequest | StashFileToolRequest;
+export type ToolRequest = BashToolRequest;
 
 // ─── Tool Review ────────────────────────────────────────────────────
 
@@ -87,7 +44,7 @@ export type ToolReviewDecision = {
 export type ToolResult = {
   toolCallId: string;
   toolName: ToolName;
-  observation: BashObservation | AgentObservation;
+  observation: PtyObservation | AgentObservation;
 };
 
 // ─── Tool Call Validation ───────────────────────────────────────────
@@ -111,15 +68,4 @@ export type AgentObservation =
         reason: string;
       };
       event?: EnvironmentEvent;
-    }
-  | {
-      kind: "file_artifact";
-      message: string;
-      recoverable: false;
-      artifactId: string;
-      name: string;
-      bytes: number;
-      sha256: string;
-      contentPath: string;
-      writeCommand: string;
     };

@@ -3,10 +3,13 @@ import type {
   ToolCallValidation,
   ToolRequest,
   AgentObservation,
-  BashCommandInput,
-  BashControlInput,
-  StashFileInput,
 } from "../types/index.js";
+import type { PtyAction, TerminalOwner } from "../terminal/types.js";
+import {
+  DEFAULT_PTY_ACTION_LIMITS,
+  validatePtyAction,
+  type PtyActionLimits,
+} from "../terminal/validator.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -37,230 +40,242 @@ function utf8Bytes(value: string): number {
 // ToolCallValidator
 // ---------------------------------------------------------------------------
 
-const DEFAULT_TIMEOUT_MS = 30_000;
-const MAX_PTY_INPUT_BYTES = 4096;
+const MAX_PTY_INPUT_BYTES = DEFAULT_PTY_ACTION_LIMITS.maxWriteTextBytes;
 
-const SESSION_CONTROLS = new Set([
-  "status",
-  "poll",
-  "interrupt",
-  "terminate",
-  "restart",
-]);
+export type ToolCallValidatorOptions = {
+  terminalOwner?: TerminalOwner;
+  actionLimits?: Partial<PtyActionLimits>;
+};
 
 export class ToolCallValidator {
+  constructor(private readonly options: ToolCallValidatorOptions = {}) {}
+
   validate(toolCall: InternalToolCall): ToolCallValidation {
     const toolName = (toolCall as { name: string }).name;
 
-    if (toolName === "stash_file") {
-      return this.validateStashFile(
-        toolCall.id,
-        toolCall.arguments as StashFileInput,
-      );
-    }
-
     if (toolName !== "bash") {
-      return invalid(
-        `Unknown tool "${toolName}". Available tools are "bash" and "stash_file".`,
-      );
+      return invalid(`Unknown tool "${toolName}". Available tool is "bash".`);
     }
 
     const args = toolCall.arguments;
 
-    // Discriminate: control input vs command input
-    if ("control" in args && args.control !== undefined) {
-      return this.validateControl(toolCall.id, args as BashControlInput);
+    if ("kind" in args && args.kind !== undefined) {
+      return this.validatePtyAction(toolCall.id, args as Record<string, unknown>);
     }
 
-    // Must be a command input
-    return this.validateCommand(toolCall.id, args as BashCommandInput);
+    if ("command" in args || "control" in args) {
+      return invalid(
+        "Invalid bash tool arguments: payload must be a PTY action object. " +
+          "Use PTY actions such as write_text, key, input_frame, end_input, poll, status, interrupt, terminate, or restart.",
+      );
+    }
+
+    return invalid("Invalid bash tool arguments: expected a PTY action `kind`.");
   }
 
-  private validateStashFile(
+  private validatePtyAction(
     toolCallId: string,
-    args: StashFileInput,
+    args: Record<string, unknown>,
   ): ToolCallValidation {
-    if (!isString(args.content)) {
-      return invalid(
-        "Invalid stash_file arguments: content must be a string.",
-      );
+    const action = parsePtyAction(args);
+    if (typeof action === "string") {
+      return invalid(action);
     }
 
-    if (args.name !== undefined && !isString(args.name)) {
-      return invalid("Invalid stash_file arguments: name must be a string.");
+    const gated = gateSmallPayload(action, this.options.actionLimits);
+    if (gated !== undefined) {
+      return invalid(gated);
     }
 
-    if (args.description !== undefined && !isString(args.description)) {
-      return invalid(
-        "Invalid stash_file arguments: description must be a string.",
-      );
-    }
-
-    const encoding = args.encoding ?? "utf8";
-    if (encoding !== "utf8" && encoding !== "base64") {
-      return invalid(
-        'Invalid stash_file arguments: encoding must be "utf8" or "base64".',
-      );
+    if (this.options.terminalOwner !== undefined) {
+      const validation = validatePtyAction({
+        action,
+        owner: this.options.terminalOwner,
+        limits: this.options.actionLimits,
+      });
+      if (!validation.ok) {
+        return invalid(`${validation.code}: ${validation.message}`);
+      }
     }
 
     const request: ToolRequest = {
-      kind: "stash_file",
-      toolName: "stash_file",
-      toolCallId,
-      name: args.name,
-      content: args.content,
-      encoding,
-      description: args.description,
-    };
-
-    return { status: "valid", request };
-  }
-
-  // -----------------------------------------------------------------------
-  // Command validation
-  // -----------------------------------------------------------------------
-
-  private validateCommand(
-    toolCallId: string,
-    args: BashCommandInput,
-  ): ToolCallValidation {
-    if (!isNonEmptyString(args.command)) {
-      return invalid(
-        "Invalid bash tool arguments: command input requires a non-empty command.",
-      );
-    }
-
-    const commandBytes = utf8Bytes(args.command);
-    if (commandBytes > MAX_PTY_INPUT_BYTES) {
-      return invalid(
-        `Invalid bash tool arguments: command is ${commandBytes} bytes, above the ${MAX_PTY_INPUT_BYTES}-byte PTY input limit. ` +
-          "Stage large file content with stash_file, then run a short artifact write command.",
-      );
-    }
-
-    const timeoutMs =
-      typeof args.timeoutMs === "number" && args.timeoutMs > 0
-        ? args.timeoutMs
-        : DEFAULT_TIMEOUT_MS;
-    const session = isNonEmptyString(args.session) ? args.session : "default";
-
-    const request: ToolRequest = {
-      kind: "command",
+      kind: "pty_action",
       toolName: "bash",
       toolCallId,
-      session,
-      command: args.command,
-      timeoutMs,
+      action,
     };
 
     return { status: "valid", request };
   }
+}
 
-  // -----------------------------------------------------------------------
-  // Control validation
-  // -----------------------------------------------------------------------
+function parsePtyAction(args: Record<string, unknown>): PtyAction | string {
+  if (!isString(args.kind)) {
+    return "Invalid bash tool arguments: PTY action kind must be a string.";
+  }
 
-  private validateControl(
-    toolCallId: string,
-    args: BashControlInput,
-  ): ToolCallValidation {
-    const control = args.control;
+  const session = parseOptionalSession(args.session);
+  if (typeof session === "string" && session.startsWith("error:")) {
+    return session.slice("error:".length);
+  }
 
-    // list — no session required
-    if (control === "list") {
-      const request: ToolRequest = {
-        kind: "control",
-        toolName: "bash",
-        toolCallId,
-        control: "list",
-      };
-      return { status: "valid", request };
+  switch (args.kind) {
+    case "write_text": {
+      const common = parseExpectedOwnerRevision(args);
+      if (typeof common === "string") return common;
+      if (!isString(args.text)) {
+        return "Invalid bash tool arguments: write_text requires text.";
+      }
+      return { kind: "write_text", session, ...common, text: args.text };
     }
-
-    // create — requires session
-    if (control === "create") {
-      if (!isNonEmptyString(args.session)) {
-        return invalid(
-          "Invalid bash tool arguments: create control requires a non-empty session.",
-        );
+    case "key": {
+      const common = parseExpectedOwnerRevision(args);
+      if (typeof common === "string") return common;
+      if (!isTerminalKey(args.key)) {
+        return "Invalid bash tool arguments: key requires a supported terminal key.";
       }
-      const request: ToolRequest = {
-        kind: "control",
-        toolName: "bash",
-        toolCallId,
-        session: args.session,
-        control: "create",
-        createOptions: {
-          cwd: isString(args.cwd) ? args.cwd : undefined,
-          shell: isString(args.shell) ? args.shell : undefined,
-          env: args.env,
-          defaultTimeoutMs:
-            typeof args.defaultTimeoutMs === "number"
-              ? args.defaultTimeoutMs
-              : undefined,
-          maxObservationBytes:
-            typeof args.maxObservationBytes === "number"
-              ? args.maxObservationBytes
-              : undefined,
-        },
-      };
-      return { status: "valid", request };
+      return { kind: "key", session, ...common, key: args.key };
     }
-
-    // sendInput — requires session + input
-    if (control === "sendInput") {
-      if (!isNonEmptyString(args.session)) {
-        return invalid(
-          "Invalid bash tool arguments: sendInput control requires a non-empty session.",
-        );
+    case "input_frame": {
+      const common = parseExpectedOwnerRevision(args);
+      if (typeof common === "string") return common;
+      if (!isNonEmptyString(args.receiverId)) {
+        return "Invalid bash tool arguments: input_frame requires receiverId.";
       }
-      if (!isString(args.input)) {
-        return invalid(
-          "Invalid bash tool arguments: sendInput control requires an input string.",
-        );
+      const seq = parseNonNegativeInteger(args.seq, "seq");
+      if (typeof seq === "string") return seq;
+      if (!isString(args.dataBase64) || !isBase64(args.dataBase64)) {
+        return "Invalid bash tool arguments: input_frame requires valid base64 dataBase64.";
       }
-      const inputBytes = utf8Bytes(args.input);
-      if (inputBytes > MAX_PTY_INPUT_BYTES) {
-        return invalid(
-          `Invalid bash tool arguments: sendInput is ${inputBytes} bytes, above the ${MAX_PTY_INPUT_BYTES}-byte PTY input limit. ` +
-            "Use stash_file for large content instead of streaming it through the PTY.",
-        );
-      }
-      const request: ToolRequest = {
-        kind: "control",
-        toolName: "bash",
-        toolCallId,
-        session: args.session,
-        control: "sendInput",
-        input: args.input,
+      return {
+        kind: "input_frame",
+        session,
+        ...common,
+        receiverId: args.receiverId,
+        seq,
+        dataBase64: args.dataBase64,
       };
-      return { status: "valid", request };
     }
-
-    // status | poll | interrupt | terminate | restart — requires session
-    if (SESSION_CONTROLS.has(control)) {
-      if (!isNonEmptyString(args.session)) {
-        return invalid(
-          `Invalid bash tool arguments: ${control} control requires a non-empty session.`,
-        );
+    case "end_input": {
+      const common = parseExpectedOwnerRevision(args);
+      if (typeof common === "string") return common;
+      if (!isNonEmptyString(args.receiverId)) {
+        return "Invalid bash tool arguments: end_input requires receiverId.";
       }
-      const request: ToolRequest = {
-        kind: "control",
-        toolName: "bash",
-        toolCallId,
-        session: args.session,
-        control: control as
-          | "status"
-          | "poll"
-          | "interrupt"
-          | "terminate"
-          | "restart",
+      const frames = parseNonNegativeInteger(args.frames, "frames");
+      if (typeof frames === "string") return frames;
+      const bytes = parseNonNegativeInteger(args.bytes, "bytes");
+      if (typeof bytes === "string") return bytes;
+      if (!isNonEmptyString(args.sha256)) {
+        return "Invalid bash tool arguments: end_input requires sha256.";
+      }
+      return {
+        kind: "end_input",
+        session,
+        ...common,
+        receiverId: args.receiverId,
+        frames,
+        bytes,
+        sha256: args.sha256,
       };
-      return { status: "valid", request };
     }
+    case "poll": {
+      const sinceSeq =
+        args.sinceSeq === undefined
+          ? undefined
+          : parseNonNegativeInteger(args.sinceSeq, "sinceSeq");
+      if (typeof sinceSeq === "string") return sinceSeq;
+      return { kind: "poll", session, sinceSeq };
+    }
+    case "status":
+      return { kind: "status", session };
+    case "interrupt": {
+      if (args.expectedOwnerRevision !== undefined) {
+        const common = parseExpectedOwnerRevision(args);
+        if (typeof common === "string") return common;
+        return { kind: "interrupt", session, ...common };
+      }
+      return { kind: "interrupt", session };
+    }
+    case "terminate":
+      return { kind: "terminate", session };
+    case "restart": {
+      if (args.cwd !== undefined && !isString(args.cwd)) {
+        return "Invalid bash tool arguments: restart cwd must be a string.";
+      }
+      return { kind: "restart", session, cwd: args.cwd };
+    }
+    default:
+      return `Invalid bash tool arguments: unknown PTY action kind "${args.kind}".`;
+  }
+}
 
-    return invalid(
-      `Invalid bash tool arguments: unknown control "${String(control)}".`,
+function parseExpectedOwnerRevision(
+  args: Record<string, unknown>,
+): { expectedOwnerRevision: number } | string {
+  const value = args.expectedOwnerRevision;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    return "Invalid bash tool arguments: expectedOwnerRevision must be a non-negative integer.";
+  }
+  return { expectedOwnerRevision: value };
+}
+
+function parseOptionalSession(value: unknown): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isNonEmptyString(value)) {
+    return "error:Invalid bash tool arguments: session must be a non-empty string when provided.";
+  }
+  return value;
+}
+
+function parseNonNegativeInteger(value: unknown, name: string): number | string {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    return `Invalid bash tool arguments: ${name} must be a non-negative integer.`;
+  }
+  return value;
+}
+
+function gateSmallPayload(
+  action: PtyAction,
+  limits: Partial<PtyActionLimits> | undefined,
+): string | undefined {
+  const maxWriteTextBytes = limits?.maxWriteTextBytes ?? MAX_PTY_INPUT_BYTES;
+  const maxFrameBytes = limits?.maxFrameBytes ?? DEFAULT_PTY_ACTION_LIMITS.maxFrameBytes;
+  if (action.kind === "write_text" && utf8Bytes(action.text) > maxWriteTextBytes) {
+    return (
+      `Invalid bash tool arguments: write_text is above the ${maxWriteTextBytes}-byte PTY small-input limit. ` +
+      "Start a receiver, then use input_frame and end_input for large payloads."
     );
   }
+
+  if (action.kind === "input_frame" && utf8Bytes(action.dataBase64) > maxFrameBytes) {
+    return `Invalid bash tool arguments: input_frame is above the ${maxFrameBytes}-byte receiver frame limit.`;
+  }
+
+  return undefined;
+}
+
+function isTerminalKey(value: unknown): value is Extract<PtyAction, { kind: "key" }>["key"] {
+  return (
+    value === "enter" ||
+    value === "ctrl-c" ||
+    value === "ctrl-d" ||
+    value === "escape" ||
+    value === "tab" ||
+    value === "up" ||
+    value === "down"
+  );
+}
+
+function isBase64(value: string): boolean {
+  if (value.length === 0) {
+    return true;
+  }
+  if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(value)) {
+    return false;
+  }
+  const firstPadding = value.indexOf("=");
+  return firstPadding === -1 || /^=+$/u.test(value.slice(firstPadding));
 }

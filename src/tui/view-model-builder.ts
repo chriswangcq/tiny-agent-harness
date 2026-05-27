@@ -6,7 +6,7 @@
 
 import type { RunEvent, AgentRunStateData } from "../types/run.js";
 import type { ModelTurn } from "../types/model.js";
-import type { BashObservation } from "../types/bash.js";
+import type { PtyObservation } from "../terminal/types.js";
 import type {
   UserMessage,
   AgentMessage,
@@ -242,28 +242,35 @@ export class ViewModelBuilder {
           let summary: string;
           let logPath: string | undefined;
 
-          if (isBashObservation(observation)) {
-            const timedOut = observation.timedOut === true;
-            status = timedOut
-              ? "waiting"
-              : observation.returnCode === 0
+          if (isPtyObservation(observation)) {
+            status =
+              observation.result === "ok"
                 ? "ok"
-                : "error";
+                : observation.result === "rejected"
+                  ? "warn"
+                  : observation.result === "timeout"
+                    ? "waiting"
+                    : "warn";
             title = observation.errorCode
-              ? `bash rejected ${observation.errorCode}`
-              : timedOut
-              ? "bash timed out, focus released"
-              : `bash finished rc=${observation.returnCode}`;
-            summary = observation.message
-              ? observation.message
-              : timedOut
-              ? `session=${observation.session ?? "unknown"} still running`
-              : observation.output?.slice(0, 200) ?? "";
-            logPath = observation.outputLogPath;
+              ? `pty rejected ${observation.errorCode}`
+              : `pty ${observation.result} ${observation.action.kind}`;
+            summary = formatPtyObservationSummary(observation);
+            logPath = observation.logRef;
           } else {
-            status = "ok";
+            const observationRecord: Record<string, unknown> = isRecord(observation)
+              ? observation
+              : {};
+            const result =
+              typeof observationRecord.result === "string"
+                ? observationRecord.result
+                : "ok";
+            status = result === "rejected" ? "warn" : "ok";
             title = `${event.request.toolName} finished`;
-            summary = observation.message;
+            summary =
+              observation.message ??
+              (typeof observationRecord.result === "string"
+                ? `result=${observationRecord.result}`
+                : "");
           }
 
           this.pushFrame({
@@ -512,12 +519,6 @@ function formatEnvironmentEventSummary(event: EnvironmentEvent): string {
   switch (event.kind) {
     case "user_message_received":
       return `event=${event.id} [user@${event.message.channel}] ${truncateForSummary(event.message.text)}`;
-    case "session_state_changed":
-      return `event=${event.id} session=${event.session} ${event.previousState}->${event.nextState}`;
-    case "command_finished":
-      return `event=${event.id} command_finished session=${event.session} rc=${event.returnCode}`;
-    case "command_timed_out":
-      return `event=${event.id} command_timed_out session=${event.session}`;
     case "skill_run_started":
     case "skill_run_closed":
     case "skill_review_pending":
@@ -533,24 +534,22 @@ function truncateForSummary(text: string, maxLength = 80): string {
 function formatToolCallSummary(toolCall: { name?: string; arguments: unknown }): string {
   const args = toolCall.arguments;
   if (isRecord(args)) {
-    if (toolCall.name === "stash_file") {
-      const name = typeof args.name === "string" ? args.name : "artifact";
-      const content =
-        typeof args.content === "string"
-          ? `${Buffer.byteLength(args.content, "utf8")} chars`
-          : "content";
-      return `name=${JSON.stringify(name)} ${content}`;
+    const actionKind = typeof args.kind === "string" ? args.kind : undefined;
+    if (actionKind) {
+      const session = typeof args.session === "string" ? args.session : "default";
+      const parts = [`action=${actionKind}`, `session=${session}`];
+      if (typeof args.expectedOwnerRevision === "number") {
+        parts.push(`rev=${args.expectedOwnerRevision}`);
+      }
+      if (typeof args.receiverId === "string") {
+        parts.push(`receiver=${args.receiverId}`);
+      }
+      if (typeof args.seq === "number") {
+        parts.push(`seq=${args.seq}`);
+      }
+      return parts.join(" ");
     }
-    const session = typeof args.session === "string" ? args.session : "default";
-    const command = typeof args.command === "string" ? args.command : undefined;
-    if (command) {
-      return `session=${session} command=${JSON.stringify(truncateForSummary(command, 80))}`;
-    }
-    const control = typeof args.control === "string" ? args.control : undefined;
-    if (control) {
-      return `control=${control}${typeof args.session === "string" ? ` session=${args.session}` : ""}`;
-    }
-    return `session=${session}`;
+    return "";
   }
   return "";
 }
@@ -581,7 +580,7 @@ function formatDetail(
 
 function formatDetailValue(value: unknown): string {
   if (typeof value === "string") return value;
-  return JSON.stringify(value, null, 2);
+  return JSON.stringify(redactReceiverPayloads(value), null, 2);
 }
 
 function compactLongText(value: string | undefined, maxLength = 2400): string | undefined {
@@ -602,6 +601,56 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isBashObservation(value: unknown): value is BashObservation {
-  return isRecord(value) && "returnCode" in value && "output" in value;
+function isPtyObservation(value: unknown): value is PtyObservation {
+  return (
+    isRecord(value) &&
+    "owner" in value &&
+    "action" in value &&
+    "result" in value &&
+    "events" in value
+  );
+}
+
+function formatPtyObservationSummary(observation: PtyObservation): string {
+  const owner = `${observation.owner.kind}#${observation.owner.revision}`;
+  const parts = [`action=${observation.action.kind}`, `owner=${owner}`];
+  if (observation.action.receiverId) {
+    parts.push(`receiver=${observation.action.receiverId}`);
+  }
+  if (observation.action.seq !== undefined) {
+    parts.push(`seq=${observation.action.seq}`);
+  }
+  if (observation.action.bytes !== undefined) {
+    parts.push(`bytes=${observation.action.bytes}`);
+  }
+  if (observation.action.redacted) {
+    parts.push("redacted=true");
+  }
+  if (observation.message) {
+    parts.push(observation.message);
+  }
+  return parts.join(" ");
+}
+
+function redactReceiverPayloads(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactReceiverPayloads(item));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const next: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (
+      key === "dataBase64" &&
+      typeof child === "string" &&
+      value.kind === "input_frame"
+    ) {
+      next[key] = `[redacted base64 frame ${child.length} chars]`;
+    } else {
+      next[key] = redactReceiverPayloads(child);
+    }
+  }
+  return next;
 }

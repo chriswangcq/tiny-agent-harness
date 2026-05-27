@@ -10,7 +10,6 @@ import type {
   ModelProgressEvent,
   ModelStepContext,
   ModelTurn,
-  StashFileInput,
   ToolDefinition,
   V4ChatMessage,
   V4Tool,
@@ -55,10 +54,6 @@ type Decision =
   | {
       name: "bash";
       arguments: BashToolInput;
-    }
-  | {
-      name: "stash_file";
-      arguments: StashFileInput;
     }
   | {
       name: "io_wait";
@@ -478,20 +473,12 @@ export class DeepSeekFimAdapter {
       };
     }
 
-    const toolCall: InternalToolCall =
-      decision.name === "bash"
-        ? {
-            id: `fim-call-${context.runId}-${context.stepIndex}`,
-            name: "bash",
-            arguments: decision.arguments,
-            raw: decision,
-          }
-        : {
-            id: `fim-call-${context.runId}-${context.stepIndex}`,
-            name: "stash_file",
-            arguments: decision.arguments,
-            raw: decision,
-          };
+    const toolCall: InternalToolCall = {
+      id: `fim-call-${context.runId}-${context.stepIndex}`,
+      name: "bash",
+      arguments: decision.arguments,
+      raw: decision,
+    };
 
     return {
       kind: "tool_call",
@@ -859,13 +846,6 @@ function buildDecision(
     return {
       status: "valid",
       decision: { name: "bash", arguments: args as BashToolInput },
-    };
-  }
-
-  if (name === "stash_file") {
-    return {
-      status: "valid",
-      decision: { name: "stash_file", arguments: args as StashFileInput },
     };
   }
 

@@ -39,34 +39,6 @@ describe("Environment reminder rendering", () => {
         },
       },
       {
-        id: "env-002",
-        kind: "session_state_changed",
-        source: "bash",
-        timestamp: "2026-05-25T12:00:03Z",
-        session: "server",
-        previousState: "running",
-        nextState: "idle",
-      },
-      {
-        id: "env-003",
-        kind: "command_finished",
-        source: "bash",
-        timestamp: "2026-05-25T12:00:04Z",
-        session: "test",
-        commandId: "cmd-123",
-        returnCode: 1,
-        outputLogPath: ".tiny-agent/sessions/test.log",
-      },
-      {
-        id: "env-004",
-        kind: "command_timed_out",
-        source: "bash",
-        timestamp: "2026-05-25T12:00:05Z",
-        session: "build",
-        commandId: "cmd-456",
-        outputLogPath: ".tiny-agent/sessions/build.log",
-      },
-      {
         id: "env-005",
         kind: "skill_run_started",
         source: "skill",
@@ -82,11 +54,6 @@ describe("Environment reminder rendering", () => {
 
     expect(reminder).toContain("Environment reminder:");
     expect(reminder).toContain("[user@default] continue with option B");
-    expect(reminder).toContain("session_state_changed");
-    expect(reminder).toContain("running -> idle");
-    expect(reminder).toContain("command_finished");
-    expect(reminder).toContain("rc=1");
-    expect(reminder).toContain("command_timed_out");
     expect(reminder).toContain("skill_run_started");
     expect(reminder).toContain("sr-001");
   });
@@ -101,23 +68,21 @@ describe("Environment consumeSince + waitFor closed loop", () => {
     const env = new Environment();
     const evt1: EnvironmentEvent = {
       id: "e1",
-      kind: "command_finished",
-      source: "bash",
+      kind: "skill_run_started",
+      source: "skill",
       timestamp: "2026-01-01T00:00:00Z",
-      session: "s",
-      commandId: "c1",
-      returnCode: 0,
-      outputLogPath: "log",
+      skillRunId: "sr-1",
+      skill: "review",
+      statePath: "state-1.json",
     };
     const evt2: EnvironmentEvent = {
       id: "e2",
-      kind: "command_finished",
-      source: "bash",
+      kind: "skill_run_closed",
+      source: "skill",
       timestamp: "2026-01-01T00:00:01Z",
-      session: "s",
-      commandId: "c2",
-      returnCode: 0,
-      outputLogPath: "log",
+      skillRunId: "sr-1",
+      skill: "review",
+      statePath: "state-1.json",
     };
 
     env.appendEvent(evt1);

@@ -1,388 +1,71 @@
-# Static Tool Catalog Design
+# Static Bash Tool Definition
 
-本文记录 tiny-agent-harness 第一版工具定义方案。
+本文记录当前 model-visible tool catalog。Harness 不再暴露命令级 bash request、session control request 或额外文件暂存工具；模型看到的外部动作只有 `bash`，等待外部事件用内部 decision function `io_wait`。
 
 ## Decision
 
-第一版不做动态 tool registry，不做插件式注册，也不允许用户配置新增工具。
-
-Harness 写死一个很小的 model-visible tool catalog：
-
-```text
-bash
-stash_file
-```
-
-`bash` 是唯一外部动作工具。`stash_file` 是内部 file artifact staging 工具，用来把生成文件字节先写到 harness state，再由 `bash` 通过 `node dist/cli/main.js artifact write <artifactId> <path>` 物化到目标文件系统。`io_wait` 是 model decision function，但不进入 review/execute tool catalog。
-
-这些工具仍然用通用 tool definition 形状描述给 DeepSeek FIM adapter。FIM adapter 会把这份定义写入 decision prompt，并在 decision 生成后用同一份 schema 做校验。
-
 ```text
 StaticToolCatalog
-  contains exactly two tools: bash, stash_file
+  contains exactly one model-visible external tool: bash
 
 DeepSeekFimAdapter
-  receives common ToolDefinition[]
-  writes tool description and schema into FIM decision context
-  normalizes FIM DSML decision into ModelTurn
+  receives ToolDefinition[]
+  appends io_wait as the internal wait function
+  normalizes DSML decisions into ModelTurn
+
+ToolCallValidator
+  accepts only PTY action payloads for bash
+  rejects non-PTY payloads
 
 RunOrchestrator
-  receives InternalToolCall
-  validates arguments
-  sends ToolRequest to review
-  executes bash through BashSessionManager
-  executes stash_file through FileArtifactStore
+  validates -> reviews -> executes PTY actions through TerminalPort
+
+ManagedTerminalRuntime
+  owns persistent node-pty sessions
+  applies TerminalOwner/revision validation
+  writes exact PTY bytes or terminal key sequences
 ```
+
+## Bash Input Schema
+
+`bash` input is a discriminated PTY action object:
+
+```ts
+type BashToolInput =
+  | { kind: "write_text"; session?: string; expectedOwnerRevision: number; text: string }
+  | { kind: "key"; session?: string; expectedOwnerRevision: number; key: TerminalKey }
+  | { kind: "input_frame"; session?: string; expectedOwnerRevision: number; receiverId: string; seq: number; dataBase64: string }
+  | { kind: "end_input"; session?: string; expectedOwnerRevision: number; receiverId: string; frames: number; bytes: number; sha256: string }
+  | { kind: "poll"; session?: string; sinceSeq?: number }
+  | { kind: "status"; session?: string }
+  | { kind: "interrupt"; session?: string; expectedOwnerRevision?: number }
+  | { kind: "terminate"; session?: string }
+  | { kind: "restart"; session?: string; cwd?: string };
+```
+
+Important semantics:
+
+- `write_text` writes exact text bytes. It does not append Enter. Include `\n` explicitly or use `{ kind: "key", key: "enter" }`.
+- `key` is for terminal keys such as Enter, Ctrl-C, Ctrl-D, Escape, Tab, Up, and Down.
+- `input_frame` and `end_input` are only valid while the terminal owner is a receiver.
+- `poll`, `status`, `interrupt`, `terminate`, and `restart` are control actions over the PTY session, not shell commands.
+- Every write-like action carries `expectedOwnerRevision`; stale revisions are rejected.
+
+## Large Payloads
+
+Generated files, IM replies, code blocks, and other multi-KB payloads must use the receiver protocol:
+
+1. Use `write_text` to start a receiver CLI in the shell owner.
+2. Wait for the observation to report owner kind `receiver` and a `receiverId`.
+3. Send base64 chunks with `input_frame`.
+4. Close with `end_input`, including frame count, byte count, and sha256.
+
+This keeps payload bytes out of shell quoting and out of PTY paste buffers.
 
 ## Non Goals
 
-第一版明确不做：
-
-- runtime tool registration
-- external plugin loading
-- per-project tool enable/disable config
-- multiple business tools such as `read_file` / `run_tests`
-- MCP as an in-process SDK tool
-
-MCP、memory、skills、sub-agent、tests 都必须通过 `bash` 调用 CLI。生成文件可以先通过 `stash_file` 暂存字节，但目标文件写入仍通过 `bash` 调 CLI。
-
-## Common Tool Definition
-
-这是 harness 内部使用的 tool definition。
-
-```ts
-type ToolName = "bash" | "stash_file";
-
-type ToolDefinition = {
-  name: ToolName;
-  description: string;
-  inputSchema: JsonSchema;
-};
-```
-
-第一版工具目录是常量：
-
-```ts
-const BASH_TOOL_DEFINITION: ToolDefinition = {
-  name: "bash",
-  description: "Run shell commands or manage persistent bash sessions. All external actions must go through this tool.",
-  inputSchema: BashToolInputSchema
-};
-
-const STASH_FILE_TOOL_DEFINITION: ToolDefinition = {
-  name: "stash_file",
-  description: "Stage generated file bytes in harness-managed artifact state before bash materializes them.",
-  inputSchema: StashFileInputSchema
-};
-
-const STATIC_TOOL_CATALOG = [
-  BASH_TOOL_DEFINITION,
-  STASH_FILE_TOOL_DEFINITION
-] as const;
-```
-
-这里叫 catalog，而不是 registry，是为了避免暗示运行时可注册。后续如果要扩展，也应该先明确是否仍坚持 bash 作为唯一外部动作面。
-
-## Internal Tool Call
-
-无论 FIM decision 原始文本是什么，模型适配层都尝试归一化为：
-
-```ts
-type InternalToolCall = {
-  id: string;
-  name: "bash" | "stash_file";
-  arguments: BashToolInput | StashFileInput;
-  raw?: unknown;
-};
-```
-
-因为 FIM 没有 provider-generated tool call id，harness 会生成 `id`，格式建议为 `fim-call-{runId}-{stepIndex}`。
-
-## Model Turn
-
-Model adapter 输出三种结果：
-
-```ts
-type ModelTurn =
-  | {
-      kind: "tool_call";
-      toolCall: InternalToolCall;
-      thinking: AgentThinking;
-      rawDecision: string;
-      raw?: unknown;
-    }
-  | {
-      kind: "io_wait";
-      wait: IoWaitRequest;
-      thinking: AgentThinking;
-      rawDecision: string;
-      raw?: unknown;
-    }
-  | {
-      kind: "invalid_output";
-      message: string;
-      thinking?: AgentThinking;
-      rawDecision?: string;
-      raw?: unknown;
-    };
-```
-
-Run state 只消费 `ModelTurn`，不直接消费 FIM 原始文本。
-
-## Bash Tool Input
-
-因为 tool call 的 name 已经是 `bash`，arguments 里不再重复携带 `tool: "bash"`。
-
-```ts
-type BashToolInput = BashCommandInput | BashControlInput;
-
-type BashCommandInput = {
-  session?: string;
-  command: string;
-  timeoutMs?: number;
-};
-
-type BashControlInput =
-  | {
-      control: "list";
-    }
-  | {
-      control: "create";
-      session: string;
-      cwd?: string;
-      shell?: string;
-      env?: Record<string, string>;
-      defaultTimeoutMs?: number;
-      maxObservationBytes?: number;
-    }
-  | {
-      control: "status" | "poll" | "interrupt" | "terminate" | "restart";
-      session: string;
-    }
-  | {
-      control: "sendInput";
-      session: string;
-      input: string;
-    };
-```
-
-Command 示例：
-
-```json
-{
-  "session": "default",
-  "command": "pwd && ls -la",
-  "timeoutMs": 10000
-}
-```
-
-Control 示例：
-
-```json
-{
-  "control": "poll",
-  "session": "server"
-}
-```
-
-## JSON Schema Shape
-
-`BashToolInputSchema` 使用 `oneOf` 区分普通命令和 session control。
-
-```json
-{
-  "type": "object",
-  "oneOf": [
-    {
-      "title": "BashCommandInput",
-      "required": ["command"],
-      "properties": {
-        "session": {
-          "type": "string",
-          "description": "Optional persistent bash session id. Defaults to default when omitted."
-        },
-        "command": {
-          "type": "string",
-          "description": "Bash command to execute in the selected session."
-        },
-        "timeoutMs": {
-          "type": "number",
-          "description": "How long the harness should focus-wait for completion. Defaults to 30000."
-        }
-      },
-      "additionalProperties": false
-    },
-    {
-      "title": "BashListControlInput",
-      "required": ["control"],
-      "properties": {
-        "control": {
-          "const": "list"
-        }
-      },
-      "additionalProperties": false
-    },
-    {
-      "title": "BashCreateControlInput",
-      "required": ["control", "session"],
-      "properties": {
-        "control": {
-          "const": "create"
-        },
-        "session": {
-          "type": "string"
-        },
-        "cwd": {
-          "type": "string"
-        },
-        "shell": {
-          "type": "string"
-        },
-        "env": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "defaultTimeoutMs": {
-          "type": "number"
-        },
-        "maxObservationBytes": {
-          "type": "number"
-        }
-      },
-      "additionalProperties": false
-    },
-    {
-      "title": "BashSessionControlInput",
-      "required": ["control", "session"],
-      "properties": {
-        "control": {
-          "enum": ["status", "poll", "interrupt", "terminate", "restart"]
-        },
-        "session": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    {
-      "title": "BashSendInputControlInput",
-      "required": ["control", "session", "input"],
-      "properties": {
-        "control": {
-          "const": "sendInput"
-        },
-        "session": {
-          "type": "string"
-        },
-        "input": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    }
-  ]
-}
-```
-
-## Validation
-
-Validation happens after FIM decision normalization and before review.
-
-```text
-FIM decision JSON
-  -> InternalToolCall
-  -> schema validation
-  -> ToolRequest
-  -> review
-  -> execution
-```
-
-Invalid arguments produce a synthetic observation instead of executing:
-
-```json
-{
-  "kind": "tool_validation",
-  "message": "Invalid bash tool arguments: command input requires a non-empty command.",
-  "recoverable": true
-}
-```
-
-This observation is fed back into the next model turn.
-
-## Tool Request
-
-Validated tool calls become reviewable `ToolRequest`.
-
-```ts
-type ToolRequest =
-  | {
-      kind: "command";
-      toolName: "bash";
-      toolCallId: string;
-      session: string;
-      command: string;
-      timeoutMs: number;
-    }
-  | {
-      kind: "control";
-      toolName: "bash";
-      toolCallId: string;
-      session?: string;
-      control: "list" | "create" | "status" | "poll" | "sendInput" | "interrupt" | "terminate" | "restart";
-      input?: string;
-      createOptions?: {
-        cwd?: string;
-        shell?: string;
-        env?: Record<string, string>;
-        defaultTimeoutMs?: number;
-        maxObservationBytes?: number;
-      };
-    };
-```
-
-`timeoutMs` defaults to `30000` during this conversion.
-
-## Tool Result
-
-After execution, the result keeps harness-level identity:
-
-```ts
-type ToolResult = {
-  toolCallId: string;
-  toolName: "bash";
-  observation: BashObservation | AgentObservation;
-};
-```
-
-For the FIM adapter, `ToolResult` is rendered into the next step context as an observation. The decision surface uses DeepSeek V4 native tool-call framing, but tool results are still harness observations rather than provider-native tool result messages.
-
-## Execution Chain
-
-```text
-1. DeepSeekFimAdapter writes STATIC_TOOL_CATALOG into the FIM decision context.
-2. FIM thinking pass generates reasoning-only text.
-3. FIM decision pass fills the DeepSeek V4 DSML tool-call middle: `function_name">...<｜DSML｜parameter ...>`.
-4. DeepSeekFimAdapter normalizes the decision into ModelTurn.
-5. If ModelTurn is io_wait, AgentRunState waits for the matching environment event.
-6. If ModelTurn is tool_call, harness validates the bash arguments.
-7. Valid arguments become ToolRequest.
-8. ToolRequest enters ToolReviewer.
-9. Approved request is executed by BashSessionManager.
-10. BashSessionManager returns BashObservation.
-11. ToolResult is appended to transcript and rendered into the next FIM step context.
-```
-
-## Implementation Notes
-
-Keep the first implementation deliberately narrow:
-
-- define `BASH_TOOL_DEFINITION` as a constant
-- define `STATIC_TOOL_CATALOG` as `[BASH_TOOL_DEFINITION]`
-- reject any tool call whose name is not `bash`
-- reject bash arguments that fail schema validation
-- do not add a public registration API
-- do not read tool definitions from config files
-
-This preserves the core idea: the harness is extensible in architecture, but the demo has one clear current path.
+- No command-shaped bash tool payload.
+- No separate text control action.
+- No line-oriented PTY action.
+- No model-visible file staging tool.
+- No provider-native tool calling dependency.

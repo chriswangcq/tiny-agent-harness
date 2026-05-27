@@ -9,10 +9,15 @@ describe("PromptBuilder", () => {
     expect(prompt.messages).toHaveLength(1);
     expect(prompt.messages[0]).toMatchObject({
       role: "system",
-      content: expect.stringContaining("three tools: bash, stash_file, and io_wait"),
+      content: expect.stringContaining("owner/revision guarded actions"),
     });
-    expect(prompt.messages[0]!.content).toContain("bash command fields");
-    expect(prompt.messages[0]!.content).toContain("artifact write");
+    expect(prompt.messages[0]!.content).toContain("PTY action kinds");
+    expect(prompt.messages[0]!.content).toContain("input_frame");
+    expect(prompt.messages[0]!.content).toContain("receiver start --target im");
+    expect(prompt.messages[0]!.content).not.toContain("bash command fields");
+    expect(prompt.messages[0]!.content).not.toContain("im send --text");
+    expect(prompt.messages[0]!.content).not.toContain("UnsupportedControlPayload");
+    expect(prompt.messages[0]!.content).not.toContain("artifact write");
     expect(prompt.messages[0]!.content).toContain("Thinking is reasoning-only");
     expect(prompt.messages[0]!.content).not.toContain("DSML");
     expect(prompt.messages[0]!.content).toContain("no special User main message");
@@ -25,16 +30,24 @@ describe("PromptBuilder", () => {
         role: "assistant_tool_call",
         toolCallId: "call-1",
         name: "bash",
-        arguments: { session: "default", command: "pwd" },
+        arguments: { kind: "write_text", expectedOwnerRevision: 0, text: "pwd" },
       },
       {
         role: "tool_result",
         toolCallId: "call-1",
         observation: {
           session: "default",
-          returnCode: 0,
-          output: "/repo\n",
-          outputTruncated: false,
+          owner: {
+            kind: "shell",
+            revision: 1,
+            cwd: "/repo",
+            promptSeq: 1,
+            lastReturnCode: 0,
+            promptNonce: "nonce",
+          },
+          action: { kind: "write_text", preview: "pwd" },
+          result: "ok",
+          events: [{ kind: "prompt" }],
         },
       },
     ];
@@ -57,7 +70,11 @@ describe("PromptBuilder", () => {
       type: "function",
       function: {
         name: "bash",
-        arguments: JSON.stringify({ session: "default", command: "pwd" }),
+        arguments: JSON.stringify({
+          kind: "write_text",
+          expectedOwnerRevision: 0,
+          text: "pwd",
+        }),
       },
     });
 
@@ -66,9 +83,17 @@ describe("PromptBuilder", () => {
     expect(toolMsg.tool_call_id).toBe("call-1");
     expect(toolMsg.content).toBe(JSON.stringify({
       session: "default",
-      returnCode: 0,
-      output: "/repo\n",
-      outputTruncated: false,
+      owner: {
+        kind: "shell",
+        revision: 1,
+        cwd: "/repo",
+        promptSeq: 1,
+        lastReturnCode: 0,
+        promptNonce: "nonce",
+      },
+      action: { kind: "write_text", preview: "pwd" },
+      result: "ok",
+      events: [{ kind: "prompt" }],
     }));
   });
 

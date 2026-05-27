@@ -4,7 +4,7 @@ export type {
   ModelPort,
   ValidatorPort,
   ReviewerPort,
-  BashPort,
+  TerminalPort,
   PromptPort,
   RunPorts,
   HistoryItem,

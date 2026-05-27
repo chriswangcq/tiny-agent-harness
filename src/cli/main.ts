@@ -3,22 +3,22 @@ import * as path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 
 import { RunOrchestrator } from "../run/orchestrator.js";
-import type { RunPorts, HistoryItem, BashPort } from "../run/orchestrator.js";
+import type { RunPorts, HistoryItem } from "../run/orchestrator.js";
 import { AgentRunState } from "../run/state.js";
 import { TranscriptStore } from "../transcript/store.js";
 import { DeepSeekFimAdapter } from "../model/adapter.js";
 import { PromptBuilder } from "../model/prompt-builder.js";
 import type { HistoryEntry } from "../model/prompt-builder.js";
-import { BashSessionManager } from "../bash/session-manager.js";
+import { ManagedTerminalRuntime } from "../bash/managed-terminal-runtime.js";
 import { ToolCallValidator } from "../tools/validator.js";
 import { AlwaysApproveReviewer } from "../tools/reviewer.js";
 import { STATIC_TOOL_CATALOG } from "../tools/catalog.js";
 import { Environment } from "../environment/environment.js";
 import { ImCliTransport } from "../im/transport.js";
 import { SkillRunStore } from "../skill/store.js";
-import { FileArtifactStore } from "../artifacts/file-store.js";
-import type { AgentObservation, BashToolRequest } from "../types/tools.js";
-import type { BashObservation } from "../types/bash.js";
+import {
+  DEFAULT_PTY_ACTION_LIMITS,
+} from "../terminal/validator.js";
 import type { V4ChatMessage } from "../types/model.js";
 
 // ---------------------------------------------------------------------------
@@ -75,110 +75,6 @@ function parseCliOptions(args: string[]): {
   return { channel, task, stateDir };
 }
 
-function extractSharedFlags(args: string[]): {
-  rest: string[];
-  stateDir?: string;
-  json: boolean;
-} {
-  const rest: string[] = [];
-  let stateDir: string | undefined;
-  let json = false;
-
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i]!;
-    if (arg === "--state-dir" && i + 1 < args.length) {
-      stateDir = args[++i];
-    } else if (arg === "--json") {
-      json = true;
-    } else {
-      rest.push(arg);
-    }
-  }
-
-  return { rest, stateDir, json };
-}
-
-function createArtifactStore(stateDir?: string): FileArtifactStore {
-  const baseDir = path.resolve(stateDir ?? ".tiny-agent");
-  return new FileArtifactStore({
-    rootDir: path.join(baseDir, "artifacts", "files"),
-    cwd: process.cwd(),
-  });
-}
-
-async function runArtifact(args: string[]): Promise<void> {
-  const { rest, stateDir, json } = extractSharedFlags(args);
-  const subcommand = rest[0];
-  const store = createArtifactStore(stateDir);
-
-  if (subcommand === "list") {
-    const items = store.list();
-    if (json) {
-      process.stdout.write(`${JSON.stringify(items, null, 2)}\n`);
-      return;
-    }
-    if (items.length === 0) {
-      console.log("[tiny-agent] No file artifacts.");
-      return;
-    }
-    for (const item of items) {
-      console.log(
-        `${item.artifactId}\t${item.bytes} bytes\t${item.sha256}\t${item.name}`,
-      );
-    }
-    return;
-  }
-
-  if (subcommand === "show") {
-    const artifactId = rest[1];
-    if (!artifactId) {
-      die("Usage: tiny-agent artifact show <artifactId> [--json] [--state-dir <dir>]");
-    }
-    const meta = store.readMeta(artifactId);
-    if (json) {
-      process.stdout.write(`${JSON.stringify(meta, null, 2)}\n`);
-      return;
-    }
-    console.log(`artifactId: ${meta.artifactId}`);
-    console.log(`name:       ${meta.name}`);
-    console.log(`bytes:      ${meta.bytes}`);
-    console.log(`sha256:     ${meta.sha256}`);
-    console.log(`createdAt:  ${meta.createdAt}`);
-    console.log(`toolCallId: ${meta.toolCallId}`);
-    if (meta.description) {
-      console.log(`description:${meta.description}`);
-    }
-    return;
-  }
-
-  if (subcommand === "write") {
-    const artifactId = rest[1];
-    const destination = rest[2];
-    if (!artifactId || !destination) {
-      die(
-        "Usage: tiny-agent artifact write <artifactId> <path> [--json] [--state-dir <dir>]",
-      );
-    }
-    const result = store.write(artifactId, destination);
-    if (json) {
-      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-      return;
-    }
-    console.log(
-      `[tiny-agent] Wrote ${result.artifactId} to ${result.destinationPath} ` +
-        `(${result.bytes} bytes, sha256 ${result.sha256}).`,
-    );
-    return;
-  }
-
-  die(
-    "Usage:\n" +
-      "  tiny-agent artifact list [--json] [--state-dir <dir>]\n" +
-      "  tiny-agent artifact show <artifactId> [--json] [--state-dir <dir>]\n" +
-      "  tiny-agent artifact write <artifactId> <path> [--json] [--state-dir <dir>]",
-  );
-}
-
 function convertHistoryItems(items: HistoryItem[]): HistoryEntry[] {
   const entries: HistoryEntry[] = [];
   for (const item of items) {
@@ -206,54 +102,22 @@ function convertHistoryItems(items: HistoryItem[]): HistoryEntry[] {
   return entries;
 }
 
-function adaptBashPort(manager: BashSessionManager): BashPort {
-  return {
-    async execute(request: BashToolRequest): Promise<BashObservation> {
-      if (request.kind === "command") {
-        return manager.executeCommandAutoCreate(
-          request.session,
-          request.command,
-          request.timeoutMs,
-        );
-      }
+function createCliTerminalPort() {
+  const runtime = new ManagedTerminalRuntime({
+    defaultSessionId: "default",
+    cwd: process.cwd(),
+    promptNonce: `cli-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    env: cleanEnv(process.env),
+    actionLimits: DEFAULT_PTY_ACTION_LIMITS,
+    observationLimits: { maxPreviewChars: 200 },
+  });
+  return runtime.createRunPort();
+}
 
-      // Control request -- adapt to BashControlInput
-      if (request.control === "list") {
-        return manager.handleControl({ control: "list" });
-      }
-
-      if (request.control === "create") {
-        return manager.handleControl({
-          control: "create",
-          session: request.session!,
-          cwd: request.createOptions?.cwd,
-          shell: request.createOptions?.shell,
-          env: request.createOptions?.env,
-          defaultTimeoutMs: request.createOptions?.defaultTimeoutMs,
-          maxObservationBytes: request.createOptions?.maxObservationBytes,
-        });
-      }
-
-      if (request.control === "sendInput") {
-        return manager.handleControl({
-          control: "sendInput",
-          session: request.session!,
-          input: request.input!,
-        });
-      }
-
-      // status | poll | interrupt | terminate | restart
-      return manager.handleControl({
-        control: request.control as
-          | "status"
-          | "poll"
-          | "interrupt"
-          | "terminate"
-          | "restart",
-        session: request.session!,
-      });
-    },
-  };
+function cleanEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  );
 }
 
 function publishLatestRun(runsDir: string, runId: string, runDir: string): void {
@@ -454,7 +318,7 @@ Usage:
   tiny-agent tui --run <runId|latest>                 Attach TUI to existing run
   tiny-agent im  <subcommand> [options]               IM message operations
   tiny-agent skill <subcommand> [options]             Skill management
-  tiny-agent artifact <subcommand> [options]          Staged file artifacts
+  tiny-agent receiver <subcommand> [options]          PTY receiver payload frames
   tiny-agent --help                                   Show this help
 
 IM subcommands:
@@ -473,10 +337,11 @@ Skill subcommands:
   review-complete <runId>       Complete skill review
   validate <name>               Validate skill structure
 
-Artifact subcommands:
-  list                          List staged file artifacts
-  show   <artifactId>           Show artifact metadata
-  write  <artifactId> <path>    Materialize artifact bytes at path
+Receiver subcommands:
+  start  --target file --path <path> --nonce <n> --max-frame-bytes <n>
+  start  --target im --channel <ch> --kind <status|error> --nonce <n> --max-frame-bytes <n>
+  frame  --id <id> --seq <n> --data-base64 <b64>
+  end    --id <id> --frames <n> --bytes <n> --sha256 <hash>
 
 Environment variables:
   DEEPSEEK_API_KEY   (required) API key for DeepSeek
@@ -519,8 +384,9 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (firstArg === "artifact") {
-    await runArtifact(process.argv.slice(3));
+  if (firstArg === "receiver") {
+    const { runReceiver } = await import("./receiver.js");
+    await runReceiver(process.argv.slice(3));
     return;
   }
 
@@ -575,12 +441,10 @@ async function main(): Promise<void> {
   // --- Create directory structure ---
   const baseDir = path.resolve(stateDirArg ?? ".tiny-agent");
   const runsDir = path.join(baseDir, "runs");
-  const sessionsDir = path.join(baseDir, "sessions");
   const skillsDir = path.join(baseDir, "skills");
   const skillRunsDir = path.join(baseDir, "skill-runs");
   const imDir = path.join(baseDir, "im");
-  const artifactsDir = path.join(baseDir, "artifacts", "files");
-  for (const dir of [runsDir, sessionsDir, skillsDir, skillRunsDir, imDir, artifactsDir]) {
+  for (const dir of [runsDir, skillsDir, skillRunsDir, imDir]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 
@@ -612,8 +476,6 @@ async function main(): Promise<void> {
   publishLatestRun(runsDir, runId, runDir);
 
   // --- Wire up modules ---
-  const bashManager = new BashSessionManager({ logDir: sessionsDir, defaultCwd: process.cwd() });
-
   const model = new DeepSeekFimAdapter({
     apiKey,
     baseUrl,
@@ -629,10 +491,6 @@ async function main(): Promise<void> {
   const environment = new Environment();
   const imTransport = new ImCliTransport({ baseDir: imDir });
   const skillRunStore = new SkillRunStore({ skillRunsDir, skillsDir });
-  const artifactStore = new FileArtifactStore({
-    rootDir: artifactsDir,
-    cwd: process.cwd(),
-  });
 
   // --- Wait for first IM message if no --task ---
   let task: string;
@@ -694,12 +552,7 @@ async function main(): Promise<void> {
     model,
     validator,
     reviewer,
-    bash: adaptBashPort(bashManager),
-    artifacts: {
-      async stash(request): Promise<AgentObservation> {
-        return artifactStore.stash(request);
-      },
-    },
+    terminal: createCliTerminalPort(),
     prompt: {
       buildMessages(task: string, history: HistoryItem[]): V4ChatMessage[] {
         const entries = convertHistoryItems(history);
@@ -752,7 +605,6 @@ async function main(): Promise<void> {
   } finally {
     imPollingActive = false;
     clearInterval(imPollInterval);
-    bashManager.terminateAll();
   }
 }
 

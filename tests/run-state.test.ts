@@ -7,9 +7,9 @@ import type {
   InternalToolCall,
   ToolRequest,
   ToolReviewDecision,
-  BashObservation,
   AgentObservation,
 } from "../src/types/index.js";
+import type { PtyObservation } from "../src/terminal/types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -32,7 +32,7 @@ function makeToolCall(id = "tc-1"): InternalToolCall {
   return {
     id,
     name: "bash",
-    arguments: { session: "default", command: "echo hi" },
+    arguments: { kind: "write_text", expectedOwnerRevision: 1, text: "echo hi\n" },
   };
 }
 
@@ -74,14 +74,16 @@ function makeInvalidOutput(): FimStepOutput {
   };
 }
 
-function makeCommandRequest(id = "tc-1"): ToolRequest {
+function makePtyRequest(id = "tc-1"): ToolRequest {
   return {
-    kind: "command",
+    kind: "pty_action",
     toolName: "bash",
     toolCallId: id,
-    session: "default",
-    command: "echo hi",
-    timeoutMs: 30000,
+    action: {
+      kind: "write_text",
+      expectedOwnerRevision: 1,
+      text: "echo hi\n",
+    },
   };
 }
 
@@ -101,13 +103,20 @@ function makeRejection(): ToolReviewDecision {
   };
 }
 
-function makeBashObservation(): BashObservation {
+function makePtyObservation(): PtyObservation {
   return {
     session: "default",
-    state: "idle",
-    returnCode: 0,
-    output: "hi\n",
-    outputTruncated: false,
+    owner: {
+      kind: "shell",
+      revision: 2,
+      cwd: "/tmp",
+      promptSeq: 2,
+      lastReturnCode: 0,
+      promptNonce: "nonce",
+    },
+    action: { kind: "write_text", preview: "echo hi\n" },
+    result: "ok",
+    events: [{ kind: "output", bytes: 3, preview: "hi\n" }],
   };
 }
 
@@ -222,7 +231,7 @@ describe("AgentRunState transitions", () => {
       type: "tool_call_validated",
       stepIndex: 0,
       toolCall: tc,
-      result: { status: "valid", request: makeCommandRequest() },
+      result: { status: "valid", request: makePtyRequest() },
       timestamp: NOW,
     });
 
@@ -277,14 +286,14 @@ describe("AgentRunState transitions", () => {
       type: "tool_call_validated",
       stepIndex: 0,
       toolCall: tc,
-      result: { status: "valid", request: makeCommandRequest() },
+      result: { status: "valid", request: makePtyRequest() },
       timestamp: NOW,
     });
 
     const waitingReview = s.apply({
       type: "tool_review_requested",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyRequest(),
       timestamp: NOW,
     });
 
@@ -305,20 +314,20 @@ describe("AgentRunState transitions", () => {
       type: "tool_call_validated",
       stepIndex: 0,
       toolCall: tc,
-      result: { status: "valid", request: makeCommandRequest() },
+      result: { status: "valid", request: makePtyRequest() },
       timestamp: NOW,
     });
     s = s.apply({
       type: "tool_review_requested",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyRequest(),
       timestamp: NOW,
     });
 
     const approved = s.apply({
       type: "tool_reviewed",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyRequest(),
       decision: makeApproval(),
       timestamp: NOW,
     });
@@ -341,20 +350,20 @@ describe("AgentRunState transitions", () => {
       type: "tool_call_validated",
       stepIndex: 0,
       toolCall: tc,
-      result: { status: "valid", request: makeCommandRequest() },
+      result: { status: "valid", request: makePtyRequest() },
       timestamp: NOW,
     });
     s = s.apply({
       type: "tool_review_requested",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyRequest(),
       timestamp: NOW,
     });
 
     const rejected = s.apply({
       type: "tool_reviewed",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyRequest(),
       decision: makeRejection(),
       timestamp: NOW,
     });
@@ -377,19 +386,19 @@ describe("AgentRunState transitions", () => {
       type: "tool_call_validated",
       stepIndex: 0,
       toolCall: tc,
-      result: { status: "valid", request: makeCommandRequest() },
+      result: { status: "valid", request: makePtyRequest() },
       timestamp: NOW,
     });
     s = s.apply({
       type: "tool_review_requested",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyRequest(),
       timestamp: NOW,
     });
     s = s.apply({
       type: "tool_reviewed",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyRequest(),
       decision: makeApproval(),
       timestamp: NOW,
     });
@@ -397,7 +406,7 @@ describe("AgentRunState transitions", () => {
     const waitingTool = s.apply({
       type: "tool_execution_started",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyRequest(),
       timestamp: NOW,
     });
 
@@ -418,34 +427,34 @@ describe("AgentRunState transitions", () => {
       type: "tool_call_validated",
       stepIndex: 0,
       toolCall: tc,
-      result: { status: "valid", request: makeCommandRequest() },
+      result: { status: "valid", request: makePtyRequest() },
       timestamp: NOW,
     });
     s = s.apply({
       type: "tool_review_requested",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyRequest(),
       timestamp: NOW,
     });
     s = s.apply({
       type: "tool_reviewed",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyRequest(),
       decision: makeApproval(),
       timestamp: NOW,
     });
     s = s.apply({
       type: "tool_execution_started",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyRequest(),
       timestamp: NOW,
     });
 
     const afterExec = s.apply({
       type: "tool_execution_finished",
       stepIndex: 0,
-      request: makeCommandRequest(),
-      observation: makeBashObservation(),
+      request: makePtyRequest(),
+      observation: makePtyObservation(),
       timestamp: NOW,
     });
 
@@ -519,26 +528,26 @@ describe("AgentRunState illegal transitions", () => {
       type: "tool_call_validated",
       stepIndex: 0,
       toolCall: tc,
-      result: { status: "valid", request: makeCommandRequest() },
+      result: { status: "valid", request: makePtyRequest() },
       timestamp: NOW,
     });
     s = s.apply({
       type: "tool_review_requested",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyRequest(),
       timestamp: NOW,
     });
     s = s.apply({
       type: "tool_reviewed",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyRequest(),
       decision: makeApproval(),
       timestamp: NOW,
     });
     s = s.apply({
       type: "tool_execution_started",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyRequest(),
       timestamp: NOW,
     });
     expect(s.status).toBe("waiting_for_tool");
@@ -562,7 +571,7 @@ describe("AgentRunState illegal transitions", () => {
       s.apply({
         type: "tool_execution_started",
         stepIndex: 0,
-        request: makeCommandRequest(),
+        request: makePtyRequest(),
         timestamp: NOW,
       }),
     ).toThrow(/Invalid transition/);
@@ -617,7 +626,7 @@ describe("AgentRunState.nextEffect()", () => {
       type: "tool_call_validated",
       stepIndex: 0,
       toolCall: tc,
-      result: { status: "valid", request: makeCommandRequest() },
+      result: { status: "valid", request: makePtyRequest() },
       timestamp: NOW,
     });
 
@@ -640,19 +649,19 @@ describe("AgentRunState.nextEffect()", () => {
       type: "tool_call_validated",
       stepIndex: 0,
       toolCall: tc,
-      result: { status: "valid", request: makeCommandRequest() },
+      result: { status: "valid", request: makePtyRequest() },
       timestamp: NOW,
     });
     s = s.apply({
       type: "tool_review_requested",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyRequest(),
       timestamp: NOW,
     });
     s = s.apply({
       type: "tool_reviewed",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyRequest(),
       decision: makeApproval(),
       timestamp: NOW,
     });
@@ -687,19 +696,19 @@ describe("AgentRunState.nextEffect()", () => {
       type: "tool_call_validated",
       stepIndex: 0,
       toolCall: tc,
-      result: { status: "valid", request: makeCommandRequest() },
+      result: { status: "valid", request: makePtyRequest() },
       timestamp: NOW,
     });
     s = s.apply({
       type: "tool_review_requested",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyRequest(),
       timestamp: NOW,
     });
     s = s.apply({
       type: "tool_reviewed",
       stepIndex: 0,
-      request: makeCommandRequest(),
+      request: makePtyRequest(),
       decision: makeRejection(),
       timestamp: NOW,
     });

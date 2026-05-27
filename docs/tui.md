@@ -11,7 +11,7 @@ TUI 是 observer / control surface，不是 harness 核心状态机。
 ```text
 RunOrchestrator owns agent loop.
 TranscriptStore owns run events.
-BashSessionManager owns bash sessions.
+ManagedTerminalRuntime owns bash sessions.
 Environment owns environment events and persistent reminder facts.
 SkillRunStore owns skill run lifecycle.
 
@@ -32,7 +32,7 @@ TUI reads those facts and renders them.
 │ Agent Loop Player                                                          │
 │ step 000 model_requested                                                   │
 │ step 000 thinking_received                                                 │
-│ step 000 decision tool_call bash(session=default, command=...)             │
+│ step 000 decision tool_call bash(action=write_text owner=shell#3)           │
 │ step 000 review approved                                                   │
 │ step 000 bash finished rc=0 log=.tiny-agent/sessions/default.log           │
 │ step 001 environment reminder ...                                          │
@@ -148,7 +148,7 @@ flowchart TD
   IM --> ENV["Environment"]
   ENV --> ORCH["RunOrchestrator"]
   ORCH --> MODEL["DeepSeek FIM Adapter"]
-  ORCH --> BASH["BashSessionManager"]
+  ORCH --> BASH["ManagedTerminalRuntime"]
   ORCH --> TR["TranscriptStore"]
   BASH --> SLOG["Session logs"]
   ORCH --> STATE["state.json"]
@@ -507,12 +507,12 @@ q            quit TUI only
 后续可加控制键：
 
 ```text
-i            sendInput to selected bash session
+i            type text/key into selected PTY owner when accepted
 Ctrl-C       request interrupt selected session
 R            request restart selected session
 ```
 
-这些控制动作必须走已有 bash control boundary，并写入 transcript / environment，不能由 TUI 私下改 session 状态。
+这些控制动作必须走已有 PTY action boundary，并写入 transcript / environment，不能由 TUI 私下改 session 状态。
 
 ## Control Actions
 
@@ -546,7 +546,7 @@ i -> choose session -> type stdin -> Enter
 
 ```text
 TUI control request
-  -> Runner control queue or BashSessionManager control port
+  -> Runner control queue or ManagedTerminalRuntime control port
   -> transcript event
   -> environment event if session state/output changes
 ```

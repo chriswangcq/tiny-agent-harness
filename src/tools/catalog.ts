@@ -1,101 +1,127 @@
 import type { ToolDefinition, JsonSchema } from "../types/index.js";
 
 // ---------------------------------------------------------------------------
-// Bash Tool Input JSON Schema (oneOf with 5 variants)
+// Bash Tool Input JSON Schema (PTY action variants)
 // ---------------------------------------------------------------------------
+
+const SessionProperty = {
+  type: "string",
+  description: "Optional persistent PTY session id. Defaults to default when omitted.",
+};
+
+const ExpectedOwnerRevisionProperty = {
+  type: "number",
+  description:
+    "TerminalOwner revision observed before choosing this action. Stale revisions are rejected.",
+};
 
 const BashToolInputSchema: JsonSchema = {
   type: "object",
   oneOf: [
     {
-      title: "BashCommandInput",
-      required: ["command"],
+      title: "PtyWriteTextAction",
+      required: ["kind", "expectedOwnerRevision", "text"],
       properties: {
-        session: {
+        kind: { const: "write_text" },
+        session: SessionProperty,
+        expectedOwnerRevision: ExpectedOwnerRevisionProperty,
+        text: {
           type: "string",
           description:
-            "Optional persistent bash session id. Defaults to default when omitted.",
+            "Text bytes to write to the current PTY owner. Include newline explicitly or use key enter.",
         },
-        command: {
+      },
+      additionalProperties: false,
+    },
+    {
+      title: "PtyKeyAction",
+      required: ["kind", "expectedOwnerRevision", "key"],
+      properties: {
+        kind: { const: "key" },
+        session: SessionProperty,
+        expectedOwnerRevision: ExpectedOwnerRevisionProperty,
+        key: {
+          enum: ["enter", "ctrl-c", "ctrl-d", "escape", "tab", "up", "down"],
+        },
+      },
+      additionalProperties: false,
+    },
+    {
+      title: "PtyInputFrameAction",
+      required: ["kind", "expectedOwnerRevision", "receiverId", "seq", "dataBase64"],
+      properties: {
+        kind: { const: "input_frame" },
+        session: SessionProperty,
+        expectedOwnerRevision: ExpectedOwnerRevisionProperty,
+        receiverId: { type: "string" },
+        seq: { type: "number" },
+        dataBase64: {
           type: "string",
           description:
-            "Bash command to execute in the selected session.",
-        },
-        timeoutMs: {
-          type: "number",
-          description:
-            "How long the harness should focus-wait for completion. Defaults to 30000.",
+            "One base64 frame for the active receiver. Do not put decoded payload bytes in the tool call.",
         },
       },
       additionalProperties: false,
     },
     {
-      title: "BashListControlInput",
-      required: ["control"],
+      title: "PtyEndInputAction",
+      required: ["kind", "expectedOwnerRevision", "receiverId", "frames", "bytes", "sha256"],
       properties: {
-        control: {
-          const: "list",
-        },
+        kind: { const: "end_input" },
+        session: SessionProperty,
+        expectedOwnerRevision: ExpectedOwnerRevisionProperty,
+        receiverId: { type: "string" },
+        frames: { type: "number" },
+        bytes: { type: "number" },
+        sha256: { type: "string" },
       },
       additionalProperties: false,
     },
     {
-      title: "BashCreateControlInput",
-      required: ["control", "session"],
+      title: "PtyPollAction",
+      required: ["kind"],
       properties: {
-        control: {
-          const: "create",
-        },
-        session: {
-          type: "string",
-        },
-        cwd: {
-          type: "string",
-        },
-        shell: {
-          type: "string",
-        },
-        env: {
-          type: "object",
-          additionalProperties: {
-            type: "string",
-          },
-        },
-        defaultTimeoutMs: {
-          type: "number",
-        },
-        maxObservationBytes: {
-          type: "number",
-        },
+        kind: { const: "poll" },
+        session: SessionProperty,
+        sinceSeq: { type: "number" },
       },
       additionalProperties: false,
     },
     {
-      title: "BashSessionControlInput",
-      required: ["control", "session"],
+      title: "PtyStatusAction",
+      required: ["kind"],
       properties: {
-        control: {
-          enum: ["status", "poll", "interrupt", "terminate", "restart"],
-        },
-        session: {
-          type: "string",
-        },
+        kind: { const: "status" },
+        session: SessionProperty,
       },
       additionalProperties: false,
     },
     {
-      title: "BashSendInputControlInput",
-      required: ["control", "session", "input"],
+      title: "PtyInterruptAction",
+      required: ["kind"],
       properties: {
-        control: {
-          const: "sendInput",
-        },
-        session: {
-          type: "string",
-        },
-        input: {
-          type: "string",
-        },
+        kind: { const: "interrupt" },
+        session: SessionProperty,
+        expectedOwnerRevision: ExpectedOwnerRevisionProperty,
+      },
+      additionalProperties: false,
+    },
+    {
+      title: "PtyTerminateAction",
+      required: ["kind"],
+      properties: {
+        kind: { const: "terminate" },
+        session: SessionProperty,
+      },
+      additionalProperties: false,
+    },
+    {
+      title: "PtyRestartAction",
+      required: ["kind"],
+      properties: {
+        kind: { const: "restart" },
+        session: SessionProperty,
+        cwd: { type: "string" },
       },
       additionalProperties: false,
     },
@@ -109,56 +135,16 @@ const BashToolInputSchema: JsonSchema = {
 export const BASH_TOOL_DEFINITION: ToolDefinition = {
   name: "bash",
   description:
-    "Run shell commands or manage persistent bash sessions. All external actions must go through this tool, " +
-    "including materializing staged artifacts with `node dist/cli/main.js artifact write <artifactId> <path>`. " +
-    "Do not embed generated files, long heredocs, large node -e strings, or other multi-KB payloads in bash; " +
-    "stage those bytes with stash_file first, then run a short bash command. " +
-    "Do not send a new command to a session that is still running; use poll, interrupt, terminate, or restart first.",
+    "Operate a persistent PTY session with owner/revision-guarded actions. " +
+    "Use write_text to write exact text bytes, including explicit newlines when desired. " +
+    "Use key for terminal keys. " +
+    "Use receiver input_frame/end_input for large files, IM replies, generated code, or other multi-KB payloads. " +
+    "Use poll/status/interrupt/terminate/restart to observe or recover terminal state.",
   inputSchema: BashToolInputSchema,
-};
-
-const StashFileInputSchema: JsonSchema = {
-  type: "object",
-  required: ["content"],
-  properties: {
-    name: {
-      type: "string",
-      description:
-        "Optional human-readable filename hint, for example snake.html.",
-    },
-    content: {
-      type: "string",
-      description:
-        "File content to stage in harness state. Use this instead of putting large content in bash. Use base64 when encoding is base64.",
-    },
-    encoding: {
-      type: "string",
-      enum: ["utf8", "base64"],
-      description:
-        "How to decode content into bytes. Defaults to utf8 when omitted.",
-    },
-    description: {
-      type: "string",
-      description: "Optional short note describing the staged file.",
-    },
-  },
-  additionalProperties: false,
-};
-
-export const STASH_FILE_TOOL_DEFINITION: ToolDefinition = {
-  name: "stash_file",
-  description:
-    "Stage generated file bytes in harness-managed artifact state without writing to the target filesystem. " +
-    "Use this for complete generated files, multi-line content, or payloads over about 2KB; do not send those bytes through bash. " +
-    "After this returns an artifact id, use bash to run `node dist/cli/main.js artifact write <artifactId> <path>`.",
-  inputSchema: StashFileInputSchema,
 };
 
 // ---------------------------------------------------------------------------
 // Static Tool Catalog
 // ---------------------------------------------------------------------------
 
-export const STATIC_TOOL_CATALOG = [
-  BASH_TOOL_DEFINITION,
-  STASH_FILE_TOOL_DEFINITION,
-] as const;
+export const STATIC_TOOL_CATALOG = [BASH_TOOL_DEFINITION] as const;

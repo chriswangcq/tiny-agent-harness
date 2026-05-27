@@ -9,11 +9,11 @@
 它继续遵守当前边界：
 
 ```text
-Model visible action surface: bash for external work, stash_file only for file-byte staging
-External capabilities: called as CLI commands inside bash
+Model visible action surface: bash PTY actions plus receiver frames
+External capabilities: called as CLI commands through write_text when TerminalOwner is shell
 ```
 
-Agent 如果需要代码智能，本质上仍然是在 `bash` tool call 里执行：
+Agent 如果需要代码智能，本质上仍然是在 shell-owner PTY action 里执行：
 
 ```bash
 codeq diagnostics --workspace --json
@@ -22,7 +22,7 @@ codeq definition src/run/orchestrator.ts:37:18 --json
 codeq references src/run/orchestrator.ts:37:18 --json
 ```
 
-这样 LSP 能力会经过现有 bash session、tool review、observation、transcript 和 log path，不会绕过审计边界。
+这样 LSP 能力会经过现有 PTY session、tool review、observation、transcript 和 log path，不会绕过审计边界。
 
 ## Why
 
@@ -52,7 +52,7 @@ ServerProcess
   owns: stdio process, timeout, stderr log, crash reporting
   does not own: business interpretation of results
 
-BashSessionManager
+ManagedTerminalRuntime
   owns: running `codeq ...` as one shell command
   owns: command return code, output window, session log
 
@@ -410,7 +410,7 @@ Read-only by default.
 No command writes files unless it has an explicit --apply flag.
 ```
 
-Even with `--apply`, codeq should emit the exact `WorkspaceEdit` summary before writing, and the agent's bash command still goes through tool review. For the tiny-agent-harness first pass, prefer `--dry-run` only and let the agent apply edits through normal patch workflow.
+Even with `--apply`, codeq should emit the exact `WorkspaceEdit` summary before writing, and the agent's PTY action still goes through tool review. For the tiny-agent-harness first pass, prefer `--dry-run` only and let the agent apply edits through normal patch workflow.
 
 Dry-run rename output:
 

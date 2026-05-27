@@ -9,13 +9,12 @@ import type {
 import type {
   AgentObservation,
   BashToolRequest,
-  StashFileToolRequest,
   ToolCallValidation,
   ToolDefinition,
   ToolRequest,
   ToolReviewDecision,
 } from "../types/tools.js";
-import type { BashObservation } from "../types/bash.js";
+import type { PtyObservation } from "../terminal/types.js";
 import type { InternalToolCall } from "../types/model.js";
 import type { EnvironmentPort, EnvironmentEvent, IoWaitRequest } from "../types/environment.js";
 import { Environment } from "../environment/environment.js";
@@ -42,12 +41,8 @@ export interface ReviewerPort {
   review(request: ToolRequest): Promise<ToolReviewDecision>;
 }
 
-export interface BashPort {
-  execute(request: BashToolRequest): Promise<BashObservation>;
-}
-
-export interface ArtifactPort {
-  stash(request: StashFileToolRequest): Promise<AgentObservation>;
+export interface TerminalPort {
+  execute(request: BashToolRequest): Promise<PtyObservation>;
 }
 
 export interface PromptPort {
@@ -56,15 +51,14 @@ export interface PromptPort {
 
 export type HistoryItem =
   | { type: "tool_call"; toolCall: InternalToolCall; thinking?: AgentThinking }
-  | { type: "observation"; observation: BashObservation | AgentObservation }
+  | { type: "observation"; observation: PtyObservation | AgentObservation }
   | { type: "environment_reminder"; content: string };
 
 export interface RunPorts {
   model: ModelPort;
   validator: ValidatorPort;
   reviewer: ReviewerPort;
-  bash: BashPort;
-  artifacts: ArtifactPort;
+  terminal: TerminalPort;
   prompt: PromptPort;
   tools: ToolDefinition[];
   environment: EnvironmentPort;
@@ -227,10 +221,7 @@ export class RunOrchestrator {
           timestamp: this.now(),
         });
 
-        const observation =
-          effect.request.toolName === "bash"
-            ? await this.ports.bash.execute(effect.request)
-            : await this.ports.artifacts.stash(effect.request);
+        const observation = await this.executeToolRequest(effect.request);
         const toolCall =
           this.state.data.pendingToolCall ??
           (this.state.data.pendingModelTurn?.kind === "tool_call"
@@ -318,6 +309,12 @@ export class RunOrchestrator {
     }
 
     return this.state;
+  }
+
+  private async executeToolRequest(
+    request: ToolRequest,
+  ): Promise<PtyObservation> {
+    return this.ports.terminal.execute(request);
   }
 }
 

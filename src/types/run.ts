@@ -14,7 +14,7 @@ import type {
   ToolCallValidation,
   AgentObservation,
 } from "./tools.js";
-import type { BashObservation } from "./bash.js";
+import type { PtyObservation } from "../terminal/types.js";
 import type {
   EnvironmentEvent,
   IoWaitRequest,
@@ -199,7 +199,7 @@ export type RunEvent =
       type: "tool_execution_finished";
       stepIndex: number;
       request: ToolRequest;
-      observation: BashObservation | AgentObservation;
+      observation: PtyObservation | AgentObservation;
       timestamp: string;
     }
   | {
