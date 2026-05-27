@@ -78,7 +78,7 @@ describe("terminal action validator", () => {
     expect(result).toEqual({ ok: true });
   });
 
-  it("rejects process text input when stdin mode is unknown", () => {
+  it("allows process text input when stdin mode is unknown", () => {
     const result = validatePtyAction({
       owner: processOwner("unknown"),
       action: {
@@ -88,10 +88,7 @@ describe("terminal action validator", () => {
       },
     });
 
-    expect(result).toMatchObject({
-      ok: false,
-      code: "OWNER_REJECTED",
-    });
+    expect(result).toEqual({ ok: true });
   });
 
   it("allows explicit process text input when process stdin may accept input", () => {

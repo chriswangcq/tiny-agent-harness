@@ -18,6 +18,8 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).not.toContain(["rece", "iver"].join(""));
     expect(prompt.messages[0]!.content).toContain("im send --channel");
     expect(prompt.messages[0]!.content).toContain("Large write_text payloads are allowed");
+    expect(prompt.messages[0]!.content).toContain("cat > path");
+    expect(prompt.messages[0]!.content).toContain("stdinMode is interactive or unknown");
     expect(prompt.messages[0]!.content).toContain("no file staging protocol");
     expect(prompt.messages[0]!.content).not.toContain("bash command fields");
     expect(prompt.messages[0]!.content).not.toContain("UnsupportedControlPayload");

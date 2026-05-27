@@ -37,10 +37,11 @@ const SYSTEM_MESSAGE =
   "  PTY action kinds: write_text, key, poll, status, interrupt, terminate, restart.\n" +
   "  Use write_text to write exact bytes to the current PTY owner; it does not append Enter, so include `\\n` explicitly or use key enter. Large write_text payloads are allowed and paced by the runtime.\n" +
   "  After a multi-line heredoc or script, poll until a shell prompt appears; shell_continuation means the shell is still waiting for input, not that you should terminate.\n" +
-  "  For process owners, write text only when stdinMode is interactive; otherwise poll/status or recover with interrupt/terminate/restart.\n" +
+  "  For process owners, write_text is allowed when stdinMode is interactive or unknown, and rejected only when stdinMode is none. Treat unknown as a real foreground PTY process that may accept stdin; write only when you deliberately started it or it is clearly waiting for input.\n" +
+  "  To write a large generated text/code file without shell heredoc parsing, start a foreground stdin consumer such as `cat > path\\n`, poll until owner.kind is process, write the file text directly, then send ctrl-d and poll until the shell prompt returns. End text payloads with `\\n`; if not, ctrl-d may need to be sent twice.\n" +
   "  If owner.kind is unknown or terminated, poll/status or recover with interrupt/terminate/restart.\n" +
   "  For short IM replies, run `node dist/cli/main.js im send --channel <channel> --kind status --text <reply>` through write_text.\n" +
-  "  For generated text files or code, use shell heredocs or small scripts through write_text. There is no file staging protocol, frame protocol, or separate payload tool in the model-visible action surface.\n" +
+  "  For generated text files or code, use foreground stdin consumers for large text and shell heredocs or small scripts for small/simple text. There is no file staging protocol, frame protocol, or separate payload tool in the model-visible action surface.\n" +
   "- io_wait: pause until the next external event. This is a TOOL CALL, not a shell command. " +
   "Never run io_wait via bash; invoke it directly as a tool.\n\n" +
   "Thinking is reasoning-only. During thinking, do not emit tool-call markup, raw tool arguments, shell heredocs, or final user-facing prose. Describe the intended next action in words only.\n\n" +

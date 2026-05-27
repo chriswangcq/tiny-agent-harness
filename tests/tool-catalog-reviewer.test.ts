@@ -26,6 +26,8 @@ describe("static tool catalog", () => {
     expect(BASH_TOOL_DEFINITION.description).toContain("owner/revision-guarded");
     expect(BASH_TOOL_DEFINITION.description).toContain("pure PTY interface");
     expect(BASH_TOOL_DEFINITION.description).toContain("Large write_text payloads are allowed");
+    expect(BASH_TOOL_DEFINITION.description).toContain("cat > path");
+    expect(BASH_TOOL_DEFINITION.description).toContain("stdinMode is interactive or unknown");
     expect(BASH_TOOL_DEFINITION.description).not.toContain(["rece", "iver"].join(""));
   });
 

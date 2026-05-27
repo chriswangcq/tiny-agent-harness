@@ -60,7 +60,7 @@ function validateWriteText(
   }
 
   if (owner.kind === "process") {
-    if (owner.stdinMode === "interactive") {
+    if (owner.stdinMode !== "none") {
       return { ok: true };
     }
 
