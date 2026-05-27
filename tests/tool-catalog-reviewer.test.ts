@@ -29,6 +29,8 @@ describe("static tool catalog", () => {
     expect(BASH_TOOL_DEFINITION.description).toContain("--text-stdin");
     expect(BASH_TOOL_DEFINITION.description).toContain("Use shell heredocs sparingly");
     expect(BASH_TOOL_DEFINITION.description).toContain("cat > path");
+    expect(BASH_TOOL_DEFINITION.description).toContain("one ctrl-d may only flush the current line");
+    expect(BASH_TOOL_DEFINITION.description).toContain("do not send any further shell command until a prompt returns");
     expect(BASH_TOOL_DEFINITION.description).toContain("does not infer");
     expect(BASH_TOOL_DEFINITION.description).toContain("terminal.inputSeq");
     expect(BASH_TOOL_DEFINITION.description).not.toContain(["rece", "iver"].join(""));

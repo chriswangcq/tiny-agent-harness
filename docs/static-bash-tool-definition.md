@@ -81,7 +81,7 @@ Generated text files and code can use shell heredocs or small scripts through `w
 1. Use `write_text` to run `cat > path\n` or another intentionally chosen stdin consumer.
 2. Poll until it is clearly waiting for input.
 3. Use `write_text` to send the file text directly to that foreground process. End text payloads with `\n`.
-4. Send `{ kind: "key", key: "ctrl-d" }` to close stdin, then poll until the shell prompt returns. If the text did not end with `\n`, Ctrl-D may need to be sent twice.
+4. Send `{ kind: "key", key: "ctrl-d" }` to close stdin, then poll until the shell prompt returns. End text payloads with `\n` before Ctrl-D. If the text did not end with `\n`, one Ctrl-D may only flush the current line while the foreground program keeps reading; do not send any further shell command until a prompt returns, and send a second Ctrl-D if needed.
 
 Large `write_text` payloads are accepted by the tool and paced internally by the runtime, so the model does not need to invent a second payload protocol or manually split ordinary shell input.
 

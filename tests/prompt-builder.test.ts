@@ -21,6 +21,8 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("Large write_text payloads are allowed");
     expect(prompt.messages[0]!.content).toContain("Use shell heredocs sparingly");
     expect(prompt.messages[0]!.content).toContain("cat > path");
+    expect(prompt.messages[0]!.content).toContain("one ctrl-d may only flush the current line");
+    expect(prompt.messages[0]!.content).toContain("do not send any further shell command until a prompt returns");
     expect(prompt.messages[0]!.content).toContain("terminal.inputSeq");
     expect(prompt.messages[0]!.content).toContain("does not infer whether");
     expect(prompt.messages[0]!.content).toContain("no file staging protocol");
