@@ -197,6 +197,9 @@ export class AgentRunState {
         });
       }
 
+      case "model_thinking_delta":
+        return this.next({ updatedAt: now });
+
       case "tool_call_validated": {
         this.assertStatus("running", event.type);
         if (!s.pendingToolCall) {

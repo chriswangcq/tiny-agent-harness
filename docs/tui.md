@@ -296,14 +296,21 @@ run_started
 model_requested
   -> LoopFrame phase=model status=running title="model requested"
 
+model_thinking_delta
+  -> Update current model LoopFrame status=running title="model thinking"
+  -> Append delta into LoopFrame detail section "thinking"
+
 model_output_received(tool_call)
   -> LoopFrame phase=decision status=ok title="tool call: bash"
+  -> Complete current model LoopFrame with final thinking/raw decision detail
 
 model_output_received(io_wait)
   -> LoopFrame phase=io_wait status=waiting title="io wait requested"
+  -> Complete current model LoopFrame with final thinking/raw decision detail
 
 model_output_received(invalid_output)
   -> LoopFrame phase=decision status=warn title="invalid model output"
+  -> Complete current model LoopFrame with final diagnostic detail
 
 tool_call_validated(valid)
   -> LoopFrame phase=validation status=ok title="tool call validated"

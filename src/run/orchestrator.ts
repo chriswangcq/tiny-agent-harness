@@ -1,5 +1,11 @@
 import type { RunEvent } from "../types/run.js";
-import type { FimStepOutput, ModelStepContext, V4ChatMessage, AgentThinking } from "../types/model.js";
+import type {
+  AgentThinking,
+  FimStepOutput,
+  ModelProgressEvent,
+  ModelStepContext,
+  V4ChatMessage,
+} from "../types/model.js";
 import type {
   AgentObservation,
   BashToolRequest,
@@ -19,7 +25,13 @@ import { AgentRunState } from "./state.js";
 import { TranscriptStore } from "../transcript/store.js";
 
 export interface ModelPort {
-  generateTurn(context: ModelStepContext, options: { tools: ToolDefinition[] }): Promise<FimStepOutput>;
+  generateTurn(
+    context: ModelStepContext,
+    options: {
+      tools: ToolDefinition[];
+      onProgress?: (event: ModelProgressEvent) => void | Promise<void>;
+    },
+  ): Promise<FimStepOutput>;
 }
 
 export interface ValidatorPort {
@@ -151,6 +163,17 @@ export class RunOrchestrator {
 
         const output = await this.ports.model.generateTurn(context, {
           tools: this.ports.tools,
+          onProgress: async (progress) => {
+            if (progress.type === "thinking_delta") {
+              await this.record({
+                type: "model_thinking_delta",
+                stepIndex: context.stepIndex,
+                delta: progress.content,
+                sequence: progress.sequence,
+                timestamp: this.now(),
+              });
+            }
+          },
         });
 
         await this.record({

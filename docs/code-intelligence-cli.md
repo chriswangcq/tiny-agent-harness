@@ -9,7 +9,7 @@
 它继续遵守当前边界：
 
 ```text
-Model visible tools: bash only
+Model visible action surface: bash for external work, stash_file only for file-byte staging
 External capabilities: called as CLI commands inside bash
 ```
 

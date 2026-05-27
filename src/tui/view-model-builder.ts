@@ -38,6 +38,7 @@ export class ViewModelBuilder {
   private frameCounter = 0;
   private conversationCounter = 0;
   private seenConversationIds = new Set<string>();
+  private thinkingStreams = new Map<number, string>();
   private readonly limits: TuiLimits;
 
   constructor(limits?: Partial<TuiLimits>) {
@@ -69,6 +70,7 @@ export class ViewModelBuilder {
       case "model_requested":
         this.header.stepIndex = event.stepIndex;
         this.header.status = "waiting_for_model";
+        this.thinkingStreams.set(event.stepIndex, "");
         this.pushFrame({
           stepIndex: event.stepIndex,
           timestamp: event.timestamp,
@@ -78,6 +80,35 @@ export class ViewModelBuilder {
           summary: "",
         });
         break;
+
+      case "model_thinking_delta": {
+        this.header.stepIndex = event.stepIndex;
+        this.header.status = "waiting_for_model";
+        const content =
+          (this.thinkingStreams.get(event.stepIndex) ?? "") + event.delta;
+        this.thinkingStreams.set(event.stepIndex, content);
+
+        let frame = this.findLatestModelFrame(event.stepIndex);
+        if (!frame) {
+          this.pushFrame({
+            stepIndex: event.stepIndex,
+            timestamp: event.timestamp,
+            phase: "model",
+            status: "running",
+            title: "model thinking",
+            summary: "",
+          });
+          frame = this.findLatestModelFrame(event.stepIndex);
+        }
+        if (frame) {
+          frame.status = "running";
+          frame.title = "model thinking";
+          frame.timestamp = event.timestamp;
+          frame.summary = `thinking... ${content.length} chars`;
+          frame.detail = formatDetail([["thinking", compactLongText(content)]]);
+        }
+        break;
+      }
 
       case "model_output_received": {
         const turn = event.turn;
@@ -401,6 +432,7 @@ export class ViewModelBuilder {
   private completeModelFrame(
     event: Extract<RunEvent, { type: "model_output_received" }>,
   ): void {
+    this.thinkingStreams.delete(event.stepIndex);
     const frame = this.findLatestModelFrame(event.stepIndex);
     if (!frame) return;
 

@@ -1,4 +1,4 @@
-# Static Bash Tool Definition Design
+# Static Tool Catalog Design
 
 本文记录 tiny-agent-harness 第一版工具定义方案。
 
@@ -6,28 +6,32 @@
 
 第一版不做动态 tool registry，不做插件式注册，也不允许用户配置新增工具。
 
-Harness 写死唯一内置工具：
+Harness 写死一个很小的 model-visible tool catalog：
 
 ```text
 bash
+stash_file
 ```
 
-但它仍然用通用 tool definition 形状描述给 DeepSeek FIM adapter。FIM adapter 会把这份定义写入 decision prompt，并在 decision 生成后用同一份 schema 做校验。
+`bash` 是唯一外部动作工具。`stash_file` 是内部 file artifact staging 工具，用来把生成文件字节先写到 harness state，再由 `bash` 通过 `node dist/cli/main.js artifact write <artifactId> <path>` 物化到目标文件系统。`io_wait` 是 model decision function，但不进入 review/execute tool catalog。
+
+这些工具仍然用通用 tool definition 形状描述给 DeepSeek FIM adapter。FIM adapter 会把这份定义写入 decision prompt，并在 decision 生成后用同一份 schema 做校验。
 
 ```text
 StaticToolCatalog
-  contains exactly one tool: bash
+  contains exactly two tools: bash, stash_file
 
 DeepSeekFimAdapter
   receives common ToolDefinition[]
   writes tool description and schema into FIM decision context
-  normalizes FIM decision JSON into InternalToolCall
+  normalizes FIM DSML decision into ModelTurn
 
 RunOrchestrator
   receives InternalToolCall
   validates arguments
   sends ToolRequest to review
-  executes through BashSessionManager
+  executes bash through BashSessionManager
+  executes stash_file through FileArtifactStore
 ```
 
 ## Non Goals
@@ -37,17 +41,17 @@ RunOrchestrator
 - runtime tool registration
 - external plugin loading
 - per-project tool enable/disable config
-- multiple business tools such as `read_file` / `write_file` / `run_tests`
+- multiple business tools such as `read_file` / `run_tests`
 - MCP as an in-process SDK tool
 
-MCP、memory、skills、sub-agent、tests、code edits 都必须通过 `bash` 调用 CLI。
+MCP、memory、skills、sub-agent、tests 都必须通过 `bash` 调用 CLI。生成文件可以先通过 `stash_file` 暂存字节，但目标文件写入仍通过 `bash` 调 CLI。
 
 ## Common Tool Definition
 
 这是 harness 内部使用的 tool definition。
 
 ```ts
-type ToolName = "bash";
+type ToolName = "bash" | "stash_file";
 
 type ToolDefinition = {
   name: ToolName;
@@ -61,14 +65,23 @@ type ToolDefinition = {
 ```ts
 const BASH_TOOL_DEFINITION: ToolDefinition = {
   name: "bash",
-  description: "Run bash commands or manage persistent bash sessions. All external actions must go through this tool.",
+  description: "Run shell commands or manage persistent bash sessions. All external actions must go through this tool.",
   inputSchema: BashToolInputSchema
 };
 
-const STATIC_TOOL_CATALOG = [BASH_TOOL_DEFINITION] as const;
+const STASH_FILE_TOOL_DEFINITION: ToolDefinition = {
+  name: "stash_file",
+  description: "Stage generated file bytes in harness-managed artifact state before bash materializes them.",
+  inputSchema: StashFileInputSchema
+};
+
+const STATIC_TOOL_CATALOG = [
+  BASH_TOOL_DEFINITION,
+  STASH_FILE_TOOL_DEFINITION
+] as const;
 ```
 
-这里叫 catalog，而不是 registry，是为了避免暗示运行时可注册。后续如果要扩展，也应该先明确是否仍坚持 all-in-bash。
+这里叫 catalog，而不是 registry，是为了避免暗示运行时可注册。后续如果要扩展，也应该先明确是否仍坚持 bash 作为唯一外部动作面。
 
 ## Internal Tool Call
 
@@ -77,8 +90,8 @@ const STATIC_TOOL_CATALOG = [BASH_TOOL_DEFINITION] as const;
 ```ts
 type InternalToolCall = {
   id: string;
-  name: "bash";
-  arguments: BashToolInput;
+  name: "bash" | "stash_file";
+  arguments: BashToolInput | StashFileInput;
   raw?: unknown;
 };
 ```

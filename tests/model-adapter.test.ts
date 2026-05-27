@@ -45,17 +45,57 @@ function okFimResponse(
   finishReason?: string | null,
   completionTokens?: number,
 ): Response {
-  return {
-    ok: true,
-    json: async () => ({
-      choices: [{ text, finish_reason: finishReason }],
-      usage:
-        completionTokens === undefined
-          ? undefined
-          : { completion_tokens: completionTokens },
-    }),
-    text: async () => "",
-  } as unknown as Response;
+  return okFimStreamResponse([
+    { text, finishReason, completionTokens },
+  ]);
+}
+
+function okFimStreamResponse(
+  chunks: Array<{
+    text: string;
+    finishReason?: string | null;
+    completionTokens?: number;
+  }>,
+): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({
+              choices: [
+                {
+                  text: chunk.text,
+                  finish_reason: chunk.finishReason,
+                },
+              ],
+              usage:
+                chunk.completionTokens === undefined
+                  ? null
+                  : { completion_tokens: chunk.completionTokens },
+            })}\n\n`,
+          ),
+        );
+      }
+      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      controller.close();
+    },
+  });
+  return new Response(stream, { status: 200 });
+}
+
+function rawFimStreamResponse(parts: string[]): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const part of parts) {
+        controller.enqueue(encoder.encode(part));
+      }
+      controller.close();
+    },
+  });
+  return new Response(stream, { status: 200 });
 }
 
 function failedFimResponse(status: number, body: string): Response {
@@ -91,6 +131,33 @@ function stubFimResponseChunks(
   }
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+function stubFimStreamResponses(
+  ...responses: Array<
+    Array<{
+      text: string;
+      finishReason?: string | null;
+      completionTokens?: number;
+    }>
+  >
+) {
+  const fetchMock = vi.fn();
+  for (const response of responses) {
+    fetchMock.mockResolvedValueOnce(okFimStreamResponse(response));
+  }
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+function expectProgressContent(
+  progress: Array<{ content: string; sequence: number }>,
+  content: string,
+) {
+  expect(progress.map((event) => event.content).join("")).toBe(content);
+  expect(progress.map((event) => event.sequence)).toEqual(
+    progress.map((_, index) => index),
+  );
 }
 
 function requestBody(fetchMock: ReturnType<typeof vi.fn>, callIndex: number) {
@@ -169,6 +236,8 @@ describe("DeepSeekFimAdapter", () => {
       model: "deepseek-v4-pro",
       suffix: "</think>",
       max_tokens: 123,
+      stream: true,
+      stream_options: { include_usage: true },
       stop: [`<${DSML}tool_calls>`],
     });
     const thinkingPrompt = String(requestBody(fetchMock, 0).prompt);
@@ -199,6 +268,195 @@ describe("DeepSeekFimAdapter", () => {
     }
   });
 
+  it("streams thinking deltas from one FIM string response", async () => {
+    const rawDecision = dsmlBash({
+      session: "default",
+      command: "pwd",
+    });
+    const thinking = "Need inspect cwd carefully before choosing the next tool.";
+    const fetchMock = stubFimStreamResponses(
+      [
+        { text: thinking.slice(0, 12), finishReason: null },
+        { text: thinking.slice(12, 32), finishReason: null },
+        { text: thinking.slice(32), finishReason: "stop" },
+      ],
+      [{ text: rawDecision, finishReason: "stop" }],
+    );
+    const progress: Array<{ content: string; sequence: number }> = [];
+
+    const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
+      tools: [...STATIC_TOOL_CATALOG],
+      onProgress(event) {
+        progress.push({ content: event.content, sequence: event.sequence });
+      },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(requestBody(fetchMock, 0)).toMatchObject({
+      prompt: MOCK_ENCODED_PREFIX,
+      suffix: "</think>",
+      stream: true,
+      stream_options: { include_usage: true },
+    });
+    expectProgressContent(progress, thinking);
+    expect(progress.length).toBeGreaterThan(1);
+    expect(output.thinking.content).toBe(thinking);
+    expect(output.turn.kind).toBe("tool_call");
+  });
+
+  it("filters accidental thinking boundary markup across stream chunks", async () => {
+    const rawDecision = dsmlBash({
+      session: "default",
+      command: "pwd",
+    });
+    const fetchMock = stubFimStreamResponses(
+      [
+        { text: "Need inspect", finishReason: null },
+        { text: "</th", finishReason: null },
+        {
+          text: `ink>\n<${DSML}tool_calls>bad`,
+          finishReason: "stop",
+        },
+      ],
+      [{ text: rawDecision, finishReason: "stop" }],
+    );
+    const progress: Array<{ content: string; sequence: number }> = [];
+
+    const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
+      tools: [...STATIC_TOOL_CATALOG],
+      onProgress(event) {
+        progress.push({ content: event.content, sequence: event.sequence });
+      },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expectProgressContent(progress, "Need inspect");
+    expect(output.thinking.content).toBe("Need inspect");
+    const decisionPrompt = String(requestBody(fetchMock, 1).prompt);
+    expect(decisionPrompt).toContain("Need inspect");
+    expect(decisionPrompt).not.toContain("</think>\n<");
+    expect(decisionPrompt).not.toContain("bad");
+  });
+
+  it("stops thinking continuation after accidental boundary markup", async () => {
+    const rawDecision = dsmlBash({
+      session: "default",
+      command: "pwd",
+    });
+    const fetchMock = stubFimResponseChunks(
+      {
+        text: `Need inspect</think>\n<${DSML}tool_calls>bad`,
+        finishReason: "length",
+      },
+      { text: rawDecision, finishReason: "stop" },
+    );
+    const progress: Array<{ content: string; sequence: number }> = [];
+
+    const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
+      tools: [...STATIC_TOOL_CATALOG],
+      onProgress(event) {
+        progress.push({ content: event.content, sequence: event.sequence });
+      },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expectProgressContent(progress, "Need inspect");
+    expect(output.thinking.content).toBe("Need inspect");
+    expect(requestBody(fetchMock, 1).prompt).toContain("Need inspect");
+    expect(output.turn.kind).toBe("tool_call");
+  });
+
+  it("parses decision DSML split across streamed chunks", async () => {
+    const rawDecision = dsmlBash({
+      session: "default",
+      command: "pwd",
+    });
+    stubFimStreamResponses(
+      [{ text: "Need inspect cwd", finishReason: "stop" }],
+      [
+        { text: rawDecision.slice(0, 3), finishReason: null },
+        { text: rawDecision.slice(3, 40), finishReason: null },
+        { text: rawDecision.slice(40), finishReason: "stop" },
+      ],
+    );
+
+    const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
+      tools: [...STATIC_TOOL_CATALOG],
+    });
+
+    expect(output.turn.kind).toBe("tool_call");
+    if (output.turn.kind === "tool_call") {
+      expect(output.turn.toolCall.arguments).toEqual({
+        session: "default",
+        command: "pwd",
+      });
+    }
+  });
+
+  it("parses SSE data split across network byte chunks", async () => {
+    const rawDecision = dsmlBash({
+      session: "default",
+      command: "pwd",
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        rawFimStreamResponse([
+          'data: {"choices":[{"text":"Ne',
+          'ed inspect cwd","finish_reason":"stop"}],"usage":{"completion_tokens":3}}\n',
+          "\n",
+          "data: [DONE]\n\n",
+        ]),
+      )
+      .mockResolvedValueOnce(okFimStreamResponse([
+        { text: rawDecision, finishReason: "stop" },
+      ]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
+      tools: [...STATIC_TOOL_CATALOG],
+    });
+
+    expect(output.thinking.content).toBe("Need inspect cwd");
+    expect(output.turn.kind).toBe("tool_call");
+  });
+
+  it("parses SSE events with multiple data lines and usage-only chunks", async () => {
+    const rawDecision = dsmlBash({
+      session: "default",
+      command: "pwd",
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        rawFimStreamResponse([
+          'data: {"choices":[{"text":"Need ","finish_reason":null}],',
+          "\n",
+          'data: "usage":null}',
+          "\n\n",
+          'data: {"choices":[{"text":"inspect cwd","finish_reason":"stop"}],"usage":null}',
+          "\n\n",
+          'data: {"choices":[],"usage":{"completion_tokens":3}}',
+          "\n\n",
+          "data: [DONE]\n\n",
+        ]),
+      )
+      .mockResolvedValueOnce(okFimStreamResponse([
+        { text: rawDecision, finishReason: "stop" },
+      ]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
+      tools: [...STATIC_TOOL_CATALOG],
+    });
+
+    expect(output.thinking.content).toBe("Need inspect cwd");
+    expect(output.usage).toMatchObject({
+      thinking: { finishReasons: ["stop"], continuationRounds: 0 },
+    });
+    expect(output.turn.kind).toBe("tool_call");
+  });
+
   it("continues FIM completions when the response hits the token limit", async () => {
     const decisionPrefix = [
       `bash">`,
@@ -212,12 +470,17 @@ describe("DeepSeekFimAdapter", () => {
       { text: decisionPrefix, finishReason: "length" },
       { text: decisionSuffix, finishReason: "stop" },
     );
+    const progress: Array<{ content: string; sequence: number }> = [];
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
       tools: [...STATIC_TOOL_CATALOG],
+      onProgress(event) {
+        progress.push({ content: event.content, sequence: event.sequence });
+      },
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(4);
+    expectProgressContent(progress, "Need inspect cwd");
     expect(requestBody(fetchMock, 0).stop).toEqual([`<${DSML}tool_calls>`]);
     expect(requestBody(fetchMock, 1).stop).toEqual([`<${DSML}tool_calls>`]);
     expect(requestBody(fetchMock, 2).stop).toEqual([`</${DSML}invoke>`]);
@@ -314,7 +577,7 @@ describe("DeepSeekFimAdapter", () => {
       .at(-1)!
       .split("</think>")[0]!;
 
-    expect(output.thinking.content).toBe(contaminatedThinking);
+    expect(output.thinking.content).toBe("Need answer in IM.");
     expect(injectedThinking).toContain("Need answer in IM.");
     expect(injectedThinking).not.toContain("</think>");
     expect(injectedThinking).not.toContain("｜DSML｜");
@@ -441,9 +704,16 @@ describe("DeepSeekFimAdapter", () => {
   });
 
   it("throws when the FIM response has no text choice", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"choices":[{}]}\n\n'));
+        controller.close();
+      },
+    });
     const fetchMock = vi.fn().mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ choices: [{}] }),
+      body: stream,
       text: async () => "",
     } as unknown as Response);
     vi.stubGlobal("fetch", fetchMock);
@@ -452,7 +722,7 @@ describe("DeepSeekFimAdapter", () => {
       makeAdapter().generateTurn(BASE_CONTEXT, {
         tools: [...STATIC_TOOL_CATALOG],
       }),
-    ).rejects.toThrow("DeepSeek FIM response missing choices[0].text");
+    ).rejects.toThrow("DeepSeek FIM stream chunk missing choices[0].text");
   });
 
   it("passes tools to the encoder so V4 chat template conditions both FIM passes", async () => {
@@ -557,6 +827,17 @@ describe("parseDsmlDecision", () => {
     expect(result).toMatchObject({
       status: "invalid",
       message: expect.stringContaining("expected DSML parameter tags"),
+    });
+  });
+
+  it("rejects extra text outside DSML parameter tags", () => {
+    const raw =
+      dsmlBash({ session: "default", command: "pwd" }) +
+      "\nI will now run this command.";
+    const result = parseDsmlDecision(raw);
+    expect(result).toMatchObject({
+      status: "invalid",
+      message: expect.stringContaining("unexpected text outside"),
     });
   });
 

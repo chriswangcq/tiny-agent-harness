@@ -74,6 +74,7 @@ function makeRun(options?: {
   bashObservation?: BashObservation;
   artifactObservation?: AgentObservation;
   activeSkillRuns?: ReturnType<RunPorts["listActiveSkillRuns"]>;
+  modelProgress?: string[];
 }) {
   const runDir = path.join(makeTmpDir(), "run-001");
   const transcript = new TranscriptStore(runDir);
@@ -101,8 +102,15 @@ function makeRun(options?: {
 
   const ports: RunPorts = {
     model: {
-      async generateTurn(context) {
+      async generateTurn(context, modelOptions) {
         contexts.push(context);
+        for (const [sequence, content] of (options?.modelProgress ?? []).entries()) {
+          await modelOptions.onProgress?.({
+            type: "thinking_delta",
+            content,
+            sequence,
+          });
+        }
         const output = outputs.shift();
         if (!output) {
           throw new Error("No queued model output");
@@ -256,6 +264,58 @@ async function waitForTranscriptCount(
 }
 
 describe("RunOrchestrator", () => {
+  it("records model thinking deltas before the final model output", async () => {
+    const wait: IoWaitRequest = {
+      reason: "awaiting next instruction",
+      condition: { kind: "new_user_message", channel: "default" },
+    };
+    const waitEvent: EnvironmentEvent = {
+      id: "msg-env-001",
+      kind: "user_message_received",
+      source: "im",
+      timestamp: "2026-05-25T12:00:00.000Z",
+      message: {
+        id: "msg-001",
+        channel: "default",
+        role: "user",
+        text: "ok",
+        createdAt: "2026-05-25T12:00:00.000Z",
+      },
+    };
+    const { orchestrator, transcript } = makeRun({
+      outputs: [ioWaitOutput(wait)],
+      maxSteps: 1,
+      waitEvent,
+      modelProgress: ["checking context", "choosing action"],
+    });
+
+    await orchestrator.run();
+
+    const events = readTranscript(transcript);
+    expect(events.map((event) => event.type)).toEqual([
+      "run_started",
+      "model_requested",
+      "model_thinking_delta",
+      "model_thinking_delta",
+      "model_output_received",
+      "io_wait_started",
+      "io_wait_satisfied",
+      "run_finished",
+    ]);
+    expect(events[2]).toMatchObject({
+      type: "model_thinking_delta",
+      stepIndex: 0,
+      delta: "checking context",
+      sequence: 0,
+    });
+    expect(events[3]).toMatchObject({
+      type: "model_thinking_delta",
+      stepIndex: 0,
+      delta: "choosing action",
+      sequence: 1,
+    });
+  });
+
   it("stops with max_steps when model returns io_wait", async () => {
     const wait: IoWaitRequest = {
       reason: "awaiting next instruction",

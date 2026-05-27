@@ -127,6 +127,13 @@ export type RunEvent =
       timestamp: string;
     }
   | {
+      type: "model_thinking_delta";
+      stepIndex: number;
+      delta: string;
+      sequence: number;
+      timestamp: string;
+    }
+  | {
       type: "user_message_received";
       runId: string;
       message: UserMessage;

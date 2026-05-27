@@ -163,6 +163,23 @@ describe("AgentRunState transitions", () => {
     expect(waiting.status).toBe("waiting_for_model");
   });
 
+  it("waiting_for_model + model_thinking_delta keeps waiting without advancing step", () => {
+    const waiting = toWaitingForModel(initial);
+    const next = waiting.apply({
+      type: "model_thinking_delta",
+      stepIndex: 0,
+      delta: "checking repo",
+      sequence: 0,
+      timestamp: "2024-01-01T00:00:01.000Z",
+    });
+
+    expect(next.status).toBe("waiting_for_model");
+    expect(next.data.stepIndex).toBe(0);
+    expect(next.data.pendingModelOutput).toBeUndefined();
+    expect(next.data.pendingModelTurn).toBeUndefined();
+    expect(next.data.updatedAt).toBe("2024-01-01T00:00:01.000Z");
+  });
+
   it("waiting_for_model + model_output_received(tool_call) -> running with pendingToolCall", () => {
     const waiting = toWaitingForModel(initial);
     const tc = makeToolCall();

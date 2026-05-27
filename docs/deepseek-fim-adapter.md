@@ -30,7 +30,7 @@
 2. tool-call-only decision generation
 ```
 
-FIM 的 `prompt + suffix` 形式可以把模型输出夹在两个边界之间，让 harness 控制模型“这一段只能填 thinking”或“这一段只能填 DeepSeek native tool-call middle”。
+FIM 的 string completion 形式让 harness 直接发送 encoded `prompt`。Thinking pass 使用 `suffix: "</think>"`，decision pass 不传 suffix，而是用 stop token `</｜DSML｜invoke>` 截断后在本地追加收尾 frame。
 
 这不是把 FIM 当普通代码补全用，而是把它当成受约束的 step generator。
 
@@ -65,7 +65,7 @@ DeepSeekFimAdapter
   output: ModelTurn
 
 DeepSeekV4DsmlToolTemplateRenderer
-  owns: DeepSeek V4 DSML prompt and suffix construction
+  owns: DeepSeek V4 DSML prompt and boundary construction
 
 NativeToolDecisionParser
   owns: DSML invoke/parameter parsing into ModelTurn
@@ -137,6 +137,39 @@ type AgentThinking = {
 
 Thinking is not shown to the user as the user-visible answer. It is recorded in transcript for debugging and self-improvement.
 
+The FIM HTTP request uses the string completion interface:
+
+```json
+{
+  "prompt": "<encoded prompt string>",
+  "suffix": "</think>",
+  "stream": true,
+  "stream_options": { "include_usage": true }
+}
+```
+
+During the thinking pass, the adapter emits progress callbacks from the
+streamed SSE chunks:
+
+```ts
+type ModelProgressEvent = {
+  type: "thinking_delta";
+  content: string;
+  sequence: number;
+};
+```
+
+`RunOrchestrator` persists those callbacks as `model_thinking_delta`
+transcript events. These events are observability-only: they let the TUI update
+the running model frame, but they do not replace `model_output_received` or
+change the final `ModelTurn` contract.
+
+Thinking content is normalized before it is stored or injected into the
+decision prompt. If a streamed thinking response accidentally crosses into
+`</think>`, `<｜DSML｜tool_calls>`, an invoke frame, or legacy tool-call markup,
+the adapter truncates at that boundary. The live progress emitter keeps a small
+lookbehind buffer so split boundary tokens are not leaked into TUI output.
+
 ## Pass 2: Generate Native Tool Decision
 
 The second FIM call generates only the middle of one DeepSeek V4 DSML tool call.
@@ -160,7 +193,7 @@ Decision prompt shape:
 <｜DSML｜invoke name="
 ```
 
-Decision suffix:
+Decision trailer appended locally after streaming completes:
 
 ```text
 </｜DSML｜invoke>
@@ -173,6 +206,16 @@ The filled middle must be:
 function_name">
 <｜DSML｜parameter name="param_name" string="true|false">param_value</｜DSML｜parameter>
 ```
+
+The decision pass also uses the streamed FIM string interface. Streamed text
+chunks are concatenated into the full DSML middle first; only then does the
+native DSML parser validate the function name, parameter tags, `string` flags,
+JSON-valued parameters, and trailing frame tokens.
+
+Unlike the thinking pass, the decision request does not send `suffix`. The
+request sends `stop: ["</｜DSML｜invoke>"]`; the adapter appends
+`</｜DSML｜invoke>\n</｜DSML｜tool_calls><｜end▁of▁sentence｜>` locally before
+parsing so a provider-side suffix cannot poison continuation prompts.
 
 Allowed decision functions:
 
@@ -357,7 +400,6 @@ Prompt text can be saved separately under the run directory:
         step-000-thinking.prompt.txt
         step-000-thinking.suffix.txt
         step-000-decision.prompt.txt
-        step-000-decision.suffix.txt
 ```
 
 ## Prompt Boundary Rules
@@ -388,10 +430,10 @@ Implement only:
 3. `generateDecision(context, thinking)`
 4. `parseDecision(rawDecision)`
 5. transcript events for thinking and decision
+6. streamed FIM string responses for both thinking and decision passes
 
 Defer:
 
-- streaming
 - provider-managed chat tool calls
 - strict JSON mode
 - FIM as a standalone code completion CLI

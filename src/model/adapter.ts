@@ -7,6 +7,7 @@ import type {
   BashToolInput,
   FimStepOutput,
   InternalToolCall,
+  ModelProgressEvent,
   ModelStepContext,
   ModelTurn,
   StashFileInput,
@@ -47,6 +48,8 @@ type FimResponse = {
     completionTokens?: number;
   };
 };
+
+type FimStreamChunk = FimResponse;
 
 type Decision =
   | {
@@ -143,9 +146,16 @@ export class DeepSeekFimAdapter {
 
   async generateTurn(
     context: ModelStepContext,
-    options: { tools: ToolDefinition[] },
+    options: {
+      tools: ToolDefinition[];
+      onProgress?: (event: ModelProgressEvent) => void | Promise<void>;
+    },
   ): Promise<FimStepOutput> {
-    const thinking = await this.generateThinking(context, options.tools);
+    const thinking = await this.generateThinking(
+      context,
+      options.tools,
+      options.onProgress,
+    );
     const decision = await this.generateDecision(
       context,
       thinking,
@@ -167,18 +177,23 @@ export class DeepSeekFimAdapter {
   private async generateThinking(
     context: ModelStepContext,
     tools: ToolDefinition[],
+    onProgress?: (event: ModelProgressEvent) => void | Promise<void>,
   ): Promise<AgentThinking> {
     const messages = this.attachTools(context.messages, tools);
     const prompt = this.encodePrompt(messages);
+    const progressEmitter = createThinkingProgressEmitter(onProgress);
     const completion = await this.completeFim({
       prompt,
       suffix: "</think>",
       maxTokens: this.config.thinkingMaxTokens,
       stop: THINKING_STOP_SEQUENCES,
+      onChunk: progressEmitter.push,
+      shouldStop: progressEmitter.isClosed,
     });
+    await progressEmitter.flush();
 
     return {
-      content: completion.text,
+      content: normalizeThinkingContent(completion.text),
       raw: { prompt, ...completionMeta(completion) },
     };
   }
@@ -246,6 +261,8 @@ export class DeepSeekFimAdapter {
     suffix?: string;
     maxTokens: number;
     stop?: string[];
+    onChunk?: (text: string) => void | Promise<void>;
+    shouldStop?: () => boolean;
   }): Promise<FimCompletionResult> {
     const maxContinuationRounds = this.config.continuationMaxRounds ?? 4;
     const finishReasons: Array<string | null | undefined> = [];
@@ -256,11 +273,13 @@ export class DeepSeekFimAdapter {
       const chunk = await this.requestFimCompletion({
         ...input,
         prompt: input.prompt + text,
+        onChunk: input.onChunk,
       });
       text += chunk.text;
       finishReasons.push(chunk.finishReason);
 
       if (
+        input.shouldStop?.() ||
         !shouldContinueFim(chunk, input.maxTokens) ||
         continuationRounds >= maxContinuationRounds ||
         chunk.text.length === 0
@@ -277,6 +296,7 @@ export class DeepSeekFimAdapter {
     suffix?: string;
     maxTokens: number;
     stop?: string[];
+    onChunk?: (text: string) => void | Promise<void>;
   }): Promise<{
     text: string;
     finishReason?: string | null;
@@ -286,6 +306,8 @@ export class DeepSeekFimAdapter {
       model: this.config.model,
       prompt: input.prompt,
       max_tokens: input.maxTokens,
+      stream: true,
+      stream_options: { include_usage: true },
     };
     if (input.suffix !== undefined) {
       body.suffix = input.suffix;
@@ -310,18 +332,119 @@ export class DeepSeekFimAdapter {
       );
     }
 
-    const data = (await response.json()) as FimResponse;
-    const choice = data.choices?.[0];
-    const text = choice?.text;
-    if (typeof text !== "string") {
-      throw new Error("DeepSeek FIM response missing choices[0].text");
+    return this.readFimCompletionStream(response, input.onChunk);
+  }
+
+  private async readFimCompletionStream(
+    response: Response,
+    onChunk?: (text: string) => void | Promise<void>,
+  ): Promise<{
+    text: string;
+    finishReason?: string | null;
+    completionTokens?: number;
+  }> {
+    if (!response.body) {
+      throw new Error("DeepSeek FIM streaming response missing body");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const textParts: string[] = [];
+    let finishReason: string | null | undefined;
+    let completionTokens: number | undefined;
+    let sawChoice = false;
+    let pending = "";
+    let streamDone = false;
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      pending += decoder.decode(value, { stream: true });
+      const extracted = extractSseEventBlocks(pending);
+      pending = extracted.rest;
+
+      for (const block of extracted.blocks) {
+        const event = parseSseEventBlock(block);
+        if (!event) continue;
+        if (event === "[DONE]") {
+          pending = "";
+          streamDone = true;
+          break;
+        }
+
+        const chunk = parseFimStreamChunk(event);
+        const usage =
+          chunk.usage?.completion_tokens ?? chunk.usage?.completionTokens;
+        if (typeof usage === "number") {
+          completionTokens = usage;
+        }
+
+        const choice = chunk.choices?.[0];
+        if (!choice) continue;
+        sawChoice = true;
+
+        if (
+          choice.finish_reason !== undefined ||
+          choice.finishReason !== undefined
+        ) {
+          finishReason = choice.finish_reason ?? choice.finishReason;
+        }
+
+        if (choice.text === undefined) {
+          if (finishReason !== undefined) continue;
+          throw new Error("DeepSeek FIM stream chunk missing choices[0].text");
+        }
+
+        if (choice.text.length > 0) {
+          textParts.push(choice.text);
+          await onChunk?.(choice.text);
+        }
+      }
+
+      if (streamDone) break;
+    }
+
+    if (!streamDone) {
+      const finalTail = decoder.decode();
+      if (finalTail.length > 0) {
+        pending += finalTail;
+      }
+      const extracted = extractSseEventBlocks(`${pending}\n\n`);
+      for (const block of extracted.blocks) {
+        const tailEvent = parseSseEventBlock(block);
+        if (!tailEvent) continue;
+        if (tailEvent === "[DONE]") break;
+        const chunk = parseFimStreamChunk(tailEvent);
+        const choice = chunk.choices?.[0];
+        if (choice) {
+          sawChoice = true;
+          finishReason =
+            choice.finish_reason ?? choice.finishReason ?? finishReason;
+          if (choice.text === undefined && finishReason === undefined) {
+            throw new Error("DeepSeek FIM stream chunk missing choices[0].text");
+          }
+          if (choice.text && choice.text.length > 0) {
+            textParts.push(choice.text);
+            await onChunk?.(choice.text);
+          }
+        }
+        const usage =
+          chunk.usage?.completion_tokens ?? chunk.usage?.completionTokens;
+        if (typeof usage === "number") {
+          completionTokens = usage;
+        }
+      }
+    }
+
+    if (!sawChoice) {
+      throw new Error("DeepSeek FIM stream response missing choices");
     }
 
     return {
-      text,
-      finishReason: choice?.finish_reason ?? choice?.finishReason,
-      completionTokens:
-        data.usage?.completion_tokens ?? data.usage?.completionTokens,
+      text: textParts.join(""),
+      finishReason,
+      completionTokens,
     };
   }
 
@@ -384,8 +507,96 @@ export class DeepSeekFimAdapter {
 // Thinking sanitization
 // ---------------------------------------------------------------------------
 
+const THINKING_BOUNDARY_MARKERS = [
+  "</think>",
+  DSML_TOOL_CALLS_OPEN,
+  DSML_INVOKE_OPEN_PREFIX,
+  "<tool_call",
+  "</tool_call>",
+  "｜tool",
+];
+
+const THINKING_BOUNDARY_LOOKBEHIND =
+  Math.max(...THINKING_BOUNDARY_MARKERS.map((marker) => marker.length)) - 1;
+
+function normalizeThinkingContent(content: string): string {
+  const boundary = findThinkingBoundary(content);
+  const safeContent =
+    boundary === undefined ? content : content.slice(0, boundary.index);
+  return safeContent.replace(/<think>/gi, "").trimEnd();
+}
+
+function findThinkingBoundary(
+  content: string,
+): { index: number; marker: string } | undefined {
+  const lowerContent = content.toLowerCase();
+  let result: { index: number; marker: string } | undefined;
+
+  for (const marker of THINKING_BOUNDARY_MARKERS) {
+    const index = lowerContent.indexOf(marker.toLowerCase());
+    if (index === -1) continue;
+    if (result === undefined || index < result.index) {
+      result = { index, marker };
+    }
+  }
+
+  return result;
+}
+
+function createThinkingProgressEmitter(
+  onProgress?: (event: ModelProgressEvent) => void | Promise<void>,
+): {
+  push(text: string): Promise<void>;
+  flush(): Promise<void>;
+  isClosed(): boolean;
+} {
+  let raw = "";
+  let emittedLength = 0;
+  let sequence = 0;
+  let closed = false;
+
+  async function emit(final: boolean): Promise<void> {
+    const normalized = normalizeThinkingContent(raw);
+    const boundary = findThinkingBoundary(raw);
+    const emitUpTo =
+      final || boundary
+        ? normalized.length
+        : Math.max(0, normalized.length - THINKING_BOUNDARY_LOOKBEHIND);
+    if (emitUpTo > emittedLength) {
+      const content = normalized.slice(emittedLength, emitUpTo);
+      emittedLength = emitUpTo;
+      if (content.length > 0) {
+        await onProgress?.({
+          type: "thinking_delta",
+          content,
+          sequence,
+        });
+        sequence++;
+      }
+    }
+    if (boundary) {
+      closed = true;
+    }
+  }
+
+  return {
+    async push(text: string): Promise<void> {
+      if (closed || text.length === 0) return;
+      raw += text;
+      await emit(false);
+    },
+    async flush(): Promise<void> {
+      if (closed) return;
+      await emit(true);
+    },
+    isClosed(): boolean {
+      return closed;
+    },
+  };
+}
+
 function sanitizeThinkingForDecisionPrompt(content: string): string {
-  const withoutThinkTags = content.replace(/<\/?think>/gi, "");
+  const withoutThinkTags = normalizeThinkingContent(content);
   const withoutDsmlBlocks = withoutThinkTags
     .replace(/<｜DSML｜tool_calls>[\s\S]*?(?:<\/｜DSML｜tool_calls>|$)/g, "")
     .replace(/<｜DSML｜invoke name="[^"]*">[\s\S]*?(?:<\/｜DSML｜invoke>|$)/g, "");
@@ -399,6 +610,61 @@ function sanitizeThinkingForDecisionPrompt(content: string): string {
 
   const sanitized = safeLines.join("\n").trim();
   return sanitized || "Prior thinking contained only decision-frame markup and was omitted.";
+}
+
+// ---------------------------------------------------------------------------
+// FIM streaming response parsing
+// ---------------------------------------------------------------------------
+
+function extractSseEventBlocks(raw: string): { blocks: string[]; rest: string } {
+  const blocks: string[] = [];
+  let start = 0;
+
+  for (;;) {
+    const separator = findSseEventSeparator(raw, start);
+    if (!separator) break;
+    blocks.push(raw.slice(start, separator.index));
+    start = separator.end;
+  }
+
+  return { blocks, rest: raw.slice(start) };
+}
+
+function findSseEventSeparator(
+  raw: string,
+  start: number,
+): { index: number; end: number } | undefined {
+  const lf = raw.indexOf("\n\n", start);
+  const crlf = raw.indexOf("\r\n\r\n", start);
+
+  if (lf === -1 && crlf === -1) return undefined;
+  if (lf === -1) return { index: crlf, end: crlf + 4 };
+  if (crlf === -1) return { index: lf, end: lf + 2 };
+  return lf < crlf
+    ? { index: lf, end: lf + 2 }
+    : { index: crlf, end: crlf + 4 };
+}
+
+function parseSseEventBlock(block: string): string | undefined {
+  const dataLines: string[] = [];
+  for (const rawLine of block.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    if (!line || line.startsWith(":")) continue;
+    if (!line.startsWith("data:")) continue;
+    dataLines.push(line.slice("data:".length).trimStart());
+  }
+  if (dataLines.length === 0) return undefined;
+  return dataLines.join("");
+}
+
+function parseFimStreamChunk(raw: string): FimStreamChunk {
+  try {
+    return JSON.parse(raw) as FimStreamChunk;
+  } catch (error) {
+    throw new Error(
+      `DeepSeek FIM stream chunk was not valid JSON: ${String(error)}`,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -486,6 +752,22 @@ function parseDsml(raw: string): ParseDecisionResult {
     return paramsResult;
   }
 
+  if (Object.keys(paramsResult.params).length === 0 && rest.includes("{")) {
+    return {
+      status: "invalid",
+      message:
+        "Malformed DSML tool call: expected DSML parameter tags, not raw JSON.",
+    };
+  }
+
+  if (paramsResult.extraText !== "") {
+    return {
+      status: "invalid",
+      message:
+        "Malformed DSML tool call: unexpected text outside DSML parameter tags.",
+    };
+  }
+
   if (Object.keys(paramsResult.params).length > 0) {
     return buildDecision(name, paramsResult.params);
   }
@@ -494,14 +776,6 @@ function parseDsml(raw: string): ParseDecisionResult {
     return {
       status: "invalid",
       message: "Malformed DSML tool call: no complete DSML parameters found.",
-    };
-  }
-
-  if (rest.includes("{")) {
-    return {
-      status: "invalid",
-      message:
-        "Malformed DSML tool call: expected DSML parameter tags, not raw JSON.",
     };
   }
 
@@ -535,9 +809,11 @@ function stripTrailingDecisionFrame(raw: string): string {
 function parseDsmlParameters(
   text: string,
 ):
-  | { status: "valid"; params: Record<string, unknown> }
+  | { status: "valid"; params: Record<string, unknown>; extraText: string }
   | { status: "invalid"; message: string } {
   const params: Record<string, unknown> = {};
+  let extraText = "";
+  let cursor = 0;
   const paramRegex = new RegExp(
     `<${escapeForRegex(DSML)}parameter\\s+name="([^"]*)"\\s+string="(true|false)"` +
       `>([\\s\\S]*?)</${escapeForRegex(DSML)}parameter>`,
@@ -546,6 +822,9 @@ function parseDsmlParameters(
 
   let match;
   while ((match = paramRegex.exec(text)) !== null) {
+    extraText += text.slice(cursor, match.index);
+    cursor = match.index + match[0].length;
+
     const paramName = match[1]!;
     const isString = match[2] === "true";
     const value = match[3]!;
@@ -563,8 +842,9 @@ function parseDsmlParameters(
       }
     }
   }
+  extraText += text.slice(cursor);
 
-  return { status: "valid", params };
+  return { status: "valid", params, extraText: extraText.trim() };
 }
 
 // ---------------------------------------------------------------------------

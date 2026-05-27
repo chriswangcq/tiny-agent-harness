@@ -9,7 +9,7 @@ Skill 不是 harness 内置工具，也不是模型可见的第二套 tool regis
 第一版仍然坚持：
 
 ```text
-Model visible tools: bash only
+Model visible action surface: bash for external work, stash_file only for file-byte staging
 External capabilities: called as CLI commands inside bash
 ```
 

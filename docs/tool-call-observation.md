@@ -4,17 +4,18 @@
 
 ## Design Principles
 
-1. Agent 对外只有一个真实工具：`bash`。
-2. MCP 也是 CLI，不作为 harness 内置 SDK。Agent 调 MCP 时本质上仍然是运行 bash 命令。
-3. Harness 原生负责 bash session lifecycle，但不提供业务工具。
-4. Tool review 位于 bash 执行之前。demo 模式下所有请求都 approve。
-5. Observation 只返回本次新增输出窗口和 return code。完整输出持久化到 session log，Agent 通过 bash 原生命令自行翻页查看。
+1. Agent 的唯一外部动作面仍是 `bash`。
+2. `stash_file` 是 model-visible 的内部 staging 工具，只把生成文件字节写进 harness artifact state；落到目标文件系统仍要通过 `bash` 执行 `artifact write`。
+3. MCP 也是 CLI，不作为 harness 内置 SDK。Agent 调 MCP 时本质上仍然是运行 bash 命令。
+4. Harness 原生负责 bash session lifecycle 和 file artifact staging，但不提供业务工具。
+5. Tool review 位于工具执行之前。demo 模式下所有请求都 approve。
+6. Observation 只返回本次新增输出窗口和 return code。完整输出持久化到 session log，Agent 通过 bash 原生命令自行翻页查看。
 
 ## FIM Decision Tool Call Protocol
 
 模型层使用 DeepSeek V4 FIM two-pass。第一通生成 reasoning，第二通生成 DeepSeek V4 DSML tool-call frame 的中间内容。
 
-Decision pass 使用 DeepSeek V4 DSML tool-call 边界，但不走 API provider-native tool calling。Harness 手工组装 prompt/suffix，并解析 FIM 填充的中间段。
+Decision pass 使用 DeepSeek V4 DSML tool-call 边界，但不走 API provider-native tool calling。Harness 手工组装 prompt 和 stop token，并解析 FIM 填充的中间段。
 
 Decision pass 由 harness 预填：
 
@@ -27,7 +28,7 @@ Decision pass 由 harness 预填：
 <｜DSML｜invoke name="
 ```
 
-并提供 suffix：
+请求不传 `suffix`。模型输出遇到 `</｜DSML｜invoke>` 时停止，harness 在本地追加 trailer：
 
 ```text
 </｜DSML｜invoke>
@@ -416,6 +417,6 @@ FIM context 只保留高层约束，例如：
 
 ```text
 All external actions must use the provided tools.
-The only external tool is bash.
+The only external action tool is bash. Use stash_file only to stage generated file bytes before bash materializes them.
 When the task is complete, send the answer through the IM CLI with bash, then return io_wait.
 ```

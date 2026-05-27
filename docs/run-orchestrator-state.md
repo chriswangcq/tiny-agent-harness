@@ -29,7 +29,7 @@ DeepSeekFimAdapter
   owns: two FIM completions per model step and conversion into ModelTurn
 
 FimPromptBuilder
-  owns: FIM prompt/suffix construction from task, config, transcript, session summaries
+  owns: FIM prompt and boundary construction from task, config, transcript, session summaries
 
 ImCliTransport
   owns: user message receive/send through im CLI
@@ -295,6 +295,13 @@ type RunEvent =
       timestamp: string;
     }
   | {
+      type: "model_thinking_delta";
+      stepIndex: number;
+      delta: string;
+      sequence: number;
+      timestamp: string;
+    }
+  | {
       type: "user_message_received";
       runId: string;
       message: UserMessage;
@@ -536,6 +543,10 @@ created + run_started
 
 running + model_requested
   -> waiting_for_model
+
+waiting_for_model + model_thinking_delta
+  -> waiting_for_model
+  (observability-only; does not advance stepIndex or create pending work)
 
 waiting_for_model + model_output_received(tool_call)
   -> running with pending tool call

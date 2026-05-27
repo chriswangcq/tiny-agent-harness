@@ -175,6 +175,83 @@ describe("ViewModelBuilder", () => {
     expect(frame.title).toBe("model requested");
   });
 
+  it("model_thinking_delta updates the running model LoopFrame", () => {
+    const b = builderWithRunStarted();
+    b.applyEvent({ type: "model_requested", stepIndex: 0, timestamp: NOW });
+    b.applyEvent({
+      type: "model_thinking_delta",
+      stepIndex: 0,
+      delta: "checking context",
+      sequence: 0,
+      timestamp: LATER,
+    });
+    b.applyEvent({
+      type: "model_thinking_delta",
+      stepIndex: 0,
+      delta: " and choosing tool",
+      sequence: 1,
+      timestamp: "2026-01-01T00:00:02Z",
+    });
+
+    const vm = b.getViewModel();
+    const modelFrames = vm.loop.filter((frame) => frame.phase === "model");
+    const frame = modelFrames[modelFrames.length - 1];
+    expect(modelFrames).toHaveLength(1);
+    expect(frame.status).toBe("running");
+    expect(frame.title).toBe("model thinking");
+    expect(frame.summary).toBe("thinking... 34 chars");
+    expect(frame.detail).toContain("## thinking");
+    expect(frame.detail).toContain("checking context and choosing tool");
+    expect(vm.conversation).toHaveLength(0);
+  });
+
+  it("model_thinking_delta creates a model frame if replay is missing model_requested", () => {
+    const b = builderWithRunStarted();
+    b.applyEvent({
+      type: "model_thinking_delta",
+      stepIndex: 2,
+      delta: "late replay chunk",
+      sequence: 0,
+      timestamp: LATER,
+    });
+
+    const vm = b.getViewModel();
+    const frame = vm.loop[vm.loop.length - 1];
+    expect(frame.stepIndex).toBe(2);
+    expect(frame.phase).toBe("model");
+    expect(frame.status).toBe("running");
+    expect(frame.detail).toContain("late replay chunk");
+  });
+
+  it("model_output_received replaces live thinking detail with final model detail", () => {
+    const b = builderWithRunStarted();
+    b.applyEvent({ type: "model_requested", stepIndex: 0, timestamp: NOW });
+    b.applyEvent({
+      type: "model_thinking_delta",
+      stepIndex: 0,
+      delta: "partial",
+      sequence: 0,
+      timestamp: LATER,
+    });
+    b.applyEvent({
+      type: "model_output_received",
+      stepIndex: 0,
+      output: makeToolCallOutput(),
+      turn: makeToolCallTurn(),
+      timestamp: "2026-01-01T00:00:02Z",
+    });
+
+    const vm = b.getViewModel();
+    const modelFrame = vm.loop.find(
+      (frame) => frame.stepIndex === 0 && frame.phase === "model",
+    );
+    expect(modelFrame?.status).toBe("ok");
+    expect(modelFrame?.title).toBe("model completed");
+    expect(modelFrame?.detail).toContain("thinking about it");
+    expect(modelFrame?.detail).not.toContain("partial");
+    expect(modelFrame?.detail).toContain("## raw decision");
+  });
+
   // 3
   it("model_output_received tool_call creates decision LoopFrame", () => {
     const b = builderWithRunStarted();
