@@ -10,6 +10,7 @@ import type { TerminalObservationLimits } from "../terminal/observation.js";
 import { ManagedPtySession } from "./managed-session.js";
 
 const PTY_WRITE_CHUNK_BYTES = 1024;
+const DEFAULT_POST_WRITE_READ_DELAY_MS = 100;
 
 export type ManagedTerminalRuntimeOptions = {
   defaultSessionId: string;
@@ -20,6 +21,7 @@ export type ManagedTerminalRuntimeOptions = {
   env?: Record<string, string>;
   actionLimits: PtyActionLimits;
   observationLimits: TerminalObservationLimits;
+  postWriteReadDelayMs?: number;
   nowIso?: () => string;
   monotonicMs?: () => number;
   newId?: (prefix: string) => string;
@@ -63,6 +65,7 @@ export class ManagedTerminalRuntime {
             pty.write(chunk);
             await yieldToPty();
           }
+          await delay(this.options.postWriteReadDelayMs ?? DEFAULT_POST_WRITE_READ_DELAY_MS);
         },
         read: async (session, cursor) => {
           const entry = this.ensureSession(session);
@@ -163,6 +166,13 @@ function chunkTextByUtf8Bytes(text: string, maxBytes: number): string[] {
 
 function yieldToPty(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
+}
+
+function delay(ms: number): Promise<void> {
+  if (ms <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function parseCursor(cursor: string | undefined): number {

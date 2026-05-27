@@ -110,6 +110,7 @@ function createCliTerminalPort() {
     env: cleanEnv(process.env),
     actionLimits: DEFAULT_PTY_ACTION_LIMITS,
     observationLimits: { maxPreviewChars: 200, maxEvents: 50 },
+    postWriteReadDelayMs: 100,
   });
   return runtime.createRunPort();
 }

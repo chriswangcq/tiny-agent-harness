@@ -106,6 +106,7 @@ export const BASH_TOOL_DEFINITION: ToolDefinition = {
   description:
     "Operate a persistent PTY session with inputSeq-guarded actions. " +
     "This is a pure PTY interface: write_text writes exact bytes to the terminal and never appends Enter for you; include \\n explicitly or use key enter. Large write_text payloads are allowed and internally paced, which solves PTY transport but not shell parsing. " +
+    "After write_text/key input, the runtime waits briefly before reading output so immediate echo or command output can appear in the same observation. " +
     "Use key only for terminal keys such as enter, ctrl-c, ctrl-d, escape, tab, up, and down. " +
     "Use poll/status to observe and interrupt/terminate/restart to recover. The runtime reports terminal facts such as lastShellPrompt, lastContinuationPrompt, syncStatus, alive, and inputSeq; it does not infer whether shell, Python, ssh, cat, vim, or another foreground program should receive the next bytes. The agent must inspect the PTY output and terminal facts before deciding what to type. " +
     "Every write_text/key action must include the latest terminal.inputSeq from the prior observation. The sequence only prevents stale input; it is not a foreground process claim. " +

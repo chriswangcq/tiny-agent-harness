@@ -48,7 +48,9 @@ afterEach(() => {
   ptyMock.spawned.length = 0;
 });
 
-function makeRuntime(): ManagedTerminalRuntime {
+function makeRuntime(options: {
+  postWriteReadDelayMs?: number;
+} = {}): ManagedTerminalRuntime {
   return new ManagedTerminalRuntime({
     defaultSessionId: "default",
     cwd: "/repo",
@@ -58,6 +60,7 @@ function makeRuntime(): ManagedTerminalRuntime {
       maxPreviewChars: 80,
       maxEvents: 50,
     },
+    postWriteReadDelayMs: options.postWriteReadDelayMs ?? 0,
     nowIso: () => "2026-05-27T00:00:00.000Z",
     monotonicMs: () => 1,
     newId: (prefix) => `${prefix}-1`,
@@ -117,6 +120,31 @@ describe("ManagedTerminalRuntime", () => {
 
     expect(observation.result).toBe("ok");
     expect(ptyMock.spawned[0]?.writes.at(-1)).toBe("pwd\n");
+  });
+
+  it("waits briefly after write_text so immediate PTY output lands in the observation", async () => {
+    const port = makeRuntime({ postWriteReadDelayMs: 20 }).createRunPort();
+    await port.execute({ action: { kind: "status" } });
+
+    const pending = port.execute({
+      action: {
+        kind: "write_text",
+        expectedInputSeq: 0,
+        text: "pwd\n",
+      },
+    });
+    setTimeout(() => {
+      ptyMock.spawned[0]?.emit("/repo\n");
+    }, 5);
+
+    const observation = await pending;
+
+    expect(observation).toMatchObject({
+      result: "ok",
+      eventCount: 1,
+      events: [{ kind: "output", preview: "/repo" }],
+      outputPreview: "/repo",
+    });
   });
 
   it("paces large write_text input into PTY chunks without dropping bytes", async () => {

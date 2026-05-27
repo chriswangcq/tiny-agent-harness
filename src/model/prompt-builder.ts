@@ -36,6 +36,7 @@ const SYSTEM_MESSAGE =
   "Every write_text/key action must use the latest terminal.inputSeq from the previous observation.\n" +
   "  PTY action kinds: write_text, key, poll, status, interrupt, terminate, restart.\n" +
   "  Use write_text to write exact bytes to the PTY; it does not append Enter, so include `\\n` explicitly or use key enter. Large write_text payloads are allowed and paced by the runtime.\n" +
+  "  After write_text/key input, the runtime waits briefly before reading output so immediate echo or command output can appear in the same observation.\n" +
   "  The runtime reports terminal facts such as terminal.alive, terminal.inputSeq, terminal.syncStatus, terminal.lastShellPrompt, and terminal.lastContinuationPrompt. It does not infer whether the shell, Python, ssh, cat, vim, or another foreground program should receive the next bytes. Inspect the PTY output and terminal facts before deciding what to type.\n" +
   "  Runtime pacing solves PTY transport, not shell parsing. Do not put a large generated file in a shell heredoc or script string literal. To write a large generated text/code file, start a foreground stdin consumer such as `cat > path\\n`, poll until the PTY appearance shows it is waiting for input, write the file text directly, then send ctrl-d and poll until the shell prompt returns. End text payloads with `\\n`; if not, ctrl-d may need to be sent twice.\n" +
   "  If terminal.alive is false, recover with restart. If terminal.syncStatus is unsynced, inspect with poll/status or recover with interrupt/terminate/restart.\n" +
