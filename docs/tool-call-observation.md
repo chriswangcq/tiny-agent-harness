@@ -71,6 +71,8 @@ Example heredoc write:
 }
 ```
 
+Heredocs are a convenience for short, simple snippets. For large generated files, HTML, Markdown, JSON containing backticks/dollars/quotes, or content whose shell parsing is uncertain, prefer a foreground stdin consumer such as `cat > path`, write the content directly, then close stdin with Ctrl-D and poll until the prompt returns.
+
 ## Observation Shape
 
 ```ts

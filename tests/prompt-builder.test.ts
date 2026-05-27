@@ -19,6 +19,7 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("im send --channel");
     expect(prompt.messages[0]!.content).toContain("--text-stdin");
     expect(prompt.messages[0]!.content).toContain("Large write_text payloads are allowed");
+    expect(prompt.messages[0]!.content).toContain("Use shell heredocs sparingly");
     expect(prompt.messages[0]!.content).toContain("cat > path");
     expect(prompt.messages[0]!.content).toContain("terminal.inputSeq");
     expect(prompt.messages[0]!.content).toContain("does not infer whether");

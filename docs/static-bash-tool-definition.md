@@ -51,6 +51,7 @@ Important semantics:
 - `key` is for terminal keys such as Enter, Ctrl-C, Ctrl-D, Escape, Tab, Up, and Down.
 - `poll`, `status`, `interrupt`, `terminate`, and `restart` are control actions over the PTY session, not shell commands.
 - Every write-like action carries `expectedInputSeq`; stale input sequences are rejected.
+- Use heredocs sparingly. They are fine for short, simple, predictable snippets, but should not be used for large generated files, HTML, Markdown, JSON containing backticks/dollars/quotes, or content whose literal shell parsing is uncertain.
 - After sending a heredoc or multi-line script, keep polling until the shell prompt returns. A `lastContinuationPrompt` fact means the shell recently reported a continuation prompt.
 - Observations are bounded summaries: full PTY output stays in the session log and observations carry previews, `eventCount`, `eventsOmitted`, and `logRef`.
 - Serialized prompt history may omit large prior `write_text.text` payloads to protect context. The raw executed tool call is still preserved in transcript/state; only the next model prompt is compacted.
@@ -75,7 +76,7 @@ EOF
 
 After sending an IM reply, poll until the shell prompt returns and the command output indicates success before choosing `io_wait`.
 
-Generated text files and code can use shell heredocs or small scripts through `write_text` when the content is small and simple. Do not put a large generated file in a shell heredoc or script string literal. For large generated text/code, prefer a foreground stdin consumer so the payload does not go through shell parsing:
+Generated text files and code can use shell heredocs or small scripts through `write_text` when the content is small and simple. For large generated files, HTML, Markdown, JSON containing backticks/dollars/quotes, or any content whose literal shell parsing is uncertain, prefer a foreground stdin consumer so the payload does not go through shell parsing:
 
 1. Use `write_text` to run `cat > path\n` or another intentionally chosen stdin consumer.
 2. Poll until it is clearly waiting for input.
