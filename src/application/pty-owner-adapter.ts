@@ -5,7 +5,7 @@ import {
 } from "../terminal/index.js";
 import type {
   LogRef,
-  ProcessStdinMode,
+  ProcessInputPolicy,
   TerminalEvent,
   TerminalOwner,
 } from "../terminal/index.js";
@@ -49,14 +49,14 @@ export function applySilenceTimeoutToSnapshot(input: {
   elapsedMs: number;
   commandLine: string | null;
   startedAt: string;
-  stdinMode?: ProcessStdinMode;
+  inputPolicy?: ProcessInputPolicy;
 }): ApplyPtyChunkResult {
   const event: TerminalEvent = {
     kind: "silence_timeout",
     elapsedMs: input.elapsedMs,
     commandLine: input.commandLine,
     startedAt: input.startedAt,
-    stdinMode: input.stdinMode,
+    inputPolicy: input.inputPolicy,
   };
   const transition = transitionOwner(input.snapshot.owner, event);
 

@@ -87,14 +87,14 @@ describe("fake PTY owner parsing adapter", () => {
       elapsedMs: 30_000,
       commandLine: "sleep 60",
       startedAt: "2026-05-27T00:00:00.000Z",
-      stdinMode: "unknown",
+      inputPolicy: "unknown",
     });
 
     expect(result.snapshot.owner).toEqual({
       kind: "process",
       revision: 6,
       commandLine: "sleep 60",
-      stdinMode: "unknown",
+      inputPolicy: "unknown",
       startedAt: "2026-05-27T00:00:00.000Z",
       lastOutputAt: null,
     });

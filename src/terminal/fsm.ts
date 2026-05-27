@@ -1,6 +1,6 @@
 import type {
   ContinuationReason,
-  ProcessStdinMode,
+  ProcessInputPolicy,
   TerminalEvent,
   TerminalOwner,
 } from "./types.js";
@@ -66,7 +66,7 @@ export function transitionOwner(
       return toProcess(owner, {
         commandLine: event.commandLine,
         startedAt: event.startedAt,
-        stdinMode: event.stdinMode ?? "unknown",
+        inputPolicy: event.inputPolicy ?? "unknown",
       });
     case "unsynced":
       return toUnknown(owner, event.reason);
@@ -114,7 +114,7 @@ export function toProcess(
   owner: TerminalOwner,
   input: {
     commandLine: string | null;
-    stdinMode?: ProcessStdinMode;
+    inputPolicy?: ProcessInputPolicy;
     startedAt: string;
     lastOutputAt?: string | null;
   },
@@ -123,7 +123,7 @@ export function toProcess(
     kind: "process",
     revision: nextOwnerRevision(owner),
     commandLine: input.commandLine,
-    stdinMode: input.stdinMode ?? "unknown",
+    inputPolicy: input.inputPolicy ?? "unknown",
     startedAt: input.startedAt,
     lastOutputAt: input.lastOutputAt ?? null,
   });

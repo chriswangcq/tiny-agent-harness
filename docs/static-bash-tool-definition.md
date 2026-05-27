@@ -45,7 +45,7 @@ Important semantics:
 
 - `write_text` writes exact text bytes. It does not append Enter. Include `\n` explicitly or use `{ kind: "key", key: "enter" }`.
 - Large `write_text` payloads are accepted by the tool and internally paced into PTY writes so the model does not need to chunk ordinary shell input.
-- When `owner.kind` is `process`, `write_text` is accepted for `stdinMode: "interactive"` and `stdinMode: "unknown"`; only `stdinMode: "none"` rejects text. Treat `unknown` as a foreground process that may accept stdin, not as proof that arbitrary text is safe.
+- When `owner.kind` is `process`, `write_text` is accepted for `inputPolicy: "writable"` and `inputPolicy: "unknown"`; only `inputPolicy: "blocked"` rejects text. Treat `unknown` as a foreground process that may accept stdin, not as proof that arbitrary text is safe.
 - `key` is for terminal keys such as Enter, Ctrl-C, Ctrl-D, Escape, Tab, Up, and Down.
 - `poll`, `status`, `interrupt`, `terminate`, and `restart` are control actions over the PTY session, not shell commands.
 - Every write-like action carries `expectedOwnerRevision`; stale revisions are rejected.

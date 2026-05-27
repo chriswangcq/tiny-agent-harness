@@ -16,12 +16,12 @@ function shell(revision = 1): TerminalOwner {
   };
 }
 
-function processOwner(stdinMode: "none" | "interactive" | "unknown" = "unknown"): TerminalOwner {
+function processOwner(inputPolicy: "blocked" | "writable" | "unknown" = "unknown"): TerminalOwner {
   return {
     kind: "process",
     revision: 2,
     commandLine: "node repl.js",
-    stdinMode,
+    inputPolicy,
     startedAt: "2026-05-27T00:00:00.000Z",
     lastOutputAt: null,
   };
@@ -91,9 +91,9 @@ describe("terminal action validator", () => {
     expect(result).toEqual({ ok: true });
   });
 
-  it("allows explicit process text input when process stdin may accept input", () => {
+  it("allows explicit process text input when process input policy is writable", () => {
     const result = validatePtyAction({
-      owner: processOwner("interactive"),
+      owner: processOwner("writable"),
       action: {
         kind: "write_text",
         expectedOwnerRevision: 2,
@@ -104,9 +104,9 @@ describe("terminal action validator", () => {
     expect(result).toEqual({ ok: true });
   });
 
-  it("rejects process text input when stdin is none", () => {
+  it("rejects process text input when process input policy is blocked", () => {
     const result = validatePtyAction({
-      owner: processOwner("none"),
+      owner: processOwner("blocked"),
       action: {
         kind: "write_text",
         expectedOwnerRevision: 2,

@@ -136,14 +136,14 @@ describe("ManagedPtySession", () => {
       elapsedMs: 30_000,
       commandLine: "sleep 60",
       startedAt: "2026-05-27T00:00:00.000Z",
-      stdinMode: "unknown",
+      inputPolicy: "unknown",
     });
 
     expect(snapshot.owner).toEqual({
       kind: "process",
       revision: 1,
       commandLine: "sleep 60",
-      stdinMode: "unknown",
+      inputPolicy: "unknown",
       startedAt: "2026-05-27T00:00:00.000Z",
       lastOutputAt: null,
     });

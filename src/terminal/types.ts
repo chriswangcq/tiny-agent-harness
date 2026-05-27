@@ -11,7 +11,7 @@ export type ContinuationReason =
   | "line_continuation"
   | "unknown";
 
-export type ProcessStdinMode = "none" | "interactive" | "unknown";
+export type ProcessInputPolicy = "unknown" | "writable" | "blocked";
 
 export type TerminalOwner =
   | ShellOwner
@@ -41,7 +41,7 @@ export type ProcessOwner = {
   kind: "process";
   revision: number;
   commandLine: string | null;
-  stdinMode: ProcessStdinMode;
+  inputPolicy: ProcessInputPolicy;
   startedAt: string;
   lastOutputAt: string | null;
 };
@@ -120,7 +120,7 @@ export type TerminalEvent =
       elapsedMs: number;
       commandLine: string | null;
       startedAt: string;
-      stdinMode?: ProcessStdinMode;
+      inputPolicy?: ProcessInputPolicy;
     }
   | {
       kind: "unsynced";

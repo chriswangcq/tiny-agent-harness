@@ -60,7 +60,7 @@ function validateWriteText(
   }
 
   if (owner.kind === "process") {
-    if (owner.stdinMode !== "none") {
+    if (owner.inputPolicy !== "blocked") {
       return { ok: true };
     }
 
@@ -83,7 +83,7 @@ function validateKey(owner: TerminalOwner): ValidationResult {
     return { ok: true };
   }
 
-  if (owner.kind === "process" && owner.stdinMode !== "none") {
+  if (owner.kind === "process" && owner.inputPolicy !== "blocked") {
     return { ok: true };
   }
 

@@ -6,7 +6,7 @@ import {
 } from "../application/pty-owner-adapter.js";
 import type { TerminalRuntimeSnapshot } from "../application/terminal-ports.js";
 import { createShellOwner } from "../terminal/fsm.js";
-import type { ProcessStdinMode } from "../terminal/index.js";
+import type { ProcessInputPolicy } from "../terminal/index.js";
 
 export type ManagedPtySessionOptions = {
   id: string;
@@ -95,7 +95,7 @@ export class ManagedPtySession {
     elapsedMs: number;
     commandLine: string | null;
     startedAt: string;
-    stdinMode?: ProcessStdinMode;
+    inputPolicy?: ProcessInputPolicy;
   }): TerminalRuntimeSnapshot {
     const result = applySilenceTimeoutToSnapshot({
       snapshot: this.currentSnapshot,
