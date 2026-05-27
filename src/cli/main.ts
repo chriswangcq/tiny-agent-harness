@@ -109,7 +109,7 @@ function createCliTerminalPort() {
     promptNonce: `cli-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     env: cleanEnv(process.env),
     actionLimits: DEFAULT_PTY_ACTION_LIMITS,
-    observationLimits: { maxPreviewChars: 200 },
+    observationLimits: { maxPreviewChars: 200, maxEvents: 50 },
   });
   return runtime.createRunPort();
 }

@@ -41,6 +41,7 @@ const SYSTEM_MESSAGE =
   "  If terminal.alive is false, recover with restart. If terminal.syncStatus is unsynced, inspect with poll/status or recover with interrupt/terminate/restart.\n" +
   "  For short IM replies, run `node dist/cli/main.js im send --channel <channel> --kind status --text <reply>` through write_text.\n" +
   "  For generated text files or code, use foreground stdin consumers for large text and shell heredocs or small scripts for small/simple text. There is no file staging protocol, frame protocol, or separate payload tool in the model-visible action surface.\n" +
+  "  Large prior write_text payloads may be omitted from serialized prompt history to protect context; the actual executed tool call remains in the transcript, and PTY output remains available through bounded observations and logRef.\n" +
   "- io_wait: pause until the next external event. This is a TOOL CALL, not a shell command. " +
   "Never run io_wait via bash; invoke it directly as a tool.\n\n" +
   "Thinking is reasoning-only. During thinking, do not emit tool-call markup, raw tool arguments, shell heredocs, or final user-facing prose. Describe the intended next action in words only.\n\n" +
@@ -81,7 +82,7 @@ export class PromptBuilder {
               type: "function",
               function: {
                 name: entry.name,
-                arguments: JSON.stringify(entry.arguments),
+                arguments: JSON.stringify(compactToolCallArguments(entry.arguments)),
               },
             },
           ],
@@ -112,4 +113,46 @@ export function wrapReminderAsUserContent(content: string): string {
     "",
     content,
   ].join("\n");
+}
+
+function compactToolCallArguments(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => compactToolCallArguments(item));
+  }
+
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (
+      key === "text" &&
+      value.kind === "write_text" &&
+      typeof child === "string" &&
+      shouldOmitWriteTextFromPrompt(child)
+    ) {
+      result[key] = `[omitted write_text payload ${utf8Bytes(child)} bytes from prompt history]`;
+      continue;
+    }
+    result[key] = compactToolCallArguments(child);
+  }
+  return result;
+}
+
+function shouldOmitWriteTextFromPrompt(text: string): boolean {
+  if (text.length > 512) {
+    return true;
+  }
+
+  const line = text.trim();
+  return line.length >= 128 && line.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/u.test(line);
+}
+
+function utf8Bytes(value: string): number {
+  return Buffer.byteLength(value, "utf8");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

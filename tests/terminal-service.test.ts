@@ -32,6 +32,7 @@ function makeConfig(): TerminalServiceConfig {
     actionLimits: {},
     observationLimits: {
       maxPreviewChars: 80,
+      maxEvents: 50,
     },
   };
 }

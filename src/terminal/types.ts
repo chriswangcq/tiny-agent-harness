@@ -142,6 +142,8 @@ export type PtyObservation = {
   terminal: TerminalState;
   action: PtyActionSummary;
   result: "ok" | "rejected" | "timeout" | "interrupted";
+  eventCount: number;
+  eventsOmitted?: number;
   events: TerminalEventSummary[];
   outputPreview?: string;
   logRef?: string;

@@ -58,6 +58,7 @@ describe("PromptBuilder", () => {
           },
           action: { kind: "write_text", preview: "pwd" },
           result: "ok",
+          eventCount: 1,
           events: [{ kind: "prompt" }],
         },
       },
@@ -108,6 +109,7 @@ describe("PromptBuilder", () => {
       },
       action: { kind: "write_text", preview: "pwd" },
       result: "ok",
+      eventCount: 1,
       events: [{ kind: "prompt" }],
     }));
   });
@@ -183,7 +185,7 @@ describe("PromptBuilder", () => {
     );
   });
 
-  it("preserves serialized tool-call history exactly", () => {
+  it("keeps tool-call fields while omitting large write_text payloads from prompt history", () => {
     const largeBase64 = `${"A".repeat(512)}\n`;
     const history: HistoryEntry[] = [
       {
@@ -207,8 +209,9 @@ describe("PromptBuilder", () => {
     expect(args).toEqual({
       kind: "write_text",
       expectedInputSeq: 5,
-      text: largeBase64,
+      text: "[omitted write_text payload 513 bytes from prompt history]",
       unexpectedFromModel: "keep-for-debugging",
     });
+    expect(fn.arguments).not.toContain(largeBase64);
   });
 });

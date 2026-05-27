@@ -79,6 +79,8 @@ type PtyObservation = {
   terminal: TerminalState;
   action: PtyActionSummary;
   result: "ok" | "rejected" | "timeout" | "interrupted";
+  eventCount: number;
+  eventsOmitted?: number;
   events: TerminalEventSummary[];
   outputPreview?: string;
   logRef?: string;
@@ -86,6 +88,8 @@ type PtyObservation = {
   message?: string;
 };
 ```
+
+`PtyObservation` is a bounded summary for the next model prompt, not the full PTY log. `events` and `outputPreview` are capped; full output stays in the session log, and the summary uses `eventCount`, `eventsOmitted`, and `logRef` to show when more output exists. Serialized assistant tool-call history uses the same principle for large prior `write_text.text` payloads: it preserves the field shape but omits oversized text from the next prompt, while the raw executed tool call remains in transcript/state.
 
 Rejected input is recoverable. The model should inspect the terminal facts and PTY output, then choose `poll`, `status`, `interrupt`, `terminate`, `restart`, or a corrected inputSeq-guarded action.
 

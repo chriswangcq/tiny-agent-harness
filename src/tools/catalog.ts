@@ -112,6 +112,7 @@ export const BASH_TOOL_DEFINITION: ToolDefinition = {
     "Do not put a large generated file in a shell heredoc or script string literal. For large generated text/code files, avoid shell parsing by starting a foreground stdin consumer such as `cat > path\\n`, polling until it is clearly waiting for input, writing the file text directly, then sending ctrl-d and polling until the shell prompt returns. End text payloads with \\n; if not, ctrl-d may need to be sent twice. " +
     "For short IM replies, write an IM send command such as `node dist/cli/main.js im send --channel <channel> --kind status --text <reply>\\n`. " +
     "For small/simple generated text files or code, shell heredocs or small scripts through write_text are also fine; the runtime paces large writes internally. " +
+    "Large prior write_text payloads may be omitted from serialized prompt history to protect context; the actual executed tool call remains in the transcript, and PTY output remains available through bounded observations and logRef. " +
     "There is no model-visible file staging protocol, frame action, or binary payload channel. " +
     "Do not call non-PTY payload actions; the only bytes you can send are PTY bytes.",
   inputSchema: BashToolInputSchema,

@@ -56,6 +56,7 @@ function makeRuntime(): ManagedTerminalRuntime {
     actionLimits: {},
     observationLimits: {
       maxPreviewChars: 80,
+      maxEvents: 50,
     },
     nowIso: () => "2026-05-27T00:00:00.000Z",
     monotonicMs: () => 1,

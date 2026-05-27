@@ -620,6 +620,9 @@ function formatPtyObservationSummary(observation: PtyObservation): string {
   if (observation.terminal.syncStatus.kind === "unsynced") {
     parts.push(`sync=unsynced:${observation.terminal.syncStatus.reason}`);
   }
+  if (observation.eventsOmitted !== undefined) {
+    parts.push(`eventsOmitted=${observation.eventsOmitted}`);
+  }
   if (observation.action.bytes !== undefined) {
     parts.push(`bytes=${observation.action.bytes}`);
   }

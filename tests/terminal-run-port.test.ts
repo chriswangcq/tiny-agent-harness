@@ -21,6 +21,7 @@ describe("createTerminalRunPort", () => {
       },
       action: { kind: "write_text", preview: "pwd" },
       result: "ok",
+      eventCount: 0,
       events: [],
     };
     const port = createTerminalRunPort({

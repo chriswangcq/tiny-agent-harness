@@ -120,7 +120,11 @@ export class TerminalService {
       action,
       result: "ok",
       events: parsed.events,
-      outputPreview: outputPreview(parsed.events, read.chunk),
+      outputPreview: outputPreview(
+        parsed.events,
+        read.chunk,
+        this.config.observationLimits.maxPreviewChars,
+      ),
       logRef: read.logRef?.ref,
       limits: this.config.observationLimits,
     });
@@ -145,7 +149,11 @@ export class TerminalService {
       action,
       result: "ok",
       events,
-      outputPreview: outputPreview(events),
+      outputPreview: outputPreview(
+        events,
+        undefined,
+        this.config.observationLimits.maxPreviewChars,
+      ),
       limits: this.config.observationLimits,
     });
     this.ports.logger.event({
@@ -222,14 +230,25 @@ function renderKey(key: Extract<PtyAction, { kind: "key" }>["key"]): string {
 function outputPreview(
   events: readonly TerminalEvent[],
   rawChunk?: string,
+  maxChars = 160,
 ): string | undefined {
-  const chunks = events
-    .filter((event): event is Extract<TerminalEvent, { kind: "output" }> => event.kind === "output")
-    .map((event) => event.preview);
-  if (chunks.length > 0) {
-    return chunks.join("\n");
+  let result = "";
+  for (const event of events) {
+    if (event.kind !== "output") {
+      continue;
+    }
+    const next = result.length === 0 ? event.preview : `${result}\n${event.preview}`;
+    if (next.length >= maxChars) {
+      return `${next.slice(0, Math.max(0, maxChars - 1))}…`;
+    }
+    result = next;
+  }
+  if (result.length > 0) {
+    return result;
   }
   return events.length === 0 && rawChunk !== undefined && rawChunk.length > 0
-    ? rawChunk
+    ? rawChunk.length <= maxChars
+      ? rawChunk
+      : `${rawChunk.slice(0, Math.max(0, maxChars - 1))}…`
     : undefined;
 }

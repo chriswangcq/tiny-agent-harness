@@ -10,10 +10,12 @@ import type {
 
 export type TerminalObservationLimits = {
   maxPreviewChars: number;
+  maxEvents: number;
 };
 
 export const DEFAULT_TERMINAL_OBSERVATION_LIMITS: TerminalObservationLimits = {
   maxPreviewChars: 160,
+  maxEvents: 50,
 };
 
 export function summarizePtyAction(
@@ -84,12 +86,18 @@ export function buildPtyObservation(input: {
   limits?: Partial<TerminalObservationLimits>;
 }): PtyObservation {
   const limits = { ...DEFAULT_TERMINAL_OBSERVATION_LIMITS, ...input.limits };
+  const summarizedEvents = input.events
+    .slice(0, limits.maxEvents)
+    .map((event) => summarizeTerminalEvent(event, limits));
+  const eventsOmitted = Math.max(0, input.events.length - summarizedEvents.length);
   return {
     session: input.session,
     terminal: input.terminal,
     action: summarizePtyAction(input.action, limits),
     result: input.result,
-    events: input.events.map((event) => summarizeTerminalEvent(event, limits)),
+    eventCount: input.events.length,
+    eventsOmitted: eventsOmitted > 0 ? eventsOmitted : undefined,
+    events: summarizedEvents,
     outputPreview:
       input.outputPreview === undefined
         ? undefined

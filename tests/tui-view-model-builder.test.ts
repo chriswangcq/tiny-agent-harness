@@ -87,6 +87,7 @@ function makePtyObservation(result: PtyObservation["result"] = "ok"): PtyObserva
     terminal: terminal(3),
     action: { kind: "write_text", preview: "pwd" },
     result,
+    eventCount: 0,
     events: [],
     logRef: "/tmp/log.txt",
   };
@@ -128,6 +129,7 @@ function makeLargeWriteObservation(): PtyObservation {
       redacted: true,
     },
     result: "ok",
+    eventCount: 1,
     events: [{ kind: "prompt" }],
   };
 }

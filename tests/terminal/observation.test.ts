@@ -105,6 +105,32 @@ describe("terminal observation helpers", () => {
     expect(JSON.stringify(observation)).not.toContain("aGVsbG8=");
   });
 
+  it("bounds terminal event summaries while preserving event counts", () => {
+    const events = Array.from({ length: 5 }, (_, index) => ({
+      kind: "output" as const,
+      bytes: 20,
+      preview: `line-${index}`,
+    }));
+
+    const observation = buildPtyObservation({
+      session: "default",
+      terminal,
+      action: {
+        kind: "poll",
+      },
+      result: "ok",
+      events,
+      limits: { maxEvents: 2, maxPreviewChars: 20 },
+    });
+
+    expect(observation.eventCount).toBe(5);
+    expect(observation.eventsOmitted).toBe(3);
+    expect(observation.events).toEqual([
+      { kind: "output", bytes: 20, preview: "line-0" },
+      { kind: "output", bytes: 20, preview: "line-1" },
+    ]);
+  });
+
   it("redacts payload-like fields when compacting history entries", () => {
     const entry = compactTerminalHistoryEntry(
       {

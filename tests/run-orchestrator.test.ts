@@ -173,6 +173,7 @@ function makeRun(options?: {
                 request.action.text.length > 512,
             },
             result: "ok",
+            eventCount: 0,
             events: [],
           }
         );
@@ -444,6 +445,7 @@ describe("RunOrchestrator", () => {
       },
       action: { kind: "write_text", preview: "pwd" },
       result: "rejected",
+      eventCount: 0,
       events: [],
       errorCode: "TERMINAL_UNSYNCED",
       message: "Terminal state is unsynced.",

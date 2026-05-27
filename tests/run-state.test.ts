@@ -120,6 +120,7 @@ function makePtyObservation(): PtyObservation {
     },
     action: { kind: "write_text", preview: "echo hi\n" },
     result: "ok",
+    eventCount: 1,
     events: [{ kind: "output", bytes: 3, preview: "hi\n" }],
   };
 }

@@ -50,6 +50,8 @@ Important semantics:
 - `poll`, `status`, `interrupt`, `terminate`, and `restart` are control actions over the PTY session, not shell commands.
 - Every write-like action carries `expectedInputSeq`; stale input sequences are rejected.
 - After sending a heredoc or multi-line script, keep polling until the shell prompt returns. A `lastContinuationPrompt` fact means the shell recently reported a continuation prompt.
+- Observations are bounded summaries: full PTY output stays in the session log and observations carry previews, `eventCount`, `eventsOmitted`, and `logRef`.
+- Serialized prompt history may omit large prior `write_text.text` payloads to protect context. The raw executed tool call is still preserved in transcript/state; only the next model prompt is compacted.
 
 ## Large Payloads
 
