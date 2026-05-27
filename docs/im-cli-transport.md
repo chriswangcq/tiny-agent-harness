@@ -51,11 +51,11 @@ Recommended command shape:
 ```bash
 im recv --channel default --cursor <cursor> --json
 im send --channel default --kind status --text "Working..."
-im send --channel default --kind status --text-stdin <<'EOF'
-Multiline Markdown reply with `literal backticks`.
-EOF
+im send --channel default --kind status --text-stdin
 im ack --channel default --message-id <id>
 ```
+
+In the PTY agent flow, `--text-stdin` is a foreground stdin consumer: start the command, write the multiline payload directly with `write_text`, send Ctrl-D, then poll until the shell prompt returns. Do not wrap multiline IM replies in shell heredocs.
 
 For interactive local demos:
 

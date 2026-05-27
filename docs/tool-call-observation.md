@@ -60,18 +60,18 @@ Example key input:
 }
 ```
 
-Example heredoc write:
+Example foreground stdin write for generated files:
 
 ```json
 {
   "kind": "write_text",
   "session": "default",
   "expectedInputSeq": 10,
-  "text": "cat > app.html <<'EOF'\\n<!doctype html>\\n<title>App</title>\\nEOF\\n"
+  "text": "cat > app.html\\n"
 }
 ```
 
-Heredocs are a convenience for short, simple snippets. For large generated files, HTML, Markdown, JSON containing backticks/dollars/quotes, or content whose shell parsing is uncertain, prefer a foreground stdin consumer such as `cat > path`, write the content directly, then close stdin with Ctrl-D and poll until the prompt returns.
+Then poll until the PTY is waiting for input, write the payload directly, close stdin with Ctrl-D, and poll until the prompt returns. Do not use shell heredocs for generated files, code, HTML, Markdown, JSON, or multiline IM replies; heredocs are only an escape hatch for tiny fixed shell-control snippets with predictable literal content.
 
 ## Observation Shape
 

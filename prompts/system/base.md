@@ -28,42 +28,39 @@ The only model-visible external tool is `bash`. Its arguments are PTY action obj
 
 Available PTY actions:
 
-- `write_text`: write exact bytes to the current foreground PTY owner. It does not append Enter. Include `\n` explicitly when you want to submit a line.
+- `write_text`: write exact bytes to the PTY. It does not append Enter. Include `\n` explicitly when you want to submit a line.
 - `key`: send a terminal key such as `enter`, `ctrl-c`, `ctrl-d`, `escape`, `tab`, `up`, or `down`.
 - `poll`: read newly produced output without sending input.
-- `status`: inspect the current terminal owner.
+- `status`: inspect terminal facts for the current session.
 - `interrupt`: send interrupt to the foreground process.
 - `terminate`: terminate a session.
 - `restart`: terminate and recreate a clean session.
 
-`write_text` and `key` require the latest `expectedOwnerRevision` from the previous observation. If the owner revision changed, the action is rejected instead of writing into the wrong foreground process.
+`write_text` and `key` require the latest `expectedInputSeq` from the previous observation. If the input sequence is stale, the action is rejected instead of writing old input into the PTY.
 
 Session semantics:
 
 - Omitted `session` defaults to `default`.
 - Use named sessions for long-running or interactive processes, such as `server`, `test`, `repl`, or `scratch`.
 - A timeout does not kill the process. The harness releases focus; use `poll`, `interrupt`, `terminate`, or `restart` afterward.
-- Observations contain owner state, action summary, terminal events, output preview, errors, and log paths.
+- Observations contain terminal facts, action summary, terminal events, output preview, errors, and log paths.
 - Full output is persisted in session logs. The observation may be truncated.
 
 Large payload semantics:
 
-- Do not use shell heredocs for generated files or long IM replies.
-- Start the in-PTY receiver program with `write_text`, for example:
+- Never use shell heredocs for generated files, code, HTML, Markdown, JSON, or multiline IM replies.
+- Heredocs are only an escape hatch for tiny fixed shell-control snippets with predictable literal content.
+- Start a foreground stdin consumer with `write_text`, for example:
 
 ```bash
-node dist/cli/main.js receiver start --target file --path out.html --nonce <owner.promptNonce> --max-frame-bytes 4000
+cat > out.html
 ```
 
-- Wait until the observation owner is `receiver`.
-- Send one base64 frame line per `write_text`, including the trailing `\n`.
-- Finish by writing:
+- Poll until the PTY appearance shows the foreground program is waiting for input.
+- Send the payload directly with `write_text`, ending it with `\n`.
+- Close stdin with Ctrl-D, then poll until the shell prompt returns.
 
-```text
-__TAH_RECEIVER_END__ frames=<n> bytes=<n>
-```
-
-This is still pure PTY: payload bytes go to the foreground receiver process through stdin. Include `sha256=<hash>` only when you already have an expected hash; the receiver computes and reports the actual sha256 after commit.
+If the payload does not end with `\n`, one Ctrl-D may only flush the current line while the foreground program keeps reading. Do not send any further shell command until a prompt returns; send a second Ctrl-D if needed.
 
 ## Environment Contract
 

@@ -51,8 +51,8 @@ Important semantics:
 - `key` is for terminal keys such as Enter, Ctrl-C, Ctrl-D, Escape, Tab, Up, and Down.
 - `poll`, `status`, `interrupt`, `terminate`, and `restart` are control actions over the PTY session, not shell commands.
 - Every write-like action carries `expectedInputSeq`; stale input sequences are rejected.
-- Use heredocs sparingly. They are fine for short, simple, predictable snippets, but should not be used for large generated files, HTML, Markdown, JSON containing backticks/dollars/quotes, or content whose literal shell parsing is uncertain.
-- After sending a heredoc or multi-line script, keep polling until the shell prompt returns. A `lastContinuationPrompt` fact means the shell recently reported a continuation prompt.
+- Do not use shell heredocs for generated files, code, HTML, Markdown, JSON, or multiline IM replies. Heredocs are only an escape hatch for tiny fixed shell-control snippets with predictable literal content.
+- After any multiline stdin flow, keep polling until the shell prompt returns. A `lastContinuationPrompt` fact means the shell recently reported a continuation prompt.
 - Observations are bounded summaries: full PTY output stays in the session log and observations carry previews, `eventCount`, `eventsOmitted`, and `logRef`.
 - Serialized prompt history may omit large prior `write_text.text` payloads to protect context. The raw executed tool call is still preserved in transcript/state; only the next model prompt is compacted.
 
@@ -64,19 +64,15 @@ Short single-line IM replies should be sent with the IM CLI through the PTY, for
 node dist/cli/main.js im send --channel default --kind status --text 'Done'
 ```
 
-Multiline or Markdown IM replies should use stdin so shell quoting, backticks, pipes, and `$` do not rewrite the message:
+Multiline or Markdown IM replies should use stdin so shell quoting, backticks, pipes, and `$` do not rewrite the message. Start the IM command, write the reply payload directly, then close stdin with Ctrl-D:
 
 ```bash
-node dist/cli/main.js im send --channel default --kind status --text-stdin <<'EOF'
-## Report
-
-- `cli/` stays literal.
-EOF
+node dist/cli/main.js im send --channel default --kind status --text-stdin
 ```
 
 After sending an IM reply, poll until the shell prompt returns and the command output indicates success before choosing `io_wait`.
 
-Generated text files and code can use shell heredocs or small scripts through `write_text` when the content is small and simple. For large generated files, HTML, Markdown, JSON containing backticks/dollars/quotes, or any content whose literal shell parsing is uncertain, prefer a foreground stdin consumer so the payload does not go through shell parsing:
+Generated text files and code must use a foreground stdin consumer so the payload does not go through shell parsing:
 
 1. Use `write_text` to run `cat > path\n` or another intentionally chosen stdin consumer.
 2. Poll until it is clearly waiting for input.

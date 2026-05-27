@@ -339,7 +339,7 @@ TUI 不拥有 agent 状态，不参与模型决策，也不直接改写 run stat
 | 持续验证要跟上 | 最新审计中 `npm run build` 和全量 `npm test` 已通过；后续改动仍要保持这条线常绿。 | 把 build/test/diff check 固定为提交前检查。 |
 | 文档与实现快速变化 | README 已包含 codeq/state/IM/skill 新能力，部分实现仍在未提交工作区中快速演进。 | 每次功能落地后同步更新对应设计文档和 project report。 |
 | 状态持久化仍需闭环 | 设计中有 `.tiny-agent/`、locks、JSONL ledger，但所有 CLI 是否都完全使用同一 resolver 还需要持续验证。 | 用集成测试覆盖多 CLI 共用 state root、并发写、resume/replay。 |
-| bash 外部动作约束对模型要求高 | 模型必须学会通过 bash 调 skill/codeq/im 等 CLI，并用 heredoc 或脚本处理大文本/代码，而不是直接获得 typed business tool affordance。 | 在 system prompt 和 examples 中强化常见 CLI 使用路径。 |
+| bash 外部动作约束对模型要求高 | 模型必须学会通过 bash 调 skill/codeq/im 等 CLI，并用前台 stdin consumer 处理大文本/代码，而不是直接获得 typed business tool affordance。 | 在 system prompt 和 examples 中强化 `cat > path` / `--text-stdin` 的 stdin flow，并避免 heredoc 示例污染生成文件路径。 |
 | review 目前默认 approve | 安全边界存在，但策略能力还未产品化。 | 增加危险命令分类、workspace policy、网络/文件权限和人工确认模式。 |
 | TUI 仍偏观察 | 当前 TUI 更像 transcript player，控制动作和 session tail 仍可增强。 | 增加 session log tail、active skill、review pending、approval 操作和 replay/follow。 |
 
