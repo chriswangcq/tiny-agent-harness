@@ -78,7 +78,7 @@ Final receiver line:
   "kind": "write_text",
   "session": "default",
   "expectedOwnerRevision": 10,
-  "text": "__TAH_RECEIVER_END__ frames=1 bytes=6 sha256=<hash>\\n"
+  "text": "__TAH_RECEIVER_END__ frames=1 bytes=6\\n"
 }
 ```
 

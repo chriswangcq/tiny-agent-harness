@@ -16,7 +16,7 @@ export type ReceiverFrameAction =
       receiverId: string;
       frames: number;
       bytes: number;
-      sha256: string;
+      sha256?: string;
     };
 
 export type ReceiverFrameResult =
@@ -31,7 +31,7 @@ export type ReceiverFrameResult =
       receiver: ReceiverOwner;
       done: true;
       bytes: number;
-      sha256: string;
+      sha256?: string;
     }
   | Extract<ValidationResult, { ok: false }>;
 
@@ -112,10 +112,6 @@ function applyEndInput(
       "RECEIVER_BYTES_MISMATCH",
       `Expected ${receiver.bytesReceived} byte(s), got ${action.bytes}.`,
     );
-  }
-
-  if (receiver.expectedSha256 !== undefined && action.sha256 !== receiver.expectedSha256) {
-    return reject(receiver, "RECEIVER_HASH_MISMATCH", "Receiver sha256 does not match.");
   }
 
   return {

@@ -38,10 +38,10 @@ const SYSTEM_MESSAGE =
   "  Use write_text to write exact bytes to the current PTY owner; it does not append Enter, so include `\\n` explicitly or use key enter.\n" +
   "  For process owners, write text only when stdinMode is interactive; otherwise poll/status or recover with interrupt/terminate/restart.\n" +
   "  If owner.kind is receiver, write only receiver stdin protocol lines; if owner.kind is unknown or terminated, poll/status or recover with interrupt/terminate/restart.\n" +
-  "  For generated files, long replies, code blocks, or any multi-KB payload, start the receiver CLI inside the PTY with write_text, then feed base64 frame lines using write_text, and close with `__TAH_RECEIVER_END__ frames=<n> bytes=<n> sha256=<hash>\\n`.\n" +
-  "  Receiver examples: target file with `node dist/cli/main.js receiver start --target file --path <path> --nonce <owner.promptNonce> --max-frame-bytes 4000 --sha256 <hash>`; " +
-  "target IM with `node dist/cli/main.js receiver start --target im --channel <channel> --kind status --nonce <owner.promptNonce> --max-frame-bytes 4000 --sha256 <hash>`.\n" +
-  "  While receiver owns the PTY, each write_text should contain exactly one base64 frame plus `\\n`, or the final `__TAH_RECEIVER_END__ ...\\n` line. Keep each write_text under the PTY small-input limit.\n" +
+  "  For generated files, long replies, code blocks, or any multi-KB payload, start the receiver CLI inside the PTY with write_text, then feed base64 frame lines using write_text, and close with `__TAH_RECEIVER_END__ frames=<n> bytes=<n>\\n`. You may include `sha256=<hash>` only when you already know an expected hash; the receiver always computes and reports the actual sha256.\n" +
+  "  Receiver examples: target file with `node dist/cli/main.js receiver start --target file --path <path> --nonce <owner.promptNonce> --max-frame-bytes 4000`; " +
+  "target IM with `node dist/cli/main.js receiver start --target im --channel <channel> --kind status --nonce <owner.promptNonce> --max-frame-bytes 4000`.\n" +
+  "  While receiver owns the PTY, each write_text should contain exactly one base64 frame plus `\\n`, or the final `__TAH_RECEIVER_END__ ...\\n` line. Receiver frame lines must fit the receiver max-frame-bytes value.\n" +
   "- io_wait: pause until the next external event. This is a TOOL CALL, not a shell command. " +
   "Never run io_wait via bash; invoke it directly as a tool.\n\n" +
   "Thinking is reasoning-only. During thinking, do not emit tool-call markup, raw tool arguments, shell heredocs, or final user-facing prose. Describe the intended next action in words only.\n\n" +

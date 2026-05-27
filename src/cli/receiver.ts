@@ -24,7 +24,7 @@ type ReceiverOutput = {
 type ReceiverEnd = {
   frames: number;
   bytes: number;
-  sha256: string;
+  sha256?: string;
 };
 
 const RECEIVER_END_MARKER = "__TAH_RECEIVER_END__";
@@ -83,7 +83,7 @@ export async function runReceiver(
     "Usage:\n" +
       "  receiver start --target file --path <path> --nonce <n> --max-frame-bytes <n> [--id <id>] [--sha256 <hash>]\n" +
       "  receiver start --target im --channel <ch> --kind <status|error> --nonce <n> --max-frame-bytes <n> [--run-id <id>]\n\n" +
-      `After start, write one base64 frame per stdin line, then write ${RECEIVER_END_MARKER} frames=<n> bytes=<n> sha256=<hash>.`,
+      `After start, write one base64 frame per stdin line, then write ${RECEIVER_END_MARKER} frames=<n> bytes=<n> [sha256=<hash>].`,
   );
 }
 
@@ -213,7 +213,7 @@ function parseReceiverEndLine(line: string): ReceiverEnd | undefined {
   return {
     frames: parseNonNegativeInteger(requiredField(fields, "frames"), "frames"),
     bytes: parseNonNegativeInteger(requiredField(fields, "bytes"), "bytes"),
-    sha256: requiredField(fields, "sha256"),
+    sha256: optionalField(fields, "sha256"),
   };
 }
 
@@ -239,6 +239,11 @@ function requiredField(fields: Map<string, string>, name: string): string {
     throw new ReceiverCliError(`${RECEIVER_END_MARKER} requires ${name}=...`);
   }
   return value;
+}
+
+function optionalField(fields: Map<string, string>, name: string): string | undefined {
+  const value = fields.get(name);
+  return value === undefined || value.length === 0 ? undefined : value;
 }
 
 function chunkToString(chunk: string | Uint8Array): string {

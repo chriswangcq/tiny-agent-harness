@@ -55,9 +55,9 @@ Generated files, IM replies, code blocks, and other multi-KB payloads must use t
 1. Use `write_text` to start a receiver CLI in the shell owner.
 2. Wait for the observation to report owner kind `receiver` and a `receiverId`.
 3. Send one base64 frame line per `write_text`; include the trailing `\n`.
-4. Close by writing `__TAH_RECEIVER_END__ frames=<n> bytes=<n> sha256=<hash>\n`.
+4. Close by writing `__TAH_RECEIVER_END__ frames=<n> bytes=<n>\n`.
 
-This keeps payload bytes out of shell quoting while preserving a pure PTY action surface. The receiver process validates frame order, byte count, and sha256 before committing the target.
+This keeps payload bytes out of shell quoting while preserving a pure PTY action surface. The receiver process validates frame order and byte count before committing the target, then emits the actual sha256. If an expected hash is already known, pass `sha256=<hash>` on `receiver start` or the end line and the receiver will verify it.
 
 ## Non Goals
 

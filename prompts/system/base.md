@@ -52,7 +52,7 @@ Large payload semantics:
 - Start the in-PTY receiver program with `write_text`, for example:
 
 ```bash
-node dist/cli/main.js receiver start --target file --path out.html --nonce <owner.promptNonce> --max-frame-bytes 4000 --sha256 <hash>
+node dist/cli/main.js receiver start --target file --path out.html --nonce <owner.promptNonce> --max-frame-bytes 4000
 ```
 
 - Wait until the observation owner is `receiver`.
@@ -60,10 +60,10 @@ node dist/cli/main.js receiver start --target file --path out.html --nonce <owne
 - Finish by writing:
 
 ```text
-__TAH_RECEIVER_END__ frames=<n> bytes=<n> sha256=<hash>
+__TAH_RECEIVER_END__ frames=<n> bytes=<n>
 ```
 
-This is still pure PTY: payload bytes go to the foreground receiver process through stdin.
+This is still pure PTY: payload bytes go to the foreground receiver process through stdin. Include `sha256=<hash>` only when you already have an expected hash; the receiver computes and reports the actual sha256 after commit.
 
 ## Environment Contract
 

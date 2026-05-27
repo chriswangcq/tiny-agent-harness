@@ -110,7 +110,7 @@ describe("receiver frame validation", () => {
     });
   });
 
-  it("accepts end input when frame count, bytes, and expected sha match", () => {
+  it("accepts end input when frame count and bytes match", () => {
     const owner = receiver({ nextSeq: 2, bytesReceived: 8 });
     const result = applyReceiverFrame({
       receiver: owner,
@@ -119,7 +119,6 @@ describe("receiver frame validation", () => {
         receiverId: "rx-1",
         frames: 2,
         bytes: 8,
-        sha256: "expected",
       },
     });
 
@@ -128,7 +127,7 @@ describe("receiver frame validation", () => {
       receiver: owner,
       done: true,
       bytes: 8,
-      sha256: "expected",
+      sha256: undefined,
     });
   });
 
@@ -168,21 +167,4 @@ describe("receiver frame validation", () => {
     });
   });
 
-  it("rejects end input expected sha mismatches", () => {
-    const result = applyReceiverFrame({
-      receiver: receiver({ nextSeq: 2, bytesReceived: 8 }),
-      action: {
-        kind: "end",
-        receiverId: "rx-1",
-        frames: 2,
-        bytes: 8,
-        sha256: "actual",
-      },
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      code: "RECEIVER_HASH_MISMATCH",
-    });
-  });
 });

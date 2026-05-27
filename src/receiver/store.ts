@@ -137,7 +137,7 @@ export class ReceiverStore {
     receiverId: string;
     frames: number;
     bytes: number;
-    sha256: string;
+    sha256?: string;
   }): ReceiverFinalizeResult {
     const state = this.readState(input.receiverId);
     const validation = applyReceiverFrame({
@@ -156,9 +156,14 @@ export class ReceiverStore {
 
     const bytes = fs.readFileSync(state.payloadFile);
     const actualSha = sha256(bytes);
-    if (actualSha !== input.sha256) {
+    if (input.sha256 !== undefined && actualSha !== input.sha256) {
       throw new Error(
-        `RECEIVER_HASH_MISMATCH: payload sha256 ${actualSha} does not match ${input.sha256}`,
+        `RECEIVER_HASH_MISMATCH: payload sha256 ${actualSha} does not match declared ${input.sha256}`,
+      );
+    }
+    if (state.expectedSha256 !== undefined && actualSha !== state.expectedSha256) {
+      throw new Error(
+        `RECEIVER_HASH_MISMATCH: payload sha256 ${actualSha} does not match expected ${state.expectedSha256}`,
       );
     }
 

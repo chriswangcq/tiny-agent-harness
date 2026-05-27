@@ -6,7 +6,6 @@ import type {
 } from "../types/index.js";
 import type { PtyAction, TerminalOwner } from "../terminal/types.js";
 import {
-  DEFAULT_PTY_ACTION_LIMITS,
   validatePtyAction,
   type PtyActionLimits,
 } from "../terminal/validator.js";
@@ -32,15 +31,9 @@ function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.length > 0;
 }
 
-function utf8Bytes(value: string): number {
-  return Buffer.byteLength(value, "utf8");
-}
-
 // ---------------------------------------------------------------------------
 // ToolCallValidator
 // ---------------------------------------------------------------------------
-
-const MAX_PTY_INPUT_BYTES = DEFAULT_PTY_ACTION_LIMITS.maxWriteTextBytes;
 
 export type ToolCallValidatorOptions = {
   terminalOwner?: TerminalOwner;
@@ -80,11 +73,6 @@ export class ToolCallValidator {
     const action = parsePtyAction(args);
     if (typeof action === "string") {
       return invalid(action);
-    }
-
-    const gated = gateSmallPayload(action, this.options.actionLimits);
-    if (gated !== undefined) {
-      return invalid(gated);
     }
 
     if (this.options.terminalOwner !== undefined) {
@@ -192,21 +180,6 @@ function parseNonNegativeInteger(value: unknown, name: string): number | string 
     return `Invalid bash tool arguments: ${name} must be a non-negative integer.`;
   }
   return value;
-}
-
-function gateSmallPayload(
-  action: PtyAction,
-  limits: Partial<PtyActionLimits> | undefined,
-): string | undefined {
-  const maxWriteTextBytes = limits?.maxWriteTextBytes ?? MAX_PTY_INPUT_BYTES;
-  if (action.kind === "write_text" && utf8Bytes(action.text) > maxWriteTextBytes) {
-    return (
-      `Invalid bash tool arguments: write_text is above the ${maxWriteTextBytes}-byte PTY small-input limit. ` +
-      "Start the receiver CLI inside the PTY and feed it smaller base64 lines with write_text."
-    );
-  }
-
-  return undefined;
 }
 
 function isTerminalKey(value: unknown): value is Extract<PtyAction, { kind: "key" }>["key"] {

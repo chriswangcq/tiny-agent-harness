@@ -53,11 +53,12 @@ function captureStdout(): {
   };
 }
 
-function receiverInputLines(payload: Buffer, maxBase64Bytes: number, hash: string): string[] {
+function receiverInputLines(payload: Buffer, maxBase64Bytes: number, hash?: string): string[] {
   const frames = splitForBase64FrameLimit(payload, maxBase64Bytes);
+  const hashField = hash === undefined ? "" : ` sha256=${hash}`;
   return [
     ...frames.map((frame) => `${frame.toString("base64")}\n`),
-    `__TAH_RECEIVER_END__ frames=${frames.length} bytes=${payload.byteLength} sha256=${hash}\n`,
+    `__TAH_RECEIVER_END__ frames=${frames.length} bytes=${payload.byteLength}${hashField}\n`,
   ];
 }
 
@@ -109,13 +110,11 @@ describe("runReceiver CLI", () => {
         "node dist/cli/main.js receiver start",
         "--max-frame-bytes",
         "4000",
-        "--sha256",
-        hash,
         "--state-dir",
         stateDir,
       ],
       {
-        stdin: stdinLines(receiverInputLines(bytes, 4000, hash)),
+        stdin: stdinLines(receiverInputLines(bytes, 4000)),
         stdout: captured.stdout,
       },
     );
@@ -160,13 +159,11 @@ describe("runReceiver CLI", () => {
         "nonce-1",
         "--max-frame-bytes",
         "4000",
-        "--sha256",
-        hash,
         "--state-dir",
         stateDir,
       ],
       {
-        stdin: stdinLines(receiverInputLines(bytes, 4000, hash)),
+        stdin: stdinLines(receiverInputLines(bytes, 4000)),
         stdout: captured.stdout,
       },
     );

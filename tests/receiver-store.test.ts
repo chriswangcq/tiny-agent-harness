@@ -49,7 +49,7 @@ describe("ReceiverStore", () => {
     expect(fs.existsSync(result.state.payloadFile)).toBe(true);
   });
 
-  it("appends valid frames and finalizes matching payloads", () => {
+  it("appends valid frames and finalizes payloads against a start-time expected hash", () => {
     const store = makeStore();
     store.start({
       receiverId: "rx-1",
@@ -78,12 +78,36 @@ describe("ReceiverStore", () => {
       receiverId: "rx-1",
       frames: 2,
       bytes: 11,
-      sha256: sha256("hello world"),
     });
 
     expect(finalized.bytes.toString("utf8")).toBe("hello world");
     expect(finalized.sha256).toBe(sha256("hello world"));
     expect(finalized.state.finalizedAt).toBe("2026-05-27T00:00:00.000Z");
+  });
+
+  it("finalizes without an expected hash and reports the actual sha", () => {
+    const store = makeStore();
+    store.start({
+      receiverId: "rx-1",
+      promptNonce: "nonce",
+      commandLine: "receiver start",
+      maxFrameBytes: 4096,
+      target: { kind: "file", path: "out.txt" },
+    });
+    store.appendFrame({
+      receiverId: "rx-1",
+      seq: 0,
+      dataBase64: Buffer.from("hello").toString("base64"),
+    });
+
+    const finalized = store.finalize({
+      receiverId: "rx-1",
+      frames: 1,
+      bytes: 5,
+    });
+
+    expect(finalized.bytes.toString("utf8")).toBe("hello");
+    expect(finalized.sha256).toBe(sha256("hello"));
   });
 
   it("rejects sequence mismatches before appending bytes", () => {

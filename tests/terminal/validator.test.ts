@@ -167,21 +167,17 @@ describe("terminal action validator", () => {
     ).toEqual({ ok: true });
   });
 
-  it("rejects small-input payloads above configured limits", () => {
+  it("does not impose a harness length limit on shell write_text", () => {
     const result = validatePtyAction({
       owner: shell(),
-      limits: { maxWriteTextBytes: 4 },
       action: {
         kind: "write_text",
         expectedOwnerRevision: 1,
-        text: "hello",
+        text: "hello".repeat(2000),
       },
     });
 
-    expect(result).toMatchObject({
-      ok: false,
-      code: "PAYLOAD_TOO_LARGE_FOR_ACTION",
-    });
+    expect(result).toEqual({ ok: true });
   });
 
   it("accepts receiver stdin text with explicit newline", () => {
@@ -246,7 +242,7 @@ describe("terminal action validator", () => {
       action: {
         kind: "write_text",
         expectedOwnerRevision: 3,
-        text: "__TAH_RECEIVER_END__ frames=2 bytes=12 sha256=hash\n",
+        text: "__TAH_RECEIVER_END__ frames=2 bytes=12\n",
       },
     });
 
@@ -255,7 +251,6 @@ describe("terminal action validator", () => {
 
   it("exposes conservative default limits", () => {
     expect(DEFAULT_PTY_ACTION_LIMITS).toEqual({
-      maxWriteTextBytes: 4096,
       maxFrameBytes: 4096,
     });
   });

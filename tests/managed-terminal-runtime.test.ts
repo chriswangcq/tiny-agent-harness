@@ -54,7 +54,6 @@ function makeRuntime(): ManagedTerminalRuntime {
     cwd: "/repo",
     promptNonce: "nonce",
     actionLimits: {
-      maxWriteTextBytes: 4096,
       maxFrameBytes: 4096,
     },
     observationLimits: {

@@ -1,12 +1,10 @@
 import type { PtyAction, TerminalErrorCode, TerminalOwner, ValidationResult } from "./types.js";
 
 export type PtyActionLimits = {
-  maxWriteTextBytes: number;
   maxFrameBytes: number;
 };
 
 export const DEFAULT_PTY_ACTION_LIMITS: PtyActionLimits = {
-  maxWriteTextBytes: 4096,
   maxFrameBytes: 4096,
 };
 
@@ -51,7 +49,7 @@ export function validatePtyAction(input: {
 
   switch (action.kind) {
     case "write_text":
-      return validateWriteText(owner, action.text, limits.maxWriteTextBytes);
+      return validateWriteText(owner, action.text);
     case "key":
       return validateKey(owner);
   }
@@ -60,16 +58,7 @@ export function validatePtyAction(input: {
 function validateWriteText(
   owner: TerminalOwner,
   text: string,
-  maxBytes: number,
 ): ValidationResult {
-  if (utf8Bytes(text) > maxBytes) {
-    return reject(
-      owner,
-      "PAYLOAD_TOO_LARGE_FOR_ACTION",
-      "write_text exceeds the PTY small-input limit; start the receiver CLI and send smaller stdin frame lines.",
-    );
-  }
-
   if (owner.kind === "receiver") {
     return validateReceiverWriteText(owner, text);
   }

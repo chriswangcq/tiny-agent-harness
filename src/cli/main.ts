@@ -341,7 +341,7 @@ Receiver subcommands:
   start  --target file --path <path> --nonce <n> --max-frame-bytes <n>
   start  --target im --channel <ch> --kind <status|error> --nonce <n> --max-frame-bytes <n>
   After start, write one base64 frame per stdin line, then:
-  __TAH_RECEIVER_END__ frames=<n> bytes=<n> sha256=<hash>
+  __TAH_RECEIVER_END__ frames=<n> bytes=<n> [sha256=<hash>]
 
 Environment variables:
   DEEPSEEK_API_KEY   (required) API key for DeepSeek

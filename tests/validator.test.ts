@@ -84,23 +84,18 @@ describe("ToolCallValidator PTY actions", () => {
     }
   });
 
-  it("rejects oversized direct text with in-PTY receiver guidance", () => {
-    const result = new ToolCallValidator({ actionLimits: { maxWriteTextBytes: 4 } }).validate(
+  it("accepts long write_text payloads because PTY writes are not harness-limited", () => {
+    const result = new ToolCallValidator().validate(
       makeCall({
         arguments: {
           kind: "write_text",
           expectedOwnerRevision: 1,
-          text: "hello",
+          text: "hello".repeat(2000),
         },
       }),
     );
 
-    expect(result.status).toBe("invalid");
-    if (result.status === "invalid") {
-      expect(result.observation.message).toContain("PTY small-input limit");
-      expect(result.observation.message).toContain("receiver CLI");
-      expect(result.observation.message).not.toContain("stash_file");
-    }
+    expect(result.status).toBe("valid");
   });
 
   it("rejects stale owner revisions when owner context is injected", () => {
