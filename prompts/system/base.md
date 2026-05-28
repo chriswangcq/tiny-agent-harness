@@ -65,7 +65,17 @@ cat > out.html
 
 If the payload does not end with `\n`, one Ctrl-D may only flush the current line while the foreground program keeps reading. Do not send any further shell command until a prompt returns; send a second Ctrl-D if needed.
 
-For user-visible IM replies, prefer a quoted heredoc into stdin:
+For user-visible IM replies, use standard shell stdin forms with `--text-stdin`.
+
+If the reply already exists in a file, prefer input redirection:
+
+```bash
+node dist/cli/main.js im send --channel <channel> --kind status --text-stdin < reply.md
+```
+
+File contents are not shell-parsed.
+
+For inline Markdown, prefer a quoted heredoc into stdin:
 
 ```bash
 node dist/cli/main.js im send --channel <channel> --kind status --text-stdin <<'IM'
@@ -73,7 +83,7 @@ node dist/cli/main.js im send --channel <channel> --kind status --text-stdin <<'
 IM
 ```
 
-Choose a delimiter that does not appear alone in the reply. Do not use `im send --text` from the agent, even for short replies.
+Other standard stdin forms exist, such as `producer | cmd`, `cmd < <(producer)`, and bash/zsh here-string `cmd <<< "$text"`; use them only when they make the command simpler. Choose a delimiter that does not appear alone in the reply. Do not use `im send --text` from the agent, even for short replies.
 
 ## Environment Contract
 

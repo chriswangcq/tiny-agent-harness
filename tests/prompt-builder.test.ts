@@ -20,6 +20,11 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("--text-stdin");
     expect(prompt.messages[0]!.content).toContain("quoted heredoc");
     expect(prompt.messages[0]!.content).toContain("<<'IM'");
+    expect(prompt.messages[0]!.content).toContain("--text-stdin < reply.md");
+    expect(prompt.messages[0]!.content).toContain("file contents are not shell-parsed");
+    expect(prompt.messages[0]!.content).toContain("producer | cmd");
+    expect(prompt.messages[0]!.content).toContain("cmd < <(producer)");
+    expect(prompt.messages[0]!.content).toContain('cmd <<< "$text"');
     expect(prompt.messages[0]!.content).toContain("Do not use `im send --text`");
     expect(prompt.messages[0]!.content).toContain("Large write_text payloads are allowed");
     expect(prompt.messages[0]!.content).toContain("stash_file");
