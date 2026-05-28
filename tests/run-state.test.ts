@@ -20,7 +20,6 @@ function createState(overrides?: Partial<Parameters<typeof AgentRunState.create>
     runId: "test-run",
     task: "test task",
     cwd: "/tmp",
-    maxSteps: 10,
     transcriptPath: "/tmp/transcript.jsonl",
     ...overrides,
   });
@@ -134,7 +133,6 @@ function toRunning(state: AgentRunState): AgentRunState {
     runId: "test-run",
     task: "test task",
     cwd: "/tmp",
-    maxSteps: 10,
     timestamp: NOW,
   });
 }
@@ -165,6 +163,81 @@ describe("AgentRunState transitions", () => {
   it("created + run_started -> running", () => {
     const running = toRunning(initial);
     expect(running.status).toBe("running");
+  });
+
+  it("run_resumed moves failed state back to running and clears error", () => {
+    const failed = toRunning(initial).apply({
+      type: "run_finished",
+      status: "failed",
+      error: { message: "old failure", code: "MODEL_ERROR" },
+      timestamp: NOW,
+    });
+
+    const resumed = failed.apply({
+      type: "run_resumed",
+      runId: "test-run",
+      previousStatus: "failed",
+      timestamp: "2024-01-01T00:00:01.000Z",
+    });
+
+    expect(resumed.status).toBe("running");
+    expect(resumed.data.error).toBeUndefined();
+  });
+
+  it("run_resumed does not replay an in-flight tool execution", () => {
+    const tc = makeToolCall();
+    let state = toWaitingForModel(initial).apply({
+      type: "model_output_received",
+      stepIndex: 0,
+      output: makeToolCallOutput(tc),
+      turn: makeToolCallTurn(tc),
+      timestamp: NOW,
+    });
+    state = state.apply({
+      type: "tool_call_validated",
+      stepIndex: 0,
+      toolCall: tc,
+      result: { status: "valid", request: makePtyRequest() },
+      timestamp: NOW,
+    });
+    state = state.apply({
+      type: "tool_review_requested",
+      stepIndex: 0,
+      request: makePtyRequest(),
+      timestamp: NOW,
+    });
+    state = state.apply({
+      type: "tool_reviewed",
+      stepIndex: 0,
+      request: makePtyRequest(),
+      decision: makeApproval(),
+      timestamp: NOW,
+    });
+    state = state.apply({
+      type: "tool_execution_started",
+      stepIndex: 0,
+      request: makePtyRequest(),
+      timestamp: NOW,
+    });
+
+    const resumed = state.apply({
+      type: "run_resumed",
+      runId: "test-run",
+      previousStatus: "waiting_for_tool",
+      timestamp: "2024-01-01T00:00:01.000Z",
+    });
+
+    expect(resumed.status).toBe("running");
+    expect(resumed.data.pendingToolRequest).toBeUndefined();
+    expect(resumed.data.pendingReview).toBeUndefined();
+    expect(resumed.nextEffect()).toMatchObject({
+      type: "append_observation",
+      observation: {
+        kind: "model_output",
+        message: expect.stringContaining("in flight"),
+        recoverable: true,
+      },
+    });
   });
 
   it("running + model_requested -> waiting_for_model", () => {
@@ -675,15 +748,12 @@ describe("AgentRunState.nextEffect()", () => {
     expect(effect.type).toBe("execute_tool");
   });
 
-  it("running at maxSteps -> stop(max_steps)", () => {
-    let s = createState({ maxSteps: 0 });
+  it("running with no pending work -> call_model regardless of step index", () => {
+    let s = createState({ stepIndex: 10_000 });
     s = toRunning(s);
 
     const effect = s.nextEffect();
-    expect(effect.type).toBe("stop");
-    if (effect.type === "stop") {
-      expect(effect.reason).toBe("max_steps");
-    }
+    expect(effect.type).toBe("call_model");
   });
 
   it("running with pendingToolRequest + rejected review -> append_observation", () => {

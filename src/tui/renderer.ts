@@ -552,7 +552,7 @@ export class BlessedRenderer implements TuiRenderer {
     return (
       `run=${run.runId} ` +
       `{${statusColor}-fg}status=${run.status}{/${statusColor}-fg} ` +
-      `step=${run.stepIndex}/${run.maxSteps} ` +
+      `step=${run.stepIndex} ` +
       `cwd=${run.cwd}` +
       (run.model ? ` model=${run.model}` : "")
     );

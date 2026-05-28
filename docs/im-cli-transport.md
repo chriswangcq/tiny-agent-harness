@@ -241,10 +241,10 @@ run does not start
 CLI exits with error
 ```
 
-If the completion `im send --kind status` delivery fails after a run completes:
+If a user-visible `im send --kind status` delivery fails:
 
 ```text
-run remains completed
+run records a recoverable observation or fails according to the calling boundary
 delivery failure is recorded as agent_message_send_failed
 CLI returns non-zero
 ```

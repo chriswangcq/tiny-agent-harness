@@ -30,7 +30,6 @@ export class ViewModelBuilder {
     runId: "",
     status: "created",
     stepIndex: 0,
-    maxSteps: 0,
     cwd: "",
   };
   private conversation: ConversationProjectionItem[] = [];
@@ -53,7 +52,6 @@ export class ViewModelBuilder {
           runId: event.runId,
           status: "running",
           cwd: event.cwd,
-          maxSteps: event.maxSteps,
           startedAt: event.timestamp,
           updatedAt: event.timestamp,
         };
@@ -64,6 +62,23 @@ export class ViewModelBuilder {
           status: "ok",
           title: "run started",
           summary: `task: ${event.task}`,
+        });
+        break;
+
+      case "run_resumed":
+        this.header = {
+          ...this.header,
+          runId: event.runId,
+          status: "running",
+          updatedAt: event.timestamp,
+        };
+        this.pushFrame({
+          stepIndex: this.header.stepIndex,
+          timestamp: event.timestamp,
+          phase: "environment",
+          status: "ok",
+          title: "run resumed",
+          summary: `previousStatus=${event.previousStatus}`,
         });
         break;
 
@@ -354,6 +369,20 @@ export class ViewModelBuilder {
         });
         break;
 
+      case "history_compacted":
+        this.pushFrame({
+          stepIndex: event.stepIndex,
+          timestamp: event.timestamp,
+          phase: "environment",
+          status: "ok",
+          title: "history compacted",
+          summary:
+            `tokens=${event.compaction.tokenCount}/${event.compaction.maxTokens} ` +
+            `dropped=${event.compaction.droppedItemCount} retained=${event.compaction.retainedItemCount}`,
+          detail: event.compaction.summary,
+        });
+        break;
+
       case "run_finished":
         this.header.status = event.status;
         this.header.updatedAt = event.timestamp;
@@ -400,7 +429,6 @@ export class ViewModelBuilder {
       runId: state.runId,
       status: state.status,
       stepIndex: state.stepIndex,
-      maxSteps: state.maxSteps,
       cwd: state.cwd,
       updatedAt: state.updatedAt,
       startedAt: state.createdAt,

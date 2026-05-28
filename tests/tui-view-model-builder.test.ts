@@ -177,7 +177,6 @@ function builderWithRunStarted(): ViewModelBuilder {
     runId: "run-1",
     task: "test",
     cwd: "/tmp",
-    maxSteps: 10,
     timestamp: NOW,
   });
   return b;
@@ -196,14 +195,12 @@ describe("ViewModelBuilder", () => {
       runId: "run-1",
       task: "test task",
       cwd: "/tmp",
-      maxSteps: 10,
       timestamp: NOW,
     });
     const vm = b.getViewModel();
     expect(vm.run.runId).toBe("run-1");
     expect(vm.run.status).toBe("running");
     expect(vm.run.cwd).toBe("/tmp");
-    expect(vm.run.maxSteps).toBe(10);
     expect(vm.run.startedAt).toBe(NOW);
     expect(vm.loop).toHaveLength(1);
     expect(vm.loop[0].phase).toBe("environment");
@@ -901,7 +898,6 @@ describe("ViewModelBuilder", () => {
       runId: "run-1",
       task: "test",
       cwd: "/tmp",
-      maxSteps: 10,
       timestamp: NOW,
     });
     for (let i = 0; i < 5; i++) {
@@ -928,7 +924,6 @@ describe("ViewModelBuilder", () => {
       runId: "run-1",
       task: "test",
       cwd: "/tmp",
-      maxSteps: 10,
       timestamp: NOW,
     });
     // run_started already adds 1 frame, add 4 more
@@ -952,7 +947,6 @@ describe("ViewModelBuilder", () => {
       createdAt: NOW,
       updatedAt: LATER,
       stepIndex: 5,
-      maxSteps: 20,
       transcriptPath: "/tmp/transcript.jsonl",
     };
     b.applyState(state);
@@ -960,7 +954,6 @@ describe("ViewModelBuilder", () => {
     expect(vm.run.runId).toBe("run-2");
     expect(vm.run.status).toBe("waiting_for_model");
     expect(vm.run.stepIndex).toBe(5);
-    expect(vm.run.maxSteps).toBe(20);
     expect(vm.run.cwd).toBe("/home");
     expect(vm.run.startedAt).toBe(NOW);
     expect(vm.run.updatedAt).toBe(LATER);

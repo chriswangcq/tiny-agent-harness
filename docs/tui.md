@@ -195,7 +195,6 @@ type RunHeaderView = {
   runId: string;
   status: AgentRunStatus;
   stepIndex: number;
-  maxSteps: number;
   cwd: string;
   model?: string;
   startedAt?: string;
@@ -363,13 +362,12 @@ run_finished
 Header 一行即可：
 
 ```text
-run=run-123 status=waiting_for_io step=7/50 cwd=/repo model=deepseek-v4-pro sessions=2 skills=1
+run=run-123 status=waiting_for_io step=7 cwd=/repo model=deepseek-v4-pro sessions=2 skills=1
 ```
 
 颜色建议：
 
 - running / waiting: yellow
-- completed: green
 - failed / error: red
 - cancelled: gray
 

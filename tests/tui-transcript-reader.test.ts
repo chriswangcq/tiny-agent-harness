@@ -25,7 +25,6 @@ const event1 = {
   runId: "run-1",
   task: "test",
   cwd: "/tmp",
-  maxSteps: 10,
   timestamp: "2026-01-01T00:00:00Z",
 };
 
@@ -140,7 +139,6 @@ describe("TranscriptReader", () => {
       createdAt: "2026-01-01T00:00:00Z",
       updatedAt: "2026-01-01T00:00:01Z",
       stepIndex: 0,
-      maxSteps: 10,
       transcriptPath: path.join(dir, "transcript.jsonl"),
     };
     fs.writeFileSync(

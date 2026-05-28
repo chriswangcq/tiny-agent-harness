@@ -111,7 +111,7 @@ task / environment reminder
 
 ### 4.1 Run Orchestrator 与 Agent Run State
 
-`src/run` 是项目的执行骨架。`AgentRunState` 维护互斥 lifecycle status，例如 `running`、`waiting_for_model`、`waiting_for_review`、`waiting_for_tool`、`waiting_for_io`、`completed`。`nextEffect()` 是 state 对 orchestrator 的唯一指令出口。
+`src/run` 是项目的执行骨架。`AgentRunState` 维护互斥 lifecycle status，例如 `running`、`waiting_for_model`、`waiting_for_review`、`waiting_for_tool`、`waiting_for_io`、`failed`、`cancelled`。`nextEffect()` 是 state 对 orchestrator 的唯一指令出口。
 
 `RunOrchestrator` 负责真正的副作用：调用模型、消费 environment events、校验 tool call、请求 review、执行 bash、等待 IO、写 transcript 和保存 state snapshot。
 

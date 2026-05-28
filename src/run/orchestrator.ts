@@ -23,6 +23,7 @@ import { wrapReminderAsUserContent } from "../model/prompt-builder.js";
 import type { ActiveSkillRunSummary } from "../types/skill.js";
 import { AgentRunState } from "./state.js";
 import { TranscriptStore } from "../transcript/store.js";
+import type { ContextWindowPort } from "./context-window.js";
 
 export interface ModelPort {
   generateTurn(
@@ -54,6 +55,10 @@ export interface PromptPort {
   buildMessages(task: string, history: HistoryItem[]): V4ChatMessage[];
 }
 
+export interface RunSessionPort {
+  saveHistory(runId: string, history: readonly HistoryItem[]): void;
+}
+
 export type HistoryItem =
   | { type: "tool_call"; toolCall: InternalToolCall; thinking?: AgentThinking }
   | {
@@ -76,6 +81,8 @@ export interface RunPorts {
   terminal: TerminalPort;
   stashFiles: StashFilePort;
   prompt: PromptPort;
+  contextWindow: ContextWindowPort;
+  session: RunSessionPort;
   tools: ToolDefinition[];
   environment: EnvironmentPort;
   listActiveSkillRuns: () => ActiveSkillRunSummary[];
@@ -85,16 +92,18 @@ export class RunOrchestrator {
   private state: AgentRunState;
   private readonly transcript: TranscriptStore;
   private readonly ports: RunPorts;
-  private readonly history: HistoryItem[] = [];
+  private readonly history: HistoryItem[];
 
   constructor(
     initialState: AgentRunState,
     transcript: TranscriptStore,
     ports: RunPorts,
+    initialHistory: HistoryItem[] = [],
   ) {
     this.state = initialState;
     this.transcript = transcript;
     this.ports = ports;
+    this.history = [...initialHistory];
   }
 
   private now(): string {
@@ -110,14 +119,23 @@ export class RunOrchestrator {
   async run(): Promise<AgentRunState> {
     this.transcript.ensureDir();
 
-    await this.record({
-      type: "run_started",
-      runId: this.state.data.runId,
-      task: this.state.data.task,
-      cwd: this.state.data.cwd,
-      maxSteps: this.state.data.maxSteps,
-      timestamp: this.now(),
-    });
+    if (this.state.status === "created") {
+      await this.record({
+        type: "run_started",
+        runId: this.state.data.runId,
+        task: this.state.data.task,
+        cwd: this.state.data.cwd,
+        timestamp: this.now(),
+      });
+    } else {
+      await this.record({
+        type: "run_resumed",
+        runId: this.state.data.runId,
+        previousStatus: this.state.status,
+        timestamp: this.now(),
+      });
+      this.saveHistory();
+    }
 
     while (true) {
       const effect = this.state.nextEffect();
@@ -141,8 +159,11 @@ export class RunOrchestrator {
               type: "environment_reminder",
               content: envReminder,
             });
+            this.saveHistory();
           }
         }
+
+        await this.compactHistoryIfNeeded();
 
         const messages = this.ports.prompt.buildMessages(
           this.state.data.task,
@@ -276,6 +297,7 @@ export class RunOrchestrator {
           });
         }
         this.history.push({ type: "observation", observation });
+        this.saveHistory();
 
         await this.record({
           type: "tool_execution_finished",
@@ -289,6 +311,7 @@ export class RunOrchestrator {
 
       if (effect.type === "append_observation") {
         this.history.push({ type: "observation", observation: effect.observation });
+        this.saveHistory();
 
         await this.record({
           type: "observation_appended",
@@ -307,6 +330,7 @@ export class RunOrchestrator {
           wait: effect.wait,
           thinking: this.state.data.pendingModelOutput?.thinking,
         });
+        this.saveHistory();
 
         const unsettledMessage = pendingImSendMessage(this.history);
         if (unsettledMessage !== undefined) {
@@ -319,6 +343,7 @@ export class RunOrchestrator {
               recoverable: true,
             },
           });
+          this.saveHistory();
           await this.record({
             type: "observation_appended",
             stepIndex: this.state.data.stepIndex,
@@ -360,6 +385,7 @@ export class RunOrchestrator {
             event,
           },
         });
+        this.saveHistory();
 
         await this.record({
           type: "io_wait_satisfied",
@@ -420,6 +446,38 @@ export class RunOrchestrator {
       return this.ports.stashFiles.stash(request);
     }
     return this.ports.terminal.execute(request);
+  }
+
+  private async compactHistoryIfNeeded(): Promise<void> {
+    const tokenCount = this.ports.contextWindow.countHistoryTokens(this.history);
+    const maxTokens = this.ports.contextWindow.maxHistoryTokens;
+    if (tokenCount < maxTokens) {
+      return;
+    }
+
+    const compaction = this.ports.contextWindow.compactHistory({
+      history: this.history,
+      tokenCount,
+      maxTokens,
+      stepIndex: this.state.data.stepIndex,
+    });
+    if (compaction === undefined || compaction.droppedItemCount === 0) {
+      return;
+    }
+
+    this.history.splice(0, this.history.length, ...compaction.history);
+    this.saveHistory();
+    const { history: _history, ...eventCompaction } = compaction;
+    await this.record({
+      type: "history_compacted",
+      stepIndex: this.state.data.stepIndex,
+      compaction: eventCompaction,
+      timestamp: this.now(),
+    });
+  }
+
+  private saveHistory(): void {
+    this.ports.session.saveHistory(this.state.data.runId, this.history);
   }
 }
 

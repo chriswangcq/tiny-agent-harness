@@ -25,7 +25,6 @@ export class AgentRunState {
     runId: string;
     task: string;
     cwd: string;
-    maxSteps: number;
     transcriptPath: string;
   }): AgentRunState {
     return new AgentRunState({
@@ -36,7 +35,6 @@ export class AgentRunState {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       stepIndex: 0,
-      maxSteps: params.maxSteps,
       transcriptPath: params.transcriptPath,
     });
   }
@@ -46,7 +44,7 @@ export class AgentRunState {
   }
 
   nextEffect(): NextEffect {
-    const { status, stepIndex, maxSteps } = this.data;
+    const { status } = this.data;
 
     if (status === "failed") {
       return { type: "stop", reason: "failed" };
@@ -109,11 +107,8 @@ export class AgentRunState {
         return { type: "wait_io", wait: this.data.pendingIoWait };
       }
 
-      // 7. No pending work — check step budget then call model
-      if (stepIndex >= maxSteps) {
-        return { type: "stop", reason: "max_steps" };
-      }
-
+      // 7. No pending work — call model. Runs are externally controlled by
+      // io_wait, cancellation, and process lifetime rather than a step budget.
       return {
         type: "call_model",
         context: {
@@ -142,6 +137,29 @@ export class AgentRunState {
         this.assertStatus("created", event.type);
         return this.next({
           status: "running",
+          updatedAt: now,
+        });
+      }
+
+      case "run_resumed": {
+        if (s.status === "waiting_for_tool") {
+          return this.next({
+            status: "running",
+            pendingModelOutput: undefined,
+            pendingModelTurn: {
+              kind: "invalid_output",
+              message:
+                "Run resumed while a tool execution was in flight. The previous process/PTY was not resumed, so the harness did not replay the tool automatically. Inspect the filesystem, transcript, and terminal state before deliberately retrying any side-effecting action.",
+            },
+            pendingToolCall: undefined,
+            pendingToolRequest: undefined,
+            pendingReview: undefined,
+            updatedAt: now,
+          });
+        }
+        return this.next({
+          status: "running",
+          error: undefined,
           updatedAt: now,
         });
       }
@@ -335,6 +353,9 @@ export class AgentRunState {
         return this.next({ updatedAt: now });
 
       case "environment_events_consumed":
+        return this.next({ updatedAt: now });
+
+      case "history_compacted":
         return this.next({ updatedAt: now });
 
       default: {

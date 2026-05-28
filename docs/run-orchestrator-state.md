@@ -21,7 +21,7 @@ RunOrchestrator
   calls: DeepSeekFimAdapter, Environment, ToolReviewer, ManagedTerminalRuntime, ImCliTransport, TranscriptStore
 
 AgentRunState
-  owns: status, step index, transcript pointers, pending tool call/review, stop conditions
+  owns: status, step index, transcript pointers, pending tool call/review, pending IO wait
   references: active skill run reminder state through Environment / SkillRunStore
   exposes: nextEffect(), apply(event)
 
@@ -49,6 +49,9 @@ ManagedTerminalRuntime
 
 TranscriptStore
   owns: append-only run events on disk
+
+RunSessionStore
+  owns: persisted agent-loop history snapshot for resume
 ```
 
 The important split:
@@ -68,7 +71,6 @@ type AgentRunStatus =
   | "waiting_for_review"
   | "waiting_for_tool"
   | "waiting_for_io"
-  | "completed"
   | "failed"
   | "cancelled";
 
@@ -82,7 +84,6 @@ type AgentRunState = {
   updatedAt: string;
 
   stepIndex: number;
-  maxSteps: number;
 
   transcriptPath: string;
   lastEventId?: string;
@@ -254,7 +255,7 @@ type NextEffect =
     }
   | {
       type: "stop";
-      reason: "completed" | "max_steps" | "failed" | "cancelled";
+      reason: "failed" | "cancelled";
     };
 ```
 
@@ -279,7 +280,25 @@ type RunEvent =
       runId: string;
       task: string;
       cwd: string;
-      maxSteps: number;
+      timestamp: string;
+    }
+  | {
+      type: "run_resumed";
+      runId: string;
+      previousStatus: AgentRunStatus;
+      timestamp: string;
+    }
+  | {
+      type: "history_compacted";
+      stepIndex: number;
+      compaction: {
+        summary: string;
+        tokenCount: number;
+        maxTokens: number;
+        originalItemCount: number;
+        retainedItemCount: number;
+        droppedItemCount: number;
+      };
       timestamp: string;
     }
   | {
@@ -378,7 +397,7 @@ type RunEvent =
     }
   | {
       type: "run_finished";
-      status: "completed" | "failed" | "cancelled";
+      status: "failed" | "cancelled";
       error?: RunError;
       timestamp: string;
     };
@@ -403,7 +422,6 @@ async function runAgent(initialState: AgentRunState, ports: RunPorts) {
     runId: state.runId,
     task: state.task,
     cwd: state.cwd,
-    maxSteps: state.maxSteps,
     timestamp: ports.clock.now()
   });
 
@@ -521,7 +539,7 @@ async function runAgent(initialState: AgentRunState, ports: RunPorts) {
     if (effect.type === "stop") {
       await record({
         type: "run_finished",
-        status: state.status === "completed" ? "completed" : state.status === "cancelled" ? "cancelled" : "failed",
+        status: state.status === "cancelled" ? "cancelled" : "failed",
         error: state.error,
         timestamp: ports.clock.now()
       });
@@ -550,9 +568,6 @@ waiting_for_model + model_thinking_delta
 
 waiting_for_model + model_output_received(tool_call)
   -> running with pending tool call
-
-waiting_for_model + model_output_received(io_wait)
-  -> waiting_for_io
 
 waiting_for_model + model_output_received(io_wait)
   -> running with pending IO wait
@@ -587,8 +602,8 @@ running + io_wait_started
 waiting_for_io + io_wait_satisfied
   -> running with synthetic user-message observation queued, stepIndex += 1
 
-running + stepIndex >= maxSteps
-  -> failed with max-steps error
+any persisted state + run_resumed
+  -> running with persisted history restored by the orchestrator
 
 any non-terminal + cancel
   -> cancelled
@@ -600,7 +615,8 @@ any non-terminal + unrecoverable error
 Invalid transitions should fail loudly in development. For example:
 
 ```text
-completed + model_output_received -> invalid
+failed + model_output_received -> invalid
+cancelled + model_output_received -> invalid
 waiting_for_tool + model_output_received -> invalid
 waiting_for_io + model_output_received -> invalid
 running + tool_execution_finished with no pending request -> invalid
@@ -627,13 +643,10 @@ running + pending approved tool request
 running + pending IO wait
   -> wait_io
 
-running + no pending work + stepIndex < maxSteps
+running + no pending work
   -> call_model
 
-running + stepIndex >= maxSteps
-  -> stop(max_steps)
-
-completed / failed / cancelled
+failed / cancelled
   -> stop(...)
 ```
 
@@ -721,7 +734,20 @@ model io_wait -> wait until condition satisfied -> observation appended
 
 Final answers do not increment `stepIndex`.
 
-Invalid model outputs, tool validation errors, review rejections, and satisfied IO waits do increment `stepIndex` after the synthetic observation is appended. This prevents an Agent from looping forever on invalid outputs, rejected commands, or repeated waits without spending budget.
+Invalid model outputs, tool validation errors, review rejections, and satisfied IO waits do increment `stepIndex` after the synthetic observation is appended. There is no fixed step budget; long-running sessions are controlled by `io_wait`, cancellation, process lifetime, and context compaction.
+
+## Context Window
+
+The prompt boundary compresses only agent-loop history. System prompt/tool contracts are not part of the compression budget.
+
+Current default:
+
+```text
+max agent-loop history tokens = 700_000
+recent history items retained verbatim = 40
+```
+
+Before each `call_model`, the orchestrator asks the injected `ContextWindowPort` to count the history messages built from persisted loop items. If the count reaches the threshold, it replaces the older history prefix with a deterministic `environment_reminder` summary and keeps the recent tail verbatim. The event is recorded as `history_compacted`, and the compacted history is saved to `session.json`.
 
 ## Persistence
 
@@ -733,9 +759,7 @@ Suggested run directory:
     run-2026-05-25T20-00-00Z/
       state.json
       transcript.jsonl
-      prompts/
-        step-000.md
-        step-001.md
+      session.json
   sessions/
     default.log
     server.log
@@ -745,27 +769,32 @@ Suggested run directory:
 
 `transcript.jsonl` is append-only and is the audit source.
 
-Prompt files are optional but useful for debugging model behavior without stuffing huge FIM prompt text into every JSONL event.
+`session.json` is the persisted agent-loop history used by resume. If it is missing, resume can reconstruct a best-effort history from `transcript.jsonl`.
 
 ## Resume Semantics
 
-First version can skip full resume, but the design should not block it.
+Resume is supported through:
 
-Resume should:
+```bash
+tiny-agent resume <runId|latest>
+tiny-agent run --resume <runId|latest>
+```
+
+Resume does:
 
 1. Load `state.json`.
-2. Normalize any persisted `waiting_*` state into a recoverable state.
-3. Reconnect or recreate bash sessions.
-4. Read session log paths from state/session metadata.
-5. Continue from `nextEffect()`.
+2. Load agent-loop history from `session.json`, or reconstruct a best-effort history from `transcript.jsonl`.
+3. Append a resume reminder explaining that the PTY process tree is fresh.
+4. Record `run_resumed` and continue from `nextEffect()`.
 
-`waiting_for_model`, `waiting_for_review`, and `waiting_for_tool` mean a side effect was in flight. If the previous process died there, resume should not blindly assume the side effect completed.
+Resume restores run state and agent-loop context, not the previous PTY process tree. Prior ssh, vim, cat, REPL, or other foreground processes do not survive. The next model step must inspect the fresh PTY with `status`/`poll` before assuming terminal state.
 
-Suggested recovery:
+Recovery rules:
 
-- `waiting_for_model`: append a recoverable observation that the model request was interrupted, then call the model again.
+- `waiting_for_model`: resume as running and call the model again.
 - `waiting_for_review`: re-run review for the pending tool request.
-- `waiting_for_tool`: mark the pending execution as unknown and ask the session manager for `status` / `poll` before continuing.
+- `waiting_for_io`: wait for the persisted IO condition.
+- `waiting_for_tool`: do not replay the tool. Convert the in-flight execution into a recoverable observation so the model must inspect filesystem/transcript/terminal state and retry deliberately if needed.
 
 ## Minimal First Implementation
 
@@ -778,9 +807,8 @@ Build only the current path:
 5. Latest `state.json` snapshot
 6. Table-driven tests for transition rules
 
-Defer:
+Still deferred:
 
-- full process crash resume
 - parallel tool execution
 - branching plans
 - multi-agent scheduling

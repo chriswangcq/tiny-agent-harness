@@ -22,6 +22,7 @@ import type {
   AgentMessage,
 } from "./environment.js";
 import type { ActiveSkillRunSummary } from "./skill.js";
+import type { HistoryCompactionResult } from "../run/context-window.js";
 
 // ─── Agent Run Status ───────────────────────────────────────────────
 
@@ -47,7 +48,6 @@ export interface AgentRunStateData {
   updatedAt: string;
 
   stepIndex: number;
-  maxSteps: number;
 
   transcriptPath: string;
   lastEventId?: string;
@@ -97,7 +97,7 @@ export type NextEffect =
     }
   | {
       type: "stop";
-      reason: "max_steps" | "failed" | "cancelled";
+      reason: "failed" | "cancelled";
     };
 
 // ─── Run Events ─────────────────────────────────────────────────────
@@ -111,7 +111,12 @@ export type RunEvent =
       runId: string;
       task: string;
       cwd: string;
-      maxSteps: number;
+      timestamp: string;
+    }
+  | {
+      type: "run_resumed";
+      runId: string;
+      previousStatus: AgentRunStatus;
       timestamp: string;
     }
   | {
@@ -167,6 +172,12 @@ export type RunEvent =
       type: "environment_events_consumed";
       runId: string;
       eventIds: string[];
+      timestamp: string;
+    }
+  | {
+      type: "history_compacted";
+      stepIndex: number;
+      compaction: Omit<HistoryCompactionResult, "history">;
       timestamp: string;
     }
   | {

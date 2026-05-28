@@ -5,10 +5,12 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { RunOrchestrator } from "../run/orchestrator.js";
 import type { RunPorts, HistoryItem } from "../run/orchestrator.js";
 import { AgentRunState } from "../run/state.js";
+import { RunSessionStore, reconstructHistoryFromTranscript } from "../run/session-store.js";
 import { TranscriptStore } from "../transcript/store.js";
 import { DeepSeekFimAdapter } from "../model/adapter.js";
 import { PromptBuilder } from "../model/prompt-builder.js";
 import type { HistoryEntry } from "../model/prompt-builder.js";
+import { DeepSeekV4PromptTokenCounter } from "../model/prompt-token-counter.js";
 import { ManagedTerminalRuntime } from "../bash/managed-terminal-runtime.js";
 import { ToolCallValidator } from "../tools/validator.js";
 import { AlwaysApproveReviewer } from "../tools/reviewer.js";
@@ -21,6 +23,12 @@ import {
   DEFAULT_PTY_ACTION_LIMITS,
 } from "../terminal/validator.js";
 import type { V4ChatMessage } from "../types/model.js";
+import type { AgentRunStateData, RunEvent } from "../types/run.js";
+import {
+  DEFAULT_CONTEXT_WINDOW_MAX_HISTORY_TOKENS,
+  DeterministicHistoryCompactor,
+  type ContextWindowPort,
+} from "../run/context-window.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -58,10 +66,12 @@ function parseCliOptions(args: string[]): {
   channel?: string;
   task?: string;
   stateDir?: string;
+  resumeRunId?: string;
 } {
   let channel: string | undefined;
   let task: string | undefined;
   let stateDir: string | undefined;
+  let resumeRunId: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--channel" && i + 1 < args.length) {
@@ -70,10 +80,12 @@ function parseCliOptions(args: string[]): {
       task = args[++i];
     } else if (args[i] === "--state-dir" && i + 1 < args.length) {
       stateDir = args[++i];
+    } else if (args[i] === "--resume" && i + 1 < args.length) {
+      resumeRunId = args[++i];
     }
   }
 
-  return { channel, task, stateDir };
+  return { channel, task, stateDir, resumeRunId };
 }
 
 function convertHistoryItems(items: HistoryItem[]): HistoryEntry[] {
@@ -139,6 +151,36 @@ function createCliStashFilePort(stateDir?: string) {
   };
 }
 
+function createCliRunSessionPort(store: RunSessionStore) {
+  return {
+    saveHistory(runId: string, history: readonly HistoryItem[]): void {
+      store.save({
+        runId,
+        updatedAt: new Date().toISOString(),
+        history: [...history],
+      });
+    },
+  };
+}
+
+function createCliContextWindowPort(
+  promptBuilder: PromptBuilder,
+): ContextWindowPort {
+  const tokenCounter = new DeepSeekV4PromptTokenCounter();
+  const compactor = new DeterministicHistoryCompactor();
+  return {
+    maxHistoryTokens: DEFAULT_CONTEXT_WINDOW_MAX_HISTORY_TOKENS,
+    countHistoryTokens(history: readonly HistoryItem[]): number {
+      const entries = convertHistoryItems([...history]);
+      const messages = promptBuilder.buildHistoryMessages(entries);
+      return tokenCounter.countMessages(messages);
+    },
+    compactHistory(input) {
+      return compactor.compact(input);
+    },
+  };
+}
+
 function cleanEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   return Object.fromEntries(
     Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined),
@@ -193,6 +235,52 @@ function readLatestRunId(runsDir: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function resolveRunDir(runsDir: string, runIdOrLatest: string): string {
+  const runId =
+    runIdOrLatest === "latest" ? readLatestRunId(runsDir) : runIdOrLatest;
+  if (!runId) {
+    die("No latest run is available to resume.");
+  }
+  const runDir = path.join(runsDir, runId);
+  if (!fs.existsSync(path.join(runDir, "state.json"))) {
+    die(`Cannot resume ${runId}: missing ${path.join(runDir, "state.json")}`);
+  }
+  return runDir;
+}
+
+function readTranscriptEvents(transcriptPath: string): RunEvent[] {
+  if (!fs.existsSync(transcriptPath)) {
+    return [];
+  }
+  return fs
+    .readFileSync(transcriptPath, "utf-8")
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .map((line) => JSON.parse(line) as RunEvent);
+}
+
+function loadHistoryForRun(runDir: string): HistoryItem[] {
+  const sessionStore = new RunSessionStore(runDir);
+  const snapshot = sessionStore.load();
+  if (snapshot !== null) {
+    return [...snapshot.history];
+  }
+  return reconstructHistoryFromTranscript(
+    readTranscriptEvents(path.join(runDir, "transcript.jsonl")),
+  );
+}
+
+function appendResumeReminder(history: HistoryItem[]): HistoryItem[] {
+  return [
+    ...history,
+    {
+      type: "environment_reminder",
+      content:
+        "Run resumed from persisted state. Agent-loop history was loaded from the run session. The bash PTY process is fresh after resume; inspect with bash status/poll and use the latest terminal.inputSeq before sending PTY input. Do not assume prior ssh, vim, cat, or other foreground processes survived the resume.",
+    },
+  ];
 }
 
 async function waitForNewLatestRun(options: {
@@ -341,6 +429,8 @@ const HELP_TEXT = `tiny-agent — AI agent harness with PTY actions and staged f
 Usage:
   tiny-agent <task>                                   Run with inline task
   tiny-agent run --channel <ch> [--task <task>]       Run, optionally wait for IM
+  tiny-agent run --resume <runId|latest>              Resume an existing run
+  tiny-agent resume <runId|latest>                    Resume an existing run
   tiny-agent ui  --channel <ch> [--task <task>]       Run + TUI in one command
   tiny-agent tui --run <runId|latest>                 Attach TUI to existing run
   tiny-agent im  <subcommand> [options]               IM message operations
@@ -427,14 +517,24 @@ async function main(): Promise<void> {
   let channel: string | undefined;
   let taskArg: string | undefined;
   let stateDirArg: string | undefined;
+  let resumeRunId: string | undefined;
 
-  if (args[0] === "run") {
+  if (args[0] === "resume") {
+    resumeRunId = args[1];
+    const parsed = parseCliOptions(args.slice(2));
+    channel = parsed.channel;
+    stateDirArg = parsed.stateDir;
+    if (!resumeRunId) {
+      die("Usage: tiny-agent resume <runId|latest> [--channel <channel>] [--state-dir <dir>]");
+    }
+  } else if (args[0] === "run") {
     const parsed = parseCliOptions(args.slice(1));
     channel = parsed.channel;
     taskArg = parsed.task;
     stateDirArg = parsed.stateDir;
-    if (!channel) {
-      die("Usage: tiny-agent run --channel <channel> [--task <task>] [--state-dir <dir>]");
+    resumeRunId = parsed.resumeRunId;
+    if (!channel && !resumeRunId) {
+      die("Usage: tiny-agent run --channel <channel> [--task <task>] [--state-dir <dir>] OR tiny-agent run --resume <runId|latest>");
     }
   } else if (args[0]) {
     const reserved = ["io_wait", "io-wait", "final"];
@@ -450,6 +550,7 @@ async function main(): Promise<void> {
         "Usage:\n" +
         "  tiny-agent <task> [--state-dir <dir>]\n" +
         "  tiny-agent run --channel <channel> [--task <task>] [--state-dir <dir>]\n" +
+        "  tiny-agent resume <runId|latest> [--state-dir <dir>]\n" +
         "  tiny-agent ui --channel <channel> [--task <task>] [--state-dir <dir>]",
     );
   }
@@ -476,33 +577,6 @@ async function main(): Promise<void> {
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  // --- Create run ID and transcript path ---
-  const runId = `run-${Date.now()}`;
-  const runDir = path.join(runsDir, runId);
-  const transcriptPath = path.join(runDir, "transcript.jsonl");
-  const maxSteps = 50;
-  const transcript = new TranscriptStore(runDir);
-  const initialDisplayTask =
-    taskArg ?? `Waiting for first user message on channel "${channel}"`;
-
-  // Make the run visible to TUI immediately, even before the first IM message.
-  // The real run_started event is still recorded by RunOrchestrator once a
-  // task exists; this snapshot is only the attachable waiting-room state.
-  transcript.ensureDir();
-  fs.closeSync(fs.openSync(transcriptPath, "a"));
-  transcript.saveState({
-    ...AgentRunState.create({
-      runId,
-      task: initialDisplayTask,
-      cwd: process.cwd(),
-      maxSteps,
-      transcriptPath,
-    }).data,
-    status: taskArg ? "created" : "waiting_for_io",
-    updatedAt: new Date().toISOString(),
-  });
-  publishLatestRun(runsDir, runId, runDir);
-
   // --- Wire up modules ---
   const model = new DeepSeekFimAdapter({
     apiKey,
@@ -520,13 +594,78 @@ async function main(): Promise<void> {
   const imTransport = new ImCliTransport({ baseDir: imDir });
   const skillRunStore = new SkillRunStore({ skillRunsDir, skillsDir });
 
-  // --- Wait for first IM message if no --task ---
+  // --- Create or load run/session state ---
+  let runId: string;
+  let runDir: string;
+  let transcriptPath: string;
+  let transcript: TranscriptStore;
+  let initialState: AgentRunState;
+  let initialHistory: HistoryItem[] = [];
   let task: string;
   let imCursor: string | undefined;
-  if (taskArg) {
+
+  if (resumeRunId) {
+    runDir = resolveRunDir(runsDir, resumeRunId);
+    transcript = new TranscriptStore(runDir);
+    const loadedState = transcript.loadState<AgentRunStateData>();
+    if (loadedState === null) {
+      die(`Cannot resume ${resumeRunId}: missing persisted run state.`);
+    }
+    runId = loadedState.runId;
+    transcriptPath = loadedState.transcriptPath;
+    task = loadedState.task;
+    initialState = new AgentRunState(loadedState);
+    initialHistory = appendResumeReminder(loadHistoryForRun(runDir));
+
     const initial = await imTransport.receive({ channel });
     imCursor = initial.nextCursor;
-    task = taskArg;
+    publishLatestRun(runsDir, runId, runDir);
+  } else {
+    runId = `run-${Date.now()}`;
+    runDir = path.join(runsDir, runId);
+    transcriptPath = path.join(runDir, "transcript.jsonl");
+    transcript = new TranscriptStore(runDir);
+    const initialDisplayTask =
+      taskArg ?? `Waiting for first user message on channel "${channel}"`;
+
+    // Make the run visible to TUI immediately, even before the first IM message.
+    // The real run_started event is still recorded by RunOrchestrator once a
+    // task exists; this snapshot is only the attachable waiting-room state.
+    transcript.ensureDir();
+    fs.closeSync(fs.openSync(transcriptPath, "a"));
+    transcript.saveState({
+      ...AgentRunState.create({
+        runId,
+        task: initialDisplayTask,
+        cwd: process.cwd(),
+        transcriptPath,
+      }).data,
+      status: taskArg ? "created" : "waiting_for_io",
+      updatedAt: new Date().toISOString(),
+    });
+    publishLatestRun(runsDir, runId, runDir);
+
+    if (taskArg) {
+      const initial = await imTransport.receive({ channel });
+      imCursor = initial.nextCursor;
+      task = taskArg;
+    } else {
+      console.log(`[tiny-agent] Waiting for user message on channel: ${channel}`);
+      const firstMessage = await waitForFirstMessage(imTransport, environment, channel);
+      task = firstMessage.task;
+      imCursor = firstMessage.cursor;
+      console.log(`[tiny-agent] Received task: ${task}`);
+    }
+
+    initialState = AgentRunState.create({
+      runId,
+      task,
+      cwd: process.cwd(),
+      transcriptPath,
+    });
+  }
+
+  if (taskArg && !resumeRunId) {
     const createdAt = new Date().toISOString();
     environment.appendEvent({
       id: `env-task-${runId}`,
@@ -541,12 +680,6 @@ async function main(): Promise<void> {
         createdAt,
       },
     });
-  } else {
-    console.log(`[tiny-agent] Waiting for user message on channel: ${channel}`);
-    const firstMessage = await waitForFirstMessage(imTransport, environment, channel);
-    task = firstMessage.task;
-    imCursor = firstMessage.cursor;
-    console.log(`[tiny-agent] Received task: ${task}`);
   }
 
   // --- IM → Environment bridge: poll inbox for new user messages ---
@@ -579,6 +712,8 @@ async function main(): Promise<void> {
     reviewer,
     terminal: createCliTerminalPort(),
     stashFiles: createCliStashFilePort(baseDir),
+    contextWindow: createCliContextWindowPort(promptBuilder),
+    session: createCliRunSessionPort(new RunSessionStore(runDir)),
     prompt: {
       buildMessages(task: string, history: HistoryItem[]): V4ChatMessage[] {
         const entries = convertHistoryItems(history);
@@ -596,23 +731,18 @@ async function main(): Promise<void> {
     listActiveSkillRuns: () => skillRunStore.listActive(),
   };
 
-  // --- Create initial state ---
-  const initialState = AgentRunState.create({
-    runId,
-    task,
-    cwd: process.cwd(),
-    maxSteps,
-    transcriptPath,
-  });
-
   // --- Create transcript store and orchestrator ---
-  const orchestrator = new RunOrchestrator(initialState, transcript, ports);
+  const orchestrator = new RunOrchestrator(
+    initialState,
+    transcript,
+    ports,
+    initialHistory,
+  );
 
   // --- Run ---
-  console.log(`[tiny-agent] Run ${runId} started`);
+  console.log(`[tiny-agent] Run ${runId} ${resumeRunId ? "resumed" : "started"}`);
   console.log(`[tiny-agent] Task: ${task}`);
   console.log(`[tiny-agent] Model: ${modelName} @ ${baseUrl}`);
-  console.log(`[tiny-agent] Max steps: ${maxSteps}`);
   console.log();
 
   try {

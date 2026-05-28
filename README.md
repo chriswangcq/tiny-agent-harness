@@ -89,7 +89,8 @@ tiny-agent ui --channel default
 - **PTY action tool catalog**：模型通过 `bash` 操作 PTY；所有 PTY 输入都走 `write_text` 或 `key`，所有 `write_text` 都由 runtime 用保护性 pacing 写入 PTY。普通文本 heredoc 不需要额外 payload 协议；`stash_file` 保留给明确需要 staged bytes 的场景。
 - **Managed PTY runtime**：基于 `node-pty` 管理长期 session，支持 `status`、`poll`、`write_text`、`key`、`interrupt`、`terminate`、`restart`，并用 prompt markers 维护 terminal facts 和 `inputSeq`。
 - **长任务不会被误杀**：timeout 只释放 agent focus，不 kill 进程。Agent 后续可以 poll 新输出、发送交互输入、中断或重启 session。
-- **可恢复 run artifacts**：每个 run 产出 `state.json` 和 `transcript.jsonl`；每个 session 有独立 log。审阅、debug、TUI、resume、eval 都可以围绕这些 artifact 展开。
+- **可恢复 run artifacts**：每个 run 产出 `state.json`、`transcript.jsonl` 和 `session.json`；每个 PTY session 有独立 log。`tiny-agent resume <runId|latest>` 会恢复 agent-loop history 并创建新的 PTY process tree。
+- **agent-loop context compaction**：上下文窗口只压缩 agent-loop history，system prompt/tool contract 不参与压缩。默认在 history prompt 约 700k token 时写入 `history_compacted` 事件并保留最近尾部。
 - **`io_wait` 是一等决策**：等待用户消息或外部事件不是 `sleep`，而是 run state machine 中可记录、可恢复、可回放的 `waiting_for_io` 状态。
 - **Environment 的 one-shot event 和 persistent fact 分层**：新事件只消费一次；active skill run 这类仍然成立的事实会持续提醒，直到状态关闭。
 - **Skill CLI 有生命周期闭环**：skill 可发现、可执行、可保持 active、可 close；agent 可以按需把 skill run 转入 review pending，复盘后把 lessons 追加到 skill 附件。
@@ -100,7 +101,7 @@ tiny-agent ui --channel default
 
 ## 潜力与演进方向
 
-- **可恢复 agent runtime**：现有 `state.json`、`transcript.jsonl`、session log 已经具备 resume/replay 的基础，后续可以实现 run 级恢复、断点继续和失败复盘。
+- **可恢复 agent runtime**：`state.json`、`transcript.jsonl`、`session.json` 和 session log 已经构成 run 级恢复基础；resume 会恢复 run state 与 agent-loop context，但不会假装旧 PTY 进程仍然存在。
 - **可审计的自动化执行层**：PTY 动作和受限文件暂存都进入 request + review + observation 链路，实际 workspace 写入仍通过 bash 内 CLI 完成，天然适合接人工审批、权限策略、危险命令拦截和企业审计。
 - **CLI 生态的 agent OS 雏形**：只要能力能做成 CLI，就能被 agent 使用，同时仍共享同一套 session、日志、审核和 TUI 观察机制。
 - **技能系统可自我进化**：skill run 的 active/review/lessons 流程为经验沉淀留了位置。agent 可以根据 skill 执行结果判断是否复盘，把成功/失败模式沉淀进 skill 附件，未来再汇总为 skill 级别的改进。

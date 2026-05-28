@@ -44,7 +44,6 @@ describe("TranscriptStore", () => {
       runId: "run-001",
       task: "test task",
       cwd: "/repo",
-      maxSteps: 10,
       timestamp: "2026-05-25T12:00:00.000Z",
     };
     const second: RunEvent = {
@@ -75,7 +74,6 @@ describe("TranscriptStore", () => {
       createdAt: "2026-05-25T12:00:00.000Z",
       updatedAt: "2026-05-25T12:00:01.000Z",
       stepIndex: 1,
-      maxSteps: 10,
       transcriptPath: store.transcriptFilePath,
     };
 

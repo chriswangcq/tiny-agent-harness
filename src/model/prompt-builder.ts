@@ -72,7 +72,14 @@ export class PromptBuilder {
   buildNextPrompt(_task: string, history: HistoryEntry[]): { messages: V4ChatMessage[] } {
     const messages: V4ChatMessage[] = [
       { role: "system", content: SYSTEM_MESSAGE },
+      ...this.buildHistoryMessages(history),
     ];
+
+    return { messages };
+  }
+
+  buildHistoryMessages(history: HistoryEntry[]): V4ChatMessage[] {
+    const messages: V4ChatMessage[] = [];
 
     for (const entry of history) {
       if (entry.role === "assistant_tool_call") {
@@ -104,7 +111,7 @@ export class PromptBuilder {
       }
     }
 
-    return { messages };
+    return messages;
   }
 }
 

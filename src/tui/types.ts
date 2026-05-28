@@ -22,7 +22,6 @@ export type RunHeaderView = {
   runId: string;
   status: AgentRunStatus;
   stepIndex: number;
-  maxSteps: number;
   cwd: string;
   model?: string;
   startedAt?: string;
