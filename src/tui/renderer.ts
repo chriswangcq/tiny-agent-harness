@@ -51,6 +51,8 @@ export class BlessedRenderer implements TuiRenderer {
       title: "tiny-agent TUI",
     });
 
+    this.enableModifiedKeyReporting();
+
     this.headerBox = blessed.box({
       top: 0,
       left: 0,
@@ -244,6 +246,7 @@ export class BlessedRenderer implements TuiRenderer {
   }
 
   close(): void {
+    this.disableModifiedKeyReporting();
     this.screen.destroy();
   }
 
@@ -313,6 +316,20 @@ export class BlessedRenderer implements TuiRenderer {
   }
 
   // ─── Key Handling ─────────────────────────────────────────────────
+
+  private enableModifiedKeyReporting(): void {
+    // Ask xterm-compatible terminals to report modified "other" keys.
+    // Without this, many terminals send Shift+Enter as plain Enter.
+    this.screen.program.setResources("4", "2");
+  }
+
+  private disableModifiedKeyReporting(): void {
+    (
+      this.screen.program as unknown as {
+        disableModifiers: (param: string) => boolean;
+      }
+    ).disableModifiers("4");
+  }
 
   private setupKeys(): void {
     this.screen.program.on("data", (data: Buffer | string) => {
