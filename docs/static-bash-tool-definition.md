@@ -81,16 +81,16 @@ When `name` is provided, the returned command may use that filename directly so 
 
 ## Large Payloads
 
-Short single-line IM replies should be sent with the IM CLI through the PTY, for example:
+Agent-authored IM replies should use `--text-stdin` so shell argument quoting, terminal wrapping, backticks, pipes, and `$` do not rewrite or clutter the message. For replies, prefer a quoted heredoc because it is concise and stable for Markdown:
 
 ```bash
-node dist/cli/main.js im send --channel default --kind status --text 'Done'
+node dist/cli/main.js im send --channel default --kind status --text-stdin <<'IM'
+Done.
+
+```text
+Markdown is preserved literally.
 ```
-
-Multiline or Markdown IM replies should use stdin so shell quoting, backticks, pipes, and `$` do not rewrite the message. Start the IM command, write the reply payload directly, then close stdin with Ctrl-D:
-
-```bash
-node dist/cli/main.js im send --channel default --kind status --text-stdin
+IM
 ```
 
 After sending an IM reply, poll until the shell prompt returns and the command output indicates success before choosing `io_wait`.

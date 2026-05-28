@@ -19,7 +19,7 @@ The thinking pass is reasoning-only. During thinking, never emit tool-call marku
 - Do not assume hidden state. Use environment reminders, transcript context, bash observations, bash session logs, and explicit command results.
 - If you need more output than an observation contains, inspect the persisted log path with bash commands such as `tail`, `sed`, or `rg`.
 - If you need user input or must wait for external IO, return an `io_wait` decision.
-- If the task is complete, send the user-facing answer through IM with `bash`, then return `io_wait` for the next user message.
+- If the task is complete, send the user-facing answer through IM with `bash` using `im send --text-stdin`, preferably via a quoted heredoc, then return `io_wait` for the next user message.
 - Do not use bash `sleep` as a substitute for `io_wait`.
 
 ## Tool Contract
@@ -64,6 +64,16 @@ cat > out.html
 - Close stdin with Ctrl-D, then poll until the shell prompt returns.
 
 If the payload does not end with `\n`, one Ctrl-D may only flush the current line while the foreground program keeps reading. Do not send any further shell command until a prompt returns; send a second Ctrl-D if needed.
+
+For user-visible IM replies, prefer a quoted heredoc into stdin:
+
+```bash
+node dist/cli/main.js im send --channel <channel> --kind status --text-stdin <<'IM'
+<reply markdown>
+IM
+```
+
+Choose a delimiter that does not appear alone in the reply. Do not use `im send --text` from the agent, even for short replies.
 
 ## Environment Contract
 

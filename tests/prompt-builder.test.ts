@@ -18,13 +18,18 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).not.toContain(["rece", "iver"].join(""));
     expect(prompt.messages[0]!.content).toContain("im send --channel");
     expect(prompt.messages[0]!.content).toContain("--text-stdin");
+    expect(prompt.messages[0]!.content).toContain("quoted heredoc");
+    expect(prompt.messages[0]!.content).toContain("<<'IM'");
+    expect(prompt.messages[0]!.content).toContain("Do not use `im send --text`");
     expect(prompt.messages[0]!.content).toContain("Large write_text payloads are allowed");
     expect(prompt.messages[0]!.content).toContain("stash_file");
     expect(prompt.messages[0]!.content).toContain("file materialize");
     expect(prompt.messages[0]!.content).toContain("small fixed snippets");
     expect(prompt.messages[0]!.content).not.toContain("<<'EOF'");
     expect(prompt.messages[0]!.content).toContain("cat > path");
-    expect(prompt.messages[0]!.content).toContain("foreground stdin consumer");
+    expect(prompt.messages[0]!.content).toContain(
+      "interactive foreground stdin programs",
+    );
     expect(prompt.messages[0]!.content).toContain("one ctrl-d may only flush the current line");
     expect(prompt.messages[0]!.content).toContain("do not send any further shell command until a prompt returns");
     expect(prompt.messages[0]!.content).toContain("terminal.inputSeq");

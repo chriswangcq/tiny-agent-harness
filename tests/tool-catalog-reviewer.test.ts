@@ -29,6 +29,9 @@ describe("static tool catalog", () => {
     expect(BASH_TOOL_DEFINITION.description).toContain("pure PTY interface");
     expect(BASH_TOOL_DEFINITION.description).toContain("Large write_text payloads are allowed");
     expect(BASH_TOOL_DEFINITION.description).toContain("--text-stdin");
+    expect(BASH_TOOL_DEFINITION.description).toContain("quoted heredoc");
+    expect(BASH_TOOL_DEFINITION.description).toContain("<<'IM'");
+    expect(BASH_TOOL_DEFINITION.description).toContain("Do not use `im send --text`");
     expect(BASH_TOOL_DEFINITION.description).toContain("small fixed snippets");
     expect(BASH_TOOL_DEFINITION.description).toContain("stash_file");
     expect(BASH_TOOL_DEFINITION.description).toContain("file materialize");

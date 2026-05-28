@@ -168,6 +168,14 @@ function validatePtyTextPayload(
     return undefined;
   }
 
+  if (usesImSendTextArgument(action.text)) {
+    return (
+      "Invalid bash tool arguments: agent IM replies must use " +
+      "`node dist/cli/main.js im send --channel <channel> --kind status --text-stdin`, preferably with a quoted heredoc. " +
+      "Do not use `im send --text` from the agent."
+    );
+  }
+
   const heredoc = estimateLargestHeredocPayload(action.text);
   if (heredoc === undefined) {
     return undefined;
@@ -175,6 +183,9 @@ function validatePtyTextPayload(
 
   const maxBytes =
     options.maxHeredocPayloadBytes ?? DEFAULT_MAX_HEREDOC_PAYLOAD_BYTES;
+  if (usesImSendTextStdin(action.text)) {
+    return undefined;
+  }
   if (heredoc.payloadBytes <= maxBytes) {
     return undefined;
   }
@@ -185,6 +196,27 @@ function validatePtyTextPayload(
     "Use stash_file for generated files or large multiline payloads, then run " +
     "`node dist/cli/main.js file materialize <stashId> <target-path>` through bash."
   );
+}
+
+function usesImSendTextArgument(text: string): boolean {
+  if (!usesImSend(text)) {
+    return false;
+  }
+  if (usesImSendTextStdin(text)) {
+    return false;
+  }
+  return /(?:^|\s)--text(?:=|\s|$)/u.test(text);
+}
+
+function usesImSendTextStdin(text: string): boolean {
+  return usesImSend(text) && /(?:^|\s)--text-stdin(?:\s|$)/u.test(text);
+}
+
+function usesImSend(text: string): boolean {
+  if (!/(?:^|[\s;&|])(?:node\s+\S+\s+)?im\s+send(?:\s|$)/u.test(text)) {
+    return false;
+  }
+  return true;
 }
 
 function estimateLargestHeredocPayload(

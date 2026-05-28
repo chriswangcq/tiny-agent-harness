@@ -118,6 +118,42 @@ describe("ToolCallValidator PTY actions", () => {
     expect(result.status).toBe("valid");
   });
 
+  it("allows large quoted heredocs for im send text-stdin replies", () => {
+    const result = new ToolCallValidator().validate(
+      makeCall({
+        arguments: {
+          kind: "write_text",
+          expectedInputSeq: 1,
+          text:
+            "node dist/cli/main.js im send --channel default --kind status --text-stdin <<'IM'\n" +
+            `${"x".repeat(8192)}\n` +
+            "IM\n",
+        },
+      }),
+    );
+
+    expect(result.status).toBe("valid");
+  });
+
+  it("rejects agent im send --text replies and points to text-stdin", () => {
+    const result = new ToolCallValidator().validate(
+      makeCall({
+        arguments: {
+          kind: "write_text",
+          expectedInputSeq: 1,
+          text:
+            "node dist/cli/main.js im send --channel default --kind status --text 'hello'\n",
+        },
+      }),
+    );
+
+    expect(result.status).toBe("invalid");
+    if (result.status === "invalid") {
+      expect(result.observation.message).toContain("--text-stdin");
+      expect(result.observation.message).toContain("quoted heredoc");
+    }
+  });
+
   it("rejects stale input sequences when terminal context is injected", () => {
     const result = new ToolCallValidator({ terminal: terminal(2) }).validate(
       makeCall({

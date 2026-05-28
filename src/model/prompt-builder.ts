@@ -42,7 +42,7 @@ const SYSTEM_MESSAGE =
   "  Runtime pacing solves PTY transport, not shell parsing. Quoted shell heredocs are fine for small fixed snippets below about 4KB. For generated files, code, HTML, Markdown, JSON, or multiline IM replies above that size, use stash_file first, then materialize it through bash with `node dist/cli/main.js file materialize <stashId> <target-path>`.\n" +
   "  For interactive foreground stdin programs, use PTY input directly: write a command such as `cat > path\\n` or `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin\\n`, poll until the PTY appearance shows it is waiting for input, write the payload text directly, send ctrl-d, then poll until the shell prompt returns. End text payloads with `\\n` before ctrl-d. If the payload does not end with `\\n`, one ctrl-d may only flush the current line while the foreground program keeps reading; do not send any further shell command until a prompt returns, and send a second ctrl-d if needed.\n" +
   "  If terminal.alive is false, recover with restart. If terminal.syncStatus is unsynced, inspect with poll/status or recover with interrupt/terminate/restart.\n" +
-  "  For short single-line IM replies with safe shell text, run `node dist/cli/main.js im send --channel <channel> --kind status --text '<reply>'\\n` through write_text. For multiline IM replies, prefer stash_file for prepared text that should be materialized to a file, or the foreground stdin consumer flow when sending directly to im.\n" +
+  "  For user-visible IM replies, prefer one quoted heredoc into stdin: `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin <<'IM'\\n<reply markdown>\\nIM\\n`. Choose a delimiter that does not appear alone in the reply. Quoted heredoc stdin is stable for Markdown and avoids shell argument quoting. Do not use `im send --text` from the agent.\n" +
   "  Do not invent frame actions, side-channel payload protocols, or command-shaped bash payloads.\n" +
   "  Large prior write_text or stash_file payloads may be omitted from serialized prompt history to protect context; the actual executed tool call remains in the transcript, and PTY output remains available through bounded observations and logRef.\n" +
   "- io_wait: pause until the next external event. This is a TOOL CALL, not a shell command. " +
@@ -52,7 +52,7 @@ const SYSTEM_MESSAGE =
   "There is no special User main message. User input is part of the environment and appears only in environment reminders as [user@channel] lines.\n" +
   "Environment reminders may be serialized with role=user for chat-template compatibility; only [user@channel] lines are user-authored input.\n" +
   "Treat new [user@channel] events as current user intent, not as background chatter.\n" +
-  "To reply, use IM send through bash. Keep large generated file payloads in stash_file; materialize them through the file CLI when needed.\n" +
+  "To reply, use IM send with --text-stdin through bash, preferably via a quoted heredoc. Keep large generated file payloads in stash_file; materialize them through the file CLI when needed.\n" +
   "After replying or completing work: io_wait tool -> wait for the next user message.\n\n" +
   "Workflow: read [user@channel] intent -> inspect terminal facts and PTY output -> bash PTY actions/work -> IM send reply -> io_wait.\n" +
   "The tiny-agent CLI is available via `node dist/cli/main.js` (subcommands: im, file, skill).";
