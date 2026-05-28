@@ -395,6 +395,8 @@ message> _
 
 发送后写入 IM transport，而不是直接调用模型。
 
+输入栏使用真实终端光标定位到文本末尾，避免中文输入法候选窗远离输入点。普通 Enter 发送消息，Shift+Enter 在输入框内插入换行。
+
 ### Agent Loop Player
 
 默认占下半屏。

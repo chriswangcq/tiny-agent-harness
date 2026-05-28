@@ -17,6 +17,10 @@ import type {
   RunHeaderView,
 } from "./types.js";
 import { TuiInteractionState } from "./interaction-state.js";
+import wcwidth from "wcwidth";
+
+const INPUT_BAR_HEIGHT = 5;
+const INPUT_INNER_ROWS = INPUT_BAR_HEIGHT - 2;
 
 export class BlessedRenderer implements TuiRenderer {
   private screen: blessed.Widgets.Screen;
@@ -37,6 +41,7 @@ export class BlessedRenderer implements TuiRenderer {
   private keyHandler?: (key: TuiKey) => void;
   private messageHandler?: (text: string) => void;
   private inputBuffer = "";
+  private inputCursor = { row: 0, col: 0 };
 
   constructor() {
     this.screen = blessed.screen({
@@ -94,7 +99,7 @@ export class BlessedRenderer implements TuiRenderer {
       top: "50%",
       left: 0,
       width: "100%",
-      height: "50%-3",
+      height: `50%-${INPUT_BAR_HEIGHT}`,
       border: { type: "line" },
       label: " Agent Loop ",
       scrollable: true,
@@ -113,7 +118,7 @@ export class BlessedRenderer implements TuiRenderer {
       top: "50%",
       left: "60%",
       width: "40%",
-      height: "50%-3",
+      height: `50%-${INPUT_BAR_HEIGHT}`,
       border: { type: "line" },
       label: " Loop Detail ",
       scrollable: true,
@@ -140,6 +145,7 @@ export class BlessedRenderer implements TuiRenderer {
         "",
         "{bold}Input mode{/bold} (default):",
         "  Type to compose, Enter to send",
+        "  Shift+Enter insert newline",
         "  Escape      switch to browse mode",
         "",
         "{bold}Browse mode{/bold}:",
@@ -160,9 +166,9 @@ export class BlessedRenderer implements TuiRenderer {
       bottom: 0,
       left: 0,
       width: "100%",
-      height: 3,
+      height: INPUT_BAR_HEIGHT,
       border: { type: "line" },
-      label: " [INPUT] message> (Enter=send, Esc=browse) ",
+      label: " [INPUT] message> (Enter=send, Shift+Enter=newline, Esc=browse) ",
       tags: false,
       style: {
         fg: "white",
@@ -225,7 +231,7 @@ export class BlessedRenderer implements TuiRenderer {
       this.loopList.setScrollPerc(100);
     }
 
-    this.screen.render();
+    this.renderScreen();
   }
 
   onKey(handler: (key: TuiKey) => void): void {
@@ -251,18 +257,58 @@ export class BlessedRenderer implements TuiRenderer {
   // ─── Input Bar ────────────────────────────────────────────────────
 
   private refreshInputBar(): void {
-    const cursor = this.ui.mode === "input" ? "█" : "";
-    this.inputBar.setContent(this.inputBuffer + cursor);
-    this.screen.render();
+    this.updateInputBarContent();
+    this.renderScreen();
   }
 
   private submitInput(): void {
-    const text = this.inputBuffer.trim();
+    const text = this.inputBuffer.trimEnd();
     this.inputBuffer = "";
     this.refreshInputBar();
-    if (text) {
+    if (text.trim()) {
       this.messageHandler?.(text);
     }
+  }
+
+  private insertInputNewline(): void {
+    this.inputBuffer += "\n";
+    this.refreshInputBar();
+  }
+
+  private updateInputBarContent(): void {
+    const input = renderInputBufferForBox(
+      this.inputBuffer,
+      this.inputContentWidth(),
+      INPUT_INNER_ROWS,
+    );
+    this.inputCursor = {
+      row: this.inputContentTop() + input.cursorLine,
+      col: 1 + input.cursorCol,
+    };
+    this.inputBar.setContent(input.content);
+  }
+
+  private inputContentWidth(): number {
+    return Math.max(1, this.screen.cols - 2);
+  }
+
+  private inputContentTop(): number {
+    return Math.max(1, this.screen.rows - INPUT_BAR_HEIGHT + 1);
+  }
+
+  private renderScreen(): void {
+    this.updateInputBarContent();
+    this.screen.render();
+    this.updateTerminalCursor();
+  }
+
+  private updateTerminalCursor(): void {
+    if (this.ui.mode !== "input") {
+      this.screen.program.hideCursor();
+      return;
+    }
+    this.screen.program.cup(this.inputCursor.row, this.inputCursor.col);
+    this.screen.program.showCursor();
   }
 
   // ─── Key Handling ─────────────────────────────────────────────────
@@ -280,7 +326,7 @@ export class BlessedRenderer implements TuiRenderer {
         // Help overlay: Esc closes it from any mode
         if (key.name === "escape" && !this.helpBox.hidden) {
           this.helpBox.hide();
-          this.screen.render();
+          this.renderScreen();
           return;
         }
 
@@ -297,6 +343,10 @@ export class BlessedRenderer implements TuiRenderer {
     ch: string,
     key: blessed.Widgets.Events.IKeyEventArg,
   ): void {
+    if (this.isShiftEnter(key)) {
+      this.insertInputNewline();
+      return;
+    }
     if (key.name === "return" || key.name === "enter") {
       this.submitInput();
       return;
@@ -382,12 +432,12 @@ export class BlessedRenderer implements TuiRenderer {
       case "down":
         if (this.ui.pane === "detail") {
           this.loopDetailBox.scroll(1);
-          this.screen.render();
+          this.renderScreen();
           return;
         }
         if (this.ui.pane === "conversationDetail") {
           this.conversationDetailBox.scroll(1);
-          this.screen.render();
+          this.renderScreen();
           return;
         }
         this.ui.moveSelection(frames, 1, conversation);
@@ -397,12 +447,12 @@ export class BlessedRenderer implements TuiRenderer {
       case "up":
         if (this.ui.pane === "detail") {
           this.loopDetailBox.scroll(-1);
-          this.screen.render();
+          this.renderScreen();
           return;
         }
         if (this.ui.pane === "conversationDetail") {
           this.conversationDetailBox.scroll(-1);
-          this.screen.render();
+          this.renderScreen();
           return;
         }
         this.ui.moveSelection(frames, -1, conversation);
@@ -411,7 +461,7 @@ export class BlessedRenderer implements TuiRenderer {
       case "g":
         if (this.ui.pane === "detail" || this.ui.pane === "conversationDetail") {
           activeList.setScrollPerc(key.shift ? 100 : 0);
-          this.screen.render();
+          this.renderScreen();
           return;
         }
         if (!key.shift) {
@@ -452,7 +502,7 @@ export class BlessedRenderer implements TuiRenderer {
 
     if (key.sequence === "?") {
       this.helpBox.toggle();
-      this.screen.render();
+      this.renderScreen();
     }
   }
 
@@ -553,7 +603,7 @@ export class BlessedRenderer implements TuiRenderer {
     if (this.lastView) {
       this.render(this.lastView);
     } else {
-      this.screen.render();
+      this.renderScreen();
     }
   }
 
@@ -722,7 +772,9 @@ export class BlessedRenderer implements TuiRenderer {
       loopBorder.fg = "gray";
       detailBorder.fg = "gray";
       inputBorder.fg = "cyan";
-      this.inputBar.setLabel(" [INPUT] message> (Enter=send, Esc=browse) ");
+      this.inputBar.setLabel(
+        " [INPUT] message> (Enter=send, Shift+Enter=newline, Esc=browse) ",
+      );
     } else {
       convBorder.fg = this.ui.pane === "conversation" ? "white" : "gray";
       convDetailBorder.fg =
@@ -733,4 +785,81 @@ export class BlessedRenderer implements TuiRenderer {
       this.inputBar.setLabel(" message> (i=input, Tab=switch, ?=help) ");
     }
   }
+
+  private isShiftEnter(key: blessed.Widgets.Events.IKeyEventArg): boolean {
+    return isShiftEnterKey(key);
+  }
+}
+
+export type RenderedInputBuffer = {
+  content: string;
+  cursorLine: number;
+  cursorCol: number;
+};
+
+export function isShiftEnterKey(
+  key: Pick<blessed.Widgets.Events.IKeyEventArg, "name" | "shift">,
+): boolean {
+  return (
+    key.shift === true &&
+    (key.name === "return" || key.name === "enter" || key.name === "linefeed")
+  );
+}
+
+type DisplayLine = {
+  text: string;
+  width: number;
+};
+
+export function renderInputBufferForBox(
+  input: string,
+  innerWidth: number,
+  rows: number,
+): RenderedInputBuffer {
+  const safeRows = Math.max(1, rows);
+  const safeWidth = Math.max(1, innerWidth);
+  const contentWidth = Math.max(1, safeWidth - 1);
+  const lines = wrapInputLines(input, contentWidth);
+  const visibleStart = Math.max(0, lines.length - safeRows);
+  const visible = lines.slice(visibleStart);
+  const cursorLine = Math.max(0, lines.length - 1 - visibleStart);
+  const cursorCol = Math.min(lines.at(-1)?.width ?? 0, safeWidth - 1);
+
+  return {
+    content: visible.map((line) => line.text).join("\n"),
+    cursorLine,
+    cursorCol,
+  };
+}
+
+function wrapInputLines(input: string, width: number): DisplayLine[] {
+  const lines: DisplayLine[] = [];
+  let text = "";
+  let currentWidth = 0;
+
+  for (const ch of Array.from(input)) {
+    if (ch === "\n") {
+      lines.push({ text, width: currentWidth });
+      text = "";
+      currentWidth = 0;
+      continue;
+    }
+
+    const nextWidth = charWidth(ch);
+    if (currentWidth > 0 && currentWidth + nextWidth > width) {
+      lines.push({ text, width: currentWidth });
+      text = "";
+      currentWidth = 0;
+    }
+
+    text += ch;
+    currentWidth = Math.min(width, currentWidth + nextWidth);
+  }
+
+  lines.push({ text, width: currentWidth });
+  return lines;
+}
+
+function charWidth(ch: string): number {
+  return Math.max(0, wcwidth(ch));
 }
