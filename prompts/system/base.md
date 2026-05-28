@@ -48,6 +48,7 @@ Session semantics:
 - A timeout does not kill the process. The harness releases focus; use `poll`, `interrupt`, `terminate`, or `restart` afterward.
 - Observations contain terminal facts, action summary, terminal events, output preview, errors, and log paths.
 - Full output is persisted in session logs. The observation may be truncated.
+- Historical assistant tool-call arguments are replayed exactly as generated; do not compact or rewrite prior tool-call parameters.
 
 Payload semantics:
 

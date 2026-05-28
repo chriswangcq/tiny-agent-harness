@@ -56,7 +56,7 @@ Important semantics:
 - Quoted shell heredocs are acceptable for small fixed snippets below about 4KB. Generated files, code, HTML, Markdown, JSON, or multiline replies above that size should use `stash_file`, followed by `node dist/cli/main.js file materialize <stashId> <target-path>` through bash.
 - After any multiline stdin flow, keep polling until the shell prompt returns. A `lastContinuationPrompt` fact means the shell recently reported a continuation prompt.
 - Observations are bounded summaries: full PTY output stays in the session log and observations carry previews, `eventCount`, `eventsOmitted`, and `logRef`.
-- Serialized prompt history may omit large prior `write_text.text` or `stash_file.content` payloads to protect context. The raw executed tool call is still preserved in transcript/state; only the next model prompt is compacted.
+- Serialized assistant tool-call history replays historical tool-call arguments exactly as generated, including large `write_text.text` and `stash_file.content` fields. PTY observations remain bounded summaries; use `eventCount`, `eventsOmitted`, `outputPreview`, and `logRef` to understand when more terminal output exists.
 
 ## Stash File Schema
 

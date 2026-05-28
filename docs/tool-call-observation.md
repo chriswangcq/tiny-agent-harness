@@ -107,7 +107,7 @@ type PtyObservation = {
 };
 ```
 
-`PtyObservation` is a bounded summary for the next model prompt, not the full PTY log. `events` and `outputPreview` are capped; full output stays in the session log, and the summary uses `eventCount`, `eventsOmitted`, and `logRef` to show when more output exists. Serialized assistant tool-call history uses the same principle for large prior `write_text.text` and `stash_file.content` payloads: it preserves the field shape but omits oversized text from the next prompt, while the raw executed tool call remains in transcript/state.
+`PtyObservation` is a bounded summary for the next model prompt, not the full PTY log. `events` and `outputPreview` are capped; full output stays in the session log, and the summary uses `eventCount`, `eventsOmitted`, and `logRef` to show when more output exists. Serialized assistant tool-call history is different: historical assistant tool-call arguments are replayed exactly as generated, including large `write_text.text` and `stash_file.content` fields.
 
 After `write_text` or `key` input, the managed runtime waits briefly before reading the PTY and building this observation. The delay is intentionally small: it captures immediate terminal echo and fast command output without turning every action into a long wait. Longer-running commands still require `poll` or `io_wait`.
 

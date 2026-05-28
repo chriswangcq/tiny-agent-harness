@@ -44,7 +44,7 @@ const SYSTEM_MESSAGE =
   "  If terminal.alive is false, recover with restart. If terminal.syncStatus is unsynced, inspect with poll/status or recover with interrupt/terminate/restart.\n" +
   "  For user-visible IM replies, use standard shell stdin forms with `--text-stdin`. If the reply already exists in a file, prefer input redirection: `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin < reply.md`; file contents are not shell-parsed. For inline Markdown, prefer one quoted heredoc into stdin: `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin <<'IM'\\n<reply markdown>\\nIM\\n`. Choose a delimiter that does not appear alone in the reply. Quoted heredoc stdin is stable for Markdown and avoids shell argument quoting. Other standard stdin forms exist, such as `producer | cmd`, `cmd < <(producer)`, and bash/zsh here-string `cmd <<< \"$text\"`; use them only when they make the command simpler. Do not use `im send --text` from the agent.\n" +
   "  Do not invent frame actions, side-channel payload protocols, or command-shaped bash payloads.\n" +
-  "  Large prior write_text or stash_file payloads may be omitted from serialized prompt history to protect context; the actual executed tool call remains in the transcript, and PTY output remains available through bounded observations and logRef.\n" +
+  "  Historical assistant tool-call arguments are serialized exactly as generated. PTY observations remain bounded summaries; use eventCount, eventsOmitted, outputPreview, and logRef to understand when more terminal output exists.\n" +
   "- io_wait: pause until the next external event. This is a TOOL CALL, not a shell command. " +
   "Never run io_wait via bash; invoke it directly as a tool.\n\n" +
   "Thinking is reasoning-only. During thinking, do not emit tool-call markup, raw tool arguments, shell heredocs, or final user-facing prose. Describe the intended next action in words only.\n\n" +
@@ -85,7 +85,7 @@ export class PromptBuilder {
               type: "function",
               function: {
                 name: entry.name,
-                arguments: JSON.stringify(compactToolCallArguments(entry.arguments)),
+                arguments: JSON.stringify(entry.arguments),
               },
             },
           ],
@@ -116,58 +116,4 @@ export function wrapReminderAsUserContent(content: string): string {
     "",
     content,
   ].join("\n");
-}
-
-function compactToolCallArguments(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => compactToolCallArguments(item));
-  }
-
-  if (!isRecord(value)) {
-    return value;
-  }
-
-  const result: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value)) {
-    if (
-      key === "text" &&
-      value.kind === "write_text" &&
-      typeof child === "string" &&
-      shouldOmitWriteTextFromPrompt(child)
-    ) {
-      result[key] = `[omitted write_text payload ${utf8Bytes(child)} bytes from prompt history]`;
-      continue;
-    }
-    if (
-      key === "content" &&
-      typeof child === "string" &&
-      shouldOmitStashFileContentFromPrompt(child)
-    ) {
-      result[key] = `[omitted stash_file content ${utf8Bytes(child)} bytes from prompt history]`;
-      continue;
-    }
-    result[key] = compactToolCallArguments(child);
-  }
-  return result;
-}
-
-function shouldOmitWriteTextFromPrompt(text: string): boolean {
-  if (text.length > 512) {
-    return true;
-  }
-
-  const line = text.trim();
-  return line.length >= 128 && line.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/u.test(line);
-}
-
-function shouldOmitStashFileContentFromPrompt(content: string): boolean {
-  return utf8Bytes(content) > 512;
-}
-
-function utf8Bytes(value: string): number {
-  return Buffer.byteLength(value, "utf8");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

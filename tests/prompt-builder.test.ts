@@ -204,7 +204,7 @@ describe("PromptBuilder", () => {
     );
   });
 
-  it("keeps tool-call fields while omitting large write_text payloads from prompt history", () => {
+  it("preserves historical write_text tool-call arguments exactly", () => {
     const largeBase64 = `${"A".repeat(512)}\n`;
     const history: HistoryEntry[] = [
       {
@@ -228,13 +228,13 @@ describe("PromptBuilder", () => {
     expect(args).toEqual({
       kind: "write_text",
       expectedInputSeq: 5,
-      text: "[omitted write_text payload 513 bytes from prompt history]",
+      text: largeBase64,
       unexpectedFromModel: "keep-for-debugging",
     });
-    expect(fn.arguments).not.toContain(largeBase64);
+    expect(fn.arguments).not.toContain("omitted write_text payload");
   });
 
-  it("keeps stash_file fields while omitting large content from prompt history", () => {
+  it("preserves historical stash_file tool-call arguments exactly", () => {
     const content = "x".repeat(1024);
     const history: HistoryEntry[] = [
       {
@@ -256,9 +256,9 @@ describe("PromptBuilder", () => {
     const args = JSON.parse(fn.arguments as string) as Record<string, unknown>;
     expect(args).toEqual({
       name: "snake.html",
-      content: "[omitted stash_file content 1024 bytes from prompt history]",
+      content,
       encoding: "utf8",
     });
-    expect(fn.arguments).not.toContain(content);
+    expect(fn.arguments).not.toContain("omitted stash_file content");
   });
 });
