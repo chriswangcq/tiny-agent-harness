@@ -134,7 +134,7 @@ codeq hover src/run/orchestrator.ts:37:18 --json
 ## 当前核心方向
 
 - Agent ReAct loop 独立实现。
-- Agent 的交互动作收敛为 `bash` tool call，session control 也走同一个工具；生成文件可先经 `stash_file` 暂存，再由 bash 内 CLI materialize 或用 `file cat` 流式消费。
+- Agent 的交互动作收敛为 `bash` tool call，session control 也走同一个工具；普通文本生成直接走 paced heredoc/命令，`stash_file` 只作为显式 staged bytes 的可选通道。
 - 主模型层使用 DeepSeek V4 FIM two-pass：先生成 thinking，再生成 native tool-call decision。
 - 用户消息收发通过 IM CLI 处理，不把 stdin/stdout 作为核心通信边界。
 - MCP、memory、skills、sub-agent 等能力都通过 CLI 暴露，再由 bash 调用。Skills 通过 `skill` CLI 发现和执行。

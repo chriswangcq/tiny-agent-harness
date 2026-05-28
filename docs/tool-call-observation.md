@@ -60,18 +60,18 @@ Example key input:
 }
 ```
 
-Example foreground stdin write for generated files:
+Example generated text file write:
 
 ```json
 {
   "kind": "write_text",
   "session": "default",
   "expectedInputSeq": 10,
-  "text": "cat > app.html\\n"
+  "text": "cat > app.html <<'HTML'\\n<!doctype html>\\n<title>App</title>\\nHTML\\n"
 }
 ```
 
-Then poll until the PTY is waiting for input, write the payload directly, close stdin with Ctrl-D, and poll until the prompt returns. Generated text files can also use quoted heredocs; `stash_file` is only the optional staged-bytes path.
+Generated text files should use normal shell syntax, usually a quoted heredoc. The runtime protects every `write_text` with pacing, so the model should not manually chunk ordinary text. Poll until the prompt or a clear command result returns before sending the next command. `stash_file` is only the optional staged-bytes path.
 
 Example staged file write:
 
@@ -121,7 +121,7 @@ type PtyObservation = {
 
 After `write_text` or `key` input, the managed runtime waits about 100ms before reading the PTY and building this observation. The delay is intentionally small: it captures immediate terminal echo and fast command output without turning every action into a long wait. Longer-running commands still require `poll` or `io_wait`.
 
-New managed PTY sessions drain the shell initialization prompt before the first model-visible observation when it arrives within the startup window. Prompt parsing also tolerates terminal-control residue such as Ctrl-D echo/backspace before a trusted prompt marker, so returning from foreground stdin consumers is not mistaken for ordinary output.
+New managed PTY sessions drain the shell initialization prompt before the first model-visible observation when it arrives within the startup window. Prompt parsing also tolerates terminal-control residue such as Ctrl-D echo/backspace before a trusted prompt marker, so prompt return is not mistaken for ordinary output.
 
 For user-visible IM replies, a `write_text` observation without a shell prompt is not proof that the reply was sent. The agent must poll until the prompt returns and should use `im send --text-stdin`. A quoted heredoc is valid for normal text replies; input redirection and `file cat` process substitution are also valid when they make the command simpler.
 

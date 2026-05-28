@@ -53,21 +53,12 @@ Session semantics:
 
 Payload semantics:
 
-- Quoted shell heredocs are acceptable for generated textual files, code, HTML, Markdown, JSON, and multiline messages. The runtime uses protected pacing for every `write_text` input.
+- The runtime protected-paces every `write_text` input in small UTF-8 chunks. Do not manually split, throttle, or sleep to protect PTY input.
+- Use normal shell syntax. Quoted shell heredocs are the default for ordinary generated text: files, code, HTML, Markdown, JSON, and multiline IM replies.
 - Choose a heredoc delimiter that does not appear alone in the payload.
-- Avoid PTY text for binary data or very large single-line/minified payloads; use line-broken text when possible.
-- `stash_file` remains available for explicit staged bytes, but it is not required for ordinary textual heredocs.
-- For interactive foreground stdin programs, start a stdin consumer with `write_text`, for example:
-
-```bash
-cat > out.html
-```
-
-- Poll until the PTY appearance shows the foreground program is waiting for input.
-- Send the payload directly with `write_text`, ending it with `\n`.
-- Close stdin with Ctrl-D, then poll until the shell prompt returns.
-
-If the payload does not end with `\n`, one Ctrl-D may only flush the current line while the foreground program keeps reading. Do not send any further shell command until a prompt returns; send a second Ctrl-D if needed.
+- Keep text line-broken when possible. Do not send binary or opaque bytes, or giant single-line/minified blobs, through PTY text.
+- Use `stash_file` only when explicit staged bytes outside the PTY command stream are useful.
+- After any multiline command or stdin flow, poll until the shell prompt or a clear command result returns before sending the next command.
 
 For user-visible IM replies, use standard shell stdin forms with `--text-stdin`.
 
@@ -91,7 +82,7 @@ If the reply is stashed and does not need a durable file, it can be streamed dir
 node dist/cli/main.js im send --channel <channel> --kind status --text-stdin < <(node dist/cli/main.js file cat <stashId>)
 ```
 
-Other standard stdin forms exist, such as `producer | cmd`, `cmd < <(producer)`, and bash/zsh here-string `cmd <<< "$text"`; use them only when they make the command simpler. Do not use `im send --text` from the agent, even for short replies.
+Do not use `im send --text` from the agent, even for short replies.
 
 ## Environment Contract
 

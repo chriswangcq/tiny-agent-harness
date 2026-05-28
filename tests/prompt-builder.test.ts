@@ -20,12 +20,10 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("--text-stdin");
     expect(prompt.messages[0]!.content).toContain("quoted heredoc");
     expect(prompt.messages[0]!.content).toContain("<<'IM'");
-    expect(prompt.messages[0]!.content).toContain("normal text replies");
+    expect(prompt.messages[0]!.content).toContain("normal form");
     expect(prompt.messages[0]!.content).toContain("< reply.md");
     expect(prompt.messages[0]!.content).toContain("protected-paced");
-    expect(prompt.messages[0]!.content).toContain("producer | cmd");
-    expect(prompt.messages[0]!.content).toContain("cmd < <(producer)");
-    expect(prompt.messages[0]!.content).toContain('cmd <<< "$text"');
+    expect(prompt.messages[0]!.content).toContain("Do not manually split");
     expect(prompt.messages[0]!.content).toContain("Do not use `im send --text`");
     expect(prompt.messages[0]!.content).toContain("All write_text input");
     expect(prompt.messages[0]!.content).toContain("stash_file");
@@ -33,12 +31,12 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("file cat");
     expect(prompt.messages[0]!.content).toContain("ordinary textual heredocs");
     expect(prompt.messages[0]!.content).not.toContain("<<'EOF'");
-    expect(prompt.messages[0]!.content).toContain("cat > path");
-    expect(prompt.messages[0]!.content).toContain(
+    expect(prompt.messages[0]!.content).not.toContain("cat > path");
+    expect(prompt.messages[0]!.content).not.toContain(
       "interactive foreground stdin programs",
     );
-    expect(prompt.messages[0]!.content).toContain("one ctrl-d may only flush the current line");
-    expect(prompt.messages[0]!.content).toContain("do not send any further shell command until a prompt returns");
+    expect(prompt.messages[0]!.content).not.toContain("one ctrl-d may only flush the current line");
+    expect(prompt.messages[0]!.content).not.toContain("do not send any further shell command until a prompt returns");
     expect(prompt.messages[0]!.content).toContain("terminal.inputSeq");
     expect(prompt.messages[0]!.content).toContain("outputTail");
     expect(prompt.messages[0]!.content).toContain("last 2K characters");
