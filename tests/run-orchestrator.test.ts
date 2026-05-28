@@ -89,6 +89,7 @@ function makeRun(options?: {
   terminalObservation?: PtyObservation;
   activeSkillRuns?: ReturnType<RunPorts["listActiveSkillRuns"]>;
   modelProgress?: string[];
+  modelError?: unknown;
 }) {
   const runDir = path.join(makeTmpDir(), "run-001");
   const transcript = new TranscriptStore(runDir);
@@ -118,6 +119,9 @@ function makeRun(options?: {
     model: {
       async generateTurn(context, modelOptions) {
         contexts.push(context);
+        if (options?.modelError !== undefined) {
+          throw options.modelError;
+        }
         for (const [sequence, content] of (options?.modelProgress ?? []).entries()) {
           await modelOptions.onProgress?.({
             type: "thinking_delta",
@@ -272,6 +276,46 @@ async function waitForTranscriptCount(
 }
 
 describe("RunOrchestrator", () => {
+  it("marks the run failed when the model port throws after model_requested", async () => {
+    const cause = Object.assign(new Error("Connect Timeout Error"), {
+      code: "UND_ERR_CONNECT_TIMEOUT",
+    });
+    const error = new Error("fetch failed", { cause });
+    const { orchestrator, transcript } = makeRun({
+      modelError: error,
+    });
+
+    const endState = await orchestrator.run();
+
+    expect(endState.status).toBe("failed");
+    expect(endState.data.error).toMatchObject({
+      message: "fetch failed",
+      code: "MODEL_ERROR",
+      details: {
+        name: "Error",
+        cause: {
+          message: "Connect Timeout Error",
+          code: "UND_ERR_CONNECT_TIMEOUT",
+        },
+      },
+    });
+
+    const events = readTranscript(transcript);
+    expect(events.map((event) => event.type)).toEqual([
+      "run_started",
+      "model_requested",
+      "run_finished",
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      type: "run_finished",
+      status: "failed",
+      error: {
+        message: "fetch failed",
+        code: "MODEL_ERROR",
+      },
+    });
+  });
+
   it("records model thinking deltas before the final model output", async () => {
     const wait: IoWaitRequest = {
       reason: "awaiting next instruction",

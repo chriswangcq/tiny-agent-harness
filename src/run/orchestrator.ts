@@ -1,4 +1,4 @@
-import type { RunEvent } from "../types/run.js";
+import type { RunError, RunEvent } from "../types/run.js";
 import type {
   AgentThinking,
   FimStepOutput,
@@ -161,20 +161,26 @@ export class RunOrchestrator {
           timestamp: this.now(),
         });
 
-        const output = await this.ports.model.generateTurn(context, {
-          tools: this.ports.tools,
-          onProgress: async (progress) => {
-            if (progress.type === "thinking_delta") {
-              await this.record({
-                type: "model_thinking_delta",
-                stepIndex: context.stepIndex,
-                delta: progress.content,
-                sequence: progress.sequence,
-                timestamp: this.now(),
-              });
-            }
-          },
-        });
+        let output: FimStepOutput;
+        try {
+          output = await this.ports.model.generateTurn(context, {
+            tools: this.ports.tools,
+            onProgress: async (progress) => {
+              if (progress.type === "thinking_delta") {
+                await this.record({
+                  type: "model_thinking_delta",
+                  stepIndex: context.stepIndex,
+                  delta: progress.content,
+                  sequence: progress.sequence,
+                  timestamp: this.now(),
+                });
+              }
+            },
+          });
+        } catch (error) {
+          await this.failRun(error, "MODEL_ERROR");
+          break;
+        }
 
         await this.record({
           type: "model_output_received",
@@ -187,7 +193,13 @@ export class RunOrchestrator {
       }
 
       if (effect.type === "validate_tool_call") {
-        const result = this.ports.validator.validate(effect.toolCall);
+        let result: ToolCallValidation;
+        try {
+          result = this.ports.validator.validate(effect.toolCall);
+        } catch (error) {
+          await this.failRun(error, "TOOL_VALIDATION_ERROR");
+          break;
+        }
 
         await this.record({
           type: "tool_call_validated",
@@ -207,7 +219,13 @@ export class RunOrchestrator {
           timestamp: this.now(),
         });
 
-        const decision = await this.ports.reviewer.review(effect.request);
+        let decision: ToolReviewDecision;
+        try {
+          decision = await this.ports.reviewer.review(effect.request);
+        } catch (error) {
+          await this.failRun(error, "TOOL_REVIEW_ERROR");
+          break;
+        }
 
         await this.record({
           type: "tool_reviewed",
@@ -227,7 +245,13 @@ export class RunOrchestrator {
           timestamp: this.now(),
         });
 
-        const observation = await this.executeToolRequest(effect.request);
+        let observation: PtyObservation | AgentObservation;
+        try {
+          observation = await this.executeToolRequest(effect.request);
+        } catch (error) {
+          await this.failRun(error, "TOOL_EXECUTION_ERROR");
+          break;
+        }
         const toolCall =
           this.state.data.pendingToolCall ??
           (this.state.data.pendingModelTurn?.kind === "tool_call"
@@ -288,10 +312,16 @@ export class RunOrchestrator {
           timestamp: this.now(),
         });
 
-        const event = await this.ports.environment.waitFor({
-          runId: this.state.data.runId,
-          wait: effect.wait,
-        });
+        let event: EnvironmentEvent;
+        try {
+          event = await this.ports.environment.waitFor({
+            runId: this.state.data.runId,
+            wait: effect.wait,
+          });
+        } catch (error) {
+          await this.failRun(error, "IO_WAIT_ERROR");
+          break;
+        }
 
         await this.record({
           type: "io_wait_satisfied",
@@ -332,6 +362,15 @@ export class RunOrchestrator {
     return this.state;
   }
 
+  private async failRun(error: unknown, code: string): Promise<void> {
+    await this.record({
+      type: "run_finished",
+      status: "failed",
+      error: toRunError(error, code),
+      timestamp: this.now(),
+    });
+  }
+
   private async executeToolRequest(
     request: ToolRequest,
   ): Promise<PtyObservation | AgentObservation> {
@@ -356,6 +395,37 @@ function renderActiveSkillReminder(runs: ActiveSkillRunSummary[]): string {
     lines.push(line);
   }
   return lines.join("\n");
+}
+
+function toRunError(error: unknown, code: string): RunError {
+  if (error instanceof Error) {
+    return {
+      message: error.message,
+      code,
+      details: {
+        name: error.name,
+        stack: error.stack,
+        cause: serializeErrorCause((error as Error & { cause?: unknown }).cause),
+      },
+    };
+  }
+
+  return {
+    message: String(error),
+    code,
+  };
+}
+
+function serializeErrorCause(cause: unknown): unknown {
+  if (cause instanceof Error) {
+    const errorCode = (cause as Error & { code?: unknown }).code;
+    return {
+      name: cause.name,
+      message: cause.message,
+      code: typeof errorCode === "string" ? errorCode : undefined,
+    };
+  }
+  return cause;
 }
 
 function pendingImSendMessage(history: readonly HistoryItem[]): string | undefined {
