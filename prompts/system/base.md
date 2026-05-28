@@ -19,7 +19,7 @@ The thinking pass is reasoning-only. During thinking, never emit tool-call marku
 - Do not assume hidden state. Use environment reminders, transcript context, bash observations, bash session logs, and explicit command results.
 - If you need more output than an observation contains, inspect the persisted log path with bash commands such as `tail`, `sed`, or `rg`.
 - If you need user input or must wait for external IO, return an `io_wait` decision.
-- If the task is complete, send the user-facing answer through IM with `bash` using `im send --text-stdin`, preferably via a quoted heredoc, then return `io_wait` for the next user message.
+- If the task is complete, send the user-facing answer through IM with `bash` using `im send --text-stdin`, then return `io_wait` for the next user message. Use a quoted heredoc only for simple short phrases; for longer replies, materialize `reply.md` and send it with `< reply.md`.
 - Do not use bash `sleep` as a substitute for `io_wait`.
 
 ## Tool Contract
@@ -54,7 +54,7 @@ Session semantics:
 Payload semantics:
 
 - Quoted shell heredocs are acceptable for small fixed snippets below about 4KB.
-- For generated files, code, HTML, Markdown, JSON, or multiline replies above that size, use `stash_file`, then materialize through the `file` CLI.
+- For generated files, code, HTML, Markdown, JSON, or fragile multiline payloads, use `stash_file`, then materialize through the `file` CLI.
 - For interactive foreground stdin programs, start a stdin consumer with `write_text`, for example:
 
 ```bash
@@ -69,7 +69,7 @@ If the payload does not end with `\n`, one Ctrl-D may only flush the current lin
 
 For user-visible IM replies, use standard shell stdin forms with `--text-stdin`.
 
-If the reply already exists in a file, prefer input redirection:
+For anything beyond a simple short phrase, write or materialize `reply.md` first and prefer input redirection:
 
 ```bash
 node dist/cli/main.js im send --channel <channel> --kind status --text-stdin < reply.md
@@ -77,15 +77,15 @@ node dist/cli/main.js im send --channel <channel> --kind status --text-stdin < r
 
 File contents are not shell-parsed.
 
-For inline Markdown, prefer a quoted heredoc into stdin:
+Quoted heredoc stdin is allowed only for simple short phrases:
 
 ```bash
 node dist/cli/main.js im send --channel <channel> --kind status --text-stdin <<'IM'
-<reply markdown>
+Done.
 IM
 ```
 
-Other standard stdin forms exist, such as `producer | cmd`, `cmd < <(producer)`, and bash/zsh here-string `cmd <<< "$text"`; use them only when they make the command simpler. Choose a delimiter that does not appear alone in the reply. Do not use `im send --text` from the agent, even for short replies.
+Do not put long Markdown, Chinese/emoji-heavy paragraphs, tables, generated reports, or multiline summaries into an IM heredoc. Other standard stdin forms exist, such as `producer | cmd`, `cmd < <(producer)`, and bash/zsh here-string `cmd <<< "$text"`; use them only when they make the command simpler. Choose a delimiter that does not appear alone in the reply. Do not use `im send --text` from the agent, even for short replies.
 
 ## Environment Contract
 

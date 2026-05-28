@@ -116,7 +116,7 @@ After `write_text` or `key` input, the managed runtime waits about 100ms before 
 
 New managed PTY sessions drain the shell initialization prompt before the first model-visible observation when it arrives within the startup window. Prompt parsing also tolerates terminal-control residue such as Ctrl-D echo/backspace before a trusted prompt marker, so returning from foreground stdin consumers is not mistaken for ordinary output.
 
-For user-visible IM replies, a `write_text` observation without a shell prompt is not proof that the reply was sent. The agent must poll until the prompt returns and should use `im send --text-stdin` with a quoted heredoc for replies so Markdown is sent as literal stdin and shell argument quoting is avoided.
+For user-visible IM replies, a `write_text` observation without a shell prompt is not proof that the reply was sent. The agent must poll until the prompt returns and should use `im send --text-stdin`. A quoted heredoc is only for simple short phrases; longer Markdown, Chinese/emoji-heavy content, tables, generated reports, or multiline summaries should be sent from a materialized reply file with `< reply.md`.
 
 Rejected input is recoverable. The model should inspect the terminal facts and PTY output, then choose `poll`, `status`, `interrupt`, `terminate`, `restart`, or a corrected inputSeq-guarded action.
 

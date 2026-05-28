@@ -31,6 +31,8 @@ describe("static tool catalog", () => {
     expect(BASH_TOOL_DEFINITION.description).toContain("--text-stdin");
     expect(BASH_TOOL_DEFINITION.description).toContain("quoted heredoc");
     expect(BASH_TOOL_DEFINITION.description).toContain("<<'IM'");
+    expect(BASH_TOOL_DEFINITION.description).toContain("simple short phrases");
+    expect(BASH_TOOL_DEFINITION.description).toContain("< reply.md");
     expect(BASH_TOOL_DEFINITION.description).toContain("Do not use `im send --text`");
     expect(BASH_TOOL_DEFINITION.description).toContain("small fixed snippets");
     expect(BASH_TOOL_DEFINITION.description).toContain("stash_file");

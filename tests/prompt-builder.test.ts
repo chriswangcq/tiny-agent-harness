@@ -20,6 +20,8 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("--text-stdin");
     expect(prompt.messages[0]!.content).toContain("quoted heredoc");
     expect(prompt.messages[0]!.content).toContain("<<'IM'");
+    expect(prompt.messages[0]!.content).toContain("simple short phrase");
+    expect(prompt.messages[0]!.content).toContain("Do not put long Markdown");
     expect(prompt.messages[0]!.content).toContain("--text-stdin < reply.md");
     expect(prompt.messages[0]!.content).toContain("file contents are not shell-parsed");
     expect(prompt.messages[0]!.content).toContain("producer | cmd");

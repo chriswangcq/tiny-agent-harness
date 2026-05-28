@@ -159,6 +159,8 @@ export class ToolCallValidator {
 }
 
 const DEFAULT_MAX_HEREDOC_PAYLOAD_BYTES = 4096;
+const DEFAULT_MAX_IM_HEREDOC_PAYLOAD_BYTES = 512;
+const DEFAULT_MAX_IM_HEREDOC_PAYLOAD_LINES = 6;
 
 function validatePtyTextPayload(
   action: PtyAction,
@@ -171,7 +173,8 @@ function validatePtyTextPayload(
   if (usesImSendTextArgument(action.text)) {
     return (
       "Invalid bash tool arguments: agent IM replies must use " +
-      "`node dist/cli/main.js im send --channel <channel> --kind status --text-stdin`, preferably with a quoted heredoc. " +
+      "`node dist/cli/main.js im send --channel <channel> --kind status --text-stdin`. " +
+      "Use a quoted heredoc only for simple short phrases; use `< reply.md` for longer replies. " +
       "Do not use `im send --text` from the agent."
     );
   }
@@ -184,7 +187,20 @@ function validatePtyTextPayload(
   const maxBytes =
     options.maxHeredocPayloadBytes ?? DEFAULT_MAX_HEREDOC_PAYLOAD_BYTES;
   if (usesImSendTextStdin(action.text)) {
-    return undefined;
+    if (
+      heredoc.payloadBytes <= DEFAULT_MAX_IM_HEREDOC_PAYLOAD_BYTES &&
+      heredoc.payloadLines <= DEFAULT_MAX_IM_HEREDOC_PAYLOAD_LINES
+    ) {
+      return undefined;
+    }
+
+    return (
+      `Invalid bash tool arguments: IM heredoc payload is ${heredoc.payloadBytes} bytes ` +
+      `across ${heredoc.payloadLines} lines, which exceeds the simple phrase limit ` +
+      `(${DEFAULT_MAX_IM_HEREDOC_PAYLOAD_BYTES} bytes and ${DEFAULT_MAX_IM_HEREDOC_PAYLOAD_LINES} lines). ` +
+      "For longer IM replies, stage or materialize a reply.md file, then run " +
+      "`node dist/cli/main.js im send --channel <channel> --kind status --text-stdin < reply.md` through bash."
+    );
   }
   if (heredoc.payloadBytes <= maxBytes) {
     return undefined;
@@ -221,10 +237,10 @@ function usesImSend(text: string): boolean {
 
 function estimateLargestHeredocPayload(
   text: string,
-): { payloadBytes: number } | undefined {
+): { payloadBytes: number; payloadLines: number } | undefined {
   const heredocPattern = /<<-?\s*(?:(['"])([A-Za-z_][A-Za-z0-9_-]*)\1|([A-Za-z_][A-Za-z0-9_-]*))/gu;
   let match: RegExpExecArray | null;
-  let largest = 0;
+  let largest: { payloadBytes: number; payloadLines: number } | undefined;
 
   while ((match = heredocPattern.exec(text)) !== null) {
     const delimiter = match[2] ?? match[3];
@@ -242,10 +258,16 @@ function estimateLargestHeredocPayload(
       closeMatch === null
         ? text.slice(bodyStart + 1)
         : text.slice(bodyStart + 1, bodyStart + 1 + closeMatch.index);
-    largest = Math.max(largest, Buffer.byteLength(body, "utf8"));
+    const payload = {
+      payloadBytes: Buffer.byteLength(body, "utf8"),
+      payloadLines: body.length === 0 ? 0 : body.split(/\r?\n/u).length,
+    };
+    if (largest === undefined || payload.payloadBytes > largest.payloadBytes) {
+      largest = payload;
+    }
   }
 
-  return largest > 0 ? { payloadBytes: largest } : undefined;
+  return largest !== undefined && largest.payloadBytes > 0 ? largest : undefined;
 }
 
 function escapeForRegex(value: string): string {

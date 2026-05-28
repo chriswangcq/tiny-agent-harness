@@ -54,7 +54,7 @@ im send --channel default --kind status --text-stdin
 im ack --channel default --message-id <id>
 ```
 
-In the PTY agent flow, `--text-stdin` is the required stdin path for all agent-authored replies. The preferred form is a quoted heredoc, e.g. `im send --kind status --text-stdin <<'IM' ... IM`, because Markdown is passed as literal stdin and shell argument quoting is avoided. `--text` remains a CLI convenience for humans and scripts, but the agent should not use it.
+In the PTY agent flow, `--text-stdin` is the required stdin path for all agent-authored replies. A quoted heredoc is only for simple short phrases, e.g. `im send --kind status --text-stdin <<'IM' ... IM`. For longer Markdown, Chinese/emoji-heavy content, tables, generated reports, or multiline summaries, write or materialize a reply file and send it with input redirection: `im send --kind status --text-stdin < reply.md`. `--text` remains a CLI convenience for humans and scripts, but the agent should not use it.
 
 For interactive local demos:
 

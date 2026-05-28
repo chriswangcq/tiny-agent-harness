@@ -118,7 +118,24 @@ describe("ToolCallValidator PTY actions", () => {
     expect(result.status).toBe("valid");
   });
 
-  it("allows large quoted heredocs for im send text-stdin replies", () => {
+  it("allows simple quoted heredocs for im send text-stdin replies", () => {
+    const result = new ToolCallValidator().validate(
+      makeCall({
+        arguments: {
+          kind: "write_text",
+          expectedInputSeq: 1,
+          text:
+            "node dist/cli/main.js im send --channel default --kind status --text-stdin <<'IM'\n" +
+            "Done.\n" +
+            "IM\n",
+        },
+      }),
+    );
+
+    expect(result.status).toBe("valid");
+  });
+
+  it("rejects large im send heredoc replies and points to reply file redirection", () => {
     const result = new ToolCallValidator().validate(
       makeCall({
         arguments: {
@@ -132,7 +149,39 @@ describe("ToolCallValidator PTY actions", () => {
       }),
     );
 
-    expect(result.status).toBe("valid");
+    expect(result.status).toBe("invalid");
+    if (result.status === "invalid") {
+      expect(result.observation.message).toContain("IM heredoc payload");
+      expect(result.observation.message).toContain("simple phrase limit");
+      expect(result.observation.message).toContain("< reply.md");
+    }
+  });
+
+  it("rejects multiline im send heredoc replies even when under the byte limit", () => {
+    const result = new ToolCallValidator().validate(
+      makeCall({
+        arguments: {
+          kind: "write_text",
+          expectedInputSeq: 1,
+          text:
+            "node dist/cli/main.js im send --channel default --kind status --text-stdin <<'IM'\n" +
+            "one\n" +
+            "two\n" +
+            "three\n" +
+            "four\n" +
+            "five\n" +
+            "six\n" +
+            "seven\n" +
+            "IM\n",
+        },
+      }),
+    );
+
+    expect(result.status).toBe("invalid");
+    if (result.status === "invalid") {
+      expect(result.observation.message).toContain("IM heredoc payload");
+      expect(result.observation.message).toContain("simple phrase limit");
+    }
   });
 
   it("rejects agent im send --text replies and points to text-stdin", () => {
@@ -150,7 +199,8 @@ describe("ToolCallValidator PTY actions", () => {
     expect(result.status).toBe("invalid");
     if (result.status === "invalid") {
       expect(result.observation.message).toContain("--text-stdin");
-      expect(result.observation.message).toContain("quoted heredoc");
+      expect(result.observation.message).toContain("simple short phrases");
+      expect(result.observation.message).toContain("< reply.md");
     }
   });
 

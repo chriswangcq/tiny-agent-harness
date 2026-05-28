@@ -53,7 +53,7 @@ Important semantics:
 - `key` is for terminal keys such as Enter, Ctrl-C, Ctrl-D, Escape, Tab, Up, and Down.
 - `poll`, `status`, `interrupt`, `terminate`, and `restart` are control actions over the PTY session, not shell commands.
 - Every write-like action carries `expectedInputSeq`; stale input sequences are rejected.
-- Quoted shell heredocs are acceptable for small fixed snippets below about 4KB. Generated files, code, HTML, Markdown, JSON, or multiline replies above that size should use `stash_file`, followed by `node dist/cli/main.js file materialize <stashId> <target-path>` through bash.
+- Quoted shell heredocs are acceptable for small fixed snippets below about 4KB. Generated files, code, HTML, Markdown, JSON, or fragile multiline payloads should use `stash_file`, followed by `node dist/cli/main.js file materialize <stashId> <target-path>` through bash.
 - After any multiline stdin flow, keep polling until the shell prompt returns. A `lastContinuationPrompt` fact means the shell recently reported a continuation prompt.
 - Observations are bounded PTY glances: full PTY output stays in the session log, and `outputTail` carries the current session's last 2K characters after write_text/key or poll/status.
 - Serialized assistant tool-call history replays historical tool-call arguments exactly as generated, including large `write_text.text` and `stash_file.content` fields. PTY observations remain bounded summaries; use `outputTail` first, terminal facts second, and `eventCount`, `eventsOmitted`, `newOutputBytes`, and `logRef` only for debugging or fetching more terminal history.
@@ -81,16 +81,18 @@ When `name` is provided, the returned command may use that filename directly so 
 
 ## Large Payloads
 
-Agent-authored IM replies should use `--text-stdin` so shell argument quoting, terminal wrapping, backticks, pipes, and `$` do not rewrite or clutter the message. For replies, prefer a quoted heredoc because it is concise and stable for Markdown:
+Agent-authored IM replies should use `--text-stdin` so shell argument quoting, terminal wrapping, backticks, pipes, and `$` do not rewrite or clutter the message. A quoted heredoc is only for simple short phrases:
 
 ```bash
 node dist/cli/main.js im send --channel default --kind status --text-stdin <<'IM'
 Done.
-
-```text
-Markdown is preserved literally.
-```
 IM
+```
+
+For longer Markdown, Chinese/emoji-heavy paragraphs, tables, generated reports, or multiline summaries, write or materialize a reply file and send it by input redirection:
+
+```bash
+node dist/cli/main.js im send --channel default --kind status --text-stdin < reply.md
 ```
 
 After sending an IM reply, poll until the shell prompt returns and the command output indicates success before choosing `io_wait`.
