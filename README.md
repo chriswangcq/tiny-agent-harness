@@ -43,6 +43,12 @@ tiny-agent ui --channel default
 node dist/cli/main.js ui --channel default --task "fix the failing tests"
 ```
 
+如果要恢复已有 run 并直接打开 TUI：
+
+```bash
+node dist/cli/main.js ui --channel default --resume run-1780009628684
+```
+
 也可以用两个终端分开调试。第一个终端启动 run：
 
 ```bash

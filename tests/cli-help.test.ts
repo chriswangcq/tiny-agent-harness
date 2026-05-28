@@ -16,6 +16,7 @@ describe("main CLI help", () => {
     expect(help).toContain("tiny-agent file <subcommand>");
     expect(help).toContain("cat <stashId>");
     expect(help).toContain("tiny-agent skill <subcommand>");
+    expect(help).toContain("tiny-agent ui  --channel <ch> --resume <runId|latest>");
     expect(help).not.toContain(["rece", "iver"].join(""));
     expect(help).not.toContain(["max", "-frame-bytes"].join(""));
   });

@@ -320,12 +320,15 @@ async function waitForNewLatestRun(options: {
 }
 
 async function runUnifiedUi(args: string[]): Promise<void> {
-  const { channel: parsedChannel, task, stateDir } = parseCliOptions(args);
+  const { channel: parsedChannel, task, stateDir, resumeRunId } = parseCliOptions(args);
   const channel = parsedChannel ?? process.env.TAH_IM_CHANNEL ?? "default";
   const apiKey = resolveDeepSeekApiKey();
 
   if (!apiKey) {
     die(missingApiKeyMessage());
+  }
+  if (task && resumeRunId) {
+    die("tiny-agent ui accepts either --task or --resume, not both.");
   }
 
   const baseDir = path.resolve(stateDir ?? ".tiny-agent");
@@ -337,15 +340,40 @@ async function runUnifiedUi(args: string[]): Promise<void> {
   const logPath = path.join(launcherDir, `ui-${Date.now()}.log`);
   const logStream = fs.createWriteStream(logPath, { flags: "a" });
 
-  const runArgs = [
-    ...process.execArgv,
-    process.argv[1]!,
-    "run",
-    "--channel",
-    channel,
-    "--state-dir",
-    baseDir,
-  ];
+  const resumeTargetRunId =
+    resumeRunId === undefined
+      ? undefined
+      : resumeRunId === "latest"
+        ? readLatestRunId(runsDir)
+        : resumeRunId;
+  if (resumeRunId !== undefined && !resumeTargetRunId) {
+    die("No latest run is available to resume.");
+  }
+  if (resumeTargetRunId !== undefined) {
+    resolveRunDir(runsDir, resumeTargetRunId);
+  }
+
+  const runArgs =
+    resumeTargetRunId !== undefined
+      ? [
+          ...process.execArgv,
+          process.argv[1]!,
+          "resume",
+          resumeTargetRunId,
+          "--channel",
+          channel,
+          "--state-dir",
+          baseDir,
+        ]
+      : [
+          ...process.execArgv,
+          process.argv[1]!,
+          "run",
+          "--channel",
+          channel,
+          "--state-dir",
+          baseDir,
+        ];
   if (task) {
     runArgs.push("--task", task);
   }
@@ -377,16 +405,22 @@ async function runUnifiedUi(args: string[]): Promise<void> {
     process.exit(143);
   });
 
-  const runId = await waitForNewLatestRun({
-    runsDir,
-    previousRunId,
-    child,
-    timeoutMs: 5_000,
-  });
+  const runId =
+    resumeTargetRunId ??
+    (await waitForNewLatestRun({
+      runsDir,
+      previousRunId,
+      child,
+      timeoutMs: 5_000,
+    }));
 
-  console.log(`[tiny-agent] Started background run: ${runId}`);
+  console.log(`[tiny-agent] ${resumeTargetRunId ? "Resumed" : "Started"} background run: ${runId}`);
   console.log(`[tiny-agent] Agent log: ${logPath}`);
-  console.log("[tiny-agent] Opening TUI. Press m to send the first task.");
+  console.log(
+    resumeTargetRunId
+      ? "[tiny-agent] Opening TUI."
+      : "[tiny-agent] Opening TUI. Press m to send the first task.",
+  );
 
   const { runTui } = await import("./tui.js");
   runTui(["--run", runId, "--channel", channel, "--state-dir", baseDir]);
@@ -432,6 +466,8 @@ Usage:
   tiny-agent run --resume <runId|latest>              Resume an existing run
   tiny-agent resume <runId|latest>                    Resume an existing run
   tiny-agent ui  --channel <ch> [--task <task>]       Run + TUI in one command
+  tiny-agent ui  --channel <ch> --resume <runId|latest>
+                                                        Resume + TUI in one command
   tiny-agent tui --run <runId|latest>                 Attach TUI to existing run
   tiny-agent im  <subcommand> [options]               IM message operations
   tiny-agent file <subcommand> [options]              Stashed file operations
@@ -551,7 +587,7 @@ async function main(): Promise<void> {
         "  tiny-agent <task> [--state-dir <dir>]\n" +
         "  tiny-agent run --channel <channel> [--task <task>] [--state-dir <dir>]\n" +
         "  tiny-agent resume <runId|latest> [--state-dir <dir>]\n" +
-        "  tiny-agent ui --channel <channel> [--task <task>] [--state-dir <dir>]",
+        "  tiny-agent ui --channel <channel> [--task <task>|--resume <runId|latest>] [--state-dir <dir>]",
     );
   }
 
