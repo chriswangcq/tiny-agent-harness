@@ -33,6 +33,7 @@ export type DeepSeekFimConfig = {
 type FimCompletionMeta = {
   finishReasons: Array<string | null | undefined>;
   continuationRounds: number;
+  usages?: FimProviderUsage[];
 };
 
 type FimCompletionResult = FimCompletionMeta & {
@@ -47,10 +48,52 @@ type FimChoice = {
 
 type FimResponse = {
   choices?: FimChoice[];
-  usage?: {
-    completion_tokens?: number;
-    completionTokens?: number;
-  };
+  usage?: FimProviderUsage | null;
+};
+
+type FimProviderUsage = {
+  prompt_tokens?: number;
+  promptTokens?: number;
+  prompt_cache_hit_tokens?: number;
+  promptCacheHitTokens?: number;
+  prompt_cache_miss_tokens?: number;
+  promptCacheMissTokens?: number;
+  completion_tokens?: number;
+  completionTokens?: number;
+  total_tokens?: number;
+  totalTokens?: number;
+  [key: string]: unknown;
+};
+
+type FimCompletionChunk = {
+  text: string;
+  finishReason?: string | null;
+  completionTokens?: number;
+  usage?: FimProviderUsage;
+};
+
+type FimCompletionRequest = {
+  prompt: string;
+  suffix?: string;
+  maxTokens: number;
+  stop?: string[];
+  onChunk?: (text: string) => void | Promise<void>;
+  shouldStop?: () => boolean;
+};
+
+type FimCompletionHttpInput = {
+  prompt: string;
+  suffix?: string;
+  maxTokens: number;
+  stop?: string[];
+  onChunk?: (text: string) => void | Promise<void>;
+};
+
+type FimCompletionStreamResult = {
+  text: string;
+  finishReason?: string | null;
+  completionTokens?: number;
+  usage?: FimProviderUsage;
 };
 
 type FimStreamChunk = FimResponse;
@@ -260,16 +303,12 @@ export class DeepSeekFimAdapter {
     });
   }
 
-  private async completeFim(input: {
-    prompt: string;
-    suffix?: string;
-    maxTokens: number;
-    stop?: string[];
-    onChunk?: (text: string) => void | Promise<void>;
-    shouldStop?: () => boolean;
-  }): Promise<FimCompletionResult> {
+  private async completeFim(
+    input: FimCompletionRequest,
+  ): Promise<FimCompletionResult> {
     const maxContinuationRounds = this.config.continuationMaxRounds ?? 4;
     const finishReasons: Array<string | null | undefined> = [];
+    const usages: FimProviderUsage[] = [];
     let text = "";
     let continuationRounds = 0;
 
@@ -281,6 +320,9 @@ export class DeepSeekFimAdapter {
       });
       text += chunk.text;
       finishReasons.push(chunk.finishReason);
+      if (chunk.usage) {
+        usages.push(chunk.usage);
+      }
 
       if (
         input.shouldStop?.() ||
@@ -288,24 +330,21 @@ export class DeepSeekFimAdapter {
         continuationRounds >= maxContinuationRounds ||
         chunk.text.length === 0
       ) {
-        return { text, finishReasons, continuationRounds };
+        return {
+          text,
+          finishReasons,
+          continuationRounds,
+          ...(usages.length > 0 ? { usages } : {}),
+        };
       }
 
       continuationRounds++;
     }
   }
 
-  private async requestFimCompletion(input: {
-    prompt: string;
-    suffix?: string;
-    maxTokens: number;
-    stop?: string[];
-    onChunk?: (text: string) => void | Promise<void>;
-  }): Promise<{
-    text: string;
-    finishReason?: string | null;
-    completionTokens?: number;
-  }> {
+  private async requestFimCompletion(
+    input: FimCompletionHttpInput,
+  ): Promise<FimCompletionChunk> {
     const maxAttempts = positiveIntegerOrDefault(
       this.config.requestRetryMaxAttempts,
       3,
@@ -333,17 +372,9 @@ export class DeepSeekFimAdapter {
     throw new Error(message, { cause: lastRetryableError });
   }
 
-  private async requestFimCompletionOnce(input: {
-    prompt: string;
-    suffix?: string;
-    maxTokens: number;
-    stop?: string[];
-    onChunk?: (text: string) => void | Promise<void>;
-  }): Promise<{
-    text: string;
-    finishReason?: string | null;
-    completionTokens?: number;
-  }> {
+  private async requestFimCompletionOnce(
+    input: FimCompletionHttpInput,
+  ): Promise<FimCompletionChunk> {
     const body: Record<string, unknown> = {
       model: this.config.model,
       prompt: input.prompt,
@@ -406,11 +437,7 @@ export class DeepSeekFimAdapter {
   private async readFimCompletionStream(
     response: Response,
     onChunk?: (text: string) => void | Promise<void>,
-  ): Promise<{
-    text: string;
-    finishReason?: string | null;
-    completionTokens?: number;
-  }> {
+  ): Promise<FimCompletionStreamResult> {
     if (!response.body) {
       throw new Error("DeepSeek FIM streaming response missing body");
     }
@@ -420,6 +447,7 @@ export class DeepSeekFimAdapter {
     const textParts: string[] = [];
     let finishReason: string | null | undefined;
     let completionTokens: number | undefined;
+    let providerUsage: FimProviderUsage | undefined;
     let sawChoice = false;
     let pending = "";
     let streamDone = false;
@@ -442,10 +470,13 @@ export class DeepSeekFimAdapter {
         }
 
         const chunk = parseFimStreamChunk(event);
-        const usage =
-          chunk.usage?.completion_tokens ?? chunk.usage?.completionTokens;
-        if (typeof usage === "number") {
-          completionTokens = usage;
+        if (isRecord(chunk.usage)) {
+          providerUsage = { ...chunk.usage };
+          const usage =
+            chunk.usage.completion_tokens ?? chunk.usage.completionTokens;
+          if (typeof usage === "number") {
+            completionTokens = usage;
+          }
         }
 
         const choice = chunk.choices?.[0];
@@ -497,10 +528,13 @@ export class DeepSeekFimAdapter {
             await onChunk?.(choice.text);
           }
         }
-        const usage =
-          chunk.usage?.completion_tokens ?? chunk.usage?.completionTokens;
-        if (typeof usage === "number") {
-          completionTokens = usage;
+        if (isRecord(chunk.usage)) {
+          providerUsage = { ...chunk.usage };
+          const usage =
+            chunk.usage.completion_tokens ?? chunk.usage.completionTokens;
+          if (typeof usage === "number") {
+            completionTokens = usage;
+          }
         }
       }
     }
@@ -513,6 +547,7 @@ export class DeepSeekFimAdapter {
       text: textParts.join(""),
       finishReason,
       completionTokens,
+      ...(providerUsage ? { usage: providerUsage } : {}),
     };
   }
 
@@ -1054,6 +1089,7 @@ function completionMeta(value: FimCompletionMeta): FimCompletionMeta {
   return {
     finishReasons: value.finishReasons,
     continuationRounds: value.continuationRounds,
+    ...(value.usages && value.usages.length > 0 ? { usages: value.usages } : {}),
   };
 }
 
@@ -1062,7 +1098,7 @@ function extractFimMeta(value: unknown): FimCompletionMeta | undefined {
   if (!Array.isArray(value.finishReasons)) return undefined;
   const continuationRounds = value.continuationRounds;
   if (typeof continuationRounds !== "number") return undefined;
-  return {
+  const meta: FimCompletionMeta = {
     finishReasons: value.finishReasons.map((reason) =>
       typeof reason === "string"
         ? reason
@@ -1072,4 +1108,13 @@ function extractFimMeta(value: unknown): FimCompletionMeta | undefined {
     ),
     continuationRounds,
   };
+  if (Array.isArray(value.usages)) {
+    const usages = value.usages.filter(isRecord).map((usage) => ({
+      ...usage,
+    }));
+    if (usages.length > 0) {
+      meta.usages = usages;
+    }
+  }
+  return meta;
 }

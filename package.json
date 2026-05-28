@@ -12,6 +12,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "audit:model-cache": "node scripts/model-cache-audit.mjs",
     "codeq": "node --loader ts-node/esm src/code-intel/cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

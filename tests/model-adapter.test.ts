@@ -59,6 +59,7 @@ function okFimStreamResponse(
     text: string;
     finishReason?: string | null;
     completionTokens?: number;
+    usage?: Record<string, unknown>;
   }>,
 ): Response {
   const encoder = new TextEncoder();
@@ -75,9 +76,10 @@ function okFimStreamResponse(
                 },
               ],
               usage:
-                chunk.completionTokens === undefined
+                chunk.usage ??
+                (chunk.completionTokens === undefined
                   ? null
-                  : { completion_tokens: chunk.completionTokens },
+                  : { completion_tokens: chunk.completionTokens }),
             })}\n\n`,
           ),
         );
@@ -437,6 +439,62 @@ describe("DeepSeekFimAdapter", () => {
       thinking: { finishReasons: ["stop"], continuationRounds: 0 },
     });
     expect(output.turn.kind).toBe("tool_call");
+  });
+
+  it("preserves provider cache usage fields from FIM streams", async () => {
+    const rawDecision = dsmlBash(writeText("pwd"));
+    const fetchMock = stubFimStreamResponses(
+      [
+        {
+          text: "Need inspect cwd",
+          finishReason: "stop",
+          usage: {
+            prompt_tokens: 100,
+            prompt_cache_hit_tokens: 80,
+            prompt_cache_miss_tokens: 20,
+            completion_tokens: 3,
+          },
+        },
+      ],
+      [
+        {
+          text: rawDecision,
+          finishReason: "stop",
+          usage: {
+            prompt_tokens: 120,
+            prompt_cache_hit_tokens: 110,
+            prompt_cache_miss_tokens: 10,
+            completion_tokens: 9,
+          },
+        },
+      ],
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
+      tools: [...STATIC_TOOL_CATALOG],
+    });
+
+    expect(output.usage).toMatchObject({
+      thinking: {
+        usages: [
+          {
+            prompt_tokens: 100,
+            prompt_cache_hit_tokens: 80,
+            prompt_cache_miss_tokens: 20,
+          },
+        ],
+      },
+      decision: {
+        usages: [
+          {
+            prompt_tokens: 120,
+            prompt_cache_hit_tokens: 110,
+            prompt_cache_miss_tokens: 10,
+          },
+        ],
+      },
+    });
   });
 
   it("continues FIM completions when the response hits the token limit", async () => {

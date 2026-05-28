@@ -382,6 +382,19 @@ failures plus HTTP `429` and `5xx`. Once the SSE stream is being parsed, errors
 are surfaced directly instead of replaying the request, so transcripted thinking
 or decision chunks are not duplicated.
 
+Provider `usage` objects from streamed chunks are preserved under
+`output.usage.thinking.usages[]` and `output.usage.decision.usages[]`. DeepSeek
+cache fields such as `prompt_cache_hit_tokens` and
+`prompt_cache_miss_tokens` stay in transcript for later audits.
+
+Cache audit helper:
+
+```bash
+npm run audit:model-cache
+npm run audit:model-cache -- --all --verbose
+npm run audit:model-cache -- --dump-prompts .tiny-agent/model-cache-prompts
+```
+
 ## Transcript Events
 
 Two-pass generation should be visible in transcript.
