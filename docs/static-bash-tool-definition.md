@@ -71,11 +71,13 @@ type StashFileInput = {
 };
 ```
 
-The observation returns `stashId`, `bytes`, `sha256`, `contentPath`, and a materialize command. The actual filesystem write is explicit and PTY-visible:
+The observation returns a short `stashId`, `bytes`, and a materialize command. The actual filesystem write is explicit and PTY-visible:
 
 ```bash
 node dist/cli/main.js file materialize <stashId> <target-path>
 ```
+
+When `name` is provided, the returned command may use that filename directly so the next bash action is short. Integrity hashes stay in stash metadata and explicit JSON/debug output; they are not part of the model-facing observation or the normal materialize message.
 
 ## Large Payloads
 

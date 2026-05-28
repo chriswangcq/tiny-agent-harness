@@ -44,11 +44,11 @@ export class StashFileStore {
     const bytes = decodeContent(request.content, request.encoding);
     const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
     const name = sanitizeFileName(request.name ?? "stashed-file.bin");
-    const stashId = makeStashId(request.toolCallId, name, sha256);
+    const stashId = this.createStashId();
     const stashDir = this.stashDir(stashId);
     const contentPath = path.join(stashDir, "content");
     const metaPath = path.join(stashDir, "meta.json");
-    const materializeCommand = this.materializeCommand(stashId);
+    const materializeCommand = this.materializeCommand(stashId, name);
     const meta: StashedFileMeta = {
       version: 1,
       stashId,
@@ -72,11 +72,9 @@ export class StashFileStore {
       stashId,
       name,
       bytes: bytes.byteLength,
-      sha256,
-      contentPath,
       materializeCommand,
       message:
-        `Stashed file ${stashId} (${bytes.byteLength} bytes, sha256 ${sha256}). ` +
+        `Stashed file ${stashId} (${bytes.byteLength} bytes). ` +
         `Use bash to materialize it: ${materializeCommand}`,
     };
   }
@@ -153,12 +151,24 @@ export class StashFileStore {
     return path.resolve(this.cwd, destination);
   }
 
-  private materializeCommand(stashId: string): string {
+  private createStashId(): string {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const stashId = `f-${crypto.randomBytes(5).toString("hex")}`;
+      if (!fs.existsSync(this.stashDir(stashId))) {
+        return stashId;
+      }
+    }
+    throw new Error("failed to allocate a unique stash id");
+  }
+
+  private materializeCommand(stashId: string, name: string): string {
+    const targetPath =
+      name === "stashed-file.bin" ? "<target-path>" : shellQuote(name);
     const stateDirFlag =
       this.stateDir === undefined
         ? ""
         : ` --state-dir ${shellQuote(this.stateDir)}`;
-    return `node dist/cli/main.js file materialize ${stashId} <target-path>${stateDirFlag}`;
+    return `node dist/cli/main.js file materialize ${stashId} ${targetPath}${stateDirFlag}`;
   }
 }
 
@@ -167,39 +177,12 @@ function decodeContent(content: string, encoding: "utf8" | "base64"): Buffer {
     return Buffer.from(content, "utf8");
   }
 
-  const normalized = content.replace(/\s+/gu, "");
-  if (normalized.length === 0) {
-    return Buffer.alloc(0);
-  }
-  if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(normalized)) {
-    throw new Error("invalid base64 stash content");
-  }
-  const firstPadding = normalized.indexOf("=");
-  if (firstPadding !== -1 && !/^=+$/u.test(normalized.slice(firstPadding))) {
-    throw new Error("invalid base64 stash content");
-  }
-
-  const bytes = Buffer.from(normalized, "base64");
-  const withoutPadding = (value: string) => value.replace(/=+$/u, "");
-  if (withoutPadding(bytes.toString("base64")) !== withoutPadding(normalized)) {
-    throw new Error("invalid base64 stash content");
-  }
-  return bytes;
-}
-
-function makeStashId(toolCallId: string, name: string, sha256: string): string {
-  const call = sanitizeIdPart(toolCallId);
-  const basename = sanitizeIdPart(path.parse(name).name || "file").slice(0, 32);
-  return `file-${call}-${basename}-${sha256.slice(0, 12)}`;
+  return Buffer.from(content.replace(/\s+/gu, ""), "base64");
 }
 
 function sanitizeFileName(name: string): string {
   const basename = path.basename(name).trim();
   return basename.length > 0 ? basename : "stashed-file.bin";
-}
-
-function sanitizeIdPart(value: string): string {
-  return value.replace(/[^A-Za-z0-9._-]+/gu, "-").replace(/^-+|-+$/gu, "") || "x";
 }
 
 function atomicWriteFile(filePath: string, data: Buffer): void {

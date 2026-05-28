@@ -151,7 +151,7 @@ export const STASH_FILE_TOOL_DEFINITION: ToolDefinition = {
   description:
     "Stage complete file bytes in harness-managed state without writing the workspace. " +
     "Use this for generated files, HTML, Markdown, JSON, code, or any payload too large or fragile for a small quoted heredoc. " +
-    "The tool returns stashId, bytes, sha256, and a materialize command. After it succeeds, use bash to run `node dist/cli/main.js file materialize <stashId> <target-path>` so the actual filesystem write happens through the PTY-visible CLI.",
+    "The tool returns a short stashId, byte count, and a materialize command. After it succeeds, use bash to run the returned `node dist/cli/main.js file materialize ...` command so the actual filesystem write happens through the PTY-visible CLI.",
   inputSchema: StashFileInputSchema,
 };
 

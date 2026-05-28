@@ -186,13 +186,11 @@ function makeRun(options?: {
         return {
           kind: "stash_file",
           recoverable: false,
-          stashId: "file-call-stash-snake-123456789abc",
+          stashId: "f-123456789a",
           name: request.name ?? "stashed-file.bin",
           bytes: Buffer.byteLength(request.content, "utf8"),
-          sha256: "a".repeat(64),
-          contentPath: "/repo/.tiny-agent/stash/files/file-call/content",
           materializeCommand:
-            "node dist/cli/main.js file materialize file-call-stash-snake-123456789abc <target-path>",
+            "node dist/cli/main.js file materialize f-123456789a snake.html",
           message: "stashed",
         };
       },
@@ -504,7 +502,7 @@ describe("RunOrchestrator", () => {
         type: "observation",
         observation: expect.objectContaining({
           kind: "stash_file",
-          stashId: "file-call-stash-snake-123456789abc",
+          stashId: "f-123456789a",
           materializeCommand: expect.stringContaining("file materialize"),
         }),
       },

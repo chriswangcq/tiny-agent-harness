@@ -54,9 +54,7 @@ export async function runFile(args: string[]): Promise<void> {
       return;
     }
     for (const item of items) {
-      console.log(
-        `${item.stashId}\t${item.bytes} bytes\t${item.sha256}\t${item.name}`,
-      );
+      console.log(`${item.stashId}\t${item.bytes} bytes\t${item.name}`);
     }
     return;
   }
@@ -98,7 +96,7 @@ export async function runFile(args: string[]): Promise<void> {
     }
     console.log(
       `[tiny-agent] Materialized ${result.stashId} to ${result.destinationPath} ` +
-        `(${result.bytes} bytes, sha256 ${result.sha256}).`,
+        `(${result.bytes} bytes).`,
     );
     return;
   }

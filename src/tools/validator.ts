@@ -143,9 +143,6 @@ export class ToolCallValidator {
         'Invalid stash_file arguments: encoding must be "utf8" or "base64".',
       );
     }
-    if (encoding === "base64" && !isValidBase64(args.content)) {
-      return invalid("Invalid stash_file arguments: content is not valid base64.");
-    }
 
     const request: ToolRequest = {
       kind: "stash_file",
@@ -159,23 +156,6 @@ export class ToolCallValidator {
 
     return { status: "valid", request };
   }
-}
-
-function isValidBase64(content: string): boolean {
-  const normalized = content.replace(/\s+/gu, "");
-  if (normalized.length === 0) {
-    return true;
-  }
-  if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(normalized)) {
-    return false;
-  }
-  const firstPadding = normalized.indexOf("=");
-  if (firstPadding !== -1 && !/^=+$/u.test(normalized.slice(firstPadding))) {
-    return false;
-  }
-  const decoded = Buffer.from(normalized, "base64");
-  const withoutPadding = (value: string) => value.replace(/=+$/u, "");
-  return withoutPadding(decoded.toString("base64")) === withoutPadding(normalized);
 }
 
 const DEFAULT_MAX_HEREDOC_PAYLOAD_BYTES = 4096;

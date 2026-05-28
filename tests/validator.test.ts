@@ -236,7 +236,7 @@ describe("ToolCallValidator tool names", () => {
     }
   });
 
-  it("rejects invalid stash_file base64 content", () => {
+  it("does not validate base64 content in the model-facing validator", () => {
     const result = new ToolCallValidator().validate({
       id: "tc-1",
       name: "stash_file",
@@ -246,10 +246,7 @@ describe("ToolCallValidator tool names", () => {
       },
     });
 
-    expect(result.status).toBe("invalid");
-    if (result.status === "invalid") {
-      expect(result.observation.message).toContain("valid base64");
-    }
+    expect(result.status).toBe("valid");
   });
 
   it("rejects non-object tool arguments", () => {

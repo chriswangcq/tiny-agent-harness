@@ -118,10 +118,11 @@ function createCliTerminalPort() {
 
 function createCliStashFilePort(stateDir?: string) {
   const baseDir = path.resolve(stateDir ?? ".tiny-agent");
+  const defaultBaseDir = path.resolve(".tiny-agent");
   const store = new StashFileStore({
     rootDir: path.join(baseDir, "stash", "files"),
     cwd: process.cwd(),
-    stateDir: baseDir,
+    stateDir: baseDir === defaultBaseDir ? undefined : baseDir,
   });
   return {
     async stash(request: Parameters<StashFileStore["stash"]>[0]) {

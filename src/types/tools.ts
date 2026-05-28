@@ -93,7 +93,5 @@ export type AgentObservation =
       stashId: string;
       name: string;
       bytes: number;
-      sha256: string;
-      contentPath: string;
       materializeCommand: string;
     };

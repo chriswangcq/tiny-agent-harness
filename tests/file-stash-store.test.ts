@@ -38,16 +38,16 @@ describe("StashFileStore", () => {
     });
 
     expect(observation.kind).toBe("stash_file");
-    expect(observation.stashId).toContain("snake");
+    expect(observation.stashId).toMatch(/^f-[a-f0-9]{10}$/u);
     expect(observation.materializeCommand).toContain("file materialize");
-    expect(fs.readFileSync(observation.contentPath, "utf8")).toContain("Snake");
+    expect(observation.materializeCommand).toContain("snake.html");
 
     const result = store.materialize(observation.stashId, "out/snake.html");
     expect(result.destinationPath).toBe(path.join(tmp, "out", "snake.html"));
     expect(fs.readFileSync(result.destinationPath, "utf8")).toBe(
       "<!DOCTYPE html>\n<title>Snake</title>\n",
     );
-    expect(result.sha256).toBe(observation.sha256);
+    expect(store.readMeta(observation.stashId).sha256).toBe(result.sha256);
   });
 
   it("includes the configured state dir in materialize commands", () => {
@@ -71,6 +71,27 @@ describe("StashFileStore", () => {
     expect(observation.materializeCommand).toContain(`'${stateDir}'`);
   });
 
+  it("omits the default state dir from materialize commands", () => {
+    const tmp = makeTmpDir();
+    const store = new StashFileStore({
+      rootDir: path.join(tmp, ".tiny-agent", "stash", "files"),
+      cwd: tmp,
+      stateDir: undefined,
+    });
+
+    const observation = store.stash({
+      kind: "stash_file",
+      toolName: "stash_file",
+      toolCallId: "call-default-state-dir",
+      name: "note.txt",
+      content: "hello\n",
+      encoding: "utf8",
+    });
+
+    expect(observation.materializeCommand).not.toContain("--state-dir");
+    expect(observation.materializeCommand).toContain("note.txt");
+  });
+
   it("decodes base64 content as bytes", () => {
     const tmp = makeTmpDir();
     const store = new StashFileStore({
@@ -92,22 +113,22 @@ describe("StashFileStore", () => {
     expect([...fs.readFileSync(outPath)]).toEqual([0, 1, 2]);
   });
 
-  it("rejects invalid base64 content before writing metadata", () => {
+  it("does not surface base64 validation to the model", () => {
     const tmp = makeTmpDir();
     const store = new StashFileStore({
       rootDir: path.join(tmp, "stash"),
       cwd: tmp,
     });
 
-    expect(() =>
-      store.stash({
-        kind: "stash_file",
-        toolName: "stash_file",
-        toolCallId: "call-invalid-b64",
-        content: "not valid!",
-        encoding: "base64",
-      }),
-    ).toThrow(/invalid base64/u);
-    expect(fs.existsSync(path.join(tmp, "stash"))).toBe(false);
+    const observation = store.stash({
+      kind: "stash_file",
+      toolName: "stash_file",
+      toolCallId: "call-invalid-b64",
+      content: "not valid!",
+      encoding: "base64",
+    });
+
+    expect(observation.kind).toBe("stash_file");
+    expect(store.readMeta(observation.stashId).encoding).toBe("base64");
   });
 });
