@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  consumeRawShiftEnterEchoCandidate,
   isRawShiftEnterSequence,
   isShiftEnterKey,
+  rawShiftEnterEchoCandidates,
   renderInputBufferForBox,
 } from "../src/tui/renderer.js";
 
@@ -45,5 +47,33 @@ describe("TUI input rendering", () => {
     expect(isRawShiftEnterSequence("\r")).toBe(false);
     expect(isRawShiftEnterSequence("\n")).toBe(false);
     expect(isRawShiftEnterSequence("\x1b[13;5u")).toBe(false);
+  });
+
+  it("suppresses printable residue emitted after raw Shift+Enter", () => {
+    const echoes = rawShiftEnterEchoCandidates("\x1b[27;2;13~");
+
+    expect(echoes).toEqual(["[27;2;13~", "27;2;13~"]);
+
+    expect(consumeRawShiftEnterEchoCandidate(echoes, "27;2;13~")).toEqual({
+      consumed: true,
+      remaining: [],
+    });
+    expect(consumeRawShiftEnterEchoCandidate(echoes, "嗯")).toEqual({
+      consumed: false,
+      remaining: echoes,
+    });
+  });
+
+  it("suppresses Shift+Enter residue when keypress parsing emits it in chunks", () => {
+    const first = consumeRawShiftEnterEchoCandidate(
+      rawShiftEnterEchoCandidates("\x1b[27;2;13~"),
+      "[",
+    );
+    const second = consumeRawShiftEnterEchoCandidate(first.remaining, "27;");
+    const third = consumeRawShiftEnterEchoCandidate(second.remaining, "2;13~");
+
+    expect(first).toEqual({ consumed: true, remaining: ["27;2;13~"] });
+    expect(second).toEqual({ consumed: true, remaining: ["2;13~"] });
+    expect(third).toEqual({ consumed: true, remaining: [] });
   });
 });

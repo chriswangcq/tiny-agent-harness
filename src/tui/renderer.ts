@@ -43,6 +43,7 @@ export class BlessedRenderer implements TuiRenderer {
   private inputBuffer = "";
   private inputCursor = { row: 0, col: 0 };
   private lastRawShiftEnterSequence: string | undefined;
+  private pendingRawShiftEnterEchoes: string[] = [];
 
   constructor() {
     this.screen = blessed.screen({
@@ -338,6 +339,7 @@ export class BlessedRenderer implements TuiRenderer {
       if (!isRawShiftEnterSequence(sequence)) return;
 
       this.lastRawShiftEnterSequence = sequence;
+      this.pendingRawShiftEnterEchoes = rawShiftEnterEchoCandidates(sequence);
       this.insertInputNewline();
     });
 
@@ -371,11 +373,7 @@ export class BlessedRenderer implements TuiRenderer {
     key: blessed.Widgets.Events.IKeyEventArg,
   ): void {
     if (this.isShiftEnter(key)) {
-      if (
-        key.sequence &&
-        this.lastRawShiftEnterSequence === key.sequence
-      ) {
-        this.lastRawShiftEnterSequence = undefined;
+      if (this.consumeRawShiftEnterEcho(ch, key)) {
         return;
       }
       this.insertInputNewline();
@@ -402,6 +400,9 @@ export class BlessedRenderer implements TuiRenderer {
     }
     // Printable character (including CJK / IME composed)
     if (ch && !key.ctrl && !key.meta) {
+      if (this.consumeRawShiftEnterEcho(ch, key)) {
+        return;
+      }
       this.inputBuffer += ch;
       this.refreshInputBar();
     }
@@ -823,6 +824,38 @@ export class BlessedRenderer implements TuiRenderer {
   private isShiftEnter(key: blessed.Widgets.Events.IKeyEventArg): boolean {
     return isShiftEnterKey(key);
   }
+
+  private consumeRawShiftEnterEcho(
+    ch: string,
+    key: blessed.Widgets.Events.IKeyEventArg,
+  ): boolean {
+    const sequence = key.sequence ?? "";
+    if (sequence && sequence === this.lastRawShiftEnterSequence) {
+      this.clearRawShiftEnterEcho();
+      return true;
+    }
+
+    const candidate = sequence || ch;
+    const result = consumeRawShiftEnterEchoCandidate(
+      this.pendingRawShiftEnterEchoes,
+      candidate,
+    );
+    if (!result.consumed) {
+      if (candidate) this.clearRawShiftEnterEcho();
+      return false;
+    }
+
+    this.pendingRawShiftEnterEchoes = result.remaining;
+    if (result.remaining.length === 0) {
+      this.lastRawShiftEnterSequence = undefined;
+    }
+    return true;
+  }
+
+  private clearRawShiftEnterEcho(): void {
+    this.lastRawShiftEnterSequence = undefined;
+    this.pendingRawShiftEnterEchoes = [];
+  }
 }
 
 export type RenderedInputBuffer = {
@@ -847,6 +880,43 @@ export function isRawShiftEnterSequence(sequence: string): boolean {
     sequence === "\x1b[13;2~" ||
     sequence === "\x1b[27;2;13~"
   );
+}
+
+export function rawShiftEnterEchoCandidates(sequence: string): string[] {
+  const withoutEscape = sequence.startsWith("\x1b")
+    ? sequence.slice(1)
+    : sequence;
+  const withoutCsi = withoutEscape.startsWith("[")
+    ? withoutEscape.slice(1)
+    : withoutEscape;
+  return Array.from(new Set([withoutEscape, withoutCsi])).filter(Boolean);
+}
+
+export function consumeRawShiftEnterEchoCandidate(
+  pending: string[],
+  candidate: string,
+): { consumed: boolean; remaining: string[] } {
+  if (!candidate) {
+    return { consumed: false, remaining: pending };
+  }
+
+  let consumed = false;
+  const remaining = pending.flatMap((echo) => {
+    if (echo === candidate) {
+      consumed = true;
+      return [];
+    }
+    if (echo.startsWith(candidate)) {
+      consumed = true;
+      return [echo.slice(candidate.length)];
+    }
+    return [];
+  });
+
+  return {
+    consumed,
+    remaining: consumed ? remaining.filter(Boolean) : pending,
+  };
 }
 
 function rawInputSequence(data: Buffer | string): string {
