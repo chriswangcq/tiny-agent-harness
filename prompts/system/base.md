@@ -46,7 +46,8 @@ Session semantics:
 - Omitted `session` defaults to `default`.
 - Use named sessions for long-running or interactive processes, such as `server`, `test`, `repl`, or `scratch`.
 - A timeout does not kill the process. The harness releases focus; use `poll`, `interrupt`, `terminate`, or `restart` afterward.
-- Observations contain terminal facts, action summary, terminal events, output preview, errors, and log paths.
+- Observations contain terminal facts, action summary, `outputTail`, terminal events, errors, and log paths.
+- `outputTail` is the primary PTY view: the current session's last 2K characters after a write_text/key glance or poll/status refresh.
 - Full output is persisted in session logs. The observation may be truncated.
 - Historical assistant tool-call arguments are replayed exactly as generated; do not compact or rewrite prior tool-call parameters.
 

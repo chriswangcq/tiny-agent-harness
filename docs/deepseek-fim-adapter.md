@@ -93,7 +93,7 @@ type ModelStepContext = {
 };
 ```
 
-The adapter encodes the messages prepared by the orchestrator. There is no special persistent User main message in this harness. User input is part of the Environment; `user_message_received` events are rendered into environment reminders and passed as `latest_reminder` messages. Large bash output is not pasted wholesale; observations already contain log paths and offsets.
+The adapter encodes the messages prepared by the orchestrator. There is no special persistent User main message in this harness. User input is part of the Environment; `user_message_received` events are rendered into environment reminders and passed as `latest_reminder` messages. Large bash output is not pasted wholesale; observations carry the current session `outputTail` plus log paths and offsets.
 
 ## Pass 1: Generate Thinking
 

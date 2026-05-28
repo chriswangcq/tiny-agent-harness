@@ -111,6 +111,21 @@ export class ManagedPtySession {
     };
   }
 
+  readOutputTailAt(endOffset: number, maxBytes: number): {
+    chunk: string;
+    startOffset: number;
+    endOffset: number;
+  } {
+    const safeEndOffset = Math.max(0, Math.min(endOffset, this.outputBytes));
+    const startOffset = Math.max(0, safeEndOffset - Math.max(0, maxBytes));
+    const output = Buffer.concat(this.outputChunks, this.outputBytes);
+    return {
+      chunk: output.subarray(startOffset, safeEndOffset).toString("utf-8"),
+      startOffset,
+      endOffset: safeEndOffset,
+    };
+  }
+
   private applyChunk(chunk: string): void {
     const bytes = Buffer.from(chunk, "utf-8");
     this.outputChunks.push(bytes);

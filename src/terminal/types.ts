@@ -145,6 +145,9 @@ export type PtyObservation = {
   eventCount: number;
   eventsOmitted?: number;
   events: TerminalEventSummary[];
+  outputTail?: string;
+  outputTailBytes?: number;
+  newOutputBytes?: number;
   outputPreview?: string;
   logRef?: string;
   errorCode?: TerminalErrorCode;

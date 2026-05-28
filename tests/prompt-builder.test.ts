@@ -38,6 +38,8 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("one ctrl-d may only flush the current line");
     expect(prompt.messages[0]!.content).toContain("do not send any further shell command until a prompt returns");
     expect(prompt.messages[0]!.content).toContain("terminal.inputSeq");
+    expect(prompt.messages[0]!.content).toContain("outputTail");
+    expect(prompt.messages[0]!.content).toContain("last 2K characters");
     expect(prompt.messages[0]!.content).toContain("does not infer whether");
     expect(prompt.messages[0]!.content).toContain("side-channel payload protocols");
     expect(prompt.messages[0]!.content).not.toContain("small/simple generated text files");

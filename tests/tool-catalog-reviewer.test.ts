@@ -42,6 +42,8 @@ describe("static tool catalog", () => {
     expect(BASH_TOOL_DEFINITION.description).toContain("do not send any further shell command until a prompt returns");
     expect(BASH_TOOL_DEFINITION.description).toContain("does not infer");
     expect(BASH_TOOL_DEFINITION.description).toContain("terminal.inputSeq");
+    expect(BASH_TOOL_DEFINITION.description).toContain("outputTail");
+    expect(BASH_TOOL_DEFINITION.description).toContain("last 2K characters");
     expect(BASH_TOOL_DEFINITION.description).not.toContain(["rece", "iver"].join(""));
     expect(BASH_TOOL_DEFINITION.description).not.toContain("small/simple generated text files");
     expect(STASH_FILE_TOOL_DEFINITION.name).toBe("stash_file");

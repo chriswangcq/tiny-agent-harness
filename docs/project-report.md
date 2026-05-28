@@ -101,7 +101,7 @@ task / environment reminder
 
 4. **大输出外化到日志**
 
-   Observation 只返回本次新增窗口、return code、offset 和 log path。完整输出由 session log 保存，agent 需要更多细节时再通过 bash 使用 `tail`、`sed`、`rg` 查看。
+   Observation 只返回当前 session 尾部 `outputTail`、terminal facts、offset 和 log path。完整输出由 session log 保存，agent 需要更多细节时再通过 bash 使用 `tail`、`sed`、`rg` 查看。
 
 5. **执行轨迹可播放**
 

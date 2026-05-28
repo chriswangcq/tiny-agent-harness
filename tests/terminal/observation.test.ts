@@ -80,8 +80,8 @@ describe("terminal observation helpers", () => {
           logRef: "log-1",
         },
       ],
-      outputPreview: "abcdefghij",
-      limits: { maxPreviewChars: 5 },
+      outputTail: "abcdefghij",
+      limits: { maxPreviewChars: 5, maxOutputTailChars: 5 },
     });
 
     expect(observation).toMatchObject({
@@ -100,7 +100,8 @@ describe("terminal observation helpers", () => {
           logRef: "log-1",
         },
       ],
-      outputPreview: "abcd…",
+      outputTail: "…ghij",
+      outputPreview: "…ghij",
     });
     expect(JSON.stringify(observation)).not.toContain("aGVsbG8=");
   });
@@ -126,8 +127,8 @@ describe("terminal observation helpers", () => {
     expect(observation.eventCount).toBe(5);
     expect(observation.eventsOmitted).toBe(3);
     expect(observation.events).toEqual([
-      { kind: "output", bytes: 20, preview: "line-0" },
-      { kind: "output", bytes: 20, preview: "line-1" },
+      { kind: "output", bytes: 20, preview: "line-3" },
+      { kind: "output", bytes: 20, preview: "line-4" },
     ]);
   });
 

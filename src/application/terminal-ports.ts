@@ -24,6 +24,7 @@ export type TerminalRuntimeSnapshot = {
 
 export type PtyReadResult = {
   chunk: string;
+  outputTail?: string;
   cursor?: string;
   logRef?: LogRef;
 };

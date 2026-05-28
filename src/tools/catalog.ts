@@ -106,7 +106,7 @@ export const BASH_TOOL_DEFINITION: ToolDefinition = {
   description:
     "Operate a persistent PTY session with inputSeq-guarded actions. " +
     "This is a pure PTY interface: write_text writes exact bytes to the terminal and never appends Enter for you; include \\n explicitly or use key enter. Large write_text payloads are allowed and internally paced, which solves PTY transport but not shell parsing. " +
-    "After write_text/key input, the runtime waits briefly before reading output so immediate echo or command output can appear in the same observation. " +
+    "After write_text/key input, the runtime waits about 100ms before glancing at the PTY. bash observations expose outputTail, the current session's last 2K characters, as the primary terminal view. poll/status refresh the same terminal tail without writing input. " +
     "Use key only for terminal keys such as enter, ctrl-c, ctrl-d, escape, tab, up, and down. " +
     "Use poll/status to observe and interrupt/terminate/restart to recover. The runtime reports terminal facts such as lastShellPrompt, lastContinuationPrompt, syncStatus, alive, and inputSeq; it does not infer whether shell, Python, ssh, cat, vim, or another foreground program should receive the next bytes. The agent must inspect the PTY output and terminal facts before deciding what to type. " +
     "Every write_text/key action must include the latest terminal.inputSeq from the prior observation. The sequence only prevents stale input; it is not a foreground process claim. " +
@@ -114,7 +114,7 @@ export const BASH_TOOL_DEFINITION: ToolDefinition = {
     "For interactive foreground stdin programs, use PTY input directly: start a foreground stdin consumer such as `cat > path\\n` or `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin\\n`, poll until it is clearly waiting for input, write the payload text directly, send ctrl-d, and poll until the shell prompt returns. End text payloads with \\n before ctrl-d. If the payload does not end with \\n, one ctrl-d may only flush the current line while the foreground program keeps reading; do not send any further shell command until a prompt returns, and send a second ctrl-d if needed. " +
     "For user-visible IM replies, prefer a quoted heredoc into `--text-stdin`, for example `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin <<'IM'\\n<reply markdown>\\nIM\\n`. Quoted heredoc stdin is stable for Markdown and avoids shell argument quoting. Do not use `im send --text` from the agent. " +
     "The runtime paces large writes internally. " +
-    "Historical assistant tool-call arguments are serialized exactly as generated. PTY observations remain bounded summaries; use eventCount, eventsOmitted, outputPreview, and logRef to understand when more terminal output exists. " +
+    "Historical assistant tool-call arguments are serialized exactly as generated. PTY observations remain bounded summaries; use outputTail first, terminal facts second, and eventCount/eventsOmitted/logRef only for debugging or fetching more terminal history. " +
     "Do not invent frame actions, side-channel payload protocols, or command-shaped bash payloads.",
   inputSchema: BashToolInputSchema,
 };

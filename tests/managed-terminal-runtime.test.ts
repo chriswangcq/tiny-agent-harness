@@ -180,8 +180,51 @@ describe("ManagedTerminalRuntime", () => {
       result: "ok",
       eventCount: 1,
       events: [{ kind: "output", preview: "/repo" }],
-      outputPreview: "/repo",
     });
+    expect(observation.outputPreview).toContain("/repo");
+    expect(observation.outputTail).toContain("/repo");
+  });
+
+  it("keeps tail success output and prompt after noisy multiline PTY output", async () => {
+    const port = makeRuntime({ postWriteReadDelayMs: 20 }).createRunPort();
+    await port.execute({ action: { kind: "status" } });
+
+    const pending = port.execute({
+      action: {
+        kind: "write_text",
+        expectedInputSeq: 0,
+        text:
+          "node dist/cli/main.js im send --channel default --kind status --text-stdin <<'IM'\n" +
+          "body\n" +
+          "IM\n",
+      },
+    });
+    setTimeout(() => {
+      ptyMock.spawned[0]?.emit(
+        [
+          "$ node dist/cli/main.js im send --channel default --kind status --text-stdin <<'IM'",
+          ...Array.from({ length: 60 }, (_, index) => `> line-${index}`),
+          "ok=true",
+          "id=agent-1",
+          formatPromptMarker({
+            nonce: "nonce",
+            returnCode: 0,
+            cwd: "/repo",
+            promptSeq: 2,
+          }),
+          "$ ",
+        ].join("\n"),
+      );
+    }, 5);
+
+    const observation = await pending;
+
+    expect(observation.eventCount).toBeGreaterThan(50);
+    expect(observation.eventsOmitted).toBeGreaterThan(0);
+    expect(observation.events.at(-1)).toEqual({ kind: "prompt" });
+    expect(observation.outputTail).toContain("ok=true");
+    expect(observation.outputTail).toContain("id=agent-1");
+    expect(observation.outputTail).not.toContain("__TAH_PROMPT__");
   });
 
   it("paces large write_text input into PTY chunks without dropping bytes", async () => {

@@ -77,8 +77,15 @@ export class ManagedTerminalRuntime {
           await this.drainStartup(entry);
           const start = parseCursor(cursor);
           const output = entry.pty.readOutputSince(start);
+          const outputTail = stripManagedShellNoise(
+            entry.pty.readOutputTailAt(
+              output.endOffset,
+              outputTailReadBytes(this.options.observationLimits),
+            ).chunk,
+          );
           return {
             chunk: output.chunk,
+            outputTail: outputTail.trim().length > 0 ? outputTail : undefined,
             logRef: {
               kind: "log",
               ref: `managed-pty://${session}`,
@@ -200,6 +207,29 @@ function delay(ms: number): Promise<void> {
     return Promise.resolve();
   }
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function outputTailReadBytes(limits: TerminalObservationLimits): number {
+  const tailChars =
+    limits.maxOutputTailChars ??
+    DEFAULT_MANAGED_OUTPUT_TAIL_CHARS;
+  return Math.max(4096, tailChars * 4);
+}
+
+const DEFAULT_MANAGED_OUTPUT_TAIL_CHARS = 2048;
+
+function stripManagedShellNoise(value: string): string {
+  return value
+    .split("\n")
+    .filter((line) =>
+      !line.includes("__TAH_PROMPT__") &&
+      !line.includes("__TAH_CONT__") &&
+      !line.includes("export TAH_PROMPT_NONCE=") &&
+      !line.includes("export TAH_PROMPT_SEQ=") &&
+      !line.includes("export PS1=") &&
+      !line.includes("export PS2=")
+    )
+    .join("\n");
 }
 
 async function waitUntil(condition: () => boolean, timeoutMs: number): Promise<void> {
