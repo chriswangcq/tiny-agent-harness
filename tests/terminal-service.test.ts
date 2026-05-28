@@ -32,7 +32,6 @@ function makeConfig(): TerminalServiceConfig {
     actionLimits: {},
     observationLimits: {
       maxPreviewChars: 80,
-      maxEvents: 50,
     },
   };
 }
@@ -144,7 +143,8 @@ describe("TerminalService", () => {
         kind: "write_text",
         preview: "echo ok\n",
       },
-      events: [{ kind: "prompt" }],
+      eventCount: 1,
+      returnedToPrompt: true,
     });
   });
 
@@ -166,7 +166,8 @@ describe("TerminalService", () => {
       terminal: {
         inputSeq: 2,
       },
-      events: [],
+      eventCount: 0,
+      returnedToPrompt: false,
       outputPreview: ">>> ",
     });
   });
@@ -220,6 +221,9 @@ describe("TerminalService", () => {
         reason: "terminated_by_action",
       },
     });
-    expect(observation.events).toEqual([{ kind: "terminated" }]);
+    expect(observation).toMatchObject({
+      eventCount: 1,
+      returnedToPrompt: false,
+    });
   });
 });

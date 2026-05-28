@@ -81,7 +81,7 @@ describe("PromptBuilder", () => {
           action: { kind: "write_text", preview: "pwd" },
           result: "ok",
           eventCount: 1,
-          events: [{ kind: "prompt" }],
+          returnedToPrompt: true,
         },
       },
     ];
@@ -132,7 +132,7 @@ describe("PromptBuilder", () => {
       action: { kind: "write_text", preview: "pwd" },
       result: "ok",
       eventCount: 1,
-      events: [{ kind: "prompt" }],
+      returnedToPrompt: true,
     }));
   });
 

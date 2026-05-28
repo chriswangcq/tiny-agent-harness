@@ -179,7 +179,7 @@ function makeRun(options?: {
             },
             result: "ok",
             eventCount: 0,
-            events: [],
+            returnedToPrompt: false,
           }
         );
       },
@@ -628,7 +628,7 @@ describe("RunOrchestrator", () => {
       action: { kind: "write_text", preview: "pwd" },
       result: "rejected",
       eventCount: 0,
-      events: [],
+      returnedToPrompt: false,
       errorCode: "TERMINAL_UNSYNCED",
       message: "Terminal state is unsynced.",
     };
@@ -739,7 +739,7 @@ describe("RunOrchestrator", () => {
       },
       result: "ok",
       eventCount: 0,
-      events: [],
+      returnedToPrompt: false,
       outputPreview: "node dist/cli/main.js im send --ch",
     };
     const { orchestrator, transcript, waitCalls, histories } = makeRun({

@@ -44,7 +44,7 @@ const SYSTEM_MESSAGE =
   "  If terminal.alive is false, recover with restart. If terminal.syncStatus is unsynced, inspect with poll/status or recover with interrupt/terminate/restart.\n" +
   "  For user-visible IM replies, use `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin`. A quoted heredoc is the normal form, including for Markdown, Chinese, emoji, and tables, for example `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin <<'IM'\\nDone.\\nIM\\n`. Input redirection such as `< reply.md` and process substitution with `file cat` are also valid when they make the command simpler. Do not use `im send --text` from the agent.\n" +
   "  Do not invent frame actions, side-channel payload protocols, or command-shaped bash payloads.\n" +
-  "  Historical assistant tool-call arguments are serialized exactly as generated. PTY observations remain bounded summaries; use outputTail first, terminal facts second, and eventCount/eventsOmitted/logRef only for debugging or fetching more terminal history.\n" +
+  "  Historical assistant tool-call arguments are serialized exactly as generated. PTY observations remain bounded summaries; use outputTail first, terminal facts second, returnedToPrompt to tell whether the latest observation saw a shell prompt, and eventCount/logRef only for debugging or fetching more terminal history.\n" +
   "- io_wait: pause until the next external event. This is a TOOL CALL, not a shell command. " +
   "Never run io_wait via bash; invoke it directly as a tool.\n\n" +
   "Thinking is reasoning-only. During thinking, do not emit tool-call markup, raw tool arguments, shell heredocs, or final user-facing prose. Describe the intended next action in words only.\n\n" +

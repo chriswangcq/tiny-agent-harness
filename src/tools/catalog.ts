@@ -114,7 +114,7 @@ export const BASH_TOOL_DEFINITION: ToolDefinition = {
     "After any multiline command or stdin flow, poll until the shell prompt or a clear command result returns before sending the next command. " +
     "For user-visible IM replies, use `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin`. A quoted heredoc is the normal form, including for Markdown, Chinese, emoji, and tables, for example `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin <<'IM'\\nDone.\\nIM\\n`. Input redirection such as `< reply.md` and process substitution with `file cat` are also valid when they make the command simpler. Do not use `im send --text` from the agent. " +
     "Runtime pacing protects every write_text input. " +
-    "Historical assistant tool-call arguments are serialized exactly as generated. PTY observations remain bounded summaries; use outputTail first, terminal facts second, and eventCount/eventsOmitted/logRef only for debugging or fetching more terminal history. " +
+    "Historical assistant tool-call arguments are serialized exactly as generated. PTY observations remain bounded summaries; use outputTail first, terminal facts second, returnedToPrompt to tell whether the latest observation saw a shell prompt, and eventCount/logRef only for debugging or fetching more terminal history. " +
     "Do not invent frame actions, side-channel payload protocols, or command-shaped bash payloads.",
   inputSchema: BashToolInputSchema,
 };

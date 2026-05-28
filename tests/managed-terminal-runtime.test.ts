@@ -59,7 +59,6 @@ function makeRuntime(options: {
     actionLimits: {},
     observationLimits: {
       maxPreviewChars: 80,
-      maxEvents: 50,
     },
     postWriteReadDelayMs: options.postWriteReadDelayMs ?? 0,
     startupReadDelayMs: options.startupReadDelayMs ?? 0,
@@ -104,7 +103,8 @@ describe("ManagedTerminalRuntime", () => {
           promptSeq: 1,
         },
       },
-      events: [{ kind: "prompt" }],
+      eventCount: 1,
+      returnedToPrompt: true,
     });
   });
 
@@ -138,7 +138,8 @@ describe("ManagedTerminalRuntime", () => {
           promptSeq: 1,
         },
       },
-      events: [],
+      eventCount: 0,
+      returnedToPrompt: false,
     });
     expect(observation.outputPreview).toBeUndefined();
   });
@@ -179,7 +180,7 @@ describe("ManagedTerminalRuntime", () => {
     expect(observation).toMatchObject({
       result: "ok",
       eventCount: 1,
-      events: [{ kind: "output", preview: "/repo" }],
+      returnedToPrompt: false,
     });
     expect(observation.outputPreview).toContain("/repo");
     expect(observation.outputTail).toContain("/repo");
@@ -220,8 +221,8 @@ describe("ManagedTerminalRuntime", () => {
     const observation = await pending;
 
     expect(observation.eventCount).toBeGreaterThan(50);
-    expect(observation.eventsOmitted).toBeGreaterThan(0);
-    expect(observation.events.at(-1)).toEqual({ kind: "prompt" });
+    expect(observation.returnedToPrompt).toBe(true);
+    expect("events" in observation).toBe(false);
     expect(observation.outputTail).toContain("ok=true");
     expect(observation.outputTail).toContain("id=agent-1");
     expect(observation.outputTail).not.toContain("__TAH_PROMPT__");

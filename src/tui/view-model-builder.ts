@@ -612,7 +612,8 @@ function isPtyObservation(value: unknown): value is PtyObservation {
     "terminal" in value &&
     "action" in value &&
     "result" in value &&
-    "events" in value
+    "eventCount" in value &&
+    "returnedToPrompt" in value
   );
 }
 
@@ -625,8 +626,11 @@ function formatPtyObservationSummary(observation: PtyObservation): string {
   if (observation.terminal.syncStatus.kind === "unsynced") {
     parts.push(`sync=unsynced:${observation.terminal.syncStatus.reason}`);
   }
-  if (observation.eventsOmitted !== undefined) {
-    parts.push(`eventsOmitted=${observation.eventsOmitted}`);
+  if (observation.eventCount > 0) {
+    parts.push(`events=${observation.eventCount}`);
+  }
+  if (observation.returnedToPrompt) {
+    parts.push("returnedToPrompt=true");
   }
   if (observation.action.bytes !== undefined) {
     parts.push(`bytes=${observation.action.bytes}`);

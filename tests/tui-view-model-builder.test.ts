@@ -88,7 +88,7 @@ function makePtyObservation(result: PtyObservation["result"] = "ok"): PtyObserva
     action: { kind: "write_text", preview: "pwd" },
     result,
     eventCount: 0,
-    events: [],
+    returnedToPrompt: false,
     logRef: "/tmp/log.txt",
   };
 }
@@ -130,7 +130,7 @@ function makeLargeWriteObservation(): PtyObservation {
     },
     result: "ok",
     eventCount: 1,
-    events: [{ kind: "prompt" }],
+    returnedToPrompt: true,
   };
 }
 

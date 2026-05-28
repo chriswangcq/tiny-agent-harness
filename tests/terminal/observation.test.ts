@@ -3,7 +3,6 @@ import { compactTerminalHistoryEntry } from "../../src/terminal/history.js";
 import {
   buildPtyObservation,
   summarizePtyAction,
-  summarizeTerminalEvent,
 } from "../../src/terminal/observation.js";
 import { createTerminalState } from "../../src/terminal/state.js";
 
@@ -48,20 +47,6 @@ describe("terminal observation helpers", () => {
     });
   });
 
-  it("summarizes prompt events without payload metadata", () => {
-    expect(
-      summarizeTerminalEvent({
-        kind: "prompt",
-        returnCode: 0,
-        cwd: "/repo",
-        promptSeq: 2,
-        promptNonce: "nonce",
-      }),
-    ).toEqual({
-      kind: "prompt",
-    });
-  });
-
   it("builds compact PTY observations", () => {
     const observation = buildPtyObservation({
       session: "default",
@@ -92,26 +77,30 @@ describe("terminal observation helpers", () => {
         preview: "aGVs…",
         redacted: true,
       },
-      events: [
-        {
-          kind: "output",
-          bytes: 18,
-          preview: "abcd…",
-          logRef: "log-1",
-        },
-      ],
+      eventCount: 1,
+      returnedToPrompt: false,
       outputTail: "…ghij",
       outputPreview: "…ghij",
     });
     expect(JSON.stringify(observation)).not.toContain("aGVsbG8=");
+    expect(JSON.stringify(observation)).not.toContain("events");
   });
 
-  it("bounds terminal event summaries while preserving event counts", () => {
-    const events = Array.from({ length: 5 }, (_, index) => ({
-      kind: "output" as const,
-      bytes: 20,
-      preview: `line-${index}`,
-    }));
+  it("records whether this observation returned to a shell prompt", () => {
+    const events = [
+      {
+        kind: "output" as const,
+        bytes: 20,
+        preview: "ok=true",
+      },
+      {
+        kind: "prompt" as const,
+        returnCode: 0,
+        cwd: "/repo",
+        promptSeq: 2,
+        promptNonce: "nonce",
+      },
+    ];
 
     const observation = buildPtyObservation({
       session: "default",
@@ -121,15 +110,12 @@ describe("terminal observation helpers", () => {
       },
       result: "ok",
       events,
-      limits: { maxEvents: 2, maxPreviewChars: 20 },
+      limits: { maxPreviewChars: 20 },
     });
 
-    expect(observation.eventCount).toBe(5);
-    expect(observation.eventsOmitted).toBe(3);
-    expect(observation.events).toEqual([
-      { kind: "output", bytes: 20, preview: "line-3" },
-      { kind: "output", bytes: 20, preview: "line-4" },
-    ]);
+    expect(observation.eventCount).toBe(2);
+    expect(observation.returnedToPrompt).toBe(true);
+    expect("events" in observation).toBe(false);
   });
 
   it("redacts payload-like fields when compacting history entries", () => {

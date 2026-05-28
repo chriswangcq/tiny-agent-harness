@@ -29,7 +29,6 @@ describe("ManagedTerminalRuntime real PTY pacing", () => {
       actionLimits: {},
       observationLimits: {
         maxPreviewChars: 200,
-        maxEvents: 20,
       },
       postWriteReadDelayMs: 150,
       startupReadDelayMs: 500,

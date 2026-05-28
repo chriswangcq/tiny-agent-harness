@@ -130,21 +130,13 @@ export type PtyActionSummary = {
   redacted?: boolean;
 };
 
-export type TerminalEventSummary = {
-  kind: TerminalEvent["kind"];
-  bytes?: number;
-  preview?: string;
-  logRef?: string;
-};
-
 export type PtyObservation = {
   session: string;
   terminal: TerminalState;
   action: PtyActionSummary;
   result: "ok" | "rejected" | "timeout" | "interrupted";
   eventCount: number;
-  eventsOmitted?: number;
-  events: TerminalEventSummary[];
+  returnedToPrompt: boolean;
   outputTail?: string;
   outputTailBytes?: number;
   newOutputBytes?: number;

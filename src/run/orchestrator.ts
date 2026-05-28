@@ -489,7 +489,7 @@ function pendingImSendMessage(history: readonly HistoryItem[]): string | undefin
   if (!isImSendPreview(observation.action.preview)) {
     return undefined;
   }
-  if (observation.events.some((event) => event.kind === "prompt")) {
+  if (observation.returnedToPrompt) {
     return undefined;
   }
 
@@ -502,7 +502,9 @@ function isPtyObservation(value: PtyObservation | AgentObservation): value is Pt
     value !== null &&
     "terminal" in value &&
     "action" in value &&
-    "events" in value
+    "result" in value &&
+    "eventCount" in value &&
+    "returnedToPrompt" in value
   );
 }
 

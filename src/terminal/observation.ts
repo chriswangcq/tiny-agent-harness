@@ -4,19 +4,16 @@ import type {
   PtyObservation,
   TerminalErrorCode,
   TerminalEvent,
-  TerminalEventSummary,
   TerminalState,
 } from "./types.js";
 
 export type TerminalObservationLimits = {
   maxPreviewChars: number;
-  maxEvents: number;
   maxOutputTailChars?: number;
 };
 
 export const DEFAULT_TERMINAL_OBSERVATION_LIMITS: TerminalObservationLimits = {
   maxPreviewChars: 160,
-  maxEvents: 50,
   maxOutputTailChars: 2048,
 };
 
@@ -53,34 +50,6 @@ export function summarizePtyAction(
   }
 }
 
-export function summarizeTerminalEvent(
-  event: TerminalEvent,
-  limits: Partial<TerminalObservationLimits> = {},
-): TerminalEventSummary {
-  const resolved = { ...DEFAULT_TERMINAL_OBSERVATION_LIMITS, ...limits };
-
-  switch (event.kind) {
-    case "output":
-      return withoutUndefined({
-        kind: "output",
-        bytes: event.bytes,
-        preview: preview(event.preview, resolved.maxPreviewChars),
-        logRef: event.logRef,
-      });
-    case "prompt":
-    case "continuation_prompt":
-    case "terminated":
-    case "unsynced":
-      return { kind: event.kind };
-  }
-}
-
-function withoutUndefined<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(
-    Object.entries(value).filter(([, child]) => child !== undefined),
-  ) as T;
-}
-
 export function buildPtyObservation(input: {
   session: string;
   terminal: TerminalState;
@@ -96,12 +65,6 @@ export function buildPtyObservation(input: {
   limits?: Partial<TerminalObservationLimits>;
 }): PtyObservation {
   const limits = { ...DEFAULT_TERMINAL_OBSERVATION_LIMITS, ...input.limits };
-  const eventTail =
-    limits.maxEvents <= 0 ? [] : input.events.slice(-limits.maxEvents);
-  const summarizedEvents = eventTail.map((event) =>
-    summarizeTerminalEvent(event, limits),
-  );
-  const eventsOmitted = Math.max(0, input.events.length - summarizedEvents.length);
   const outputTail =
     input.outputTail === undefined
       ? undefined
@@ -113,8 +76,7 @@ export function buildPtyObservation(input: {
     action: summarizePtyAction(input.action, limits),
     result: input.result,
     eventCount: input.events.length,
-    eventsOmitted: eventsOmitted > 0 ? eventsOmitted : undefined,
-    events: summarizedEvents,
+    returnedToPrompt: input.events.some((event) => event.kind === "prompt"),
     outputTail,
     outputTailBytes: outputTail === undefined ? undefined : utf8Bytes(outputTail),
     newOutputBytes: input.newOutputBytes,
