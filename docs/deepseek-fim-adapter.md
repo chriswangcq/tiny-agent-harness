@@ -360,6 +360,9 @@ type DeepSeekFimConfig = {
   model: "deepseek-v4-pro";
   thinkingMaxTokens: number; // <= 4096
   decisionMaxTokens: number; // <= 4096
+  requestRetryMaxAttempts?: number; // default 3
+  requestRetryInitialDelayMs?: number; // default 500
+  requestRetryMaxDelayMs?: number; // default 4000
 };
 ```
 
@@ -369,9 +372,15 @@ Suggested defaults:
 {
   "model": "deepseek-v4-pro",
   "thinkingMaxTokens": 2048,
-  "decisionMaxTokens": 1024
+  "decisionMaxTokens": 1024,
+  "requestRetryMaxAttempts": 3
 }
 ```
+
+FIM request retry is scoped to failures before streaming starts: fetch/connect
+failures plus HTTP `429` and `5xx`. Once the SSE stream is being parsed, errors
+are surfaced directly instead of replaying the request, so transcripted thinking
+or decision chunks are not duplicated.
 
 ## Transcript Events
 

@@ -25,6 +25,9 @@ export type DeepSeekFimConfig = {
   thinkingMaxTokens: number;
   decisionMaxTokens: number;
   continuationMaxRounds?: number;
+  requestRetryMaxAttempts?: number;
+  requestRetryInitialDelayMs?: number;
+  requestRetryMaxDelayMs?: number;
 };
 
 type FimCompletionMeta = {
@@ -303,6 +306,44 @@ export class DeepSeekFimAdapter {
     finishReason?: string | null;
     completionTokens?: number;
   }> {
+    const maxAttempts = positiveIntegerOrDefault(
+      this.config.requestRetryMaxAttempts,
+      3,
+    );
+    let lastRetryableError: RetryableFimRequestError | undefined;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await this.requestFimCompletionOnce(input);
+      } catch (error) {
+        if (!isRetryableFimRequestError(error)) {
+          throw error;
+        }
+
+        lastRetryableError = error;
+        if (attempt >= maxAttempts) break;
+
+        await delay(this.requestRetryDelayMs(attempt));
+      }
+    }
+
+    const message = lastRetryableError
+      ? `${lastRetryableError.message} (after ${maxAttempts} attempts)`
+      : `DeepSeek FIM request failed after ${maxAttempts} attempts`;
+    throw new Error(message, { cause: lastRetryableError });
+  }
+
+  private async requestFimCompletionOnce(input: {
+    prompt: string;
+    suffix?: string;
+    maxTokens: number;
+    stop?: string[];
+    onChunk?: (text: string) => void | Promise<void>;
+  }): Promise<{
+    text: string;
+    finishReason?: string | null;
+    completionTokens?: number;
+  }> {
     const body: Record<string, unknown> = {
       model: this.config.model,
       prompt: input.prompt,
@@ -317,23 +358,49 @@ export class DeepSeekFimAdapter {
       body.stop = input.stop;
     }
 
-    const response = await fetch(`${this.config.baseUrl}/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.config.apiKey}`,
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(
-        `DeepSeek FIM request failed: ${response.status} ${body}`,
+    let response: Response;
+    try {
+      response = await fetch(`${this.config.baseUrl}/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config.apiKey}`,
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (error) {
+      throw new RetryableFimRequestError(
+        `DeepSeek FIM request failed before response: ${errorMessage(error)}`,
+        { cause: error },
       );
     }
 
+    if (!response.ok) {
+      const body = await response.text();
+      const message = `DeepSeek FIM request failed: ${response.status} ${body}`;
+      if (isRetryableHttpStatus(response.status)) {
+        throw new RetryableFimRequestError(message, {
+          status: response.status,
+        });
+      }
+      throw new Error(message);
+    }
+
     return this.readFimCompletionStream(response, input.onChunk);
+  }
+
+  private requestRetryDelayMs(completedAttempt: number): number {
+    const initialDelay = nonNegativeNumberOrDefault(
+      this.config.requestRetryInitialDelayMs,
+      500,
+    );
+    const maxDelay = nonNegativeNumberOrDefault(
+      this.config.requestRetryMaxDelayMs,
+      4_000,
+    );
+    const exponentialDelay =
+      initialDelay * 2 ** Math.max(0, completedAttempt - 1);
+    return Math.min(exponentialDelay, maxDelay);
   }
 
   private async readFimCompletionStream(
@@ -843,6 +910,56 @@ function parseDsmlParameters(
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
+
+class RetryableFimRequestError extends Error {
+  readonly status?: number;
+
+  constructor(
+    message: string,
+    options?: { cause?: unknown; status?: number },
+  ) {
+    super(message, { cause: options?.cause });
+    this.name = "RetryableFimRequestError";
+    this.status = options?.status;
+  }
+}
+
+function isRetryableFimRequestError(
+  error: unknown,
+): error is RetryableFimRequestError {
+  return error instanceof RetryableFimRequestError;
+}
+
+function isRetryableHttpStatus(status: number): boolean {
+  return status === 429 || (status >= 500 && status <= 599);
+}
+
+function delay(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function positiveIntegerOrDefault(value: unknown, defaultValue: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return defaultValue;
+  }
+  return Math.max(1, Math.trunc(value));
+}
+
+function nonNegativeNumberOrDefault(
+  value: unknown,
+  defaultValue: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return defaultValue;
+  }
+  return Math.max(0, value);
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  return String(error);
+}
 
 function buildDecision(
   name: string,

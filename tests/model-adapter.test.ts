@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DeepSeekFimAdapter } from "../src/model/adapter.js";
 import { parseDsmlDecision } from "../src/model/adapter.js";
 import { STATIC_TOOL_CATALOG } from "../src/tools/catalog.js";
+import type { DeepSeekFimConfig } from "../src/model/adapter.js";
 import type { ModelStepContext, V4ChatMessage } from "../src/types/model.js";
 
 const DSML = "｜DSML｜";
@@ -30,13 +31,16 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-function makeAdapter(): DeepSeekFimAdapter {
+function makeAdapter(
+  overrides: Partial<DeepSeekFimConfig> = {},
+): DeepSeekFimAdapter {
   return new DeepSeekFimAdapter({
     apiKey: "test-key",
     baseUrl: "https://deepseek.example/beta",
     model: "deepseek-v4-pro",
     thinkingMaxTokens: 123,
     decisionMaxTokens: 45,
+    ...overrides,
   });
 }
 
@@ -640,17 +644,76 @@ describe("DeepSeekFimAdapter", () => {
     });
   });
 
-  it("throws with response body when the FIM request fails", async () => {
+  it("throws with response body when the FIM request fails with a non-retryable status", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(failedFimResponse(429, "rate limited"));
+      .mockResolvedValueOnce(failedFimResponse(400, "bad request"));
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
       makeAdapter().generateTurn(BASE_CONTEXT, {
         tools: [...STATIC_TOOL_CATALOG],
       }),
-    ).rejects.toThrow("DeepSeek FIM request failed: 429 rate limited");
+    ).rejects.toThrow("DeepSeek FIM request failed: 400 bad request");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries FIM fetch failures before a streaming response starts", async () => {
+    const rawDecision = dsmlBash(writeText("pwd"));
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(okFimResponse("Need inspect cwd"))
+      .mockResolvedValueOnce(okFimResponse(rawDecision));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const output = await makeAdapter({
+      requestRetryInitialDelayMs: 0,
+    }).generateTurn(BASE_CONTEXT, {
+      tools: [...STATIC_TOOL_CATALOG],
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(output.turn.kind).toBe("tool_call");
+  });
+
+  it("retries retryable FIM HTTP statuses before reading the stream", async () => {
+    const rawDecision = dsmlBash(writeText("pwd"));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(failedFimResponse(429, "rate limited"))
+      .mockResolvedValueOnce(failedFimResponse(502, "bad gateway"))
+      .mockResolvedValueOnce(okFimResponse("Need inspect cwd"))
+      .mockResolvedValueOnce(okFimResponse(rawDecision));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const output = await makeAdapter({
+      requestRetryInitialDelayMs: 0,
+    }).generateTurn(BASE_CONTEXT, {
+      tools: [...STATIC_TOOL_CATALOG],
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(output.turn.kind).toBe("tool_call");
+  });
+
+  it("stops retrying after the configured FIM request attempt limit", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(failedFimResponse(500, "server error"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      makeAdapter({
+        requestRetryInitialDelayMs: 0,
+        requestRetryMaxAttempts: 2,
+      }).generateTurn(BASE_CONTEXT, {
+        tools: [...STATIC_TOOL_CATALOG],
+      }),
+    ).rejects.toThrow(
+      "DeepSeek FIM request failed: 500 server error (after 2 attempts)",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("throws when the FIM response has no text choice", async () => {
@@ -673,6 +736,7 @@ describe("DeepSeekFimAdapter", () => {
         tools: [...STATIC_TOOL_CATALOG],
       }),
     ).rejects.toThrow("DeepSeek FIM stream chunk missing choices[0].text");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("passes tools to the encoder so V4 chat template conditions both FIM passes", async () => {
