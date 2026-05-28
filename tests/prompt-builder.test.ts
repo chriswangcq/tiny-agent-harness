@@ -264,4 +264,35 @@ describe("PromptBuilder", () => {
     });
     expect(fn.arguments).not.toContain("omitted stash_file content");
   });
+
+  it("serializes historical io_wait tool-call arguments exactly", () => {
+    const history: HistoryEntry[] = [
+      {
+        role: "assistant_tool_call",
+        toolCallId: "fim-call-run-001-3",
+        name: "io_wait",
+        arguments: {
+          reason: "awaiting user",
+          condition: { kind: "new_user_message", channel: "default" },
+        },
+        thinking: "I should wait for the next user message.",
+      },
+    ];
+
+    const prompt = new PromptBuilder().buildNextPrompt("wait", history);
+    const assistantMsg = prompt.messages[1]! as Record<string, unknown>;
+    const toolCalls = assistantMsg.tool_calls as Array<Record<string, unknown>>;
+    const fn = toolCalls[0]!.function as Record<string, unknown>;
+
+    expect(assistantMsg.reasoning).toBe(
+      "I should wait for the next user message.",
+    );
+    expect(fn).toEqual({
+      name: "io_wait",
+      arguments: JSON.stringify({
+        reason: "awaiting user",
+        condition: { kind: "new_user_message", channel: "default" },
+      }),
+    });
+  });
 });

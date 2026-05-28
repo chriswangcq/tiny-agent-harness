@@ -412,6 +412,58 @@ describe("RunOrchestrator", () => {
     });
   });
 
+  it("keeps io_wait decisions and results in model history", async () => {
+    const firstWait: IoWaitRequest = {
+      reason: "awaiting first reply",
+      condition: { kind: "new_user_message", channel: "default" },
+    };
+    const secondWait: IoWaitRequest = {
+      reason: "awaiting second reply",
+      condition: { kind: "new_user_message", channel: "default" },
+    };
+    const waitEvent: EnvironmentEvent = {
+      id: "msg-env-001",
+      kind: "user_message_received",
+      source: "im",
+      timestamp: "2026-05-25T12:00:00.000Z",
+      message: {
+        id: "msg-001",
+        channel: "default",
+        role: "user",
+        text: "next",
+        createdAt: "2026-05-25T12:00:00.000Z",
+      },
+    };
+    const { orchestrator, histories } = makeRun({
+      outputs: [ioWaitOutput(firstWait), ioWaitOutput(secondWait)],
+      maxSteps: 2,
+      waitEvent,
+    });
+
+    await orchestrator.run();
+
+    expect(histories[1]).toEqual(
+      expect.arrayContaining([
+        {
+          type: "io_wait_call",
+          toolCallId: "fim-call-run-001-0",
+          wait: firstWait,
+          thinking: { content: "need user" },
+        },
+        {
+          type: "observation",
+          toolCallId: "fim-call-run-001-0",
+          observation: {
+            kind: "io_wait",
+            message: "io_wait satisfied by external event.",
+            recoverable: false,
+            event: waitEvent,
+          },
+        },
+      ]),
+    );
+  });
+
   it("dispatches approved PTY actions through the terminal port", async () => {
     const toolCall: InternalToolCall = {
       id: "call-pty",
@@ -690,15 +742,33 @@ describe("RunOrchestrator", () => {
       events: [],
       outputPreview: "node dist/cli/main.js im send --ch",
     };
-    const { orchestrator, transcript, waitCalls } = makeRun({
-      outputs: [toolOutput(toolCall), ioWaitOutput(wait)],
-      maxSteps: 2,
+    const { orchestrator, transcript, waitCalls, histories } = makeRun({
+      outputs: [toolOutput(toolCall), ioWaitOutput(wait), invalidOutput("done")],
+      maxSteps: 3,
       terminalObservation,
     });
 
     await orchestrator.run();
 
     expect(waitCalls).toEqual([]);
+    expect(histories[2]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "io_wait_call",
+          toolCallId: "fim-call-run-001-1",
+          wait,
+        }),
+        expect.objectContaining({
+          type: "observation",
+          toolCallId: "fim-call-run-001-1",
+          observation: expect.objectContaining({
+            kind: "io_wait",
+            recoverable: true,
+            message: expect.stringContaining("prompt"),
+          }),
+        }),
+      ]),
+    );
     expect(readTranscript(transcript)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

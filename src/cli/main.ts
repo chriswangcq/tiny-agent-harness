@@ -87,10 +87,18 @@ function convertHistoryItems(items: HistoryItem[]): HistoryEntry[] {
         arguments: item.toolCall.arguments,
         thinking: item.thinking?.content,
       });
+    } else if (item.type === "io_wait_call") {
+      entries.push({
+        role: "assistant_tool_call",
+        toolCallId: item.toolCallId,
+        name: "io_wait",
+        arguments: item.wait,
+        thinking: item.thinking?.content,
+      });
     } else if (item.type === "observation") {
       entries.push({
         role: "tool_result",
-        toolCallId: "",
+        toolCallId: item.toolCallId ?? "",
         observation: item.observation,
       });
     } else if (item.type === "environment_reminder") {

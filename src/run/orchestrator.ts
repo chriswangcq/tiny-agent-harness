@@ -56,7 +56,17 @@ export interface PromptPort {
 
 export type HistoryItem =
   | { type: "tool_call"; toolCall: InternalToolCall; thinking?: AgentThinking }
-  | { type: "observation"; observation: PtyObservation | AgentObservation }
+  | {
+      type: "io_wait_call";
+      toolCallId: string;
+      wait: IoWaitRequest;
+      thinking?: AgentThinking;
+    }
+  | {
+      type: "observation";
+      observation: PtyObservation | AgentObservation;
+      toolCallId?: string;
+    }
   | { type: "environment_reminder"; content: string };
 
 export interface RunPorts {
@@ -290,8 +300,25 @@ export class RunOrchestrator {
       }
 
       if (effect.type === "wait_io") {
+        const ioWaitToolCallId = this.pendingIoWaitToolCallId();
+        this.history.push({
+          type: "io_wait_call",
+          toolCallId: ioWaitToolCallId,
+          wait: effect.wait,
+          thinking: this.state.data.pendingModelOutput?.thinking,
+        });
+
         const unsettledMessage = pendingImSendMessage(this.history);
         if (unsettledMessage !== undefined) {
+          this.history.push({
+            type: "observation",
+            toolCallId: ioWaitToolCallId,
+            observation: {
+              kind: "io_wait",
+              message: unsettledMessage,
+              recoverable: true,
+            },
+          });
           await this.record({
             type: "observation_appended",
             stepIndex: this.state.data.stepIndex,
@@ -322,6 +349,17 @@ export class RunOrchestrator {
           await this.failRun(error, "IO_WAIT_ERROR");
           break;
         }
+
+        this.history.push({
+          type: "observation",
+          toolCallId: ioWaitToolCallId,
+          observation: {
+            kind: "io_wait",
+            message: "io_wait satisfied by external event.",
+            recoverable: false,
+            event,
+          },
+        });
 
         await this.record({
           type: "io_wait_satisfied",
@@ -360,6 +398,10 @@ export class RunOrchestrator {
     }
 
     return this.state;
+  }
+
+  private pendingIoWaitToolCallId(): string {
+    return `fim-call-${this.state.data.runId}-${this.state.data.stepIndex}`;
   }
 
   private async failRun(error: unknown, code: string): Promise<void> {
