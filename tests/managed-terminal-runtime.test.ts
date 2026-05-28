@@ -245,11 +245,11 @@ describe("ManagedTerminalRuntime", () => {
     expect(writes.length).toBeGreaterThan(1);
     expect(writes.join("")).toBe(largeText);
     for (const chunk of writes) {
-      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(256);
+      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(128);
     }
   });
 
-  it("uses protected pacing for heredocs even below the large-write threshold", async () => {
+  it("uses protected pacing for heredocs", async () => {
     const port = makeRuntime().createRunPort();
     await port.execute({ action: { kind: "status" } });
     const heredoc =
@@ -271,7 +271,7 @@ describe("ManagedTerminalRuntime", () => {
     expect(writes.length).toBeGreaterThan(1);
     expect(writes.join("")).toBe(heredoc);
     for (const chunk of writes) {
-      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(256);
+      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(128);
     }
   });
 

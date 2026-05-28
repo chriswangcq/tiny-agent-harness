@@ -71,7 +71,7 @@ describe("ManagedTerminalRuntime real PTY pacing", () => {
     } finally {
       await port.execute({ action: { kind: "terminate" } });
     }
-  });
+  }, 15_000);
 });
 
 function makePayload(targetBytes: number): string {

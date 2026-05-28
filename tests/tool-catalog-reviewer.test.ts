@@ -27,7 +27,7 @@ describe("static tool catalog", () => {
     expect(BASH_TOOL_DEFINITION.name).toBe("bash");
     expect(BASH_TOOL_DEFINITION.description).toContain("inputSeq-guarded");
     expect(BASH_TOOL_DEFINITION.description).toContain("pure PTY interface");
-    expect(BASH_TOOL_DEFINITION.description).toContain("Large write_text payloads are allowed");
+    expect(BASH_TOOL_DEFINITION.description).toContain("All write_text input");
     expect(BASH_TOOL_DEFINITION.description).toContain("--text-stdin");
     expect(BASH_TOOL_DEFINITION.description).toContain("quoted heredoc");
     expect(BASH_TOOL_DEFINITION.description).toContain("<<'IM'");

@@ -86,7 +86,7 @@ tiny-agent ui --channel default
 ## 设计亮点
 
 - **DeepSeek V4 native tool-call FIM**：decision pass 使用 DeepSeek V4 native tool-call special token 边界，但仍由 harness 手工解析和归一化，不依赖 provider-native tool calling。
-- **PTY action tool catalog**：模型通过 `bash` 操作 PTY；所有 PTY 输入都走 `write_text` 或 `key`，大段或 heredoc-shaped 输入由 runtime 用保护性 pacing 写入 PTY。普通文本 heredoc 不需要额外 payload 协议；`stash_file` 保留给明确需要 staged bytes 的场景。
+- **PTY action tool catalog**：模型通过 `bash` 操作 PTY；所有 PTY 输入都走 `write_text` 或 `key`，所有 `write_text` 都由 runtime 用保护性 pacing 写入 PTY。普通文本 heredoc 不需要额外 payload 协议；`stash_file` 保留给明确需要 staged bytes 的场景。
 - **Managed PTY runtime**：基于 `node-pty` 管理长期 session，支持 `status`、`poll`、`write_text`、`key`、`interrupt`、`terminate`、`restart`，并用 prompt markers 维护 terminal facts 和 `inputSeq`。
 - **长任务不会被误杀**：timeout 只释放 agent focus，不 kill 进程。Agent 后续可以 poll 新输出、发送交互输入、中断或重启 session。
 - **可恢复 run artifacts**：每个 run 产出 `state.json` 和 `transcript.jsonl`；每个 session 有独立 log。审阅、debug、TUI、resume、eval 都可以围绕这些 artifact 展开。

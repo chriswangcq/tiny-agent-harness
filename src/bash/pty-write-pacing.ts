@@ -1,30 +1,17 @@
 export type PtyWritePacing = {
   chunkBytes: number;
   interChunkDelayMs: number;
-  reason: "short" | "protected";
+  reason: "protected";
 };
 
-export const FAST_PTY_WRITE_CHUNK_BYTES = 1024;
-export const PROTECTED_PTY_WRITE_CHUNK_BYTES = 256;
-export const PROTECTED_PTY_WRITE_DELAY_MS = 5;
-export const PROTECTED_PTY_WRITE_THRESHOLD_BYTES = 1024;
+export const PROTECTED_PTY_WRITE_CHUNK_BYTES = 128;
+export const PROTECTED_PTY_WRITE_DELAY_MS = 10;
 
-export function planPtyWrite(text: string): PtyWritePacing {
-  if (
-    Buffer.byteLength(text, "utf8") > PROTECTED_PTY_WRITE_THRESHOLD_BYTES ||
-    containsShellHeredoc(text)
-  ) {
-    return {
-      chunkBytes: PROTECTED_PTY_WRITE_CHUNK_BYTES,
-      interChunkDelayMs: PROTECTED_PTY_WRITE_DELAY_MS,
-      reason: "protected",
-    };
-  }
-
+export function planPtyWrite(_text: string): PtyWritePacing {
   return {
-    chunkBytes: FAST_PTY_WRITE_CHUNK_BYTES,
-    interChunkDelayMs: 0,
-    reason: "short",
+    chunkBytes: PROTECTED_PTY_WRITE_CHUNK_BYTES,
+    interChunkDelayMs: PROTECTED_PTY_WRITE_DELAY_MS,
+    reason: "protected",
   };
 }
 
@@ -54,10 +41,4 @@ export function chunkTextByUtf8Bytes(text: string, maxBytes: number): string[] {
   }
 
   return chunks;
-}
-
-function containsShellHeredoc(text: string): boolean {
-  return /<<-?\s*(?:(['"])[A-Za-z_][A-Za-z0-9_-]*\1|[A-Za-z_][A-Za-z0-9_-]*)/u.test(
-    text,
-  );
 }

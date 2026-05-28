@@ -53,7 +53,7 @@ Session semantics:
 
 Payload semantics:
 
-- Quoted shell heredocs are acceptable for generated textual files, code, HTML, Markdown, JSON, and multiline messages. The runtime uses protected pacing for large or heredoc-shaped `write_text` input.
+- Quoted shell heredocs are acceptable for generated textual files, code, HTML, Markdown, JSON, and multiline messages. The runtime uses protected pacing for every `write_text` input.
 - Choose a heredoc delimiter that does not appear alone in the payload.
 - Avoid PTY text for binary data or very large single-line/minified payloads; use line-broken text when possible.
 - `stash_file` remains available for explicit staged bytes, but it is not required for ordinary textual heredocs.

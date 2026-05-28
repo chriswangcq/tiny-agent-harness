@@ -46,7 +46,7 @@ type BashToolInput =
 Important semantics:
 
 - `write_text` writes exact text bytes. It does not append Enter. Include `\n` explicitly or use `{ kind: "key", key: "enter" }`.
-- Large `write_text` payloads are accepted by the tool. The runtime uses protected pacing for large or heredoc-shaped input so interactive bash can keep up.
+- All `write_text` input is protected-paced by the runtime at about 128 bytes per chunk with a small delay so interactive bash can keep up.
 - After `write_text` or `key` input, the runtime waits briefly before reading PTY output so immediate echo or command output can land in the same observation.
 - New managed PTY sessions drain shell initialization output before the first model-visible observation when startup reaches the prompt quickly.
 - The runtime reports terminal facts such as `alive`, `inputSeq`, `syncStatus`, `lastShellPrompt`, and `lastContinuationPrompt`. It does not infer whether shell, Python, ssh, cat, vim, or another foreground program should receive the next bytes.
@@ -116,7 +116,7 @@ Generated text files and code can use quoted heredocs directly. Interactive fore
 3. Use `write_text` to send the file text directly to that foreground process. End text payloads with `\n`.
 4. Send `{ kind: "key", key: "ctrl-d" }` to close stdin, then poll until the shell prompt returns. End text payloads with `\n` before Ctrl-D. If the text did not end with `\n`, one Ctrl-D may only flush the current line while the foreground program keeps reading; do not send any further shell command until a prompt returns, and send a second Ctrl-D if needed.
 
-Large or heredoc-shaped `write_text` payloads are accepted by the tool and protected-paced internally by the runtime, so the model does not need to invent a second payload protocol or manually split ordinary textual input.
+All `write_text` input is protected-paced internally by the runtime, so the model does not need to invent a second payload protocol or manually split ordinary textual input.
 
 There is no frame action, receiver protocol, or binary payload side channel. Binary or opaque transfer should use `stash_file` with `encoding: "base64"` when needed.
 

@@ -6,7 +6,7 @@
 >
 > Legacy note: this is a historical report for the pre-managed-PTY architecture.
 > Active guidance is the PTY action runtime with terminal facts, `inputSeq`,
-> internally paced `write_text`, and `stash_file` for large generated files.
+> protected-paced `write_text`, and optional `stash_file` staged bytes.
 > Owner: P036. Removal condition: regenerate the report after the PTY cutover
 > fully replaces historical wording.
 
@@ -388,13 +388,13 @@ capability as CLI
 
 建议对外表达可以聚焦为：
 
-1. tiny-agent-harness keeps bash as the PTY action surface and uses `stash_file` for large generated files that should not pass through shell parsing.
+1. tiny-agent-harness keeps bash as the PTY action surface and protected-paces every `write_text` input.
 2. tiny-agent-harness turns agent execution into explicit state and durable logs.
 3. tiny-agent-harness lets skills, code intelligence, IM, and future tools evolve as CLIs without bloating the core runtime.
 
 中文版本：
 
-1. tiny-agent-harness 让 bash 成为 PTY 动作面，并用 `stash_file` 处理不应经过 shell 解析的大生成文件。
+1. tiny-agent-harness 让 bash 成为 PTY 动作面，并对每次 `write_text` 输入进行保护性 pacing。
 2. tiny-agent-harness 把 agent 执行过程变成显式状态和可持久化日志。
 3. tiny-agent-harness 让 skill、代码智能、IM 和未来工具以 CLI 生态演进，而不是膨胀内核。
 

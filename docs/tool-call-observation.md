@@ -1,13 +1,13 @@
 # Tool Call And Observation Design
 
-当前 harness 的 tool call 协议是 PTY-first：模型通过 `bash` 发 PTY action，harness 校验 inputSeq 后写入真实 PTY 或执行 PTY control；大段或 heredoc-shaped 输入由 runtime 保护性 pacing。模型也可以通过 `stash_file` 把完整 bytes 暂存在 harness state，再通过 PTY 内 `file materialize` CLI 显式落盘，或通过 `file cat` CLI 将 bytes 输出到 stdin consumer。观察结果统一为 `PtyObservation` 或 `AgentObservation`。
+当前 harness 的 tool call 协议是 PTY-first：模型通过 `bash` 发 PTY action，harness 校验 inputSeq 后写入真实 PTY 或执行 PTY control；所有 `write_text` 输入由 runtime 保护性 pacing。模型也可以通过 `stash_file` 把完整 bytes 暂存在 harness state，再通过 PTY 内 `file materialize` CLI 显式落盘，或通过 `file cat` CLI 将 bytes 输出到 stdin consumer。观察结果统一为 `PtyObservation` 或 `AgentObservation`。
 
 ## Design Principles
 
 1. 模型可见的外部动作面只有 `bash` 和 `stash_file`。
 2. `bash` arguments 必须是 PTY action，不存在命令级双轨。
 3. PTY 是字节和按键流，不是 shell line API；Enter 是 `\n` 或 `key: "enter"`。
-4. 文本 payload 可以通过 PTY/heredoc 完成；runtime 会对大段或 heredoc-shaped 输入做保护性 pacing。`stash_file` 仅作为显式 staged bytes 的可选通道；不存在 frame action 或 receiver 协议。
+4. 文本 payload 可以通过 PTY/heredoc 完成；runtime 会对所有 `write_text` 输入做保护性 pacing。`stash_file` 仅作为显式 staged bytes 的可选通道；不存在 frame action 或 receiver 协议。
 5. Tool review 仍位于执行前；demo 模式可以默认 approve。
 6. Observation 返回 terminal facts、action summary、`outputTail`、terminal events、log ref 和错误码；完整输出留在 session log。
 
@@ -71,7 +71,7 @@ Example foreground stdin write for generated files:
 }
 ```
 
-Then poll until the PTY is waiting for input, write the payload directly, close stdin with Ctrl-D, and poll until the prompt returns. For large generated files, prefer `stash_file` and then materialize through bash. Oversized heredoc payloads are recoverably rejected and should be retried with `stash_file`.
+Then poll until the PTY is waiting for input, write the payload directly, close stdin with Ctrl-D, and poll until the prompt returns. Generated text files can also use quoted heredocs; `stash_file` is only the optional staged-bytes path.
 
 Example staged file write:
 

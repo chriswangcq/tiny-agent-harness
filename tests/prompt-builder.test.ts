@@ -22,12 +22,12 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("<<'IM'");
     expect(prompt.messages[0]!.content).toContain("normal text replies");
     expect(prompt.messages[0]!.content).toContain("< reply.md");
-    expect(prompt.messages[0]!.content).toContain("protected pacing");
+    expect(prompt.messages[0]!.content).toContain("protected-paced");
     expect(prompt.messages[0]!.content).toContain("producer | cmd");
     expect(prompt.messages[0]!.content).toContain("cmd < <(producer)");
     expect(prompt.messages[0]!.content).toContain('cmd <<< "$text"');
     expect(prompt.messages[0]!.content).toContain("Do not use `im send --text`");
-    expect(prompt.messages[0]!.content).toContain("Large write_text payloads are allowed");
+    expect(prompt.messages[0]!.content).toContain("All write_text input");
     expect(prompt.messages[0]!.content).toContain("stash_file");
     expect(prompt.messages[0]!.content).toContain("file materialize");
     expect(prompt.messages[0]!.content).toContain("file cat");
