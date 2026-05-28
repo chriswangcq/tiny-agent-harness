@@ -19,8 +19,9 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("im send --channel");
     expect(prompt.messages[0]!.content).toContain("--text-stdin");
     expect(prompt.messages[0]!.content).toContain("Large write_text payloads are allowed");
-    expect(prompt.messages[0]!.content).toContain("Never use shell heredocs for generated files");
-    expect(prompt.messages[0]!.content).toContain("multiline IM replies");
+    expect(prompt.messages[0]!.content).toContain("stash_file");
+    expect(prompt.messages[0]!.content).toContain("file materialize");
+    expect(prompt.messages[0]!.content).toContain("small fixed snippets");
     expect(prompt.messages[0]!.content).not.toContain("<<'EOF'");
     expect(prompt.messages[0]!.content).toContain("cat > path");
     expect(prompt.messages[0]!.content).toContain("foreground stdin consumer");
@@ -28,7 +29,7 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("do not send any further shell command until a prompt returns");
     expect(prompt.messages[0]!.content).toContain("terminal.inputSeq");
     expect(prompt.messages[0]!.content).toContain("does not infer whether");
-    expect(prompt.messages[0]!.content).toContain("no file staging protocol");
+    expect(prompt.messages[0]!.content).toContain("side-channel payload protocols");
     expect(prompt.messages[0]!.content).not.toContain("small/simple generated text files");
     expect(prompt.messages[0]!.content).not.toContain("bash command fields");
     expect(prompt.messages[0]!.content).not.toContain("UnsupportedControlPayload");
@@ -221,5 +222,33 @@ describe("PromptBuilder", () => {
       unexpectedFromModel: "keep-for-debugging",
     });
     expect(fn.arguments).not.toContain(largeBase64);
+  });
+
+  it("keeps stash_file fields while omitting large content from prompt history", () => {
+    const content = "x".repeat(1024);
+    const history: HistoryEntry[] = [
+      {
+        role: "assistant_tool_call",
+        toolCallId: "call-1",
+        name: "stash_file",
+        arguments: {
+          name: "snake.html",
+          content,
+          encoding: "utf8",
+        },
+      },
+    ];
+
+    const prompt = new PromptBuilder().buildNextPrompt("write file", history);
+    const assistantMsg = prompt.messages[1]! as Record<string, unknown>;
+    const toolCalls = assistantMsg.tool_calls as Array<Record<string, unknown>>;
+    const fn = toolCalls[0]!.function as Record<string, unknown>;
+    const args = JSON.parse(fn.arguments as string) as Record<string, unknown>;
+    expect(args).toEqual({
+      name: "snake.html",
+      content: "[omitted stash_file content 1024 bytes from prompt history]",
+      encoding: "utf8",
+    });
+    expect(fn.arguments).not.toContain(content);
   });
 });

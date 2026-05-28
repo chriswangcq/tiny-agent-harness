@@ -1,13 +1,13 @@
 # Tool Call And Observation Design
 
-当前 harness 的 tool call 协议是 PTY-first：模型通过 `bash` 发 PTY action，harness 校验 inputSeq 后写入真实 PTY 或执行 PTY control。观察结果统一为 `PtyObservation` 或可恢复的 `AgentObservation`。
+当前 harness 的 tool call 协议是 PTY-first，并为大文件恢复了受限 staging：模型通过 `bash` 发 PTY action，harness 校验 inputSeq 后写入真实 PTY 或执行 PTY control；模型也可以通过 `stash_file` 把完整文件 bytes 暂存在 harness state，再通过 PTY 内 `file materialize` CLI 显式落盘。观察结果统一为 `PtyObservation` 或 `AgentObservation`。
 
 ## Design Principles
 
-1. 模型可见的外部动作面只有 `bash`。
+1. 模型可见的外部动作面只有 `bash` 和 `stash_file`。
 2. `bash` arguments 必须是 PTY action，不存在命令级双轨。
 3. PTY 是字节和按键流，不是 shell line API；Enter 是 `\n` 或 `key: "enter"`。
-4. 长文本、生成文件和 IM 回复都通过纯 PTY 动作完成：文本/代码使用 `write_text`，短答复使用 PTY 内的 `im send` CLI；不存在额外暂存工具或 model-visible frame action。
+4. 小片段可以通过 PTY/heredoc 完成；大文本、生成文件和脆弱内容使用 `stash_file` 暂存，再用 PTY 内 `file materialize` CLI 写入目标路径；不存在 frame action 或 receiver 协议。
 5. Tool review 仍位于执行前；demo 模式可以默认 approve。
 6. Observation 返回 terminal facts、action summary、terminal events、log ref 和错误码；完整输出留在 session log。
 
@@ -71,7 +71,23 @@ Example foreground stdin write for generated files:
 }
 ```
 
-Then poll until the PTY is waiting for input, write the payload directly, close stdin with Ctrl-D, and poll until the prompt returns. Do not use shell heredocs for generated files, code, HTML, Markdown, JSON, or multiline IM replies; heredocs are only an escape hatch for tiny fixed shell-control snippets with predictable literal content.
+Then poll until the PTY is waiting for input, write the payload directly, close stdin with Ctrl-D, and poll until the prompt returns. For large generated files, prefer `stash_file` and then materialize through bash. Oversized heredoc payloads are recoverably rejected and should be retried with `stash_file`.
+
+Example staged file write:
+
+```json
+{
+  "name": "app.html",
+  "content": "<!doctype html>\n<title>App</title>\n",
+  "encoding": "utf8"
+}
+```
+
+The returned observation includes a `stashId`. The next bash action should run:
+
+```bash
+node dist/cli/main.js file materialize <stashId> app.html
+```
 
 ## Observation Shape
 
@@ -91,7 +107,7 @@ type PtyObservation = {
 };
 ```
 
-`PtyObservation` is a bounded summary for the next model prompt, not the full PTY log. `events` and `outputPreview` are capped; full output stays in the session log, and the summary uses `eventCount`, `eventsOmitted`, and `logRef` to show when more output exists. Serialized assistant tool-call history uses the same principle for large prior `write_text.text` payloads: it preserves the field shape but omits oversized text from the next prompt, while the raw executed tool call remains in transcript/state.
+`PtyObservation` is a bounded summary for the next model prompt, not the full PTY log. `events` and `outputPreview` are capped; full output stays in the session log, and the summary uses `eventCount`, `eventsOmitted`, and `logRef` to show when more output exists. Serialized assistant tool-call history uses the same principle for large prior `write_text.text` and `stash_file.content` payloads: it preserves the field shape but omits oversized text from the next prompt, while the raw executed tool call remains in transcript/state.
 
 After `write_text` or `key` input, the managed runtime waits briefly before reading the PTY and building this observation. The delay is intentionally small: it captures immediate terminal echo and fast command output without turning every action into a long wait. Longer-running commands still require `poll` or `io_wait`.
 
@@ -104,12 +120,10 @@ Rejected input is recoverable. The model should inspect the terminal facts and P
 ## Current Execution Path
 
 ```text
-ModelTurn(tool_call bash)
+ModelTurn(tool_call bash|stash_file)
   -> ToolCallValidator
   -> ToolReviewer
   -> RunOrchestrator
-  -> TerminalPort
-  -> ManagedTerminalRuntime
-  -> ManagedPtySession
-  -> PtyObservation
+  -> TerminalPort | StashFileStore
+  -> PtyObservation | AgentObservation
 ```

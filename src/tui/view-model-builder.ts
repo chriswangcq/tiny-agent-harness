@@ -115,17 +115,12 @@ export class ViewModelBuilder {
         this.completeModelFrame(event);
         switch (turn.kind) {
           case "tool_call": {
-            const args = turn.toolCall.arguments;
-            const session =
-              "session" in args && typeof args.session === "string"
-                ? args.session
-                : "default";
             this.pushFrame({
               stepIndex: event.stepIndex,
               timestamp: event.timestamp,
               phase: "decision",
               status: "ok",
-              title: "tool call: bash",
+              title: `tool call: ${turn.toolCall.name}`,
               summary: formatToolCallSummary(turn.toolCall),
               detail: formatDetail([
                 ["thinking", turn.thinking.content],
@@ -537,6 +532,16 @@ function truncateForSummary(text: string, maxLength = 80): string {
 function formatToolCallSummary(toolCall: { name?: string; arguments: unknown }): string {
   const args = toolCall.arguments;
   if (isRecord(args)) {
+    if (toolCall.name === "stash_file") {
+      const parts = ["tool=stash_file"];
+      if (typeof args.name === "string") {
+        parts.push(`name=${args.name}`);
+      }
+      if (typeof args.content === "string") {
+        parts.push(`bytes=${Buffer.byteLength(args.content, "utf8")}`);
+      }
+      return parts.join(" ");
+    }
     const actionKind = typeof args.kind === "string" ? args.kind : undefined;
     if (actionKind) {
       const session = typeof args.session === "string" ? args.session : "default";
@@ -652,6 +657,12 @@ function redactLargePayloads(value: unknown): unknown {
       shouldRedactWriteTextDetail(child)
     ) {
       next[key] = `[redacted write_text payload ${Buffer.byteLength(child, "utf8")} bytes]`;
+    } else if (
+      key === "content" &&
+      typeof child === "string" &&
+      shouldRedactWriteTextDetail(child)
+    ) {
+      next[key] = `[redacted stash_file content ${Buffer.byteLength(child, "utf8")} bytes]`;
     } else if (
       key === "preview" &&
       typeof child === "string" &&

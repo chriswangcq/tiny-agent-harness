@@ -35,7 +35,7 @@ ManagedTerminalRuntime
   owns: return code, incremental output, session log
 
 RunOrchestrator
-  sees: one normal bash tool call
+  sees: one normal bash PTY action
   does not know: whether the command is skill, mcp, memory, test, or git
 ```
 

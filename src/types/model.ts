@@ -5,6 +5,7 @@
 
 import type { BashToolInput } from "./bash.js";
 import type { IoWaitRequest } from "./environment.js";
+import type { StashFileInput, ToolName } from "./tools.js";
 
 /**
  * Raw model output placeholder. Will be refined as the FIM adapter
@@ -26,8 +27,8 @@ export type AgentThinking = {
  */
 export type InternalToolCall = {
   id: string;
-  name: "bash";
-  arguments: BashToolInput;
+  name: ToolName;
+  arguments: BashToolInput | StashFileInput;
   raw?: unknown;
 };
 

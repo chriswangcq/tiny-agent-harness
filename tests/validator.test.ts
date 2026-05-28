@@ -84,6 +84,40 @@ describe("ToolCallValidator PTY actions", () => {
     expect(result.status).toBe("valid");
   });
 
+  it("rejects large heredoc payloads and points to stash_file", () => {
+    const heredoc = `cat > app.html <<'EOF'\n${"x".repeat(4097)}\nEOF\n`;
+    const result = new ToolCallValidator().validate(
+      makeCall({
+        arguments: {
+          kind: "write_text",
+          expectedInputSeq: 1,
+          text: heredoc,
+        },
+      }),
+    );
+
+    expect(result.status).toBe("invalid");
+    if (result.status === "invalid") {
+      expect(result.observation.message).toContain("heredoc payload");
+      expect(result.observation.message).toContain("stash_file");
+      expect(result.observation.message).toContain("file materialize");
+    }
+  });
+
+  it("allows small quoted heredoc snippets", () => {
+    const result = new ToolCallValidator().validate(
+      makeCall({
+        arguments: {
+          kind: "write_text",
+          expectedInputSeq: 1,
+          text: "cat > note.txt <<'EOF'\nhello\nEOF\n",
+        },
+      }),
+    );
+
+    expect(result.status).toBe("valid");
+  });
+
   it("rejects stale input sequences when terminal context is injected", () => {
     const result = new ToolCallValidator({ terminal: terminal(2) }).validate(
       makeCall({
@@ -161,6 +195,76 @@ describe("ToolCallValidator PTY actions", () => {
 });
 
 describe("ToolCallValidator tool names", () => {
+  it("validates stash_file calls and defaults encoding to utf8", () => {
+    const result = new ToolCallValidator().validate({
+      id: "tc-1",
+      name: "stash_file",
+      arguments: {
+        name: "snake.html",
+        content: "<!doctype html>\n",
+        description: "generated game",
+      },
+    });
+
+    expect(result.status).toBe("valid");
+    if (result.status === "valid") {
+      expect(result.request).toEqual({
+        kind: "stash_file",
+        toolName: "stash_file",
+        toolCallId: "tc-1",
+        name: "snake.html",
+        content: "<!doctype html>\n",
+        encoding: "utf8",
+        description: "generated game",
+      });
+    }
+  });
+
+  it("rejects invalid stash_file encoding", () => {
+    const result = new ToolCallValidator().validate({
+      id: "tc-1",
+      name: "stash_file",
+      arguments: {
+        content: "abc",
+        encoding: "hex",
+      } as any,
+    });
+
+    expect(result.status).toBe("invalid");
+    if (result.status === "invalid") {
+      expect(result.observation.message).toContain("encoding");
+    }
+  });
+
+  it("rejects invalid stash_file base64 content", () => {
+    const result = new ToolCallValidator().validate({
+      id: "tc-1",
+      name: "stash_file",
+      arguments: {
+        content: "not valid!",
+        encoding: "base64",
+      },
+    });
+
+    expect(result.status).toBe("invalid");
+    if (result.status === "invalid") {
+      expect(result.observation.message).toContain("valid base64");
+    }
+  });
+
+  it("rejects non-object tool arguments", () => {
+    const result = new ToolCallValidator().validate({
+      id: "tc-1",
+      name: "stash_file",
+      arguments: null as any,
+    });
+
+    expect(result.status).toBe("invalid");
+    if (result.status === "invalid") {
+      expect(result.observation.message).toContain("expected an object payload");
+    }
+  });
+
   it("rejects unknown tools", () => {
     const result = new ToolCallValidator().validate({
       id: "tc-1",
@@ -171,6 +275,7 @@ describe("ToolCallValidator tool names", () => {
     expect(result.status).toBe("invalid");
     if (result.status === "invalid") {
       expect(result.observation.message).toMatch(/Unknown tool/);
+      expect(result.observation.message).toContain("stash_file");
     }
   });
 });

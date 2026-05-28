@@ -7,7 +7,7 @@ import type { PtyAction, PtyObservation } from "../terminal/types.js";
 
 // ─── Tool Catalog ───────────────────────────────────────────────────
 
-export type ToolName = "bash";
+export type ToolName = "bash" | "stash_file";
 
 /** A JSON Schema value (opaque to the harness). */
 export type JsonSchema = Record<string, unknown>;
@@ -28,7 +28,24 @@ export type BashToolRequest = {
   action: PtyAction;
 };
 
-export type ToolRequest = BashToolRequest;
+export type StashFileInput = {
+  name?: string;
+  content: string;
+  encoding?: "utf8" | "base64";
+  description?: string;
+};
+
+export type StashFileToolRequest = {
+  kind: "stash_file";
+  toolName: "stash_file";
+  toolCallId: string;
+  name?: string;
+  content: string;
+  encoding: "utf8" | "base64";
+  description?: string;
+};
+
+export type ToolRequest = BashToolRequest | StashFileToolRequest;
 
 // ─── Tool Review ────────────────────────────────────────────────────
 
@@ -68,4 +85,15 @@ export type AgentObservation =
         reason: string;
       };
       event?: EnvironmentEvent;
+    }
+  | {
+      kind: "stash_file";
+      message: string;
+      recoverable: false;
+      stashId: string;
+      name: string;
+      bytes: number;
+      sha256: string;
+      contentPath: string;
+      materializeCommand: string;
     };

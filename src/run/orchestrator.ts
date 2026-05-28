@@ -9,6 +9,7 @@ import type {
 import type {
   AgentObservation,
   BashToolRequest,
+  StashFileToolRequest,
   ToolCallValidation,
   ToolDefinition,
   ToolRequest,
@@ -45,6 +46,10 @@ export interface TerminalPort {
   execute(request: BashToolRequest): Promise<PtyObservation>;
 }
 
+export interface StashFilePort {
+  stash(request: StashFileToolRequest): Promise<AgentObservation>;
+}
+
 export interface PromptPort {
   buildMessages(task: string, history: HistoryItem[]): V4ChatMessage[];
 }
@@ -59,6 +64,7 @@ export interface RunPorts {
   validator: ValidatorPort;
   reviewer: ReviewerPort;
   terminal: TerminalPort;
+  stashFiles: StashFilePort;
   prompt: PromptPort;
   tools: ToolDefinition[];
   environment: EnvironmentPort;
@@ -328,7 +334,10 @@ export class RunOrchestrator {
 
   private async executeToolRequest(
     request: ToolRequest,
-  ): Promise<PtyObservation> {
+  ): Promise<PtyObservation | AgentObservation> {
+    if (request.kind === "stash_file") {
+      return this.ports.stashFiles.stash(request);
+    }
     return this.ports.terminal.execute(request);
   }
 }

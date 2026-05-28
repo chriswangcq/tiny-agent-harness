@@ -1,7 +1,7 @@
 {
   "name": "tiny-agent-harness",
   "version": "0.1.0",
-  "description": "An open coding agent harness where all external actions converge to bash tool calls.",
+  "description": "An open coding agent harness with a PTY action surface and staged file materialization.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {

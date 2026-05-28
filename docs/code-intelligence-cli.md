@@ -57,7 +57,7 @@ ManagedTerminalRuntime
   owns: command return code, output window, session log
 
 RunOrchestrator
-  sees: one normal bash tool call
+  sees: one normal bash PTY action
   does not know: whether the command is codeq, skill, test, git, or project script
 ```
 

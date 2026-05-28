@@ -43,8 +43,10 @@ Decision pass 贴近 DeepSeek V4 post-train 的 DSML tool-call 格式：
 
 <｜DSML｜tool_calls>
 <｜DSML｜invoke name="bash">
-<｜DSML｜parameter name="session" string="true">default</｜DSML｜parameter>
-<｜DSML｜parameter name="command" string="true">pwd</｜DSML｜parameter>
+<｜DSML｜parameter name="kind" string="true">write_text</｜DSML｜parameter>
+<｜DSML｜parameter name="expectedInputSeq" string="false">0</｜DSML｜parameter>
+<｜DSML｜parameter name="text" string="true">pwd
+</｜DSML｜parameter>
 </｜DSML｜invoke>
 </｜DSML｜tool_calls><｜end▁of▁sentence｜>
 ```
@@ -219,16 +221,18 @@ parsing so a provider-side suffix cannot poison continuation prompts.
 
 Allowed decision functions:
 
-- `bash`: external bash tool call.
+- `bash`: PTY action tool call.
+- `stash_file`: staged file bytes tool call.
 - `io_wait`: internal wait request.
 
 Examples:
 
 ```text
 bash">
-<｜DSML｜parameter name="session" string="true">default</｜DSML｜parameter>
-<｜DSML｜parameter name="command" string="true">pwd && ls -la</｜DSML｜parameter>
-<｜DSML｜parameter name="timeoutMs" string="false">30000</｜DSML｜parameter>
+<｜DSML｜parameter name="kind" string="true">write_text</｜DSML｜parameter>
+<｜DSML｜parameter name="expectedInputSeq" string="false">0</｜DSML｜parameter>
+<｜DSML｜parameter name="text" string="true">pwd && ls -la
+</｜DSML｜parameter>
 ```
 
 ```text

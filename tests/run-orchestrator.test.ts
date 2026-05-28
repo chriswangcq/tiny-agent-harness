@@ -112,6 +112,7 @@ function makeRun(options?: {
   const waitCalls: Array<{ runId: string; wait: IoWaitRequest }> = [];
   const reviewCalls: ToolRequest[] = [];
   const terminalCalls: ToolRequest[] = [];
+  const stashCalls: Array<Extract<ToolRequest, { kind: "stash_file" }>> = [];
 
   const ports: RunPorts = {
     model: {
@@ -179,6 +180,23 @@ function makeRun(options?: {
         );
       },
     },
+    stashFiles: {
+      async stash(request) {
+        stashCalls.push(request);
+        return {
+          kind: "stash_file",
+          recoverable: false,
+          stashId: "file-call-stash-snake-123456789abc",
+          name: request.name ?? "stashed-file.bin",
+          bytes: Buffer.byteLength(request.content, "utf8"),
+          sha256: "a".repeat(64),
+          contentPath: "/repo/.tiny-agent/stash/files/file-call/content",
+          materializeCommand:
+            "node dist/cli/main.js file materialize file-call-stash-snake-123456789abc <target-path>",
+          message: "stashed",
+        };
+      },
+    },
     prompt: {
       buildMessages(task, history) {
         void task;
@@ -224,6 +242,7 @@ function makeRun(options?: {
     waitCalls,
     reviewCalls,
     terminalCalls,
+    stashCalls,
   };
 }
 
@@ -418,6 +437,75 @@ describe("RunOrchestrator", () => {
           session: "default",
           result: "ok",
           action: expect.objectContaining({ kind: "write_text" }),
+        }),
+      },
+    ]);
+  });
+
+  it("dispatches approved stash_file requests through the stash port", async () => {
+    const toolCall: InternalToolCall = {
+      id: "call-stash",
+      name: "stash_file",
+      arguments: {
+        name: "snake.html",
+        content: "<!doctype html>\n",
+        encoding: "utf8",
+      },
+    };
+    const wait: IoWaitRequest = {
+      reason: "awaiting next instruction",
+      condition: { kind: "new_user_message", channel: "default" },
+    };
+    const { orchestrator, histories, terminalCalls, stashCalls } = makeRun({
+      outputs: [toolOutput(toolCall), ioWaitOutput(wait)],
+      maxSteps: 2,
+      validateResult: () => ({
+        status: "valid",
+        request: {
+          kind: "stash_file",
+          toolName: "stash_file",
+          toolCallId: "call-stash",
+          name: "snake.html",
+          content: "<!doctype html>\n",
+          encoding: "utf8",
+        },
+      }),
+      waitEvent: {
+        id: "msg-env-wait",
+        kind: "user_message_received",
+        source: "im",
+        timestamp: "2026-05-25T12:02:00.000Z",
+        message: {
+          id: "msg-wait",
+          channel: "default",
+          role: "user",
+          text: "ok",
+          createdAt: "2026-05-25T12:02:00.000Z",
+        },
+      },
+    });
+
+    await orchestrator.run();
+
+    expect(terminalCalls).toEqual([]);
+    expect(stashCalls).toEqual([
+      {
+        kind: "stash_file",
+        toolName: "stash_file",
+        toolCallId: "call-stash",
+        name: "snake.html",
+        content: "<!doctype html>\n",
+        encoding: "utf8",
+      },
+    ]);
+    expect(histories[1]).toEqual([
+      { type: "tool_call", toolCall, thinking: { content: "need bash" } },
+      {
+        type: "observation",
+        observation: expect.objectContaining({
+          kind: "stash_file",
+          stashId: "file-call-stash-snake-123456789abc",
+          materializeCommand: expect.stringContaining("file materialize"),
         }),
       },
     ]);

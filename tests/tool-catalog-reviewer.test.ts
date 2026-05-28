@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BASH_TOOL_DEFINITION,
+  STASH_FILE_TOOL_DEFINITION,
   STATIC_TOOL_CATALOG,
 } from "../src/tools/catalog.js";
 import { AlwaysApproveReviewer } from "../src/tools/reviewer.js";
@@ -19,16 +20,18 @@ type BashInputSchema = {
 };
 
 describe("static tool catalog", () => {
-  it("exposes bash as the only model-facing tool", () => {
-    expect(STATIC_TOOL_CATALOG).toHaveLength(1);
+  it("exposes bash and stash_file as model-facing tools", () => {
+    expect(STATIC_TOOL_CATALOG).toHaveLength(2);
     expect(STATIC_TOOL_CATALOG[0]).toBe(BASH_TOOL_DEFINITION);
+    expect(STATIC_TOOL_CATALOG[1]).toBe(STASH_FILE_TOOL_DEFINITION);
     expect(BASH_TOOL_DEFINITION.name).toBe("bash");
     expect(BASH_TOOL_DEFINITION.description).toContain("inputSeq-guarded");
     expect(BASH_TOOL_DEFINITION.description).toContain("pure PTY interface");
     expect(BASH_TOOL_DEFINITION.description).toContain("Large write_text payloads are allowed");
     expect(BASH_TOOL_DEFINITION.description).toContain("--text-stdin");
-    expect(BASH_TOOL_DEFINITION.description).toContain("Never use shell heredocs for generated files");
-    expect(BASH_TOOL_DEFINITION.description).toContain("multiline IM replies");
+    expect(BASH_TOOL_DEFINITION.description).toContain("small fixed snippets");
+    expect(BASH_TOOL_DEFINITION.description).toContain("stash_file");
+    expect(BASH_TOOL_DEFINITION.description).toContain("file materialize");
     expect(BASH_TOOL_DEFINITION.description).not.toContain("<<'EOF'");
     expect(BASH_TOOL_DEFINITION.description).toContain("cat > path");
     expect(BASH_TOOL_DEFINITION.description).toContain("foreground stdin consumer");
@@ -38,6 +41,9 @@ describe("static tool catalog", () => {
     expect(BASH_TOOL_DEFINITION.description).toContain("terminal.inputSeq");
     expect(BASH_TOOL_DEFINITION.description).not.toContain(["rece", "iver"].join(""));
     expect(BASH_TOOL_DEFINITION.description).not.toContain("small/simple generated text files");
+    expect(STASH_FILE_TOOL_DEFINITION.name).toBe("stash_file");
+    expect(STASH_FILE_TOOL_DEFINITION.description).toContain("without writing the workspace");
+    expect(STASH_FILE_TOOL_DEFINITION.description).toContain("file materialize");
   });
 
   it("documents PTY actions in the bash input schema", () => {
@@ -92,6 +98,23 @@ describe("AlwaysApproveReviewer", () => {
         expectedInputSeq: 0,
         text: "pwd",
       },
+    };
+
+    await expect(new AlwaysApproveReviewer().review(request)).resolves.toEqual({
+      status: "approved",
+      reason: "Demo mode: all tool calls are approved.",
+      reviewer: "always-approve",
+    });
+  });
+
+  it("approves stash_file requests in demo mode", async () => {
+    const request: ToolRequest = {
+      kind: "stash_file",
+      toolName: "stash_file",
+      toolCallId: "call-1",
+      name: "snake.html",
+      content: "<!doctype html>\n",
+      encoding: "utf8",
     };
 
     await expect(new AlwaysApproveReviewer().review(request)).resolves.toEqual({

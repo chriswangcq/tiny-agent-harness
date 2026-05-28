@@ -1,12 +1,12 @@
 # Static Bash Tool Definition
 
-本文记录当前 model-visible tool catalog。Harness 不再暴露命令级 bash request、session control request 或额外文件暂存工具；模型看到的外部动作只有 `bash`，等待外部事件用内部 decision function `io_wait`。
+本文记录当前 model-visible tool catalog。Harness 不再暴露命令级 bash request 或 session control request；模型看到的外部动作是 `bash` 和 `stash_file`，等待外部事件用内部 decision function `io_wait`。
 
 ## Decision
 
 ```text
 StaticToolCatalog
-  contains exactly one model-visible external tool: bash
+  contains two model-visible external tools: bash, stash_file
 
 DeepSeekFimAdapter
   receives ToolDefinition[]
@@ -15,10 +15,12 @@ DeepSeekFimAdapter
 
 ToolCallValidator
   accepts only PTY action payloads for bash
-  rejects non-PTY payloads
+  accepts stash_file payloads for staged file bytes
+  rejects command-shaped bash payloads and oversized heredocs
 
 RunOrchestrator
   validates -> reviews -> executes PTY actions through TerminalPort
+  executes stash_file through StashFileStore
 
 ManagedTerminalRuntime
   owns persistent node-pty sessions
@@ -51,10 +53,29 @@ Important semantics:
 - `key` is for terminal keys such as Enter, Ctrl-C, Ctrl-D, Escape, Tab, Up, and Down.
 - `poll`, `status`, `interrupt`, `terminate`, and `restart` are control actions over the PTY session, not shell commands.
 - Every write-like action carries `expectedInputSeq`; stale input sequences are rejected.
-- Do not use shell heredocs for generated files, code, HTML, Markdown, JSON, or multiline IM replies. Heredocs are only an escape hatch for tiny fixed shell-control snippets with predictable literal content.
+- Quoted shell heredocs are acceptable for small fixed snippets below about 4KB. Generated files, code, HTML, Markdown, JSON, or multiline replies above that size should use `stash_file`, followed by `node dist/cli/main.js file materialize <stashId> <target-path>` through bash.
 - After any multiline stdin flow, keep polling until the shell prompt returns. A `lastContinuationPrompt` fact means the shell recently reported a continuation prompt.
 - Observations are bounded summaries: full PTY output stays in the session log and observations carry previews, `eventCount`, `eventsOmitted`, and `logRef`.
-- Serialized prompt history may omit large prior `write_text.text` payloads to protect context. The raw executed tool call is still preserved in transcript/state; only the next model prompt is compacted.
+- Serialized prompt history may omit large prior `write_text.text` or `stash_file.content` payloads to protect context. The raw executed tool call is still preserved in transcript/state; only the next model prompt is compacted.
+
+## Stash File Schema
+
+`stash_file` stages bytes in harness state and does not write the workspace:
+
+```ts
+type StashFileInput = {
+  name?: string;
+  content: string;
+  encoding?: "utf8" | "base64";
+  description?: string;
+};
+```
+
+The observation returns `stashId`, `bytes`, `sha256`, `contentPath`, and a materialize command. The actual filesystem write is explicit and PTY-visible:
+
+```bash
+node dist/cli/main.js file materialize <stashId> <target-path>
+```
 
 ## Large Payloads
 
@@ -72,7 +93,7 @@ node dist/cli/main.js im send --channel default --kind status --text-stdin
 
 After sending an IM reply, poll until the shell prompt returns and the command output indicates success before choosing `io_wait`.
 
-Generated text files and code must use a foreground stdin consumer so the payload does not go through shell parsing:
+Generated text files and code can use small quoted heredocs when below the heredoc guard limit. Larger or fragile payloads should use `stash_file`. Interactive foreground stdin programs can still use direct PTY stdin so the payload does not go through shell parsing:
 
 1. Use `write_text` to run `cat > path\n` or another intentionally chosen stdin consumer.
 2. Poll until it is clearly waiting for input.
@@ -81,12 +102,11 @@ Generated text files and code must use a foreground stdin consumer so the payloa
 
 Large `write_text` payloads are accepted by the tool and paced internally by the runtime, so the model does not need to invent a second payload protocol or manually split ordinary shell input.
 
-There is no model-visible file staging protocol, frame action, or binary payload channel. Binary or opaque transfer should be redesigned as a separate explicit feature if it becomes necessary later.
+There is no frame action, receiver protocol, or binary payload side channel. Binary or opaque transfer should use `stash_file` with `encoding: "base64"` when needed.
 
 ## Non Goals
 
 - No command-shaped bash tool payload.
 - No separate text control action.
 - No line-oriented PTY action.
-- No model-visible file staging tool.
 - No provider-native tool calling dependency.

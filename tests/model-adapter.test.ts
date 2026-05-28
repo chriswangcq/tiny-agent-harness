@@ -693,6 +693,7 @@ describe("DeepSeekFimAdapter", () => {
     expect(thinkingSysMsg.role).toBe("system");
     expect(thinkingSysMsg.tools.map((tool: any) => tool.function.name)).toEqual([
       "bash",
+      "stash_file",
       "io_wait",
     ]);
     expect(thinkingInput.thinking_mode).toBe("thinking");
@@ -702,6 +703,7 @@ describe("DeepSeekFimAdapter", () => {
     expect(decisionSysMsg.role).toBe("system");
     expect(decisionSysMsg.tools.map((tool: any) => tool.function.name)).toEqual([
       "bash",
+      "stash_file",
       "io_wait",
     ]);
     expect(decisionInput.thinking_mode).toBe("thinking");
@@ -903,6 +905,27 @@ describe("parseDsmlDecision", () => {
       decision: {
         name: "bash",
         arguments: writeText(`echo 'hello world' | grep "hello"`),
+      },
+    });
+  });
+
+  it("parses stash_file DSML tool calls", () => {
+    const raw = [
+      `stash_file">`,
+      `<${DSML}parameter name="name" string="true">snake.html</${DSML}parameter>`,
+      `<${DSML}parameter name="content" string="true"><!doctype html>\n<title>Snake</title>\n</${DSML}parameter>`,
+      `<${DSML}parameter name="encoding" string="true">utf8</${DSML}parameter>`,
+    ].join("\n");
+    const result = parseDsmlDecision(raw);
+    expect(result).toEqual({
+      status: "valid",
+      decision: {
+        name: "stash_file",
+        arguments: {
+          name: "snake.html",
+          content: "<!doctype html>\n<title>Snake</title>\n",
+          encoding: "utf8",
+        },
       },
     });
   });

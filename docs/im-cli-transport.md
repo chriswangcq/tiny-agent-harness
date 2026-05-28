@@ -17,7 +17,7 @@ User
   -> User
 ```
 
-这里的 IM 是 harness 的用户通信边界，不是 Agent 可调用的业务工具。Agent 的外部动作仍然只有 `bash`。
+这里的 IM 是 harness 的用户通信边界，不是 Agent 可调用的业务工具。Agent 通过 `bash` 中的 IM CLI 发送消息；需要暂存大段准备内容时，可先用 `stash_file`，但最终发送仍要经过 PTY 可见的 CLI。
 
 ## Responsibilities
 
@@ -39,7 +39,7 @@ The split:
 
 ```text
 User communication is an orchestrator port.
-Bash remains the only model-visible tool.
+Bash remains the PTY-visible delivery path; `stash_file` may stage prepared file/message payloads before a bash CLI materializes or sends them.
 ```
 
 ## CLI Shape

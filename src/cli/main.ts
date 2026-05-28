@@ -16,6 +16,7 @@ import { STATIC_TOOL_CATALOG } from "../tools/catalog.js";
 import { Environment } from "../environment/environment.js";
 import { ImCliTransport } from "../im/transport.js";
 import { SkillRunStore } from "../skill/store.js";
+import { StashFileStore } from "../stash/file-store.js";
 import {
   DEFAULT_PTY_ACTION_LIMITS,
 } from "../terminal/validator.js";
@@ -113,6 +114,20 @@ function createCliTerminalPort() {
     postWriteReadDelayMs: 100,
   });
   return runtime.createRunPort();
+}
+
+function createCliStashFilePort(stateDir?: string) {
+  const baseDir = path.resolve(stateDir ?? ".tiny-agent");
+  const store = new StashFileStore({
+    rootDir: path.join(baseDir, "stash", "files"),
+    cwd: process.cwd(),
+    stateDir: baseDir,
+  });
+  return {
+    async stash(request: Parameters<StashFileStore["stash"]>[0]) {
+      return store.stash(request);
+    },
+  };
 }
 
 function cleanEnv(env: NodeJS.ProcessEnv): Record<string, string> {
@@ -312,7 +327,7 @@ async function waitForFirstMessage(
 // Main
 // ---------------------------------------------------------------------------
 
-const HELP_TEXT = `tiny-agent — AI agent harness with bash tool calling
+const HELP_TEXT = `tiny-agent — AI agent harness with PTY actions and staged files
 
 Usage:
   tiny-agent <task>                                   Run with inline task
@@ -320,6 +335,7 @@ Usage:
   tiny-agent ui  --channel <ch> [--task <task>]       Run + TUI in one command
   tiny-agent tui --run <runId|latest>                 Attach TUI to existing run
   tiny-agent im  <subcommand> [options]               IM message operations
+  tiny-agent file <subcommand> [options]              Stashed file operations
   tiny-agent skill <subcommand> [options]             Skill management
   tiny-agent --help                                   Show this help
 
@@ -330,6 +346,11 @@ IM subcommands:
                                                  Send agent message to outbox
   ack    --channel <ch> --message-id <id>      Acknowledge (advance cursor)
   listen --channel <ch> [--cursor <id>]        Poll for new messages
+
+File subcommands:
+  list                          List stashed files
+  show <stashId>                Show stashed file metadata
+  materialize <stashId> <path>  Write stashed file to path
 
 Skill subcommands:
   list                          List available skills
@@ -372,6 +393,12 @@ async function main(): Promise<void> {
   if (firstArg === "im") {
     const { runIm } = await import("./im.js");
     await runIm(process.argv.slice(3));
+    return;
+  }
+
+  if (firstArg === "file") {
+    const { runFile } = await import("./file.js");
+    await runFile(process.argv.slice(3));
     return;
   }
 
@@ -541,6 +568,7 @@ async function main(): Promise<void> {
     validator,
     reviewer,
     terminal: createCliTerminalPort(),
+    stashFiles: createCliStashFilePort(baseDir),
     prompt: {
       buildMessages(task: string, history: HistoryItem[]): V4ChatMessage[] {
         const entries = convertHistoryItems(history);

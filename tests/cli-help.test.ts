@@ -13,6 +13,7 @@ describe("main CLI help", () => {
     );
 
     expect(help).toContain("tiny-agent im  <subcommand>");
+    expect(help).toContain("tiny-agent file <subcommand>");
     expect(help).toContain("tiny-agent skill <subcommand>");
     expect(help).not.toContain(["rece", "iver"].join(""));
     expect(help).not.toContain(["max", "-frame-bytes"].join(""));
