@@ -334,8 +334,13 @@ export class BlessedRenderer implements TuiRenderer {
 
   private setupKeys(): void {
     this.screen.program.on("data", (data: Buffer | string) => {
-      if (this.ui.mode !== "input") return;
       const sequence = rawInputSequence(data);
+      if (isRawCtrlCSequence(sequence)) {
+        this.exitProcess();
+        return;
+      }
+
+      if (this.ui.mode !== "input") return;
       if (!isRawShiftEnterSequence(sequence)) return;
 
       this.lastRawShiftEnterSequence = sequence;
@@ -348,8 +353,7 @@ export class BlessedRenderer implements TuiRenderer {
       (ch: string, key: blessed.Widgets.Events.IKeyEventArg) => {
         // Ctrl+C always quits
         if (key.ctrl && key.name === "c") {
-          this.close();
-          process.exit(0);
+          this.exitProcess();
         }
 
         // Help overlay: Esc closes it from any mode
@@ -856,6 +860,11 @@ export class BlessedRenderer implements TuiRenderer {
     this.lastRawShiftEnterSequence = undefined;
     this.pendingRawShiftEnterEchoes = [];
   }
+
+  private exitProcess(): never {
+    this.close();
+    process.exit(0);
+  }
 }
 
 export type RenderedInputBuffer = {
@@ -879,6 +888,13 @@ export function isRawShiftEnterSequence(sequence: string): boolean {
     sequence === "\x1b[13;2U" ||
     sequence === "\x1b[13;2~" ||
     sequence === "\x1b[27;2;13~"
+  );
+}
+
+export function isRawCtrlCSequence(sequence: string): boolean {
+  return (
+    sequence === "\x03" ||
+    /^\x1b\[(?:27;5;(?:67|99)~|(?:3|67|99);5[Uu])$/.test(sequence)
   );
 }
 

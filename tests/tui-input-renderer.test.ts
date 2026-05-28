@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   consumeRawShiftEnterEchoCandidate,
+  isRawCtrlCSequence,
   isRawShiftEnterSequence,
   isShiftEnterKey,
   rawShiftEnterEchoCandidates,
@@ -47,6 +48,18 @@ describe("TUI input rendering", () => {
     expect(isRawShiftEnterSequence("\r")).toBe(false);
     expect(isRawShiftEnterSequence("\n")).toBe(false);
     expect(isRawShiftEnterSequence("\x1b[13;5u")).toBe(false);
+  });
+
+  it("recognizes raw Ctrl+C sequences even with modified key reporting", () => {
+    expect(isRawCtrlCSequence("\x03")).toBe(true);
+    expect(isRawCtrlCSequence("\x1b[27;5;99~")).toBe(true);
+    expect(isRawCtrlCSequence("\x1b[27;5;67~")).toBe(true);
+    expect(isRawCtrlCSequence("\x1b[99;5u")).toBe(true);
+    expect(isRawCtrlCSequence("\x1b[99;5U")).toBe(true);
+    expect(isRawCtrlCSequence("\x1b[67;5u")).toBe(true);
+    expect(isRawCtrlCSequence("\x1b[3;5u")).toBe(true);
+    expect(isRawCtrlCSequence("\x1b[27;2;13~")).toBe(false);
+    expect(isRawCtrlCSequence("c")).toBe(false);
   });
 
   it("suppresses printable residue emitted after raw Shift+Enter", () => {
