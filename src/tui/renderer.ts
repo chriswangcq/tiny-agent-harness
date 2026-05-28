@@ -42,6 +42,7 @@ export class BlessedRenderer implements TuiRenderer {
   private messageHandler?: (text: string) => void;
   private inputBuffer = "";
   private inputCursor = { row: 0, col: 0 };
+  private lastRawShiftEnterSequence: string | undefined;
 
   constructor() {
     this.screen = blessed.screen({
@@ -314,6 +315,15 @@ export class BlessedRenderer implements TuiRenderer {
   // ─── Key Handling ─────────────────────────────────────────────────
 
   private setupKeys(): void {
+    this.screen.program.on("data", (data: Buffer | string) => {
+      if (this.ui.mode !== "input") return;
+      const sequence = rawInputSequence(data);
+      if (!isRawShiftEnterSequence(sequence)) return;
+
+      this.lastRawShiftEnterSequence = sequence;
+      this.insertInputNewline();
+    });
+
     this.screen.on(
       "keypress",
       (ch: string, key: blessed.Widgets.Events.IKeyEventArg) => {
@@ -344,6 +354,13 @@ export class BlessedRenderer implements TuiRenderer {
     key: blessed.Widgets.Events.IKeyEventArg,
   ): void {
     if (this.isShiftEnter(key)) {
+      if (
+        key.sequence &&
+        this.lastRawShiftEnterSequence === key.sequence
+      ) {
+        this.lastRawShiftEnterSequence = undefined;
+        return;
+      }
       this.insertInputNewline();
       return;
     }
@@ -804,6 +821,19 @@ export function isShiftEnterKey(
     key.shift === true &&
     (key.name === "return" || key.name === "enter" || key.name === "linefeed")
   );
+}
+
+export function isRawShiftEnterSequence(sequence: string): boolean {
+  return (
+    sequence === "\x1b[13;2u" ||
+    sequence === "\x1b[13;2U" ||
+    sequence === "\x1b[13;2~" ||
+    sequence === "\x1b[27;2;13~"
+  );
+}
+
+function rawInputSequence(data: Buffer | string): string {
+  return Buffer.isBuffer(data) ? data.toString("utf8") : data;
 }
 
 type DisplayLine = {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isRawShiftEnterSequence,
   isShiftEnterKey,
   renderInputBufferForBox,
 } from "../src/tui/renderer.js";
@@ -34,5 +35,15 @@ describe("TUI input rendering", () => {
     expect(isShiftEnterKey({ name: "return", shift: true })).toBe(true);
     expect(isShiftEnterKey({ name: "linefeed", shift: true })).toBe(true);
     expect(isShiftEnterKey({ name: "enter", shift: false })).toBe(false);
+  });
+
+  it("recognizes raw terminal Shift+Enter sequences dropped by keypress parsing", () => {
+    expect(isRawShiftEnterSequence("\x1b[13;2u")).toBe(true);
+    expect(isRawShiftEnterSequence("\x1b[13;2U")).toBe(true);
+    expect(isRawShiftEnterSequence("\x1b[13;2~")).toBe(true);
+    expect(isRawShiftEnterSequence("\x1b[27;2;13~")).toBe(true);
+    expect(isRawShiftEnterSequence("\r")).toBe(false);
+    expect(isRawShiftEnterSequence("\n")).toBe(false);
+    expect(isRawShiftEnterSequence("\x1b[13;5u")).toBe(false);
   });
 });
