@@ -29,6 +29,14 @@ export type MaterializeFileResult = {
   sha256: string;
 };
 
+export type ReadStashedFileResult = {
+  stashId: string;
+  sourcePath: string;
+  bytes: number;
+  sha256: string;
+  content: Buffer;
+};
+
 export class StashFileStore {
   private readonly rootDir: string;
   private readonly cwd: string;
@@ -49,6 +57,7 @@ export class StashFileStore {
     const contentPath = path.join(stashDir, "content");
     const metaPath = path.join(stashDir, "meta.json");
     const materializeCommand = this.materializeCommand(stashId, name);
+    const catCommand = this.catCommand(stashId);
     const meta: StashedFileMeta = {
       version: 1,
       stashId,
@@ -73,9 +82,11 @@ export class StashFileStore {
       name,
       bytes: bytes.byteLength,
       materializeCommand,
+      catCommand,
       message:
         `Stashed file ${stashId} (${bytes.byteLength} bytes). ` +
-        `Use bash to materialize it: ${materializeCommand}`,
+        `Use bash to materialize it: ${materializeCommand}; ` +
+        `or stream it: ${catCommand}`,
     };
   }
 
@@ -104,26 +115,38 @@ export class StashFileStore {
   }
 
   materialize(stashId: string, destination: string): MaterializeFileResult {
+    const read = this.readContent(stashId);
+
+    const destinationPath = this.resolveDestination(destination);
+    fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
+    atomicWriteFile(destinationPath, read.content);
+
+    return {
+      stashId,
+      sourcePath: read.sourcePath,
+      destinationPath,
+      bytes: read.bytes,
+      sha256: read.sha256,
+    };
+  }
+
+  readContent(stashId: string): ReadStashedFileResult {
     const meta = this.readMeta(stashId);
     const contentPath = path.join(this.stashDir(stashId), meta.contentFile);
-    const bytes = fs.readFileSync(contentPath);
-    const actualHash = crypto.createHash("sha256").update(bytes).digest("hex");
+    const content = fs.readFileSync(contentPath);
+    const actualHash = crypto.createHash("sha256").update(content).digest("hex");
     if (actualHash !== meta.sha256) {
       throw new Error(
         `stash ${stashId} content hash mismatch: expected ${meta.sha256}, got ${actualHash}`,
       );
     }
 
-    const destinationPath = this.resolveDestination(destination);
-    fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
-    atomicWriteFile(destinationPath, bytes);
-
     return {
       stashId,
       sourcePath: contentPath,
-      destinationPath,
-      bytes: bytes.byteLength,
+      bytes: content.byteLength,
       sha256: actualHash,
+      content,
     };
   }
 
@@ -169,6 +192,14 @@ export class StashFileStore {
         ? ""
         : ` --state-dir ${shellQuote(this.stateDir)}`;
     return `node dist/cli/main.js file materialize ${stashId} ${targetPath}${stateDirFlag}`;
+  }
+
+  private catCommand(stashId: string): string {
+    const stateDirFlag =
+      this.stateDir === undefined
+        ? ""
+        : ` --state-dir ${shellQuote(this.stateDir)}`;
+    return `node dist/cli/main.js file cat ${stashId}${stateDirFlag}`;
   }
 }
 

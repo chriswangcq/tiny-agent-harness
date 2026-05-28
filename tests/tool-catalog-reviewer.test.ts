@@ -37,6 +37,7 @@ describe("static tool catalog", () => {
     expect(BASH_TOOL_DEFINITION.description).toContain("small fixed snippets");
     expect(BASH_TOOL_DEFINITION.description).toContain("stash_file");
     expect(BASH_TOOL_DEFINITION.description).toContain("file materialize");
+    expect(BASH_TOOL_DEFINITION.description).toContain("file cat");
     expect(BASH_TOOL_DEFINITION.description).not.toContain("<<'EOF'");
     expect(BASH_TOOL_DEFINITION.description).toContain("cat > path");
     expect(BASH_TOOL_DEFINITION.description).toContain("foreground stdin consumer");
@@ -51,6 +52,7 @@ describe("static tool catalog", () => {
     expect(STASH_FILE_TOOL_DEFINITION.name).toBe("stash_file");
     expect(STASH_FILE_TOOL_DEFINITION.description).toContain("without writing the workspace");
     expect(STASH_FILE_TOOL_DEFINITION.description).toContain("file materialize");
+    expect(STASH_FILE_TOOL_DEFINITION.description).toContain("file cat");
   });
 
   it("documents PTY actions in the bash input schema", () => {

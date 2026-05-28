@@ -41,6 +41,8 @@ describe("StashFileStore", () => {
     expect(observation.stashId).toMatch(/^f-[a-f0-9]{10}$/u);
     expect(observation.materializeCommand).toContain("file materialize");
     expect(observation.materializeCommand).toContain("snake.html");
+    expect(observation.catCommand).toContain("file cat");
+    expect(observation.catCommand).toContain(observation.stashId);
 
     const result = store.materialize(observation.stashId, "out/snake.html");
     expect(result.destinationPath).toBe(path.join(tmp, "out", "snake.html"));
@@ -48,6 +50,13 @@ describe("StashFileStore", () => {
       "<!DOCTYPE html>\n<title>Snake</title>\n",
     );
     expect(store.readMeta(observation.stashId).sha256).toBe(result.sha256);
+
+    const read = store.readContent(observation.stashId);
+    expect(read.sourcePath).toContain(observation.stashId);
+    expect(read.sha256).toBe(result.sha256);
+    expect(read.content.toString("utf8")).toBe(
+      "<!DOCTYPE html>\n<title>Snake</title>\n",
+    );
   });
 
   it("includes the configured state dir in materialize commands", () => {
@@ -69,6 +78,8 @@ describe("StashFileStore", () => {
 
     expect(observation.materializeCommand).toContain("--state-dir");
     expect(observation.materializeCommand).toContain(`'${stateDir}'`);
+    expect(observation.catCommand).toContain("--state-dir");
+    expect(observation.catCommand).toContain(`'${stateDir}'`);
   });
 
   it("omits the default state dir from materialize commands", () => {

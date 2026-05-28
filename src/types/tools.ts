@@ -94,4 +94,5 @@ export type AgentObservation =
       name: string;
       bytes: number;
       materializeCommand: string;
+      catCommand?: string;
     };

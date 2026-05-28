@@ -23,7 +23,7 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("simple short phrase");
     expect(prompt.messages[0]!.content).toContain("Do not put long Markdown");
     expect(prompt.messages[0]!.content).toContain("--text-stdin < reply.md");
-    expect(prompt.messages[0]!.content).toContain("file contents are not shell-parsed");
+    expect(prompt.messages[0]!.content).toContain("File/stash contents are not shell-parsed");
     expect(prompt.messages[0]!.content).toContain("producer | cmd");
     expect(prompt.messages[0]!.content).toContain("cmd < <(producer)");
     expect(prompt.messages[0]!.content).toContain('cmd <<< "$text"');
@@ -31,6 +31,7 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("Large write_text payloads are allowed");
     expect(prompt.messages[0]!.content).toContain("stash_file");
     expect(prompt.messages[0]!.content).toContain("file materialize");
+    expect(prompt.messages[0]!.content).toContain("file cat");
     expect(prompt.messages[0]!.content).toContain("small fixed snippets");
     expect(prompt.messages[0]!.content).not.toContain("<<'EOF'");
     expect(prompt.messages[0]!.content).toContain("cat > path");

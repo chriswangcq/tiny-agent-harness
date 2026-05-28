@@ -53,7 +53,7 @@ Important semantics:
 - `key` is for terminal keys such as Enter, Ctrl-C, Ctrl-D, Escape, Tab, Up, and Down.
 - `poll`, `status`, `interrupt`, `terminate`, and `restart` are control actions over the PTY session, not shell commands.
 - Every write-like action carries `expectedInputSeq`; stale input sequences are rejected.
-- Quoted shell heredocs are acceptable for small fixed snippets below about 4KB. Generated files, code, HTML, Markdown, JSON, or fragile multiline payloads should use `stash_file`, followed by `node dist/cli/main.js file materialize <stashId> <target-path>` through bash.
+- Quoted shell heredocs are acceptable for small fixed snippets below about 4KB. Generated files, code, HTML, Markdown, JSON, or fragile multiline payloads should use `stash_file`, followed by `node dist/cli/main.js file materialize <stashId> <target-path>` through bash, or `node dist/cli/main.js file cat <stashId>` when the bytes should flow to stdin.
 - After any multiline stdin flow, keep polling until the shell prompt returns. A `lastContinuationPrompt` fact means the shell recently reported a continuation prompt.
 - Observations are bounded PTY glances: full PTY output stays in the session log, and `outputTail` carries the current session's last 2K characters after write_text/key or poll/status.
 - Serialized assistant tool-call history replays historical tool-call arguments exactly as generated, including large `write_text.text` and `stash_file.content` fields. PTY observations remain bounded summaries; use `outputTail` first, terminal facts second, and `eventCount`, `eventsOmitted`, `newOutputBytes`, and `logRef` only for debugging or fetching more terminal history.
@@ -71,10 +71,16 @@ type StashFileInput = {
 };
 ```
 
-The observation returns a short `stashId`, `bytes`, and a materialize command. The actual filesystem write is explicit and PTY-visible:
+The observation returns a short `stashId`, `bytes`, a materialize command, and a cat command. The actual filesystem write is explicit and PTY-visible:
 
 ```bash
 node dist/cli/main.js file materialize <stashId> <target-path>
+```
+
+To stream the stashed bytes to a stdin consumer without a temporary target file:
+
+```bash
+node dist/cli/main.js file cat <stashId>
 ```
 
 When `name` is provided, the returned command may use that filename directly so the next bash action is short. Integrity hashes stay in stash metadata and explicit JSON/debug output; they are not part of the model-facing observation or the normal materialize message.
@@ -93,6 +99,12 @@ For longer Markdown, Chinese/emoji-heavy paragraphs, tables, generated reports, 
 
 ```bash
 node dist/cli/main.js im send --channel default --kind status --text-stdin < reply.md
+```
+
+If the reply is already stashed and does not need a durable file, stream it directly:
+
+```bash
+node dist/cli/main.js im send --channel default --kind status --text-stdin < <(node dist/cli/main.js file cat <stashId>)
 ```
 
 After sending an IM reply, poll until the shell prompt returns and the command output indicates success before choosing `io_wait`.

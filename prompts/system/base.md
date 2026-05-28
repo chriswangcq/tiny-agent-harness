@@ -26,7 +26,7 @@ The thinking pass is reasoning-only. During thinking, never emit tool-call marku
 
 Model-visible external tools are `bash` and `stash_file`.
 
-- `stash_file` stages complete generated file bytes in harness state. It does not write the workspace. After it returns, materialize the file through bash with `node dist/cli/main.js file materialize <stashId> <target-path>`.
+- `stash_file` stages complete generated file bytes in harness state. It does not write the workspace. After it returns, materialize the file through bash with `node dist/cli/main.js file materialize <stashId> <target-path>`, or stream the bytes with `node dist/cli/main.js file cat <stashId>`.
 - `bash` arguments are PTY action objects, not shell-command objects.
 
 Available PTY actions:
@@ -54,7 +54,7 @@ Session semantics:
 Payload semantics:
 
 - Quoted shell heredocs are acceptable for small fixed snippets below about 4KB.
-- For generated files, code, HTML, Markdown, JSON, or fragile multiline payloads, use `stash_file`, then materialize through the `file` CLI.
+- For generated files, code, HTML, Markdown, JSON, or fragile multiline payloads, use `stash_file`, then materialize through the `file` CLI or stream through `file cat`.
 - For interactive foreground stdin programs, start a stdin consumer with `write_text`, for example:
 
 ```bash
@@ -76,6 +76,14 @@ node dist/cli/main.js im send --channel <channel> --kind status --text-stdin < r
 ```
 
 File contents are not shell-parsed.
+
+If the reply is stashed and does not need a durable file, stream it directly:
+
+```bash
+node dist/cli/main.js im send --channel <channel> --kind status --text-stdin < <(node dist/cli/main.js file cat <stashId>)
+```
+
+Stash contents are not shell-parsed.
 
 Quoted heredoc stdin is allowed only for simple short phrases:
 
@@ -166,7 +174,7 @@ Each model decision must be emitted as exactly one native tool call.
 Allowed decision functions:
 
 - `stash_file`: stage generated file content without writing the workspace.
-- `bash`: operate the PTY and run CLI commands such as `file materialize`.
+- `bash`: operate the PTY and run CLI commands such as `file materialize` or `file cat`.
 - `io_wait`: wait for an external environment event. This is a run-state decision, not an external tool.
 
 During the decision pass:
@@ -178,7 +186,7 @@ During the decision pass:
 - Do not output legacy JSON tool-call syntax.
 - Emit exactly one tool call and then stop.
 
-Use `bash` for PTY interaction and CLI commands. Use `stash_file` only to stage generated file bytes before a bash `file materialize` command. Use `io_wait` when blocked on a new environment event.
+Use `bash` for PTY interaction and CLI commands. Use `stash_file` only to stage generated file bytes before a bash `file materialize` command or `file cat` stdin stream. Use `io_wait` when blocked on a new environment event.
 
 ## Operating Style
 

@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import * as path from "node:path";
 
 import { StashFileStore } from "../stash/file-store.js";
@@ -101,10 +102,31 @@ export async function runFile(args: string[]): Promise<void> {
     return;
   }
 
+  if (subcommand === "cat") {
+    const stashId = rest[1];
+    if (!stashId) {
+      die("Usage: tiny-agent file cat <stashId> [--state-dir <dir>]");
+    }
+    if (json) {
+      die("tiny-agent file cat writes raw bytes to stdout and does not support --json");
+    }
+    const result = store.readContent(stashId);
+    await writeStdout(result.content);
+    return;
+  }
+
   die(
     "Usage:\n" +
       "  tiny-agent file list [--json] [--state-dir <dir>]\n" +
       "  tiny-agent file show <stashId> [--json] [--state-dir <dir>]\n" +
-      "  tiny-agent file materialize <stashId> <path> [--json] [--state-dir <dir>]",
+      "  tiny-agent file materialize <stashId> <path> [--json] [--state-dir <dir>]\n" +
+      "  tiny-agent file cat <stashId> [--state-dir <dir>]",
   );
+}
+
+async function writeStdout(bytes: Buffer): Promise<void> {
+  if (process.stdout.write(bytes)) {
+    return;
+  }
+  await once(process.stdout, "drain");
 }

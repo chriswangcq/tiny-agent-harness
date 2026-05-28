@@ -199,7 +199,8 @@ function validatePtyTextPayload(
       `across ${heredoc.payloadLines} lines, which exceeds the simple phrase limit ` +
       `(${DEFAULT_MAX_IM_HEREDOC_PAYLOAD_BYTES} bytes and ${DEFAULT_MAX_IM_HEREDOC_PAYLOAD_LINES} lines). ` +
       "For longer IM replies, stage or materialize a reply.md file, then run " +
-      "`node dist/cli/main.js im send --channel <channel> --kind status --text-stdin < reply.md` through bash."
+      "`node dist/cli/main.js im send --channel <channel> --kind status --text-stdin < reply.md` " +
+      "or stream the stash with `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin < <(node dist/cli/main.js file cat <stashId>)` through bash."
     );
   }
   if (heredoc.payloadBytes <= maxBytes) {

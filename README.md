@@ -71,7 +71,7 @@ tiny-agent ui --channel default
 
 ## 核心设计理念
 
-- **小内核、统一动作面**：模型可见的交互动作收敛到 `bash` PTY；大文件/生成内容可先用受限的 `stash_file` 暂存，再通过 bash 内的 `file materialize` CLI 落盘。MCP、memory、skills、sub-agent、测试、git 和项目脚本都先作为 CLI 存在，再通过 bash 进入 harness。这样外部能力不会把内核变成一组不断膨胀的业务工具。
+- **小内核、统一动作面**：模型可见的交互动作收敛到 `bash` PTY；大文件/生成内容可先用受限的 `stash_file` 暂存，再通过 bash 内的 `file materialize` CLI 落盘，或用 `file cat` CLI 流式送入 stdin consumer。MCP、memory、skills、sub-agent、测试、git 和项目脚本都先作为 CLI 存在，再通过 bash 进入 harness。这样外部能力不会把内核变成一组不断膨胀的业务工具。
 - **显式状态优先**：`AgentRunState` 是互斥生命周期状态机。模型输出、待校验 tool call、待审核 request、待执行 tool、`io_wait` 都进入 state，而不是散落在 orchestrator 局部变量里。
 - **决策和副作用分离**：`AgentRunState.nextEffect()` 只决定下一步应该发生什么；`RunOrchestrator` 负责调用模型、校验工具、审核工具、执行 bash、等待 IO、写 transcript。
 - **FIM 是受约束的 step generator**：DeepSeek V4 FIM 被拆成 thinking pass 和 decision pass。Decision pass 只允许生成一个 native tool-call frame，并被归一化为 `ModelTurn`。
@@ -86,7 +86,7 @@ tiny-agent ui --channel default
 ## 设计亮点
 
 - **DeepSeek V4 native tool-call FIM**：decision pass 使用 DeepSeek V4 native tool-call special token 边界，但仍由 harness 手工解析和归一化，不依赖 provider-native tool calling。
-- **PTY action tool catalog**：模型通过 `bash` 操作 PTY；所有 PTY 输入都走 `write_text` 或 `key`，大段输入由 runtime 内部分块写入 PTY。生成文件等脆弱 payload 通过 `stash_file` 暂存后再由 PTY 内 CLI 显式 materialize。
+- **PTY action tool catalog**：模型通过 `bash` 操作 PTY；所有 PTY 输入都走 `write_text` 或 `key`，大段输入由 runtime 内部分块写入 PTY。生成文件等脆弱 payload 通过 `stash_file` 暂存后，再由 PTY 内 CLI 显式 materialize 或通过 `file cat` 输出到 stdin。
 - **Managed PTY runtime**：基于 `node-pty` 管理长期 session，支持 `status`、`poll`、`write_text`、`key`、`interrupt`、`terminate`、`restart`，并用 prompt markers 维护 terminal facts 和 `inputSeq`。
 - **长任务不会被误杀**：timeout 只释放 agent focus，不 kill 进程。Agent 后续可以 poll 新输出、发送交互输入、中断或重启 session。
 - **可恢复 run artifacts**：每个 run 产出 `state.json` 和 `transcript.jsonl`；每个 session 有独立 log。审阅、debug、TUI、resume、eval 都可以围绕这些 artifact 展开。
@@ -134,7 +134,7 @@ codeq hover src/run/orchestrator.ts:37:18 --json
 ## 当前核心方向
 
 - Agent ReAct loop 独立实现。
-- Agent 的交互动作收敛为 `bash` tool call，session control 也走同一个工具；生成文件可先经 `stash_file` 暂存，再由 bash 内 CLI materialize。
+- Agent 的交互动作收敛为 `bash` tool call，session control 也走同一个工具；生成文件可先经 `stash_file` 暂存，再由 bash 内 CLI materialize 或用 `file cat` 流式消费。
 - 主模型层使用 DeepSeek V4 FIM two-pass：先生成 thinking，再生成 native tool-call decision。
 - 用户消息收发通过 IM CLI 处理，不把 stdin/stdout 作为核心通信边界。
 - MCP、memory、skills、sub-agent 等能力都通过 CLI 暴露，再由 bash 调用。Skills 通过 `skill` CLI 发现和执行。

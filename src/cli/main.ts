@@ -352,6 +352,7 @@ File subcommands:
   list                          List stashed files
   show <stashId>                Show stashed file metadata
   materialize <stashId> <path>  Write stashed file to path
+  cat <stashId>                 Write stashed file bytes to stdout
 
 Skill subcommands:
   list                          List available skills
