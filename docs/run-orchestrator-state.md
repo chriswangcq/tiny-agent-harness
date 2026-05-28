@@ -108,7 +108,7 @@ type AgentRunState = {
 model output -> optional tool validation -> optional tool review -> optional tool execution -> observation
 ```
 
-如果任务已经完成，模型仍然不直接返回用户可见正文；Agent 应通过 bash 调用 `im send --text-stdin` 发送用户可见答复，然后返回 `io_wait`，让 run 等待下一条用户消息或环境事件。`im post` 只用于外部/本地 demo 注入用户消息，不能作为 agent 回复出口。所有 Agent 回复都应走 `im send --text-stdin`；简单短语可以用 `im send --text-stdin <<'IM' ... IM`，更长的 Markdown、中文/emoji 段落、表格、生成报告或多行总结应先写入/物化到 `reply.md`，再用 `im send --text-stdin < reply.md`；如果内容已在 stash 且不需要 durable 文件，也可以用 `im send --text-stdin < <(node dist/cli/main.js file cat <stashId>)` 直接流式发送。发送后 poll 到 shell prompt/成功输出再 `io_wait`。如果最近一次 IM send 的 PTY observation 尚未回到 shell prompt，orchestrator 会把 `io_wait` 转成 recoverable observation，要求模型先 poll。大段 PTY 输入会由 runtime 内部 pacing；生成文件、代码、HTML、JSON 等不应经过大型 heredoc，可用 `stash_file` 暂存后通过 bash 内 `file materialize` CLI 落盘，或通过 `file cat` 输出到 stdin consumer。
+如果任务已经完成，模型仍然不直接返回用户可见正文；Agent 应通过 bash 调用 `im send --text-stdin` 发送用户可见答复，然后返回 `io_wait`，让 run 等待下一条用户消息或环境事件。`im post` 只用于外部/本地 demo 注入用户消息，不能作为 agent 回复出口。所有 Agent 回复都应走 `im send --text-stdin`；普通文本回复可以直接用 quoted heredoc，例如 `im send --text-stdin <<'IM' ... IM`，也可以在更简单时使用 `< reply.md` 或 `file cat` process substitution。发送后 poll 到 shell prompt/成功输出再 `io_wait`。如果最近一次 IM send 的 PTY observation 尚未回到 shell prompt，orchestrator 会把 `io_wait` 转成 recoverable observation，要求模型先 poll。大段或 heredoc-shaped PTY 输入会由 runtime 保护性 pacing；生成文件、代码、HTML、JSON 等文本 payload 可以使用 heredoc，`stash_file` 仅作为显式 staged bytes 的可选通道。
 
 ## Model Turn
 

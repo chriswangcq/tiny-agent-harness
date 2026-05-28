@@ -245,7 +245,33 @@ describe("ManagedTerminalRuntime", () => {
     expect(writes.length).toBeGreaterThan(1);
     expect(writes.join("")).toBe(largeText);
     for (const chunk of writes) {
-      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(1024);
+      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(256);
+    }
+  });
+
+  it("uses protected pacing for heredocs even below the large-write threshold", async () => {
+    const port = makeRuntime().createRunPort();
+    await port.execute({ action: { kind: "status" } });
+    const heredoc =
+      "cat > note.md <<'EOF'\n" +
+      `${"中文✅".repeat(60)}\n` +
+      "EOF\n";
+
+    const observation = await port.execute({
+      action: {
+        kind: "write_text",
+        expectedInputSeq: 0,
+        text: heredoc,
+      },
+    });
+
+    const writes = ptyMock.spawned[0]?.writes.slice(1) ?? [];
+    expect(observation.result).toBe("ok");
+    expect(Buffer.byteLength(heredoc, "utf8")).toBeLessThanOrEqual(1024);
+    expect(writes.length).toBeGreaterThan(1);
+    expect(writes.join("")).toBe(heredoc);
+    for (const chunk of writes) {
+      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(256);
     }
   });
 

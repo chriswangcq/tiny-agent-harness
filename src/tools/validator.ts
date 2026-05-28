@@ -42,6 +42,10 @@ function isNonEmptyString(v: unknown): v is string {
 export type ToolCallValidatorOptions = {
   terminal?: TerminalState;
   actionLimits?: Partial<PtyActionLimits>;
+  /**
+   * @deprecated Large heredocs are accepted; the PTY runtime is responsible for
+   * paced writes. Kept only so older callers do not need a compatibility branch.
+   */
   maxHeredocPayloadBytes?: number;
 };
 
@@ -158,13 +162,9 @@ export class ToolCallValidator {
   }
 }
 
-const DEFAULT_MAX_HEREDOC_PAYLOAD_BYTES = 4096;
-const DEFAULT_MAX_IM_HEREDOC_PAYLOAD_BYTES = 512;
-const DEFAULT_MAX_IM_HEREDOC_PAYLOAD_LINES = 6;
-
 function validatePtyTextPayload(
   action: PtyAction,
-  options: { maxHeredocPayloadBytes?: number },
+  _options: { maxHeredocPayloadBytes?: number },
 ): string | undefined {
   if (action.kind !== "write_text") {
     return undefined;
@@ -174,45 +174,12 @@ function validatePtyTextPayload(
     return (
       "Invalid bash tool arguments: agent IM replies must use " +
       "`node dist/cli/main.js im send --channel <channel> --kind status --text-stdin`. " +
-      "Use a quoted heredoc only for simple short phrases; use `< reply.md` for longer replies. " +
+      "Use stdin forms such as a quoted heredoc or input redirection instead of shell arguments. " +
       "Do not use `im send --text` from the agent."
     );
   }
 
-  const heredoc = estimateLargestHeredocPayload(action.text);
-  if (heredoc === undefined) {
-    return undefined;
-  }
-
-  const maxBytes =
-    options.maxHeredocPayloadBytes ?? DEFAULT_MAX_HEREDOC_PAYLOAD_BYTES;
-  if (usesImSendTextStdin(action.text)) {
-    if (
-      heredoc.payloadBytes <= DEFAULT_MAX_IM_HEREDOC_PAYLOAD_BYTES &&
-      heredoc.payloadLines <= DEFAULT_MAX_IM_HEREDOC_PAYLOAD_LINES
-    ) {
-      return undefined;
-    }
-
-    return (
-      `Invalid bash tool arguments: IM heredoc payload is ${heredoc.payloadBytes} bytes ` +
-      `across ${heredoc.payloadLines} lines, which exceeds the simple phrase limit ` +
-      `(${DEFAULT_MAX_IM_HEREDOC_PAYLOAD_BYTES} bytes and ${DEFAULT_MAX_IM_HEREDOC_PAYLOAD_LINES} lines). ` +
-      "For longer IM replies, stage or materialize a reply.md file, then run " +
-      "`node dist/cli/main.js im send --channel <channel> --kind status --text-stdin < reply.md` " +
-      "or stream the stash with `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin < <(node dist/cli/main.js file cat <stashId>)` through bash."
-    );
-  }
-  if (heredoc.payloadBytes <= maxBytes) {
-    return undefined;
-  }
-
-  return (
-    `Invalid bash tool arguments: heredoc payload is ${heredoc.payloadBytes} bytes, ` +
-    `which exceeds the ${maxBytes} byte small-snippet limit. ` +
-    "Use stash_file for generated files or large multiline payloads, then run " +
-    "`node dist/cli/main.js file materialize <stashId> <target-path>` through bash."
-  );
+  return undefined;
 }
 
 function usesImSendTextArgument(text: string): boolean {
@@ -234,45 +201,6 @@ function usesImSend(text: string): boolean {
     return false;
   }
   return true;
-}
-
-function estimateLargestHeredocPayload(
-  text: string,
-): { payloadBytes: number; payloadLines: number } | undefined {
-  const heredocPattern = /<<-?\s*(?:(['"])([A-Za-z_][A-Za-z0-9_-]*)\1|([A-Za-z_][A-Za-z0-9_-]*))/gu;
-  let match: RegExpExecArray | null;
-  let largest: { payloadBytes: number; payloadLines: number } | undefined;
-
-  while ((match = heredocPattern.exec(text)) !== null) {
-    const delimiter = match[2] ?? match[3];
-    if (!delimiter) continue;
-
-    const bodyStart = text.indexOf("\n", heredocPattern.lastIndex);
-    if (bodyStart === -1) continue;
-
-    const closePattern = new RegExp(
-      `(?:^|\\n)${escapeForRegex(delimiter)}(?:\\r?\\n|$)`,
-      "u",
-    );
-    const closeMatch = closePattern.exec(text.slice(bodyStart + 1));
-    const body =
-      closeMatch === null
-        ? text.slice(bodyStart + 1)
-        : text.slice(bodyStart + 1, bodyStart + 1 + closeMatch.index);
-    const payload = {
-      payloadBytes: Buffer.byteLength(body, "utf8"),
-      payloadLines: body.length === 0 ? 0 : body.split(/\r?\n/u).length,
-    };
-    if (largest === undefined || payload.payloadBytes > largest.payloadBytes) {
-      largest = payload;
-    }
-  }
-
-  return largest !== undefined && largest.payloadBytes > 0 ? largest : undefined;
-}
-
-function escapeForRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 function parsePtyAction(args: Record<string, unknown>): PtyAction | string {

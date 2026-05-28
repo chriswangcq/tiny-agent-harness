@@ -84,7 +84,7 @@ describe("ToolCallValidator PTY actions", () => {
     expect(result.status).toBe("valid");
   });
 
-  it("rejects large heredoc payloads and points to stash_file", () => {
+  it("allows large heredoc payloads because runtime write pacing protects PTY input", () => {
     const heredoc = `cat > app.html <<'EOF'\n${"x".repeat(4097)}\nEOF\n`;
     const result = new ToolCallValidator().validate(
       makeCall({
@@ -96,12 +96,7 @@ describe("ToolCallValidator PTY actions", () => {
       }),
     );
 
-    expect(result.status).toBe("invalid");
-    if (result.status === "invalid") {
-      expect(result.observation.message).toContain("heredoc payload");
-      expect(result.observation.message).toContain("stash_file");
-      expect(result.observation.message).toContain("file materialize");
-    }
+    expect(result.status).toBe("valid");
   });
 
   it("allows small quoted heredoc snippets", () => {
@@ -135,7 +130,7 @@ describe("ToolCallValidator PTY actions", () => {
     expect(result.status).toBe("valid");
   });
 
-  it("rejects large im send heredoc replies and points to reply file redirection", () => {
+  it("allows large im send heredoc replies through text-stdin", () => {
     const result = new ToolCallValidator().validate(
       makeCall({
         arguments: {
@@ -149,15 +144,10 @@ describe("ToolCallValidator PTY actions", () => {
       }),
     );
 
-    expect(result.status).toBe("invalid");
-    if (result.status === "invalid") {
-      expect(result.observation.message).toContain("IM heredoc payload");
-      expect(result.observation.message).toContain("simple phrase limit");
-      expect(result.observation.message).toContain("< reply.md");
-    }
+    expect(result.status).toBe("valid");
   });
 
-  it("rejects multiline im send heredoc replies even when under the byte limit", () => {
+  it("allows multiline im send heredoc replies", () => {
     const result = new ToolCallValidator().validate(
       makeCall({
         arguments: {
@@ -177,11 +167,7 @@ describe("ToolCallValidator PTY actions", () => {
       }),
     );
 
-    expect(result.status).toBe("invalid");
-    if (result.status === "invalid") {
-      expect(result.observation.message).toContain("IM heredoc payload");
-      expect(result.observation.message).toContain("simple phrase limit");
-    }
+    expect(result.status).toBe("valid");
   });
 
   it("rejects agent im send --text replies and points to text-stdin", () => {
@@ -199,8 +185,8 @@ describe("ToolCallValidator PTY actions", () => {
     expect(result.status).toBe("invalid");
     if (result.status === "invalid") {
       expect(result.observation.message).toContain("--text-stdin");
-      expect(result.observation.message).toContain("simple short phrases");
-      expect(result.observation.message).toContain("< reply.md");
+      expect(result.observation.message).toContain("quoted heredoc");
+      expect(result.observation.message).not.toContain("reply.md");
     }
   });
 

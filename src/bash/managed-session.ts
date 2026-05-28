@@ -37,7 +37,11 @@ export class ManagedPtySession {
     this.cwd = options.cwd;
     this.shell = options.shell ?? "/bin/bash";
     this.shellArgs = options.shellArgs ?? ["--noprofile", "--norc", "-i"];
-    this.env = { ...(options.env ?? {}), TERM: "dumb" };
+    this.env = normalizePtyEnv({
+      ...processEnv(),
+      ...(options.env ?? {}),
+      TERM: "dumb",
+    });
     this.currentSnapshot = {
       session: this.id,
       terminal: createTerminalState({
@@ -138,4 +142,35 @@ export class ManagedPtySession {
     });
     this.currentSnapshot = result.snapshot;
   }
+}
+
+function processEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) {
+      env[key] = value;
+    }
+  }
+  return env;
+}
+
+function normalizePtyEnv(env: Record<string, string>): Record<string, string> {
+  if (!hasUtf8Locale(env)) {
+    env.LANG = env.LANG && isUtf8Locale(env.LANG) ? env.LANG : "C.UTF-8";
+    env.LC_CTYPE =
+      env.LC_CTYPE && isUtf8Locale(env.LC_CTYPE)
+        ? env.LC_CTYPE
+        : env.LANG;
+  }
+  return env;
+}
+
+function hasUtf8Locale(env: Record<string, string>): boolean {
+  return [env.LC_ALL, env.LC_CTYPE, env.LANG].some(
+    (value) => value !== undefined && isUtf8Locale(value),
+  );
+}
+
+function isUtf8Locale(value: string): boolean {
+  return /utf-?8/iu.test(value);
 }

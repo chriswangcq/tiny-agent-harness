@@ -16,7 +16,7 @@ DeepSeekFimAdapter
 ToolCallValidator
   accepts only PTY action payloads for bash
   accepts stash_file payloads for staged file bytes
-  rejects command-shaped bash payloads and oversized heredocs
+  rejects command-shaped bash payloads
 
 RunOrchestrator
   validates -> reviews -> executes PTY actions through TerminalPort
@@ -46,14 +46,14 @@ type BashToolInput =
 Important semantics:
 
 - `write_text` writes exact text bytes. It does not append Enter. Include `\n` explicitly or use `{ kind: "key", key: "enter" }`.
-- Large `write_text` payloads are accepted by the tool and internally paced into PTY writes so the model does not need to chunk ordinary shell input. This solves PTY transport, not shell parsing.
+- Large `write_text` payloads are accepted by the tool. The runtime uses protected pacing for large or heredoc-shaped input so interactive bash can keep up.
 - After `write_text` or `key` input, the runtime waits briefly before reading PTY output so immediate echo or command output can land in the same observation.
 - New managed PTY sessions drain shell initialization output before the first model-visible observation when startup reaches the prompt quickly.
 - The runtime reports terminal facts such as `alive`, `inputSeq`, `syncStatus`, `lastShellPrompt`, and `lastContinuationPrompt`. It does not infer whether shell, Python, ssh, cat, vim, or another foreground program should receive the next bytes.
 - `key` is for terminal keys such as Enter, Ctrl-C, Ctrl-D, Escape, Tab, Up, and Down.
 - `poll`, `status`, `interrupt`, `terminate`, and `restart` are control actions over the PTY session, not shell commands.
 - Every write-like action carries `expectedInputSeq`; stale input sequences are rejected.
-- Quoted shell heredocs are acceptable for small fixed snippets below about 4KB. Generated files, code, HTML, Markdown, JSON, or fragile multiline payloads should use `stash_file`, followed by `node dist/cli/main.js file materialize <stashId> <target-path>` through bash, or `node dist/cli/main.js file cat <stashId>` when the bytes should flow to stdin.
+- Quoted shell heredocs are acceptable for generated textual files, code, HTML, Markdown, JSON, and multiline messages. Choose a delimiter that does not appear alone in the payload. Avoid PTY text for binary data or very large single-line/minified payloads; use line-broken text when possible. `stash_file` remains available for explicit staged bytes, but it is not required for ordinary textual heredocs.
 - After any multiline stdin flow, keep polling until the shell prompt returns. A `lastContinuationPrompt` fact means the shell recently reported a continuation prompt.
 - Observations are bounded PTY glances: full PTY output stays in the session log, and `outputTail` carries the current session's last 2K characters after write_text/key or poll/status.
 - Serialized assistant tool-call history replays historical tool-call arguments exactly as generated, including large `write_text.text` and `stash_file.content` fields. PTY observations remain bounded summaries; use `outputTail` first, terminal facts second, and `eventCount`, `eventsOmitted`, `newOutputBytes`, and `logRef` only for debugging or fetching more terminal history.
@@ -87,7 +87,7 @@ When `name` is provided, the returned command may use that filename directly so 
 
 ## Large Payloads
 
-Agent-authored IM replies should use `--text-stdin` so shell argument quoting, terminal wrapping, backticks, pipes, and `$` do not rewrite or clutter the message. A quoted heredoc is only for simple short phrases:
+Agent-authored IM replies should use `--text-stdin` so shell argument quoting, terminal wrapping, backticks, pipes, and `$` do not rewrite or clutter the message. A quoted heredoc is valid for normal text replies:
 
 ```bash
 node dist/cli/main.js im send --channel default --kind status --text-stdin <<'IM'
@@ -95,7 +95,7 @@ Done.
 IM
 ```
 
-For longer Markdown, Chinese/emoji-heavy paragraphs, tables, generated reports, or multiline summaries, write or materialize a reply file and send it by input redirection:
+Input redirection is also valid when it makes the command simpler:
 
 ```bash
 node dist/cli/main.js im send --channel default --kind status --text-stdin < reply.md
@@ -109,14 +109,14 @@ node dist/cli/main.js im send --channel default --kind status --text-stdin < <(n
 
 After sending an IM reply, poll until the shell prompt returns and the command output indicates success before choosing `io_wait`.
 
-Generated text files and code can use small quoted heredocs when below the heredoc guard limit. Larger or fragile payloads should use `stash_file`. Interactive foreground stdin programs can still use direct PTY stdin so the payload does not go through shell parsing:
+Generated text files and code can use quoted heredocs directly. Interactive foreground stdin programs can also use direct PTY stdin:
 
 1. Use `write_text` to run `cat > path\n` or another intentionally chosen stdin consumer.
 2. Poll until it is clearly waiting for input.
 3. Use `write_text` to send the file text directly to that foreground process. End text payloads with `\n`.
 4. Send `{ kind: "key", key: "ctrl-d" }` to close stdin, then poll until the shell prompt returns. End text payloads with `\n` before Ctrl-D. If the text did not end with `\n`, one Ctrl-D may only flush the current line while the foreground program keeps reading; do not send any further shell command until a prompt returns, and send a second Ctrl-D if needed.
 
-Large `write_text` payloads are accepted by the tool and paced internally by the runtime, so the model does not need to invent a second payload protocol or manually split ordinary shell input.
+Large or heredoc-shaped `write_text` payloads are accepted by the tool and protected-paced internally by the runtime, so the model does not need to invent a second payload protocol or manually split ordinary textual input.
 
 There is no frame action, receiver protocol, or binary payload side channel. Binary or opaque transfer should use `stash_file` with `encoding: "base64"` when needed.
 

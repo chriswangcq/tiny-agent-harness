@@ -105,15 +105,15 @@ export const BASH_TOOL_DEFINITION: ToolDefinition = {
   name: "bash",
   description:
     "Operate a persistent PTY session with inputSeq-guarded actions. " +
-    "This is a pure PTY interface: write_text writes exact bytes to the terminal and never appends Enter for you; include \\n explicitly or use key enter. Large write_text payloads are allowed and internally paced, which solves PTY transport but not shell parsing. " +
+    "This is a pure PTY interface: write_text writes exact bytes to the terminal and never appends Enter for you; include \\n explicitly or use key enter. Large write_text payloads are allowed; the runtime uses protected pacing for large or heredoc-shaped input so interactive bash can keep up. " +
     "After write_text/key input, the runtime waits about 100ms before glancing at the PTY. bash observations expose outputTail, the current session's last 2K characters, as the primary terminal view. poll/status refresh the same terminal tail without writing input. " +
     "Use key only for terminal keys such as enter, ctrl-c, ctrl-d, escape, tab, up, and down. " +
     "Use poll/status to observe and interrupt/terminate/restart to recover. The runtime reports terminal facts such as lastShellPrompt, lastContinuationPrompt, syncStatus, alive, and inputSeq; it does not infer whether shell, Python, ssh, cat, vim, or another foreground program should receive the next bytes. The agent must inspect the PTY output and terminal facts before deciding what to type. " +
     "Every write_text/key action must include the latest terminal.inputSeq from the prior observation. The sequence only prevents stale input; it is not a foreground process claim. " +
-    "Use quoted shell heredocs only for small fixed snippets below about 4KB. For generated files, code, HTML, Markdown, JSON, or fragile multiline payloads, call stash_file first, then use bash to run `node dist/cli/main.js file materialize <stashId> <target-path>` or stream bytes with `node dist/cli/main.js file cat <stashId>`. " +
+    "Quoted shell heredocs are acceptable for generated textual files, code, HTML, Markdown, JSON, and multiline messages; choose a delimiter that does not appear alone in the payload. Avoid using PTY text for binary data or very large single-line/minified payloads; use line-broken text when possible. stash_file remains available for explicit staged bytes, but it is not required for ordinary textual heredocs; if used, materialize with `node dist/cli/main.js file materialize ...` or stream with `node dist/cli/main.js file cat ...`. " +
     "For interactive foreground stdin programs, use PTY input directly: start a foreground stdin consumer such as `cat > path\\n` or `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin\\n`, poll until it is clearly waiting for input, write the payload text directly, send ctrl-d, and poll until the shell prompt returns. End text payloads with \\n before ctrl-d. If the payload does not end with \\n, one ctrl-d may only flush the current line while the foreground program keeps reading; do not send any further shell command until a prompt returns, and send a second ctrl-d if needed. " +
-    "For user-visible IM replies, use `--text-stdin`. Use a quoted heredoc only for simple short phrases, for example `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin <<'IM'\\nDone.\\nIM\\n`. For anything longer, Chinese/emoji-heavy, tabular, generated, or Markdown-rich, first write or materialize `reply.md`, then send with `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin < reply.md`, or stream a stashed reply with `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin < <(node dist/cli/main.js file cat <stashId>)`. Do not use `im send --text` from the agent. " +
-    "The runtime paces large writes internally. " +
+    "For user-visible IM replies, use `--text-stdin`. A quoted heredoc is valid for normal text replies, including Markdown, Chinese, emoji, and tables, for example `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin <<'IM'\\nDone.\\nIM\\n`. Input redirection such as `< reply.md` and process substitution with `file cat` are also valid when they make the command simpler. Do not use `im send --text` from the agent. " +
+    "Runtime pacing protects large and heredoc write_text input. " +
     "Historical assistant tool-call arguments are serialized exactly as generated. PTY observations remain bounded summaries; use outputTail first, terminal facts second, and eventCount/eventsOmitted/logRef only for debugging or fetching more terminal history. " +
     "Do not invent frame actions, side-channel payload protocols, or command-shaped bash payloads.",
   inputSchema: BashToolInputSchema,
@@ -131,7 +131,7 @@ const StashFileInputSchema: JsonSchema = {
     content: {
       type: "string",
       description:
-        "Complete file content to stash in harness state. Use stash_file for generated files or multiline payloads that should not pass through shell parsing.",
+        "Complete file content to stash in harness state. Use stash_file only when you explicitly want staged bytes outside the PTY command stream.",
     },
     encoding: {
       type: "string",
@@ -150,7 +150,7 @@ export const STASH_FILE_TOOL_DEFINITION: ToolDefinition = {
   name: "stash_file",
   description:
     "Stage complete file bytes in harness-managed state without writing the workspace. " +
-    "Use this for generated files, HTML, Markdown, JSON, code, or any payload too large or fragile for a small quoted heredoc. " +
+    "Use this only when the agent explicitly needs staged bytes outside the PTY command stream, such as binary or opaque payloads. " +
     "The tool returns a short stashId, byte count, a materialize command, and a cat command. After it succeeds, use bash to run the returned `node dist/cli/main.js file materialize ...` command for filesystem writes, or `node dist/cli/main.js file cat ...` to stream the bytes into a stdin consumer.",
   inputSchema: StashFileInputSchema,
 };

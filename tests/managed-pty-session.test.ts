@@ -64,10 +64,11 @@ describe("ManagedPtySession", () => {
       ["--noprofile", "--norc", "-i"],
       expect.objectContaining({
         cwd: "/repo",
-        env: {
+        env: expect.objectContaining({
           PATH: "/bin",
           TERM: "dumb",
-        },
+          LANG: expect.stringMatching(/utf-?8/iu),
+        }),
       }),
     );
     expect(ptyMock.spawned[0]?.writes[0]).toContain("__TAH_PROMPT__");

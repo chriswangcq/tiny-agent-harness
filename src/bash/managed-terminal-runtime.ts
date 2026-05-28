@@ -8,8 +8,11 @@ import type { TerminalPort } from "../run/orchestrator.js";
 import type { PtyActionLimits } from "../terminal/validator.js";
 import type { TerminalObservationLimits } from "../terminal/observation.js";
 import { ManagedPtySession } from "./managed-session.js";
+import {
+  chunkTextByUtf8Bytes,
+  planPtyWrite,
+} from "./pty-write-pacing.js";
 
-const PTY_WRITE_CHUNK_BYTES = 1024;
 const DEFAULT_POST_WRITE_READ_DELAY_MS = 100;
 const DEFAULT_STARTUP_READ_DELAY_MS = 100;
 
@@ -66,9 +69,14 @@ export class ManagedTerminalRuntime {
           const entry = this.ensureSession(session);
           await this.drainStartup(entry);
           const pty = entry.pty;
-          for (const chunk of chunkTextByUtf8Bytes(data, PTY_WRITE_CHUNK_BYTES)) {
+          const pacing = planPtyWrite(data);
+          const chunks = chunkTextByUtf8Bytes(data, pacing.chunkBytes);
+          for (let index = 0; index < chunks.length; index += 1) {
+            const chunk = chunks[index]!;
             pty.write(chunk);
-            await yieldToPty();
+            if (index < chunks.length - 1) {
+              await waitBetweenPtyWrites(pacing.interChunkDelayMs);
+            }
           }
           await delay(this.options.postWriteReadDelayMs ?? DEFAULT_POST_WRITE_READ_DELAY_MS);
         },
@@ -170,35 +178,10 @@ export class ManagedTerminalRuntime {
   }
 }
 
-function chunkTextByUtf8Bytes(text: string, maxBytes: number): string[] {
-  if (Buffer.byteLength(text, "utf8") <= maxBytes) {
-    return [text];
+function waitBetweenPtyWrites(delayMs: number): Promise<void> {
+  if (delayMs > 0) {
+    return delay(delayMs);
   }
-
-  const chunks: string[] = [];
-  let current = "";
-  let currentBytes = 0;
-
-  for (const char of text) {
-    const charBytes = Buffer.byteLength(char, "utf8");
-    if (current.length > 0 && currentBytes + charBytes > maxBytes) {
-      chunks.push(current);
-      current = "";
-      currentBytes = 0;
-    }
-
-    current += char;
-    currentBytes += charBytes;
-  }
-
-  if (current.length > 0) {
-    chunks.push(current);
-  }
-
-  return chunks;
-}
-
-function yieldToPty(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 

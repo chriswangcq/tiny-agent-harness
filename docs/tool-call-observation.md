@@ -1,13 +1,13 @@
 # Tool Call And Observation Design
 
-当前 harness 的 tool call 协议是 PTY-first，并为大文件恢复了受限 staging：模型通过 `bash` 发 PTY action，harness 校验 inputSeq 后写入真实 PTY 或执行 PTY control；模型也可以通过 `stash_file` 把完整文件 bytes 暂存在 harness state，再通过 PTY 内 `file materialize` CLI 显式落盘，或通过 `file cat` CLI 将 bytes 输出到 stdin consumer。观察结果统一为 `PtyObservation` 或 `AgentObservation`。
+当前 harness 的 tool call 协议是 PTY-first：模型通过 `bash` 发 PTY action，harness 校验 inputSeq 后写入真实 PTY 或执行 PTY control；大段或 heredoc-shaped 输入由 runtime 保护性 pacing。模型也可以通过 `stash_file` 把完整 bytes 暂存在 harness state，再通过 PTY 内 `file materialize` CLI 显式落盘，或通过 `file cat` CLI 将 bytes 输出到 stdin consumer。观察结果统一为 `PtyObservation` 或 `AgentObservation`。
 
 ## Design Principles
 
 1. 模型可见的外部动作面只有 `bash` 和 `stash_file`。
 2. `bash` arguments 必须是 PTY action，不存在命令级双轨。
 3. PTY 是字节和按键流，不是 shell line API；Enter 是 `\n` 或 `key: "enter"`。
-4. 小片段可以通过 PTY/heredoc 完成；大文本、生成文件和脆弱内容使用 `stash_file` 暂存，再用 PTY 内 `file materialize` CLI 写入目标路径，或用 `file cat` CLI 流式送入 stdin consumer；不存在 frame action 或 receiver 协议。
+4. 文本 payload 可以通过 PTY/heredoc 完成；runtime 会对大段或 heredoc-shaped 输入做保护性 pacing。`stash_file` 仅作为显式 staged bytes 的可选通道；不存在 frame action 或 receiver 协议。
 5. Tool review 仍位于执行前；demo 模式可以默认 approve。
 6. Observation 返回 terminal facts、action summary、`outputTail`、terminal events、log ref 和错误码；完整输出留在 session log。
 
@@ -123,7 +123,7 @@ After `write_text` or `key` input, the managed runtime waits about 100ms before 
 
 New managed PTY sessions drain the shell initialization prompt before the first model-visible observation when it arrives within the startup window. Prompt parsing also tolerates terminal-control residue such as Ctrl-D echo/backspace before a trusted prompt marker, so returning from foreground stdin consumers is not mistaken for ordinary output.
 
-For user-visible IM replies, a `write_text` observation without a shell prompt is not proof that the reply was sent. The agent must poll until the prompt returns and should use `im send --text-stdin`. A quoted heredoc is only for simple short phrases; longer Markdown, Chinese/emoji-heavy content, tables, generated reports, or multiline summaries should be sent from a materialized reply file with `< reply.md`, or streamed from stash with `file cat` process substitution.
+For user-visible IM replies, a `write_text` observation without a shell prompt is not proof that the reply was sent. The agent must poll until the prompt returns and should use `im send --text-stdin`. A quoted heredoc is valid for normal text replies; input redirection and `file cat` process substitution are also valid when they make the command simpler.
 
 Rejected input is recoverable. The model should inspect the terminal facts and PTY output, then choose `poll`, `status`, `interrupt`, `terminate`, `restart`, or a corrected inputSeq-guarded action.
 

@@ -20,10 +20,9 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("--text-stdin");
     expect(prompt.messages[0]!.content).toContain("quoted heredoc");
     expect(prompt.messages[0]!.content).toContain("<<'IM'");
-    expect(prompt.messages[0]!.content).toContain("simple short phrase");
-    expect(prompt.messages[0]!.content).toContain("Do not put long Markdown");
-    expect(prompt.messages[0]!.content).toContain("--text-stdin < reply.md");
-    expect(prompt.messages[0]!.content).toContain("File/stash contents are not shell-parsed");
+    expect(prompt.messages[0]!.content).toContain("normal text replies");
+    expect(prompt.messages[0]!.content).toContain("< reply.md");
+    expect(prompt.messages[0]!.content).toContain("protected pacing");
     expect(prompt.messages[0]!.content).toContain("producer | cmd");
     expect(prompt.messages[0]!.content).toContain("cmd < <(producer)");
     expect(prompt.messages[0]!.content).toContain('cmd <<< "$text"');
@@ -32,7 +31,7 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("stash_file");
     expect(prompt.messages[0]!.content).toContain("file materialize");
     expect(prompt.messages[0]!.content).toContain("file cat");
-    expect(prompt.messages[0]!.content).toContain("small fixed snippets");
+    expect(prompt.messages[0]!.content).toContain("ordinary textual heredocs");
     expect(prompt.messages[0]!.content).not.toContain("<<'EOF'");
     expect(prompt.messages[0]!.content).toContain("cat > path");
     expect(prompt.messages[0]!.content).toContain(
@@ -46,6 +45,7 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("does not infer whether");
     expect(prompt.messages[0]!.content).toContain("side-channel payload protocols");
     expect(prompt.messages[0]!.content).not.toContain("small/simple generated text files");
+    expect(prompt.messages[0]!.content).not.toContain("Do not put long Markdown");
     expect(prompt.messages[0]!.content).not.toContain("bash command fields");
     expect(prompt.messages[0]!.content).not.toContain("UnsupportedControlPayload");
     expect(prompt.messages[0]!.content).not.toContain("artifact write");
