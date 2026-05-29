@@ -256,7 +256,7 @@ Parsing steps:
 
 1. Trim whitespace.
 2. Extract the DSML invoke name and parameters.
-3. Validate function name is one of `bash`, `io_wait`.
+3. Validate function name is one of `bash`, `stash_file`, or `io_wait`.
 4. Parse parameter values according to their `string` flag.
 5. Normalize into `ModelTurn`.
 6. Reject any extra assistant content before or after the single tool call.
@@ -266,6 +266,9 @@ Normalization:
 ```text
 bash(args)
   -> ModelTurn.tool_call with InternalToolCall(name="bash", arguments=args)
+
+stash_file(args)
+  -> ModelTurn.tool_call with InternalToolCall(name="stash_file", arguments=args)
 
 io_wait(args)
   -> ModelTurn.io_wait
@@ -331,8 +334,8 @@ Tool call normalization:
 ```ts
 type InternalToolCall = {
   id: string;
-  name: "bash";
-  arguments: BashToolInput;
+  name: "bash" | "stash_file";
+  arguments: BashToolInput | StashFileInput;
   raw?: unknown;
 };
 ```
@@ -355,11 +358,12 @@ Schema-level failures become tool-validation observations in the run state.
 
 ```ts
 type DeepSeekFimConfig = {
-  apiKeyEnv: "DEEPSEEK_API_KEY";
-  baseUrl: "https://api.deepseek.com/beta";
-  model: "deepseek-v4-pro";
+  apiKey: string;
+  baseUrl: string; // CLI default: "https://api.deepseek.com/beta"
+  model: string; // CLI default: "deepseek-v4-pro"
   thinkingMaxTokens: number; // <= 4096
   decisionMaxTokens: number; // <= 4096
+  continuationMaxRounds?: number; // default 4
   requestRetryMaxAttempts?: number; // default 3
   requestRetryInitialDelayMs?: number; // default 500
   requestRetryMaxDelayMs?: number; // default 4000
@@ -370,9 +374,11 @@ Suggested defaults:
 
 ```json
 {
+  "baseUrl": "https://api.deepseek.com/beta",
   "model": "deepseek-v4-pro",
-  "thinkingMaxTokens": 2048,
-  "decisionMaxTokens": 1024,
+  "thinkingMaxTokens": 4096,
+  "decisionMaxTokens": 2048,
+  "continuationMaxRounds": 4,
   "requestRetryMaxAttempts": 3
 }
 ```
@@ -381,6 +387,11 @@ FIM request retry is scoped to failures before streaming starts: fetch/connect
 failures plus HTTP `429` and `5xx`. Once the SSE stream is being parsed, errors
 are surfaced directly instead of replaying the request, so transcripted thinking
 or decision chunks are not duplicated.
+
+Prompt encoding is delegated to `scripts/encode-prompt.py` through
+`execFileSync`. Both `DeepSeekFimAdapter` and `DeepSeekV4PromptTokenCounter`
+set the subprocess `maxBuffer` to 2 MiB so large encoded prompts can be
+generated and counted before the context compaction threshold is reached.
 
 Provider `usage` objects from streamed chunks are preserved under
 `output.usage.thinking.usages[]` and `output.usage.decision.usages[]`. DeepSeek
@@ -416,17 +427,29 @@ type FimModelEvent =
     };
 ```
 
-Prompt text can be saved separately under the run directory:
+Prompt text can be saved separately under the run directory. The current orchestrator does this for `thinking.raw.prompt`: before writing `model_output_received`, it saves the raw thinking prompt as a debug artifact and replaces the embedded prompt with a `promptRef` object.
 
 ```text
 .tiny-agent/
   runs/
     run-.../
-      prompts/
-        step-000-thinking.prompt.txt
-        step-000-thinking.suffix.txt
-        step-000-decision.prompt.txt
+      debug/
+        prompts/
+          step-0000-thinking.prompt.txt
 ```
+
+The `promptRef` includes:
+
+```ts
+type RunDebugArtifact = {
+  path: string;
+  relativePath: string;
+  bytes: number;
+  sha256: string;
+};
+```
+
+Transcript and `session.json` should keep the reference, not the full prompt string. This makes model-cache audits and prompt debugging possible without turning every replay or resumed run into a prompt-size multiplier.
 
 ## Prompt Boundary Rules
 

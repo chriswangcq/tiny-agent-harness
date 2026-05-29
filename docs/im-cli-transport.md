@@ -172,8 +172,9 @@ First version:
 - allow the Agent to submit `io_wait` for a new user message
 - while in `waiting_for_io`, do not call the model or execute bash
 - resume the Agent loop when the wait condition is satisfied
-- run until completed / failed / cancelled
-- send status or error
+- keep the run alive across user-visible replies by sending status through `im send` and then returning to `io_wait`
+- stop only on failed or cancelled run state
+- send error details when the run fails
 
 Defer multi-message live chat during a run.
 

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ManagedTerminalRuntime } from "../src/bash/managed-terminal-runtime.js";
+import type { ForegroundInspector } from "../src/bash/managed-session.js";
 import { formatPromptMarker } from "../src/application/managed-shell.js";
 
 const ptyMock = vi.hoisted(() => {
@@ -9,6 +10,7 @@ const ptyMock = vi.hoisted(() => {
     private dataHandler: DataHandler | undefined;
     readonly writes: string[] = [];
     killed = false;
+    readonly pid = 99999;
 
     onData(handler: DataHandler): void {
       this.dataHandler = handler;
@@ -51,6 +53,7 @@ afterEach(() => {
 function makeRuntime(options: {
   postWriteReadDelayMs?: number;
   startupReadDelayMs?: number;
+  foregroundInspector?: ForegroundInspector;
 } = {}): ManagedTerminalRuntime {
   return new ManagedTerminalRuntime({
     defaultSessionId: "default",
@@ -66,6 +69,7 @@ function makeRuntime(options: {
     monotonicMs: () => 1,
     newId: (prefix) => `${prefix}-1`,
     newNonce: () => "nonce",
+    foregroundInspector: options.foregroundInspector ?? (() => null),
   });
 }
 
@@ -106,6 +110,16 @@ describe("ManagedTerminalRuntime", () => {
       eventCount: 1,
       returnedToPrompt: true,
     });
+    expect(second.terminal.foregroundProcess).toBeNull();
+  });
+
+  it("resolves foregroundProcess via injected inspector", async () => {
+    const inspector = vi.fn((_pid: number) => "sleep");
+    const runtime = makeRuntime({ foregroundInspector: inspector });
+    const port = runtime.createRunPort();
+    const obs = await port.execute({ action: { kind: "status" } });
+    expect(obs.terminal.foregroundProcess).toBe("sleep");
+    expect(inspector).toHaveBeenCalledWith(99999);
   });
 
   it("drains managed shell startup output before the first observation", async () => {

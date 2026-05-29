@@ -68,7 +68,10 @@ TUI reads those facts and renders them.
 推荐入口：
 
 ```bash
-tiny-agent run "fix tests" --tui
+tiny-agent ui --channel default
+tiny-agent ui --channel default --task "fix tests"
+tiny-agent ui --channel default --resume latest
+tiny-agent ui --channel default --resume run-2026-05-25T20-00-00Z
 tiny-agent tui --run latest
 tiny-agent tui --run run-2026-05-25T20-00-00Z
 tiny-agent tui --run latest --replay
@@ -77,16 +80,12 @@ tiny-agent tui --run latest --follow
 
 语义：
 
-- `tiny-agent run --tui`: 启动 run，同时打开 live TUI。
-- `tiny-agent tui --run latest`: attach 到最近 run。
+- `tiny-agent ui --channel default`: 后台启动 run，等待第一条 IM 消息，同时打开 live TUI。
+- `tiny-agent ui --channel default --task "fix tests"`: 后台启动 run 并直接注入初始任务，同时打开 live TUI。
+- `tiny-agent ui --channel default --resume <runId|latest>`: 恢复已有 run，并把 TUI attach 到恢复后的 run。
+- `tiny-agent tui --run latest`: 只 attach 到最近 run，不启动或恢复 run。
 - `--replay`: 从 transcript 起点播放，不自动跳到末尾。
 - `--follow`: tail 新事件，默认 live 模式。
-
-第一版可以只实现：
-
-```bash
-tiny-agent tui --run latest
-```
 
 ## Data Sources
 
@@ -98,8 +97,10 @@ TUI 只读这些 durable artifacts：
     <runId>/
       state.json
       transcript.jsonl
-      prompts/
-        step-000.md
+      session.json
+      debug/
+        prompts/
+          step-0000-thinking.prompt.txt
   sessions/
     default.log
     server.log
@@ -622,7 +623,7 @@ type TuiRenderer = {
 - session log 只读 tail。
 - view model 对历史 step 做虚拟化或窗口化。
 - 单个 LoopFrame detail 默认截断。
-- 大 prompt / raw output 只显示路径。
+- 大 prompt / raw output 只显示路径。模型 prompt 通过 `promptRef` 指向 `debug/prompts/` artifact，不在 loop frame 内整段展开。
 
 建议默认：
 

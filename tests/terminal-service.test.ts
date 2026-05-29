@@ -6,6 +6,7 @@ import type {
   TerminalServicePorts,
 } from "../src/application/terminal-ports.js";
 import { createTerminalState } from "../src/terminal/state.js";
+import { formatPromptMarker } from "../src/application/managed-shell.js";
 import type { TerminalState } from "../src/terminal/index.js";
 
 function terminal(inputSeq = 1): TerminalState {
@@ -90,8 +91,18 @@ function makePorts(options: {
 }
 
 describe("TerminalService", () => {
-  it("rejects stale input sequences without writing or saving", async () => {
-    const { ports, writes, saves } = makePorts({ snapshot: makeSnapshot(terminal(2)) });
+  it("rejects stale input sequences and refreshes snapshot so the rejection carries the latest inputSeq", async () => {
+    const promptChunk = formatPromptMarker({
+      nonce: "nonce",
+      returnCode: 0,
+      cwd: "/repo",
+      promptSeq: 3,
+    }) + "\n";
+
+    const { ports, writes, saves } = makePorts({
+      snapshot: makeSnapshot(terminal(2)),
+      readChunk: promptChunk,
+    });
     const service = new TerminalService(ports, makeConfig());
 
     const observation = await service.handleAction({
@@ -103,9 +114,26 @@ describe("TerminalService", () => {
     expect(observation).toMatchObject({
       result: "rejected",
       errorCode: "INPUT_SEQ_MISMATCH",
+      terminal: {
+        inputSeq: 3,
+        lastShellPrompt: {
+          cwd: "/repo",
+          promptSeq: 3,
+          lastReturnCode: 0,
+        },
+      },
     });
     expect(writes).toEqual([]);
-    expect(saves).toEqual([]);
+    // On mismatch the service reads latest output and saves the refreshed snapshot
+    // so the rejection carries the correct inputSeq.
+    expect(saves.length).toBe(1);
+    expect(saves[0].terminal.inputSeq).toBe(3);
+    expect(saves[0].terminal.lastShellPrompt).toMatchObject({
+      cwd: "/repo",
+      promptSeq: 3,
+      lastReturnCode: 0,
+    });
+    expect(saves[0].parserState.totalBytes).toBeGreaterThan(0);
   });
 
   it("writes input, parses prompt output, saves snapshot, and returns compact observation", async () => {

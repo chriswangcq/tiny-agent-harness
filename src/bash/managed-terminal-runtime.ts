@@ -7,7 +7,7 @@ import type {
 import type { TerminalPort } from "../run/orchestrator.js";
 import type { PtyActionLimits } from "../terminal/validator.js";
 import type { TerminalObservationLimits } from "../terminal/observation.js";
-import { ManagedPtySession } from "./managed-session.js";
+import { ManagedPtySession, type ForegroundInspector } from "./managed-session.js";
 import {
   chunkTextByUtf8Bytes,
   planPtyWrite,
@@ -31,6 +31,7 @@ export type ManagedTerminalRuntimeOptions = {
   monotonicMs?: () => number;
   newId?: (prefix: string) => string;
   newNonce?: () => string;
+  foregroundInspector?: ForegroundInspector;
 };
 
 type RuntimeSession = {
@@ -118,7 +119,12 @@ export class ManagedTerminalRuntime {
         load: async (session) => {
           const entry = this.ensureSession(session);
           await this.drainStartup(entry);
-          return cloneSnapshot(entry.snapshot);
+          const snapshot = cloneSnapshot(entry.snapshot);
+          if (snapshot.terminal.alive) {
+            const fg = entry.pty.detectForegroundProcess();
+            snapshot.terminal = { ...snapshot.terminal, foregroundProcess: fg };
+          }
+          return snapshot;
         },
         save: async (snapshot) => {
           const entry = this.ensureSession(snapshot.session);
@@ -150,6 +156,7 @@ export class ManagedTerminalRuntime {
       shell: this.options.shell,
       shellArgs: this.options.shellArgs,
       env: this.options.env,
+      foregroundInspector: this.options.foregroundInspector,
     });
     pty.spawn();
 

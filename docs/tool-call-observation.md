@@ -9,7 +9,7 @@
 3. PTY 是字节和按键流，不是 shell line API；Enter 是 `\n` 或 `key: "enter"`。
 4. 文本 payload 可以通过 PTY/heredoc 完成；runtime 会对所有 `write_text` 输入做保护性 pacing。`stash_file` 仅作为显式 staged bytes 的可选通道；不存在 frame action 或 receiver 协议。
 5. Tool review 仍位于执行前；demo 模式可以默认 approve。
-6. Observation 返回 terminal facts、action summary、`outputTail`、terminal events、log ref 和错误码；完整输出留在 session log。
+6. Observation 返回 terminal facts、action summary、`outputTail`、`returnedToPrompt`、log ref 和错误码；完整输出留在 session log。
 
 ## FIM Decision Tool Call Protocol
 
@@ -105,8 +105,7 @@ type PtyObservation = {
   action: PtyActionSummary;
   result: "ok" | "rejected" | "timeout" | "interrupted";
   eventCount: number;
-  eventsOmitted?: number;
-  events: TerminalEventSummary[];
+  returnedToPrompt: boolean;
   outputTail?: string;
   outputTailBytes?: number;
   newOutputBytes?: number;
@@ -117,7 +116,23 @@ type PtyObservation = {
 };
 ```
 
-`PtyObservation` is a bounded terminal glance for the next model prompt, not the full PTY log. `outputTail` is the primary model-facing PTY view: after `write_text` or `key`, the managed runtime waits briefly, then returns the current session's last 2K characters; `poll` and `status` return the same current-session tail without writing input. `outputPreview` is kept as a compatibility alias for the same tail. `events` are structured tail events for state/debug, not the primary success signal. Full output stays in the session log; `eventCount`, `eventsOmitted`, `newOutputBytes`, and `logRef` show when more output exists. Serialized assistant tool-call history is different: historical assistant tool-call arguments are replayed exactly as generated, including large `write_text.text` and `stash_file.content` fields.
+The referenced `TerminalState` is the durable terminal fact surface:
+
+```ts
+type TerminalState = {
+  inputSeq: number;
+  alive: boolean;
+  syncStatus: TerminalSyncStatus;
+  lastShellPrompt: ShellPromptSnapshot | null;
+  lastContinuationPrompt: ContinuationPromptSnapshot | null;
+  termination: TerminalTermination | null;
+  foregroundProcess: string | null;
+};
+```
+
+`PtyObservation` is a bounded terminal glance for the next model prompt, not the full PTY log. `outputTail` is the primary model-facing PTY view: after `write_text` or `key`, the managed runtime waits briefly, then returns the current session's last 2K characters; `poll` and `status` return the same current-session tail without writing input. `outputPreview` is kept as a compatibility alias for the same tail. `returnedToPrompt` is the compact success signal for "the last read observed a shell prompt"; it is more important than raw event details for ordinary command sequencing. Full output stays in the session log; `eventCount`, `newOutputBytes`, and `logRef` show when more output exists. Serialized assistant tool-call history is different: historical assistant tool-call arguments are replayed exactly as generated, including large `write_text.text` and `stash_file.content` fields.
+
+`foregroundProcess` is a best-effort fact captured from the PTY's foreground process group when the session is loaded. It may be `null`, and it should be treated as a clue for whether the next bytes might reach `sleep`, `vim`, `python`, `ssh`, `cat`, or the shell, not as a security boundary or a perfect routing oracle.
 
 After `write_text` or `key` input, the managed runtime waits about 100ms before reading the PTY and building this observation. The delay is intentionally small: it captures immediate terminal echo and fast command output without turning every action into a long wait. Longer-running commands still require `poll` or `io_wait`.
 
@@ -125,7 +140,7 @@ New managed PTY sessions drain the shell initialization prompt before the first 
 
 For user-visible IM replies, a `write_text` observation without a shell prompt is not proof that the reply was sent. The agent must poll until the prompt returns and should use `im send --text-stdin`. A quoted heredoc is valid for normal text replies; input redirection and `file cat` process substitution are also valid when they make the command simpler.
 
-Rejected input is recoverable. The model should inspect the terminal facts and PTY output, then choose `poll`, `status`, `interrupt`, `terminate`, `restart`, or a corrected inputSeq-guarded action.
+Rejected input is recoverable. For `INPUT_SEQ_MISMATCH`, the terminal service tries to read any pending PTY output first, save the refreshed snapshot, and return a rejection carrying the latest `inputSeq` and prompt facts. The model should inspect the terminal facts and PTY output, then choose `poll`, `status`, `interrupt`, `terminate`, `restart`, or a corrected inputSeq-guarded action.
 
 ## Current Execution Path
 

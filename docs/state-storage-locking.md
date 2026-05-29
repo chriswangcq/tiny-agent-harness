@@ -116,9 +116,10 @@ memory/sub-agent        # 第一版不是核心路径
     run-2026-05-25T12-00-00-abc123/
       state.json
       transcript.jsonl
-      model/
-        step-0001.thinking.txt
-        step-0001.decision.txt
+      session.json
+      debug/
+        prompts/
+          step-0000-thinking.prompt.txt
 
   sessions/
     default/
@@ -160,6 +161,8 @@ memory/sub-agent        # 第一版不是核心路径
 
 - `runs/<runId>/state.json` 是 run snapshot。
 - `runs/<runId>/transcript.jsonl` 是 run event ledger。
+- `runs/<runId>/session.json` 是 agent-loop history snapshot，用于 resume。
+- `runs/<runId>/debug/prompts/` 保存由 transcript/history 通过 `promptRef` 引用的大 prompt artifact。
 - `environment/events.jsonl` 是跨 run 的外部环境事件 ledger。
 - `sessions/<sessionId>/output.log` 是完整 bash 输出，observation 只返回新增窗口。
 - `skill-runs/<id>/execution.txt` 和 `review-task.txt` 只给 agent 通过 bash 原生命令读取，不直接塞进 prompt。
@@ -238,6 +241,7 @@ type LedgerRecord = {
 
 ```text
 sessions/<sessionId>/output.log
+debug/prompts/<artifact>.txt
 skill-runs/<skillRunId>/execution.txt
 ```
 
@@ -247,6 +251,8 @@ skill-runs/<skillRunId>/execution.txt
 - 不在长时间执行期间持有全局锁。
 - 修改 `state.json` 时才短暂获取资源锁。
 - reader 可以无锁读取，使用 byte offset 翻页。
+
+Run debug artifacts are write-once files under the run owner. Transcript events should store a small reference with `relativePath`, byte size, and hash instead of embedding the full debug payload.
 
 ## Lock Primitive
 
@@ -321,6 +327,8 @@ best-effort fsync parent dir
 ```text
 runs/<runId>/state.json
 runs/<runId>/transcript.jsonl
+runs/<runId>/session.json
+runs/<runId>/debug/
 runs/latest.json
 ```
 

@@ -1,8 +1,38 @@
 import * as nodePty from "node-pty";
+import { execFileSync } from "node:child_process";
 import { buildManagedShellInitSnippet } from "../application/managed-shell.js";
 import { applyPtyChunkToSnapshot } from "../application/terminal-state-adapter.js";
 import type { TerminalRuntimeSnapshot } from "../application/terminal-ports.js";
 import { createTerminalState, markTerminalTerminated } from "../terminal/index.js";
+
+export type ForegroundInspector = (shellPid: number) => string | null;
+
+export const defaultForegroundInspector: ForegroundInspector = (
+  shellPid: number,
+): string | null => {
+  try {
+    const tpgid = execFileSync(
+      "ps",
+      ["-o", "tpgid=", "-p", String(shellPid)],
+      { encoding: "utf-8", timeout: 500 },
+    ).trim();
+    if (!tpgid) return null;
+
+    const commandOutput = execFileSync(
+      "ps",
+      ["-o", "comm=", "-g", tpgid],
+      { encoding: "utf-8", timeout: 500 },
+    );
+    return (
+      commandOutput
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .find(Boolean) ?? null
+    );
+  } catch {
+    return null;
+  }
+};
 
 export type ManagedPtySessionOptions = {
   id: string;
@@ -13,6 +43,7 @@ export type ManagedPtySessionOptions = {
   env?: Record<string, string>;
   cols?: number;
   rows?: number;
+  foregroundInspector?: ForegroundInspector;
 };
 
 /**
@@ -30,6 +61,7 @@ export class ManagedPtySession {
   private currentSnapshot: TerminalRuntimeSnapshot;
   private readonly outputChunks: Buffer[] = [];
   private outputBytes = 0;
+  private readonly foregroundInspector: ForegroundInspector;
 
   constructor(options: ManagedPtySessionOptions) {
     this.id = options.id;
@@ -42,6 +74,7 @@ export class ManagedPtySession {
       ...(options.env ?? {}),
       TERM: "dumb",
     });
+    this.foregroundInspector = options.foregroundInspector ?? defaultForegroundInspector;
     this.currentSnapshot = {
       session: this.id,
       terminal: createTerminalState({
@@ -95,6 +128,11 @@ export class ManagedPtySession {
         reason: "terminated",
       }),
     };
+  }
+
+  detectForegroundProcess(): string | null {
+    if (this.pty === null) return null;
+    return this.foregroundInspector(this.pty.pid);
   }
 
   get snapshot(): TerminalRuntimeSnapshot {

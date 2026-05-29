@@ -30,6 +30,7 @@ export function createTerminalState(
     },
     lastContinuationPrompt: null,
     termination: null,
+    foregroundProcess: null,
   };
 }
 
@@ -139,7 +140,8 @@ function sameTerminalFacts(
     JSON.stringify(left.lastShellPrompt) === JSON.stringify(right.lastShellPrompt) &&
     JSON.stringify(left.lastContinuationPrompt) ===
       JSON.stringify(right.lastContinuationPrompt) &&
-    JSON.stringify(left.termination) === JSON.stringify(right.termination)
+    JSON.stringify(left.termination) === JSON.stringify(right.termination) &&
+    left.foregroundProcess === right.foregroundProcess
   );
 }
 
@@ -153,5 +155,6 @@ export function createUnsyncedTerminalState(
     lastShellPrompt: null,
     lastContinuationPrompt: null,
     termination: null,
+    foregroundProcess: null,
   };
 }

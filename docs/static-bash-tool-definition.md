@@ -49,14 +49,14 @@ Important semantics:
 - All `write_text` input is protected-paced by the runtime at about 128 bytes per chunk with a small delay so interactive bash can keep up. The model should not manually split, throttle, or sleep to protect PTY input.
 - After `write_text` or `key` input, the runtime waits briefly before reading PTY output so immediate echo or command output can land in the same observation.
 - New managed PTY sessions drain shell initialization output before the first model-visible observation when startup reaches the prompt quickly.
-- The runtime reports terminal facts such as `alive`, `inputSeq`, `syncStatus`, `lastShellPrompt`, and `lastContinuationPrompt`. It does not infer whether shell, Python, ssh, cat, vim, or another foreground program should receive the next bytes.
+- The runtime reports terminal facts such as `alive`, `inputSeq`, `syncStatus`, `lastShellPrompt`, `lastContinuationPrompt`, and best-effort `foregroundProcess`. `foregroundProcess` may be `null`; use it as a clue about the current foreground program, not as a perfect routing oracle.
 - `key` is for terminal keys such as Enter, Ctrl-C, Ctrl-D, Escape, Tab, Up, and Down.
 - `poll`, `status`, `interrupt`, `terminate`, and `restart` are control actions over the PTY session, not shell commands.
-- Every write-like action carries `expectedInputSeq`; stale input sequences are rejected.
+- Every write-like action carries `expectedInputSeq`; stale input sequences are rejected. On `INPUT_SEQ_MISMATCH`, the service tries to refresh pending PTY output first so the rejection can carry the latest prompt facts and `inputSeq`.
 - Use normal shell syntax for textual payloads. Quoted shell heredocs are the default for generated files, code, HTML, Markdown, JSON, and multiline messages. Choose a delimiter that does not appear alone in the payload. Avoid PTY text for binary data or giant single-line/minified payloads; use line-broken text when possible. `stash_file` is only for explicit staged bytes and is not required for ordinary textual heredocs.
 - After any multiline command or stdin flow, poll until the shell prompt or a clear command result returns before sending the next command. A `lastContinuationPrompt` fact means the shell recently reported a continuation prompt.
 - Observations are bounded PTY glances: full PTY output stays in the session log, and `outputTail` carries the current session's last 2K characters after write_text/key or poll/status.
-- Serialized assistant tool-call history replays historical tool-call arguments exactly as generated, including large `write_text.text` and `stash_file.content` fields. PTY observations remain bounded summaries; use `outputTail` first, terminal facts second, and `eventCount`, `eventsOmitted`, `newOutputBytes`, and `logRef` only for debugging or fetching more terminal history.
+- Serialized assistant tool-call history replays historical tool-call arguments exactly as generated, including large `write_text.text` and `stash_file.content` fields. PTY observations remain bounded summaries; use `outputTail` first, terminal facts second, and `eventCount`, `returnedToPrompt`, `newOutputBytes`, and `logRef` only for debugging or fetching more terminal history.
 
 ## Stash File Schema
 

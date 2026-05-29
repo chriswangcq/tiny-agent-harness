@@ -403,6 +403,8 @@ type RunEvent =
     };
 ```
 
+Before recording `model_output_received`, the orchestrator moves large raw debug payloads out of model output when possible. Today this applies to `thinking.raw.prompt`: the prompt text is written under the run directory as a debug artifact, and transcript/history keep only a `promptRef` with `path`, `relativePath`, `bytes`, and `sha256`. This keeps `transcript.jsonl` and `session.json` useful for replay without repeatedly embedding full FIM prompts into the agent-loop context.
+
 ## Orchestrator Loop
 
 The orchestrator is deliberately simple.
@@ -749,6 +751,8 @@ recent history items retained verbatim = 40
 
 Before each `call_model`, the orchestrator asks the injected `ContextWindowPort` to count the history messages built from persisted loop items. If the count reaches the threshold, it replaces the older history prefix with a deterministic `environment_reminder` summary and keeps the recent tail verbatim. The event is recorded as `history_compacted`, and the compacted history is saved to `session.json`.
 
+Large debug strings should not participate in this budget. When the model adapter exposes raw prompt text for debugging, the orchestrator replaces it with a `promptRef` before the model output is appended to history. The prompt remains inspectable on disk, while compaction only accounts for the compact references and user/tool-facing loop items.
+
 ## Persistence
 
 Suggested run directory:
@@ -760,6 +764,9 @@ Suggested run directory:
       state.json
       transcript.jsonl
       session.json
+      debug/
+        prompts/
+          step-0000-thinking.prompt.txt
   sessions/
     default.log
     server.log
@@ -770,6 +777,8 @@ Suggested run directory:
 `transcript.jsonl` is append-only and is the audit source.
 
 `session.json` is the persisted agent-loop history used by resume. If it is missing, resume can reconstruct a best-effort history from `transcript.jsonl`.
+
+`debug/prompts/*.prompt.txt` stores large model prompt artifacts referenced from transcript/history by `promptRef`. The artifact metadata includes byte size and sha256 so later audits can verify which prompt was used without bloating replay state.
 
 ## Resume Semantics
 

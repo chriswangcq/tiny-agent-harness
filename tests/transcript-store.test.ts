@@ -61,6 +61,24 @@ describe("TranscriptStore", () => {
     expect(JSON.parse(lines[1]!)).toEqual(second);
   });
 
+  it("writes debug artifacts under the run directory", () => {
+    const runDir = path.join(makeTmpDir(), "run-001");
+    const store = new TranscriptStore(runDir);
+
+    const artifact = store.writeDebugArtifact(
+      "debug/prompts/step-0000-thinking.prompt.txt",
+      "encoded prompt",
+    );
+
+    expect(artifact).toMatchObject({
+      path: path.join(runDir, "debug/prompts/step-0000-thinking.prompt.txt"),
+      relativePath: path.join("debug", "prompts", "step-0000-thinking.prompt.txt"),
+      bytes: Buffer.byteLength("encoded prompt", "utf-8"),
+    });
+    expect(artifact.sha256).toHaveLength(64);
+    expect(fs.readFileSync(artifact.path, "utf-8")).toBe("encoded prompt");
+  });
+
   it("saveState and loadState round-trip run state", () => {
     const runDir = path.join(makeTmpDir(), "run-001");
     const store = new TranscriptStore(runDir);

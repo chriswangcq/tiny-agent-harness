@@ -47,6 +47,7 @@ node dist/cli/main.js ui --channel default --task "fix the failing tests"
 
 ```bash
 node dist/cli/main.js ui --channel default --resume run-1780009628684
+node dist/cli/main.js ui --channel default --resume latest
 ```
 
 也可以用两个终端分开调试。第一个终端启动 run：
@@ -82,7 +83,7 @@ tiny-agent ui --channel default
 - **决策和副作用分离**：`AgentRunState.nextEffect()` 只决定下一步应该发生什么；`RunOrchestrator` 负责调用模型、校验工具、审核工具、执行 bash、等待 IO、写 transcript。
 - **FIM 是受约束的 step generator**：DeepSeek V4 FIM 被拆成 thinking pass 和 decision pass。Decision pass 只允许生成一个 native tool-call frame，并被归一化为 `ModelTurn`。
 - **外部世界事件化**：IM 消息、bash session 状态、命令完成/超时、skill run 状态统一进入 `Environment`。模型每轮看到的是被消费过的 factual reminder，而不是隐藏的可变状态。
-- **日志是主要调试接口**：Observation 只返回当前 session 的尾部 `outputTail`、terminal facts、offset 和 log path；完整输出写入 session log，run 事件写入 transcript JSONL。大上下文靠路径回看，不靠一次性塞进 prompt。
+- **日志是主要调试接口**：Observation 只返回当前 session 的尾部 `outputTail`、terminal facts、offset 和 log path；完整输出写入 session log，run 事件写入 transcript JSONL。FIM prompt 这类大调试 payload 写入 run debug artifacts，并在 transcript/history 里保留 `promptRef`。大上下文靠路径回看，不靠一次性塞进 prompt。
 - **失败也进入回路**：无效模型输出、tool validation 失败、review 拒绝都会转成 recoverable observation，让 agent 下一轮自我修正，而不是立刻把 run 打死。
 - **复盘由 agent 判断触发**：skill 执行结束后不是固定进入复盘流程，而是由 agent 根据输出、失败模式、风险和任务结果决定是否 `close --review required`。Harness 只提供状态机和记录位置。
 - **审阅先于执行**：所有 PTY action 和 `stash_file` request 在执行前经过 `ToolReviewer`。当前 demo 可以默认 approve，但边界已经为人工审核、策略审核、权限分级和安全审计留好入口。
@@ -93,9 +94,9 @@ tiny-agent ui --channel default
 
 - **DeepSeek V4 native tool-call FIM**：decision pass 使用 DeepSeek V4 native tool-call special token 边界，但仍由 harness 手工解析和归一化，不依赖 provider-native tool calling。
 - **PTY action tool catalog**：模型通过 `bash` 操作 PTY；所有 PTY 输入都走 `write_text` 或 `key`，所有 `write_text` 都由 runtime 用保护性 pacing 写入 PTY。普通文本 heredoc 不需要额外 payload 协议；`stash_file` 保留给明确需要 staged bytes 的场景。
-- **Managed PTY runtime**：基于 `node-pty` 管理长期 session，支持 `status`、`poll`、`write_text`、`key`、`interrupt`、`terminate`、`restart`，并用 prompt markers 维护 terminal facts 和 `inputSeq`。
+- **Managed PTY runtime**：基于 `node-pty` 管理长期 session，支持 `status`、`poll`、`write_text`、`key`、`interrupt`、`terminate`、`restart`，并用 prompt markers 维护 terminal facts、`inputSeq` 和 best-effort `foregroundProcess`。
 - **长任务不会被误杀**：timeout 只释放 agent focus，不 kill 进程。Agent 后续可以 poll 新输出、发送交互输入、中断或重启 session。
-- **可恢复 run artifacts**：每个 run 产出 `state.json`、`transcript.jsonl` 和 `session.json`；每个 PTY session 有独立 log。`tiny-agent resume <runId|latest>` 会恢复 agent-loop history 并创建新的 PTY process tree。
+- **可恢复 run artifacts**：每个 run 产出 `state.json`、`transcript.jsonl`、`session.json` 和 `debug/prompts/`；每个 PTY session 有独立 log。`tiny-agent resume <runId|latest>` 会恢复 agent-loop history 并创建新的 PTY process tree。
 - **agent-loop context compaction**：上下文窗口只压缩 agent-loop history，system prompt/tool contract 不参与压缩。默认在 history prompt 约 700k token 时写入 `history_compacted` 事件并保留最近尾部。
 - **`io_wait` 是一等决策**：等待用户消息或外部事件不是 `sleep`，而是 run state machine 中可记录、可恢复、可回放的 `waiting_for_io` 状态。
 - **Environment 的 one-shot event 和 persistent fact 分层**：新事件只消费一次；active skill run 这类仍然成立的事实会持续提醒，直到状态关闭。
@@ -152,6 +153,7 @@ codeq hover src/run/orchestrator.ts:37:18 --json
 
 当前设计文档：
 
+- [Docs Index](docs/README.md)
 - [Tool Call And Observation](docs/tool-call-observation.md)
 - [Run Orchestrator And Agent Run State](docs/run-orchestrator-state.md)
 - [Static Bash Tool Definition](docs/static-bash-tool-definition.md)

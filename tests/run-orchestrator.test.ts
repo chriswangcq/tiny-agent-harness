@@ -861,6 +861,80 @@ describe("RunOrchestrator", () => {
     ]);
   });
 
+  it("moves raw thinking prompts into debug artifact files", async () => {
+    const toolCall: InternalToolCall = {
+      id: "call-debug-prompt",
+      name: "bash",
+      arguments: {
+        kind: "write_text",
+        expectedInputSeq: 1,
+        text: "pwd",
+      },
+    };
+    const thinking = {
+      content: "need bash",
+      raw: {
+        prompt: "encoded prompt for debugging",
+        finishReasons: ["stop"],
+      },
+    };
+    const turn: ModelTurn = {
+      kind: "tool_call",
+      toolCall,
+      thinking,
+      rawDecision: "bash",
+    };
+    const output: FimStepOutput = {
+      thinking,
+      rawDecision: turn.rawDecision,
+      turn,
+    };
+    const { orchestrator, transcript, histories } = makeRun({
+      outputs: [output],
+    });
+
+    await orchestrator.run();
+
+    const artifactPath = path.join(
+      path.dirname(transcript.transcriptFilePath),
+      "debug/prompts/step-0000-thinking.prompt.txt",
+    );
+    expect(fs.readFileSync(artifactPath, "utf-8")).toBe(
+      "encoded prompt for debugging",
+    );
+
+    const events = readTranscript(transcript);
+    const modelOutput = events.find(
+      (event): event is Extract<RunEvent, { type: "model_output_received" }> =>
+        event.type === "model_output_received",
+    );
+    expect(modelOutput?.output.thinking.raw).toMatchObject({
+      finishReasons: ["stop"],
+      promptRef: {
+        path: artifactPath,
+        relativePath: path.join("debug", "prompts", "step-0000-thinking.prompt.txt"),
+        bytes: Buffer.byteLength("encoded prompt for debugging", "utf-8"),
+      },
+    });
+    expect(JSON.stringify(modelOutput)).not.toContain("encoded prompt for debugging");
+    expect(histories[1]).toEqual([
+      {
+        type: "tool_call",
+        toolCall,
+        thinking: {
+          content: "need bash",
+          raw: expect.objectContaining({
+            promptRef: expect.objectContaining({
+              path: artifactPath,
+            }),
+          }),
+        },
+      },
+      expect.objectContaining({ type: "observation" }),
+    ]);
+    expect(JSON.stringify(histories)).not.toContain("encoded prompt for debugging");
+  });
+
   it("dispatches approved stash_file requests through the stash port", async () => {
     const toolCall: InternalToolCall = {
       id: "call-stash",

@@ -37,6 +37,7 @@ export type TerminalState = {
   lastShellPrompt: ShellPromptSnapshot | null;
   lastContinuationPrompt: ContinuationPromptSnapshot | null;
   termination: TerminalTermination | null;
+  foregroundProcess: string | null;
 };
 
 export type TerminalKey =

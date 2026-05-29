@@ -29,6 +29,7 @@ describe("terminal state", () => {
       },
       lastContinuationPrompt: null,
       termination: null,
+      foregroundProcess: null,
     });
   });
 

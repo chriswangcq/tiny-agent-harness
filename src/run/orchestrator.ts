@@ -22,7 +22,10 @@ import { Environment } from "../environment/environment.js";
 import { wrapReminderAsUserContent } from "../model/prompt-builder.js";
 import type { ActiveSkillRunSummary } from "../types/skill.js";
 import { AgentRunState } from "./state.js";
-import { TranscriptStore } from "../transcript/store.js";
+import {
+  TranscriptStore,
+  type RunDebugArtifact,
+} from "../transcript/store.js";
 import type { ContextWindowPort } from "./context-window.js";
 
 export interface ModelPort {
@@ -212,6 +215,7 @@ export class RunOrchestrator {
           await this.failRun(error, "MODEL_ERROR");
           break;
         }
+        output = this.persistModelDebugArtifacts(output, this.state.data.stepIndex);
 
         await this.record({
           type: "model_output_received",
@@ -448,6 +452,27 @@ export class RunOrchestrator {
     return this.ports.terminal.execute(request);
   }
 
+  private persistModelDebugArtifacts(
+    output: FimStepOutput,
+    stepIndex: number,
+  ): FimStepOutput {
+    const raw = output.thinking.raw;
+    if (!hasPrompt(raw)) {
+      return output;
+    }
+
+    const promptRef = this.transcript.writeDebugArtifact(
+      `debug/prompts/step-${String(stepIndex).padStart(4, "0")}-thinking.prompt.txt`,
+      raw.prompt,
+    );
+    const thinking = withPromptRef(output.thinking, promptRef);
+    return {
+      ...output,
+      thinking,
+      turn: withTurnThinking(output.turn, thinking),
+    };
+  }
+
   private async compactHistoryIfNeeded(): Promise<void> {
     const tokenCount = this.ports.contextWindow.countHistoryTokens(this.history);
     const maxTokens = this.ports.contextWindow.maxHistoryTokens;
@@ -514,6 +539,45 @@ function toRunError(error: unknown, code: string): RunError {
     message: String(error),
     code,
   };
+}
+
+function hasPrompt(value: unknown): value is { prompt: string } & Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { prompt?: unknown }).prompt === "string"
+  );
+}
+
+function withPromptRef(
+  thinking: AgentThinking,
+  promptRef: RunDebugArtifact,
+): AgentThinking {
+  if (!hasPrompt(thinking.raw)) {
+    return thinking;
+  }
+  const { prompt: _prompt, ...raw } = thinking.raw;
+  return {
+    ...thinking,
+    raw: {
+      ...raw,
+      promptRef,
+    },
+  };
+}
+
+function withTurnThinking(
+  turn: FimStepOutput["turn"],
+  thinking: AgentThinking,
+): FimStepOutput["turn"] {
+  switch (turn.kind) {
+    case "tool_call":
+      return { ...turn, thinking };
+    case "io_wait":
+      return { ...turn, thinking };
+    case "invalid_output":
+      return { ...turn, thinking };
+  }
 }
 
 function serializeErrorCause(cause: unknown): unknown {

@@ -6,7 +6,8 @@
 >
 > Legacy note: this is a historical report for the pre-managed-PTY architecture.
 > Active guidance is the PTY action runtime with terminal facts, `inputSeq`,
-> protected-paced `write_text`, and optional `stash_file` staged bytes.
+> best-effort `foregroundProcess`, protected-paced `write_text`, optional
+> `stash_file` staged bytes, and run debug artifacts for large model prompts.
 > Owner: P036. Removal condition: regenerate the report after the PTY cutover
 > fully replaces historical wording.
 
@@ -24,7 +25,7 @@
 | --- | --- |
 | Agent ReAct loop | `AgentRunState` 决定下一步 effect，`RunOrchestrator` 执行模型调用、工具校验、审核、bash 执行和 transcript 写入。 |
 | 统一外部动作面 | 交互动作通过 `bash` PTY；大文件/生成内容可先用 `stash_file` 暂存，再通过 PTY 内 `file materialize` CLI 落盘。MCP、memory、skills、sub-agent、code intelligence、测试、git 等能力都通过 CLI 进入 bash session。 |
-| 可观察与可恢复执行 | run state、transcript JSONL、session log、environment events、skill run state、TUI view model 共同构成可审计执行轨迹。 |
+| 可观察与可恢复执行 | run state、transcript JSONL、session history、debug prompt artifacts、session log、environment events、skill run state、TUI view model 共同构成可审计执行轨迹。 |
 
 ## 2. 系统整体架构
 
@@ -101,7 +102,7 @@ task / environment reminder
 
 4. **大输出外化到日志**
 
-   Observation 只返回当前 session 尾部 `outputTail`、terminal facts、offset 和 log path。完整输出由 session log 保存，agent 需要更多细节时再通过 bash 使用 `tail`、`sed`、`rg` 查看。
+   Observation 只返回当前 session 尾部 `outputTail`、terminal facts、`returnedToPrompt`、offset 和 log path。完整输出由 session log 保存，agent 需要更多细节时再通过 bash 使用 `tail`、`sed`、`rg` 查看。FIM prompt 这类大调试 payload 通过 `debug/prompts/` artifact 外置，transcript/history 只保留 `promptRef`。
 
 5. **执行轨迹可播放**
 
@@ -145,7 +146,7 @@ Decision pass 允许的 function name 是：
 
 - 控制命令：`list`、`create`、`status`、`poll`、`write_text` or `key`、`interrupt`、`terminate`、`restart`
 
-当前 bash payload 是 PTY action，不再是命令级 `{ command }` 对象。timeout 只释放 agent focus，不 kill 进程；长任务可以继续运行，后续通过 `poll`、`write_text` or `key`、`interrupt` 或 `restart` 管理。
+当前 bash payload 是 PTY action，不再是命令级 `{ command }` 对象。timeout 只释放 agent focus，不 kill 进程；长任务可以继续运行，后续通过 `poll`、`write_text` or `key`、`interrupt` 或 `restart` 管理。runtime 还会在 session load 时附带 best-effort `foregroundProcess`，并在 stale `inputSeq` rejection 前尽量刷新一次 PTY 输出，让 agent 拿到新的 prompt facts。
 
 ### 4.4 Environment 与 IM Transport
 
@@ -197,9 +198,9 @@ codeq hover src/run/orchestrator.ts:37:18 --json
 
 核心思路是：
 
-- run state、session state、skill run state 属于 snapshot JSON
+- run state、session history、session state、skill run state 属于 snapshot JSON
 - transcript、environment events、IM inbox/outbox 属于 append-only JSONL
-- bash output 和 skill execution output 属于 plain log
+- bash output、skill execution output 和 run debug prompt artifact 属于可按路径 inspect 的文件
 - 写 snapshot 和 ledger 时使用文件锁，reader 通过 offset / idempotency 处理并发
 
 这让多个 CLI 能在同一个项目目录下共享状态，同时保持可 inspect、可 grep、可恢复。
@@ -313,7 +314,7 @@ TUI 不拥有 agent 状态，不参与模型决策，也不直接改写 run stat
 | bash PTY action boundary | 不把能力注册成一组 provider tools，而是把交互能力统一收敛到 bash session；大文件/生成内容通过 `stash_file` 暂存后由 PTY 内 CLI 落盘。 |
 | FIM two-pass decision | 用 FIM 控制 thinking 与 decision 的生成边界，并贴近 DeepSeek V4 native tool-call 格式。 |
 | explicit run state | pending model/tool/review/io 都是 state，不靠 orchestrator 临时变量。 |
-| durable artifacts | state、transcript、session log、skill run state、environment events 都是可读文件。 |
+| durable artifacts | state、transcript、session history、debug prompt artifacts、session log、skill run state、environment events 都是可读文件。 |
 | CLI ecosystem first | skill、codeq、im、未来 MCP/memory/sub-agent 都以 CLI 方式进入同一审计边界。 |
 | TUI as player | TUI 播放 transcript，而不是重新拥有 agent 状态。 |
 

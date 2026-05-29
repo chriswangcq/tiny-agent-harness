@@ -55,9 +55,41 @@ export class TerminalService {
       limits: this.config.actionLimits,
     });
     if (!validation.ok) {
+      // Bug fix: on INPUT_SEQ_MISMATCH, read latest output to get updated
+      // terminal state so the rejection includes the correct inputSeq.
+      let rejectedTerminal = snapshot.terminal;
+      if (validation.code === "INPUT_SEQ_MISMATCH" && snapshot.terminal.alive) {
+        try {
+          const refreshRead = await this.ports.pty.read(
+            session,
+            snapshot.parserState.totalBytes.toString(),
+          );
+          const refreshParsed = parseTerminalChunk({
+            chunk: refreshRead.chunk,
+            state: snapshot.parserState,
+            promptNonce: this.config.promptNonce,
+          });
+          const refreshTransition = transitionTerminalStateMany(
+            snapshot.terminal,
+            refreshParsed.events,
+            { inputAccepted: refreshRead.chunk.length > 0 },
+          );
+          rejectedTerminal = refreshTransition.terminal;
+          // Save refreshed snapshot so the next load sees the latest inputSeq.
+          const nextSnapshot: TerminalRuntimeSnapshot = {
+            ...snapshot,
+            terminal: refreshTransition.terminal,
+            parserState: refreshParsed.state,
+            outputLog: refreshRead.logRef ?? snapshot.outputLog,
+          };
+          await this.ports.sessions.save(nextSnapshot);
+        } catch {
+          // Fallback to stale terminal on read error
+        }
+      }
       return this.rejectedObservation(
         session,
-        snapshot.terminal,
+        rejectedTerminal,
         action,
         validation.code,
         validation.message,
