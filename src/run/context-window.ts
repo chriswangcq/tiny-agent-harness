@@ -24,6 +24,7 @@ export interface ContextWindowPort {
   countHistoryTokens(history: HistoryItem[]): number;
   maxHistoryTokens: number;
   compactHistory(input: HistoryCompactionInput): HistoryCompactionResult | undefined;
+  llmEnrichSummary?: (summary: string, droppedItems: HistoryItem[]) => Promise<string>;
 }
 
 export class DeterministicHistoryCompactor implements ContextWindowPort {
@@ -36,7 +37,7 @@ export class DeterministicHistoryCompactor implements ContextWindowPort {
 
   constructor(options?: {
     maxHistoryTokens?: number;
-    retainedItemCount?: number;
+    retainedItemCount?: number; recentItemCount?: number;
     maxSummaryItems?: number;
     maxSummaryChars?: number;
     groupSimilarToolCalls?: boolean;
@@ -45,7 +46,7 @@ export class DeterministicHistoryCompactor implements ContextWindowPort {
     this.maxHistoryTokens =
       options?.maxHistoryTokens ?? DEFAULT_CONTEXT_WINDOW_MAX_HISTORY_TOKENS;
     this.retainedItemCount =
-      options?.retainedItemCount ?? DEFAULT_CONTEXT_WINDOW_RECENT_ITEMS;
+      options?.recentItemCount ?? options?.retainedItemCount ?? DEFAULT_CONTEXT_WINDOW_RECENT_ITEMS;
     this.maxSummaryItems = options?.maxSummaryItems ?? 500;
     this.maxSummaryChars = options?.maxSummaryChars ?? 12_000;
     this.groupSimilarToolCalls = options?.groupSimilarToolCalls ?? true;

@@ -651,7 +651,7 @@ describe("RunOrchestrator", () => {
     const firstPrompt = contexts[0]!.messages.map((message) => message.content).join("\n");
     expect(firstPrompt).toContain("Compressed agent-loop history.");
     expect(firstPrompt).toContain("recent context to keep");
-    expect(firstPrompt).toContain("Dropped history summary");
+    expect(firstPrompt).toContain("Dropped history items:");
   });
 
   it("does not compact history below the context threshold", async () => {

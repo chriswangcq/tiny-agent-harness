@@ -22,7 +22,6 @@ import { Environment } from "../environment/environment.js";
 import { wrapReminderAsUserContent } from "../model/prompt-builder.js";
 import type { ActiveSkillRunSummary } from "../types/skill.js";
 import { AgentRunState } from "./state.js";
-import { generateLlmHistorySummary } from "./context-window.js";
 import {
   TranscriptStore,
   type RunDebugArtifact,
@@ -492,52 +491,43 @@ export class RunOrchestrator {
     }
 
 
-    // Phase 2: Enrich summary with LLM semantic summary
-    try {
-      const apiKey = process.env.DEEPSEEK_API_KEY?.trim() || "";
-      if (apiKey) {
-        const llmSummary = await generateLlmHistorySummary(
+    // Phase 2: Enrich summary via port-based LLM semantic summary
+    if (this.ports.contextWindow.llmEnrichSummary) {
+      try {
+        const enriched = await this.ports.contextWindow.llmEnrichSummary(
+          compaction.summary,
           this.history.slice(0, compaction.droppedItemCount),
-          { apiKey }
         );
-        if (llmSummary && !llmSummary.startsWith("[LLM")) {
+        if (enriched && !enriched.startsWith("[LLM")) {
           const firstItem = compaction.history[0];
           if (firstItem && firstItem.type === "environment_reminder") {
-            firstItem.content += llmSummary;
-            compaction.summary += llmSummary;
+            firstItem.content += enriched;
+            compaction.summary += enriched;
           }
         }
+      } catch {
+        /* LLM enrichment is best-effort */
       }
-    } catch (_e) {
-      /* LLM enrichment is best-effort */
+    }
 
-    // Phase 3: Re-inject key project files (Claude Code-style disk re-injection)
+    // Phase 3: Safe re-injection of project guidance files only
     try {
       const fs = await import("node:fs");
-      const path = await import("node:path");
-      const cwd = process.cwd();
-      const reinjectFiles = [
-        ".tiny-agent/skills",
-        "AGENTS.md",
-        "CLAUDE.md",
-      ];
-      for (const relPath of reinjectFiles) {
-        const fullPath = path.join(cwd, relPath);
+      const { join } = await import("node:path");
+      for (const rel of ["AGENTS.md", "CLAUDE.md"]) {
+        const full = join(process.cwd(), rel);
         try {
-          if (fs.existsSync(fullPath)) {
-            const stat = fs.statSync(fullPath);
-            if (stat.isFile()) {
-              const content = fs.readFileSync(fullPath, "utf-8").slice(0, 2000);
-              compaction.history.push({
-                type: "environment_reminder",
-                content: `[Disk Re-injection: ${relPath}]\n${content}`,
-              });
-            }
+          if (fs.existsSync(full) && fs.statSync(full).isFile()) {
+            const c = fs.readFileSync(full, "utf-8").slice(0, 1000);
+            compaction.history.push({
+              type: "environment_reminder",
+              content: `[Re-inject: ${rel}]\n${c}`,
+            });
           }
-        } catch (_f) { /* skip missing files */ }
+        } catch { /* skip */ }
       }
-    } catch (_re) { /* best-effort */ }
-    }
+    } catch { /* best-effort */ }
+
     this.history.splice(0, this.history.length, ...compaction.history);
     this.saveHistory();
     const { history: _history, ...eventCompaction } = compaction;
