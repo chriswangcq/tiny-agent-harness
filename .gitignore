@@ -5,3 +5,4 @@ dist/
 .tiny-agent/
 agent-traces/
 ak.txt
+scripts/__pycache__/
