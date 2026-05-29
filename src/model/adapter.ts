@@ -18,6 +18,8 @@ import type {
 } from "../types/index.js";
 import type { IoWaitRequest } from "../types/environment.js";
 
+const ENCODE_PROMPT_MAX_BUFFER_BYTES = 2 * 1024 * 1024;
+
 export type DeepSeekFimConfig = {
   apiKey: string;
   baseUrl: string;
@@ -299,6 +301,7 @@ export class DeepSeekFimAdapter {
     return execFileSync("python3", [ENCODE_SCRIPT], {
       input,
       encoding: "utf-8",
+      maxBuffer: ENCODE_PROMPT_MAX_BUFFER_BYTES,
       timeout: 10_000,
     });
   }

@@ -17,6 +17,7 @@ const DEFAULT_ENCODE_SCRIPT = path.resolve(
   __dirname,
   "../../scripts/encode-prompt.py",
 );
+const ENCODE_PROMPT_MAX_BUFFER_BYTES = 2 * 1024 * 1024;
 
 export class DeepSeekV4PromptTokenCounter implements PromptTokenCounter {
   private readonly encodeScriptPath: string;
@@ -32,6 +33,7 @@ export class DeepSeekV4PromptTokenCounter implements PromptTokenCounter {
     const encoded = execFileSync("python3", [this.encodeScriptPath], {
       input: JSON.stringify({ messages, thinking_mode: "thinking" }),
       encoding: "utf-8",
+      maxBuffer: ENCODE_PROMPT_MAX_BUFFER_BYTES,
       timeout: 10_000,
     });
     return conservativePromptTokenCount(encoded);
