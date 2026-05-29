@@ -544,6 +544,7 @@ async function main(): Promise<void> {
     return;
   }
 
+
   // --- Parse run arguments ---
   // Supported forms:
   //   tiny-agent "fix the tests"                     (legacy positional)

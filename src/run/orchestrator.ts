@@ -22,6 +22,7 @@ import { Environment } from "../environment/environment.js";
 import { wrapReminderAsUserContent } from "../model/prompt-builder.js";
 import type { ActiveSkillRunSummary } from "../types/skill.js";
 import { AgentRunState } from "./state.js";
+import { generateLlmHistorySummary } from "./context-window.js";
 import {
   TranscriptStore,
   type RunDebugArtifact,
@@ -490,6 +491,53 @@ export class RunOrchestrator {
       return;
     }
 
+
+    // Phase 2: Enrich summary with LLM semantic summary
+    try {
+      const apiKey = process.env.DEEPSEEK_API_KEY?.trim() || "";
+      if (apiKey) {
+        const llmSummary = await generateLlmHistorySummary(
+          this.history.slice(0, compaction.droppedItemCount),
+          { apiKey }
+        );
+        if (llmSummary && !llmSummary.startsWith("[LLM")) {
+          const firstItem = compaction.history[0];
+          if (firstItem && firstItem.type === "environment_reminder") {
+            firstItem.content += llmSummary;
+            compaction.summary += llmSummary;
+          }
+        }
+      }
+    } catch (_e) {
+      /* LLM enrichment is best-effort */
+
+    // Phase 3: Re-inject key project files (Claude Code-style disk re-injection)
+    try {
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const cwd = process.cwd();
+      const reinjectFiles = [
+        ".tiny-agent/skills",
+        "AGENTS.md",
+        "CLAUDE.md",
+      ];
+      for (const relPath of reinjectFiles) {
+        const fullPath = path.join(cwd, relPath);
+        try {
+          if (fs.existsSync(fullPath)) {
+            const stat = fs.statSync(fullPath);
+            if (stat.isFile()) {
+              const content = fs.readFileSync(fullPath, "utf-8").slice(0, 2000);
+              compaction.history.push({
+                type: "environment_reminder",
+                content: `[Disk Re-injection: ${relPath}]\n${content}`,
+              });
+            }
+          }
+        } catch (_f) { /* skip missing files */ }
+      }
+    } catch (_re) { /* best-effort */ }
+    }
     this.history.splice(0, this.history.length, ...compaction.history);
     this.saveHistory();
     const { history: _history, ...eventCompaction } = compaction;
