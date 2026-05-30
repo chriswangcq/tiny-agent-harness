@@ -17,6 +17,7 @@ import type {
   RunHeaderView,
   ConversationItem,
   LoopFrame,
+  SessionView,
   TuiLimits,
 } from "./types.js";
 import { DEFAULT_TUI_LIMITS } from "./types.js";
@@ -26,6 +27,8 @@ type ConversationProjectionItem = ConversationItem & {
 };
 
 export class ViewModelBuilder {
+  private sessions = new Map<string, SessionView>();
+
   private header: RunHeaderView = {
     runId: "",
     status: "created",
@@ -266,6 +269,26 @@ export class ViewModelBuilder {
               : `pty ${observation.result} ${observation.action.kind}`;
             summary = formatPtyObservationSummary(observation);
             logPath = observation.logRef;
+
+            this.sessions.set(observation.session ?? "default", {
+              session: observation.session ?? "default",
+              state: observation.terminal.alive
+                ? observation.terminal.foregroundProcess
+                  ? "running"
+                  : "idle"
+                : "terminated",
+              currentCommand: observation.terminal.foregroundProcess ?? undefined,
+              returnCode:
+                observation.terminal.lastShellPrompt?.lastReturnCode ?? null,
+              logPath: observation.logRef ?? "",
+              tail:
+                observation.outputTail ??
+                observation.outputPreview ??
+                observation.message ??
+                "",
+              tailOffset: observation.outputTailBytes,
+              updatedAt: event.timestamp,
+            });
           } else {
             const observationRecord: Record<string, unknown> = isRecord(observation)
               ? observation
@@ -449,7 +472,11 @@ export class ViewModelBuilder {
       run: { ...this.header },
       conversation: conversation.map(({ order: _order, ...item }) => item),
       loop,
-      sessions: [],
+      sessions: [...this.sessions.values()].sort((a, b) => {
+        if (a.session === "default") return -1;
+        if (b.session === "default") return 1;
+        return a.session.localeCompare(b.session);
+      }),
       activeSkills: [],
     };
   }

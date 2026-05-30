@@ -28,6 +28,13 @@ export class Environment implements EnvironmentPort {
 
   private waiters: Waiter[] = [];
 
+  // Bound IM channel for this run; io_wait channel is auto-corrected to this value.
+  boundChannel: string | undefined = undefined;
+
+  setBoundChannel(ch: string): void {
+    this.boundChannel = ch;
+  }
+
   // -----------------------------------------------------------------------
   // State getter (for debugging / testing)
   // -----------------------------------------------------------------------
@@ -182,11 +189,12 @@ export class Environment implements EnvironmentPort {
     const { condition } = wait;
 
     if (condition.kind === "new_user_message") {
-      return (
-        event.kind === "user_message_received" &&
-        event.source === "im" &&
-        event.message.channel === condition.channel
-      );
+      if (event.kind !== "user_message_received" || event.source !== "im") {
+        return false;
+      }
+      // Auto-correct: match against boundChannel if set, else use condition.channel
+      const targetChannel = this.boundChannel ?? condition.channel;
+      return event.message.channel === targetChannel;
     }
 
     if (condition.kind === "event") {

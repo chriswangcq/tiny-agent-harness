@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { TuiInteractionState } from "../src/tui/interaction-state.js";
+import type { TuiPane } from "../src/tui/interaction-state.js";
 import type { ConversationItem, LoopFrame } from "../src/tui/types.js";
+
+const focusablePanes: Record<TuiPane, true> = {
+  conversation: true,
+  loop: true,
+};
 
 function frame(id: string, stepIndex: number): LoopFrame {
   return {
@@ -119,38 +125,8 @@ describe("TuiInteractionState", () => {
     expect(state.selectedLoopFrameId).toBe("b");
   });
 
-  it("right-detail focus preserves selected loop frame without changing follow state", () => {
-    const state = new TuiInteractionState();
-    const frames = [frame("a", 0), frame("b", 1)];
-
-    state.enterBrowse(frames, "loop");
-    state.enterDetail(frames);
-    state.moveSelection(frames, -1);
-
-    expect(state.pane).toBe("detail");
-    expect(state.selectedLoopFrameId).toBe("b");
-    expect(state.followBottom).toEqual({ conversation: true, loop: true });
-
-    state.leaveDetail(frames);
-    expect(state.pane).toBe("loop");
-    expect(state.selectedLoopFrameId).toBe("b");
-  });
-
-  it("right-detail focus preserves selected conversation item without changing follow state", () => {
-    const state = new TuiInteractionState();
-    const items = [conversation("a", "first"), conversation("b", "second")];
-
-    state.enterBrowse([], "conversation", items);
-    state.enterConversationDetail(items);
-    state.moveSelection([], -1, items);
-
-    expect(state.pane).toBe("conversationDetail");
-    expect(state.selectedConversationItemId).toBe("b");
-    expect(state.followBottom).toEqual({ conversation: true, loop: true });
-
-    state.leaveConversationDetail(items);
-    expect(state.pane).toBe("conversation");
-    expect(state.selectedConversationItemId).toBe("b");
+  it("limits focusable panes to messages and loop", () => {
+    expect(Object.keys(focusablePanes)).toEqual(["conversation", "loop"]);
   });
 
   it("input mode keeps cursor on newest frame as frames append", () => {
@@ -175,4 +151,34 @@ describe("TuiInteractionState", () => {
     ]);
     expect(state.selectedConversationItemId).toBe("b");
   });
+  it("syncWithFrames does not affect conversation selection", () => {
+    const state = new TuiInteractionState();
+    const frames = [frame("a", 0), frame("b", 1)];
+    const items = [conversation("x", "msg1"), conversation("y", "msg2")];
+
+    state.syncWithView(items, frames);
+    expect(state.selectedConversationItemId).toBe("y");
+    expect(state.selectedLoopFrameId).toBe("b");
+
+    state.syncWithFrames([frame("c", 2)]);
+    expect(state.selectedLoopFrameId).toBe("c");
+    // conversation selection must not be cleared
+    expect(state.selectedConversationItemId).toBe("y");
+  });
+
+  it("syncWithConversation does not affect loop selection", () => {
+    const state = new TuiInteractionState();
+    const frames = [frame("a", 0), frame("b", 1)];
+    const items = [conversation("x", "msg1"), conversation("y", "msg2")];
+
+    state.syncWithView(items, frames);
+    expect(state.selectedConversationItemId).toBe("y");
+    expect(state.selectedLoopFrameId).toBe("b");
+
+    state.syncWithConversation([conversation("z", "msg3")]);
+    expect(state.selectedConversationItemId).toBe("z");
+    // loop selection must not be cleared
+    expect(state.selectedLoopFrameId).toBe("b");
+  });
+
 });

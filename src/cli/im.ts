@@ -172,7 +172,10 @@ async function cmdSend(
   textStdin: boolean,
   stdin: StdinSource,
 ): Promise<void> {
-  const channel = flags["channel"];
+  const rawChannel = flags["channel"];
+  // Auto-correct channel to match bound run channel (prevents IM channel drift)
+  const boundChannel = process.env.TAH_RUN_CHANNEL;
+  const channel = (boundChannel && rawChannel !== boundChannel) ? boundChannel : rawChannel;
   const kind = flags["kind"] as "status" | "error" | undefined;
   if (flags["text"] !== undefined && textStdin) {
     die("im send accepts either --text or --text-stdin, not both");

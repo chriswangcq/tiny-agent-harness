@@ -557,6 +557,104 @@ describe("ViewModelBuilder", () => {
     expect(frame.detail).toContain('"logRef": "/tmp/log.txt"');
   });
 
+  it("tool_execution_finished updates PTY session view", () => {
+    const b = builderWithRunStarted();
+    b.applyEvent({
+      type: "tool_execution_finished",
+      stepIndex: 0,
+      request: makePtyActionRequest(),
+      observation: {
+        ...makePtyObservation("ok"),
+        session: "default",
+        terminal: {
+          ...terminal(7),
+          foregroundProcess: "/bin/bash",
+          lastShellPrompt: {
+            cwd: "/repo",
+            promptSeq: 2,
+            lastReturnCode: 0,
+          },
+        },
+        outputTail: "file1.txt\nfile2.txt",
+        outputTailBytes: 42,
+        logRef: "pty://log/1",
+      },
+      timestamp: LATER,
+    });
+
+    const vm = b.getViewModel();
+    expect(vm.sessions).toHaveLength(1);
+    expect(vm.sessions[0]).toMatchObject({
+      session: "default",
+      state: "running",
+      currentCommand: "/bin/bash",
+      returnCode: 0,
+      logPath: "pty://log/1",
+      tail: "file1.txt\nfile2.txt",
+      tailOffset: 42,
+      updatedAt: LATER,
+    });
+  });
+
+  it("PTY sessions sort default first, then by session name", () => {
+    const b = builderWithRunStarted();
+    for (const [index, session] of ["sessB", "default", "sessA"].entries()) {
+      b.applyEvent({
+        type: "tool_execution_finished",
+        stepIndex: index,
+        request: makePtyActionRequest("tc-" + session),
+        observation: {
+          ...makePtyObservation("ok"),
+          session,
+          outputTail: session,
+        },
+        timestamp: LATER,
+      });
+    }
+
+    const vm = b.getViewModel();
+    expect(vm.sessions.map((session) => session.session)).toEqual([
+      "default",
+      "sessA",
+      "sessB",
+    ]);
+  });
+
+  it("PTY session tail falls back from outputPreview to message", () => {
+    const b = builderWithRunStarted();
+    b.applyEvent({
+      type: "tool_execution_finished",
+      stepIndex: 0,
+      request: makePtyActionRequest("tc-preview"),
+      observation: {
+        ...makePtyObservation("ok"),
+        session: "preview",
+        outputPreview: "preview tail",
+        message: "message tail",
+      },
+      timestamp: LATER,
+    });
+    b.applyEvent({
+      type: "tool_execution_finished",
+      stepIndex: 1,
+      request: makePtyActionRequest("tc-message"),
+      observation: {
+        ...makePtyObservation("ok"),
+        session: "message",
+        message: "message tail",
+      },
+      timestamp: "2026-01-01T00:00:02Z",
+    });
+
+    const vm = b.getViewModel();
+    expect(vm.sessions.find((session) => session.session === "preview")?.tail).toBe(
+      "preview tail",
+    );
+    expect(vm.sessions.find((session) => session.session === "message")?.tail).toBe(
+      "message tail",
+    );
+  });
+
   // 14
   it("tool_execution_finished PTY rejected creates warn tool LoopFrame", () => {
     const b = builderWithRunStarted();

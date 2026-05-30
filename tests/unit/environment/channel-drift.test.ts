@@ -1,0 +1,92 @@
+import { describe, it, expect, beforeEach } from "vitest";
+import { Environment } from "../../../src/environment/environment.js";
+import type { IoWaitRequest, EnvironmentEvent } from "../../../src/types/index.js";
+
+function makeUserMsg(channel: string, text: string): EnvironmentEvent {
+  return {
+    id: `msg-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    kind: "user_message_received",
+    source: "im",
+    timestamp: new Date().toISOString(),
+    message: {
+      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      channel,
+      role: "user",
+      text,
+      createdAt: new Date().toISOString(),
+    },
+  };
+}
+
+function makeIoWait(channel: string): IoWaitRequest {
+  return {
+    reason: "test",
+    condition: {
+      kind: "new_user_message",
+      channel,
+    },
+  };
+}
+
+describe("Environment channel drift auto-correct (Option B)", () => {
+  let env: Environment;
+
+  beforeEach(() => {
+    env = new Environment();
+  });
+
+  it("boundChannel=default + wait.channel=cli + default event -> resolves (no hang)", async () => {
+    env.setBoundChannel("default");
+    const waitReq = makeIoWait("cli");
+    const origChannel = waitReq.condition.channel;
+    const event = makeUserMsg("default", "hello from default");
+    env.appendEvent(event);
+    const result = await env.waitFor({ runId: "run-1", wait: waitReq });
+    expect(result.message.channel).toBe("default");
+    // Original wait object NOT mutated
+    expect(waitReq.condition.channel).toBe("cli");
+    expect(waitReq.condition.channel).toBe(origChannel);
+  });
+
+  it("normal default->default path still works", async () => {
+    env.setBoundChannel("default");
+    const waitReq = makeIoWait("default");
+    const event = makeUserMsg("default", "hello");
+    env.appendEvent(event);
+    const result = await env.waitFor({ runId: "run-2", wait: waitReq });
+    expect(result.message.channel).toBe("default");
+    expect(result.message.text).toBe("hello");
+  });
+
+  it("without boundChannel, waits use exact condition.channel", async () => {
+    const waitReq = makeIoWait("cli");
+    const event = makeUserMsg("cli", "msg");
+    env.appendEvent(event);
+    const result = await env.waitFor({ runId: "run-3", wait: waitReq });
+    expect(result.message.channel).toBe("cli");
+  });
+
+  it("boundChannel=default + wait.channel=cli + no events yet -> waiter registered, wait not mutated", async () => {
+    env.setBoundChannel("default");
+    const waitReq = makeIoWait("cli");
+    const orig = waitReq.condition.channel;
+    expect(waitReq.condition.channel).toBe(orig);
+
+    // Call waitFor BEFORE posting event (true future waiter)
+    const promise = env.waitFor({ runId: "run-4", wait: waitReq });
+
+    // Yield to microtask queue: promise should NOT be resolved yet
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Original wait object must still not be mutated
+    expect(waitReq.condition.channel).toBe("cli");
+
+    // Now post the event
+    const event = makeUserMsg("default", "late");
+    env.appendEvent(event);
+
+    const result = await promise;
+    expect(result.message.channel).toBe("default");
+    expect(waitReq.condition.channel).toBe("cli");
+  });
+});

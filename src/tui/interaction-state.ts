@@ -1,7 +1,7 @@
 import type { ConversationItem, LoopFrame } from "./types.js";
 
 export type TuiMode = "input" | "browse";
-export type TuiPane = "conversation" | "conversationDetail" | "loop" | "detail";
+export type TuiPane = "conversation" | "loop";
 
 export type FollowBottomState = {
   conversation: boolean;
@@ -10,7 +10,7 @@ export type FollowBottomState = {
 
 export class TuiInteractionState {
   mode: TuiMode = "input";
-  pane: TuiPane = "loop";
+  pane: TuiPane = "conversation";
   followBottom: FollowBottomState = {
     conversation: true,
     loop: true,
@@ -32,33 +32,16 @@ export class TuiInteractionState {
   ): void {
     this.mode = "browse";
     this.pane = pane;
-    if (pane === "loop" || pane === "detail") {
+    if (pane === "loop") {
       this.ensureLoopSelection(frames);
-    } else if (pane === "conversation" || pane === "conversationDetail") {
+    } else {
       this.ensureConversationSelection(conversation);
     }
   }
 
-  enterDetail(frames: LoopFrame[]): void {
-    this.enterBrowse(frames, "detail");
-  }
-
-  leaveDetail(frames: LoopFrame[]): void {
-    this.enterBrowse(frames, "loop");
-  }
-
-  enterConversationDetail(conversation: ConversationItem[]): void {
-    this.enterBrowse([], "conversationDetail", conversation);
-  }
-
-  leaveConversationDetail(conversation: ConversationItem[]): void {
-    this.enterBrowse([], "conversation", conversation);
-  }
-
   switchPane(frames: LoopFrame[]): void {
     this.mode = "browse";
-    this.pane =
-      this.pane === "loop" || this.pane === "detail" ? "conversation" : "loop";
+    this.pane = this.pane === "loop" ? "conversation" : "loop";
     if (this.pane === "loop") {
       this.ensureLoopSelection(frames);
     }
@@ -82,7 +65,7 @@ export class TuiInteractionState {
       return;
     }
 
-    if (this.pane !== "loop") return;
+    // pane === "loop"
     this.followBottom.loop = false;
     if (frames.length === 0) {
       this.selectedLoopFrameId = undefined;
@@ -98,61 +81,75 @@ export class TuiInteractionState {
     this.mode = "browse";
     if (this.pane === "conversation") {
       this.followBottom.conversation = false;
-      this.selectedConversationItemId = conversation.at(0)?.id;
+      if (conversation.length > 0) {
+        this.selectedConversationItemId = conversation[0]!.id;
+      }
       return;
     }
-    if (this.pane !== "loop") return;
+    // loop pane
     this.followBottom.loop = false;
-    if (this.pane === "loop" && frames.length > 0) {
+    if (frames.length > 0) {
       this.selectedLoopFrameId = frames[0]!.id;
     }
   }
 
-  jumpBottom(frames: LoopFrame[]): void {
-    if (this.pane === "detail" || this.pane === "conversationDetail") return;
-    this.followBottom[this.pane] = true;
-    if (this.pane === "loop") {
+  jumpBottom(frames: LoopFrame[], conversation: ConversationItem[] = []): void {
+    this.mode = "browse";
+    if (this.pane === "conversation") {
+      if (conversation.length > 0) {
+        this.selectedConversationItemId = conversation.at(-1)!.id;
+      }
+      this.followBottom.conversation = true;
+      return;
+    }
+    // loop pane
+    if (frames.length > 0) {
+      this.selectedLoopFrameId = frames.at(-1)!.id;
+    }
+    this.followBottom.loop = true;
+  }
+
+  toggleFollow(
+    pane: TuiPane,
+    conversation: ConversationItem[] = [],
+    frames: LoopFrame[] = [],
+  ): void {
+    if (pane === "conversation") {
+      this.followBottom.conversation = !this.followBottom.conversation;
+      if (this.followBottom.conversation && conversation.length > 0) {
+        this.selectLastConversationItem(conversation);
+      }
+      return;
+    }
+    // loop pane
+    this.followBottom.loop = !this.followBottom.loop;
+    if (this.followBottom.loop && frames.length > 0) {
       this.selectLastLoopFrame(frames);
     }
   }
 
-  toggleFollow(frames: LoopFrame[]): void {
-    if (this.pane === "detail" || this.pane === "conversationDetail") return;
-    const next = !this.followBottom[this.pane];
-    this.followBottom[this.pane] = next;
-    if (next && this.pane === "loop") {
-      this.selectLastLoopFrame(frames);
-    }
-  }
-
-  syncWithFrames(frames: LoopFrame[]): void {
-    if (frames.length === 0) {
-      this.selectedLoopFrameId = undefined;
-      return;
-    }
-    if (this.mode === "input") {
-      this.selectLastLoopFrame(frames);
-      return;
-    }
-    if (this.pane !== "loop" && this.pane !== "detail") return;
+  syncWithView(conversation: ConversationItem[] = [], frames: LoopFrame[] = []): void {
     this.ensureLoopSelection(frames);
-    if (this.pane === "loop" && this.followBottom.loop) {
+    this.ensureConversationSelection(conversation);
+    if (this.followBottom.conversation && conversation.length > 0) {
+      this.selectLastConversationItem(conversation);
+    }
+    if (this.followBottom.loop && frames.length > 0) {
+      this.selectLastLoopFrame(frames);
+    }
+  }
+
+  // Side-specific compatibility wrappers: each handles only one side
+  syncWithFrames(frames: LoopFrame[]): void {
+    this.ensureLoopSelection(frames);
+    if (this.followBottom.loop && frames.length > 0) {
       this.selectLastLoopFrame(frames);
     }
   }
 
   syncWithConversation(conversation: ConversationItem[]): void {
-    if (conversation.length === 0) {
-      this.selectedConversationItemId = undefined;
-      return;
-    }
-    if (this.mode === "input") {
-      this.selectLastConversationItem(conversation);
-      return;
-    }
-    if (this.pane !== "conversation" && this.pane !== "conversationDetail") return;
     this.ensureConversationSelection(conversation);
-    if (this.pane === "conversation" && this.followBottom.conversation) {
+    if (this.followBottom.conversation && conversation.length > 0) {
       this.selectLastConversationItem(conversation);
     }
   }

@@ -18,6 +18,7 @@ import { STATIC_TOOL_CATALOG } from "../tools/catalog.js";
 import { Environment } from "../environment/environment.js";
 import { ImCliTransport } from "../im/transport.js";
 import { SkillRunStore } from "../skill/store.js";
+import { buildCliTerminalEnv } from "./terminal-env.js";
 import { StashFileStore } from "../stash/file-store.js";
 import {
   DEFAULT_PTY_ACTION_LIMITS,
@@ -123,12 +124,12 @@ function convertHistoryItems(items: HistoryItem[]): HistoryEntry[] {
   return entries;
 }
 
-function createCliTerminalPort() {
+function createCliTerminalPort(channel: string) {
   const runtime = new ManagedTerminalRuntime({
     defaultSessionId: "default",
     cwd: process.cwd(),
     promptNonce: `cli-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    env: cleanEnv(process.env),
+    env: buildCliTerminalEnv(process.env, channel),
     actionLimits: DEFAULT_PTY_ACTION_LIMITS,
     observationLimits: { maxPreviewChars: 200, maxOutputTailChars: 2048 },
     postWriteReadDelayMs: 100,
@@ -179,12 +180,6 @@ function createCliContextWindowPort(
       return compactor.compact(input);
     },
   };
-}
-
-function cleanEnv(env: NodeJS.ProcessEnv): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined),
-  );
 }
 
 function publishLatestRun(runsDir: string, runId: string, runDir: string): void {
@@ -628,6 +623,7 @@ async function main(): Promise<void> {
   const reviewer = new AlwaysApproveReviewer();
 
   const environment = new Environment();
+  environment.setBoundChannel(channel);
   const imTransport = new ImCliTransport({ baseDir: imDir });
   const skillRunStore = new SkillRunStore({ skillRunsDir, skillsDir });
 
@@ -747,7 +743,7 @@ async function main(): Promise<void> {
     model,
     validator,
     reviewer,
-    terminal: createCliTerminalPort(),
+    terminal: createCliTerminalPort(channel),
     stashFiles: createCliStashFilePort(baseDir),
     contextWindow: createCliContextWindowPort(promptBuilder),
     session: createCliRunSessionPort(new RunSessionStore(runDir)),

@@ -229,6 +229,44 @@ describe("runIm CLI", () => {
     expect(fs.existsSync(outboxPath)).toBe(true);
   });
 
+  it("send auto-corrects channel via TAH_RUN_CHANNEL (cli->default)", async () => {
+    const origEnv = process.env.TAH_RUN_CHANNEL;
+    process.env.TAH_RUN_CHANNEL = "default";
+    try {
+      const stateDir = createStateDir();
+
+      captureStdout();
+      await runIm(["send", "--channel", "cli", "--kind", "status", "--text-stdin", "--state-dir", stateDir, "--json"], {
+        stdin: Readable.from(["hello from agent"]),
+      });
+      restoreStdout();
+
+      const sendResult = JSON.parse(captured.join(""));
+      expect(sendResult.ok).toBe(true);
+      // Channel must be auto-corrected to default
+      expect(sendResult.channel).toBe("default");
+
+      // Verify default.outbox.jsonl exists with correct content
+      const defaultOutbox = path.join(stateDir, "im", "default.outbox.jsonl");
+      expect(fs.existsSync(defaultOutbox)).toBe(true);
+      const lines = fs.readFileSync(defaultOutbox, "utf-8").trim().split("\n");
+      expect(lines.length).toBeGreaterThanOrEqual(1);
+      const msg = JSON.parse(lines[lines.length - 1]!);
+      expect(msg.channel).toBe("default");
+      expect(msg.text).toBe("hello from agent");
+
+      // cli.outbox.jsonl MUST NOT exist
+      const cliOutbox = path.join(stateDir, "im", "cli.outbox.jsonl");
+      expect(fs.existsSync(cliOutbox)).toBe(false);
+    } finally {
+      if (origEnv === undefined) {
+        delete process.env.TAH_RUN_CHANNEL;
+      } else {
+        process.env.TAH_RUN_CHANNEL = origEnv;
+      }
+    }
+  });
+
   it("send reads multiline agent message with --text-stdin", async () => {
     const stateDir = createStateDir();
     const text = "## report\n\n- `cli/` stays literal\n- done\n";
