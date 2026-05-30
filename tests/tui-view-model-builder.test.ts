@@ -502,6 +502,8 @@ describe("ViewModelBuilder", () => {
         returnCode: 0,
         logPath: "terminal-log://default",
         tail: "pwd\n/repo\n",
+        screenRows: 24,
+        screenCols: 80,
         updatedAt: LATER,
       },
     ]);

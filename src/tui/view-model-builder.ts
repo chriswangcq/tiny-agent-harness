@@ -275,6 +275,8 @@ export class ViewModelBuilder {
                 observation.terminal.lastShellPrompt?.lastReturnCode ?? null,
               logPath: observation.screen.logRef.path,
               tail: observation.screen.text || observation.message || "",
+              screenRows: observation.screen.rows,
+              screenCols: observation.screen.cols,
               updatedAt: event.timestamp,
             });
           } else if (isSessionListObservation(observation)) {
