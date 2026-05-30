@@ -42,35 +42,13 @@ export type TerminalState = {
 
 export type TerminalKey =
   | "enter"
-  | "ctrl-c"
   | "ctrl-d"
   | "escape"
   | "tab"
   | "up"
-  | "down";
-
-export type PtyAction =
-  | {
-      kind: "write_text";
-      session?: string;
-      expectedInputSeq: number;
-      text: string;
-    }
-  | {
-      kind: "key";
-      session?: string;
-      expectedInputSeq: number;
-      key: TerminalKey;
-    }
-  | { kind: "poll"; session?: string; sinceSeq?: number }
-  | { kind: "status"; session?: string }
-  | {
-      kind: "interrupt";
-      session?: string;
-      expectedInputSeq?: number;
-    }
-  | { kind: "terminate"; session?: string }
-  | { kind: "restart"; session?: string; cwd?: string };
+  | "down"
+  | "left"
+  | "right";
 
 export type TerminalEvent =
   | {
@@ -123,33 +101,95 @@ export type LogRef = {
   endOffset?: number;
 };
 
-export type PtyActionSummary = {
-  kind: PtyAction["kind"];
-  session?: string;
-  bytes?: number;
-  preview?: string;
-  redacted?: boolean;
-};
-
-export type PtyObservation = {
-  session: string;
-  terminal: TerminalState;
-  action: PtyActionSummary;
-  result: "ok" | "rejected" | "timeout" | "interrupted";
-  eventCount: number;
-  returnedToPrompt: boolean;
-  outputTail?: string;
-  outputTailBytes?: number;
-  newOutputBytes?: number;
-  outputPreview?: string;
-  logRef?: string;
-  errorCode?: TerminalErrorCode;
-  message?: string;
-};
-
 export type TerminalSessionSnapshot = {
   session: string;
   terminal: TerminalState;
   parserCursor?: string;
   outputLog?: LogRef;
+};
+
+export type TerminalWriteRequest = {
+  kind: "terminal_write";
+  expectedInputSeq: number;
+  text: string;
+  waitForReturnMs?: number;
+};
+
+export type TerminalKeyRequest = {
+  kind: "terminal_key";
+  expectedInputSeq: number;
+  key: TerminalKey;
+  waitForReturnMs?: number;
+};
+
+export type SessionObserveRequest = {
+  kind: "session_observe";
+  session?: string;
+};
+
+export type SessionListRequest = {
+  kind: "session_list";
+};
+
+export type SessionFocusRequest = {
+  kind: "session_focus";
+  session: string;
+  create?: boolean;
+  cwd?: string;
+};
+
+export type SessionInterruptRequest = {
+  kind: "session_interrupt";
+  expectedInputSeq: number;
+  waitForReturnMs?: number;
+};
+
+export type SessionRestartRequest = {
+  kind: "session_restart";
+  session?: string;
+  cwd?: string;
+  reason?: string;
+};
+
+export type SessionTerminateRequest = {
+  kind: "session_terminate";
+  session?: string;
+  reason?: string;
+};
+
+export type TerminalToolRequest =
+  | TerminalWriteRequest
+  | TerminalKeyRequest
+  | SessionObserveRequest
+  | SessionListRequest
+  | SessionFocusRequest
+  | SessionInterruptRequest
+  | SessionRestartRequest
+  | SessionTerminateRequest;
+
+export type TerminalScreen = {
+  text: string;
+  rows: number;
+  cols: number;
+  truncated: boolean;
+  logRef: {
+    path: string;
+  };
+};
+
+export type TerminalObservation = {
+  currentSession: string;
+  observedSession: string;
+  terminal: TerminalState;
+  request: TerminalToolRequest["kind"];
+  result: "ok" | "rejected" | "timeout" | "interrupted";
+  returnedToPrompt: boolean;
+  screen: TerminalScreen;
+  errorCode?: TerminalErrorCode;
+  message?: string;
+};
+
+export type SessionListObservation = {
+  currentSession: string;
+  sessions: TerminalSessionSnapshot[];
 };

@@ -3,11 +3,35 @@
 // Static tool catalog, tool request/review/result, and validation types.
 
 import type { EnvironmentEvent } from "./environment.js";
-import type { PtyAction, PtyObservation } from "../terminal/types.js";
+import type {
+  SessionFocusRequest,
+  SessionInterruptRequest,
+  SessionListObservation,
+  SessionListRequest,
+  SessionObserveRequest,
+  SessionRestartRequest,
+  SessionTerminateRequest,
+  TerminalKey,
+  TerminalKeyRequest,
+  TerminalObservation,
+  TerminalToolRequest,
+  TerminalWriteRequest,
+} from "../terminal/types.js";
 
 // ─── Tool Catalog ───────────────────────────────────────────────────
 
-export type ToolName = "bash" | "stash_file";
+export const MODEL_VISIBLE_TOOL_NAMES = [
+  "terminal_write",
+  "terminal_key",
+  "session_observe",
+  "session_list",
+  "session_focus",
+  "session_interrupt",
+  "session_restart",
+  "session_terminate",
+] as const;
+
+export type ToolName = (typeof MODEL_VISIBLE_TOOL_NAMES)[number];
 
 /** A JSON Schema value (opaque to the harness). */
 export type JsonSchema = Record<string, unknown>;
@@ -21,31 +45,34 @@ export type ToolDefinition = {
 
 // ─── Tool Request (validated, ready for review) ─────────────────────
 
-export type BashToolRequest = {
-  kind: "pty_action";
-  toolName: "bash";
+export type TerminalWriteToolInput = Omit<TerminalWriteRequest, "kind">;
+export type TerminalKeyToolInput = Omit<TerminalKeyRequest, "kind">;
+export type SessionObserveToolInput = Omit<SessionObserveRequest, "kind">;
+export type SessionListToolInput = Record<string, never>;
+export type SessionFocusToolInput = Omit<SessionFocusRequest, "kind">;
+export type SessionInterruptToolInput = Omit<SessionInterruptRequest, "kind">;
+export type SessionRestartToolInput = Omit<SessionRestartRequest, "kind">;
+export type SessionTerminateToolInput = Omit<SessionTerminateRequest, "kind">;
+
+export type ToolInputByName = {
+  terminal_write: TerminalWriteToolInput;
+  terminal_key: TerminalKeyToolInput;
+  session_observe: SessionObserveToolInput;
+  session_list: SessionListToolInput;
+  session_focus: SessionFocusToolInput;
+  session_interrupt: SessionInterruptToolInput;
+  session_restart: SessionRestartToolInput;
+  session_terminate: SessionTerminateToolInput;
+};
+
+export type TerminalToolInput = ToolInputByName[ToolName];
+
+export type ToolRequest = {
+  kind: "terminal_tool";
+  toolName: ToolName;
   toolCallId: string;
-  action: PtyAction;
+  request: TerminalToolRequest;
 };
-
-export type StashFileInput = {
-  name?: string;
-  content: string;
-  encoding?: "utf8" | "base64";
-  description?: string;
-};
-
-export type StashFileToolRequest = {
-  kind: "stash_file";
-  toolName: "stash_file";
-  toolCallId: string;
-  name?: string;
-  content: string;
-  encoding: "utf8" | "base64";
-  description?: string;
-};
-
-export type ToolRequest = BashToolRequest | StashFileToolRequest;
 
 // ─── Tool Review ────────────────────────────────────────────────────
 
@@ -61,8 +88,13 @@ export type ToolReviewDecision = {
 export type ToolResult = {
   toolCallId: string;
   toolName: ToolName;
-  observation: PtyObservation | AgentObservation;
+  observation: ToolObservation;
 };
+
+export type ToolObservation =
+  | TerminalObservation
+  | SessionListObservation
+  | AgentObservation;
 
 // ─── Tool Call Validation ───────────────────────────────────────────
 
@@ -76,23 +108,13 @@ export type ToolCallValidation =
 // (invalid output, validation errors, review rejections).
 
 export type AgentObservation =
-  | {
-      kind: "model_output" | "tool_validation" | "tool_review" | "io_wait";
-      message: string;
-      recoverable: boolean;
-      decision?: {
-        status: "approved" | "rejected";
-        reason: string;
-      };
-      event?: EnvironmentEvent;
-    }
-  | {
-      kind: "stash_file";
-      message: string;
-      recoverable: false;
-      stashId: string;
-      name: string;
-      bytes: number;
-      materializeCommand: string;
-      catCommand?: string;
+  {
+    kind: "model_output" | "tool_validation" | "tool_review" | "io_wait";
+    message: string;
+    recoverable: boolean;
+    decision?: {
+      status: "approved" | "rejected";
+      reason: string;
     };
+    event?: EnvironmentEvent;
+  };

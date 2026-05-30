@@ -5,8 +5,6 @@ import type {
   TerminalServicePorts,
 } from "../application/terminal-ports.js";
 import type { TerminalPort } from "../run/orchestrator.js";
-import type { PtyActionLimits } from "../terminal/validator.js";
-import type { TerminalObservationLimits } from "../terminal/observation.js";
 import { ManagedPtySession, type ForegroundInspector } from "./managed-session.js";
 import {
   chunkTextByUtf8Bytes,
@@ -23,14 +21,10 @@ export type ManagedTerminalRuntimeOptions = {
   shell?: string;
   shellArgs?: string[];
   env?: Record<string, string>;
-  actionLimits: PtyActionLimits;
-  observationLimits: TerminalObservationLimits;
+  screenRows?: number;
+  screenCols?: number;
   postWriteReadDelayMs?: number;
   startupReadDelayMs?: number;
-  nowIso?: () => string;
-  monotonicMs?: () => number;
-  newId?: (prefix: string) => string;
-  newNonce?: () => string;
   foregroundInspector?: ForegroundInspector;
 };
 
@@ -42,29 +36,24 @@ type RuntimeSession = {
 
 export class ManagedTerminalRuntime {
   private readonly sessions = new Map<string, RuntimeSession>();
+  private currentSession: string;
 
-  constructor(private readonly options: ManagedTerminalRuntimeOptions) {}
+  constructor(private readonly options: ManagedTerminalRuntimeOptions) {
+    this.currentSession = options.defaultSessionId;
+  }
 
   createRunPort(): TerminalPort {
     const service = new TerminalService(this.createPorts(), {
       defaultSessionId: this.options.defaultSessionId,
       promptNonce: this.options.promptNonce,
-      actionLimits: this.options.actionLimits,
-      observationLimits: this.options.observationLimits,
+      screenRows: this.screenRows(),
+      screenCols: this.screenCols(),
     });
     return createTerminalRunPort(service);
   }
 
   private createPorts(): TerminalServicePorts {
     return {
-      clock: {
-        nowIso: () => this.options.nowIso?.() ?? new Date().toISOString(),
-        monotonicMs: () => this.options.monotonicMs?.() ?? Date.now(),
-      },
-      ids: {
-        newId: (prefix) => this.options.newId?.(prefix) ?? `${prefix}-${Date.now()}`,
-        newNonce: () => this.options.newNonce?.() ?? this.options.promptNonce,
-      },
       pty: {
         write: async (session, data) => {
           const entry = this.ensureSession(session);
@@ -86,20 +75,25 @@ export class ManagedTerminalRuntime {
           await this.drainStartup(entry);
           const start = parseCursor(cursor);
           const output = entry.pty.readOutputSince(start);
-          const outputTail = stripManagedShellNoise(
-            entry.pty.readOutputTailAt(
-              output.endOffset,
-              outputTailReadBytes(this.options.observationLimits),
-            ).chunk,
+          const screenTail = entry.pty.readOutputTailAt(
+            output.endOffset,
+            screenReadBytes(this.screenRows(), this.screenCols()),
           );
+          const screenText = stripManagedShellNoise(screenTail.chunk);
           return {
             chunk: output.chunk,
-            outputTail: outputTail.trim().length > 0 ? outputTail : undefined,
             logRef: {
               kind: "log",
               ref: `managed-pty://${session}`,
               startOffset: output.startOffset,
               endOffset: output.endOffset,
+            },
+            screen: {
+              text: screenText,
+              rows: this.screenRows(),
+              cols: this.screenCols(),
+              truncated: screenTail.startOffset > 0,
+              logRef: { path: `managed-pty://${session}` },
             },
           };
         },
@@ -116,8 +110,26 @@ export class ManagedTerminalRuntime {
         },
       },
       sessions: {
+        getCurrent: async () => this.currentSession,
+        setCurrent: async (session) => {
+          this.currentSession = session;
+        },
+        list: async () => {
+          this.ensureSession(this.currentSession);
+          const snapshots: TerminalRuntimeSnapshot[] = [];
+          for (const entry of this.sessions.values()) {
+            await this.drainStartup(entry);
+            snapshots.push(cloneSnapshot(entry.snapshot));
+          }
+          return snapshots;
+        },
         load: async (session) => {
-          const entry = this.ensureSession(session);
+          const entry =
+            this.sessions.get(session) ??
+            (session === this.currentSession ? this.ensureSession(session) : undefined);
+          if (entry === undefined) {
+            return null;
+          }
           await this.drainStartup(entry);
           const snapshot = cloneSnapshot(entry.snapshot);
           if (snapshot.terminal.alive) {
@@ -183,6 +195,14 @@ export class ManagedTerminalRuntime {
     }
     entry.startupDrained = true;
   }
+
+  private screenRows(): number {
+    return this.options.screenRows ?? 24;
+  }
+
+  private screenCols(): number {
+    return this.options.screenCols ?? 80;
+  }
 }
 
 function waitBetweenPtyWrites(delayMs: number): Promise<void> {
@@ -199,14 +219,9 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function outputTailReadBytes(limits: TerminalObservationLimits): number {
-  const tailChars =
-    limits.maxOutputTailChars ??
-    DEFAULT_MANAGED_OUTPUT_TAIL_CHARS;
-  return Math.max(4096, tailChars * 4);
+function screenReadBytes(rows: number, cols: number): number {
+  return Math.max(4096, rows * cols * 4);
 }
-
-const DEFAULT_MANAGED_OUTPUT_TAIL_CHARS = 2048;
 
 function stripManagedShellNoise(value: string): string {
   return value

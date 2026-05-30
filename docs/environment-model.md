@@ -1,6 +1,6 @@
 # Environment Model
 
-Environment stores external facts that should wake or remind the agent outside normal tool observations. Terminal output is not duplicated here; PTY facts return through `PtyObservation` in the tool-result path.
+Environment stores external facts that should wake or remind the agent outside normal tool observations. Terminal output is not duplicated here; terminal/session facts return through the tool-result path as `TerminalObservation` or `SessionListObservation`.
 
 ## Event Kinds
 
@@ -37,10 +37,10 @@ IM transport / skill lifecycle
   -> Environment reminder
   -> PromptBuilder
 
-PTY action execution
+terminal/session tool execution
   -> ManagedTerminalRuntime
-  -> PtyObservation
+  -> TerminalObservation | SessionListObservation
   -> tool result history
 ```
 
-This keeps terminal state in one place: the PTY observation stream.
+This keeps terminal state in one place: the terminal/session observation stream.

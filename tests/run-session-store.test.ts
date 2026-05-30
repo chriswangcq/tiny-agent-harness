@@ -53,14 +53,14 @@ describe("reconstructHistoryFromTranscript", () => {
   it("rebuilds tool call, observation, and io_wait history from transcript events", () => {
     const toolCall: InternalToolCall = {
       id: "call-1",
-      name: "bash",
-      arguments: { kind: "poll", session: "default" },
+      name: "session_observe",
+      arguments: { session: "default" },
     };
     const turn: ModelTurn = {
       kind: "tool_call",
       toolCall,
       thinking: { content: "inspect terminal" },
-      rawDecision: "bash",
+      rawDecision: "session_observe",
     };
     const waitTurn: ModelTurn = {
       kind: "io_wait",
@@ -90,10 +90,10 @@ describe("reconstructHistoryFromTranscript", () => {
         type: "tool_execution_finished",
         stepIndex: 0,
         request: {
-          kind: "pty_action",
-          toolName: "bash",
+          kind: "terminal_tool",
+          toolName: "session_observe",
           toolCallId: "call-1",
-          action: { kind: "poll", session: "default" },
+          request: { kind: "session_observe", session: "default" },
         },
         observation: {
           kind: "tool_validation",

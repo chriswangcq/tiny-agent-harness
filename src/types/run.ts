@@ -13,8 +13,8 @@ import type {
   ToolReviewDecision,
   ToolCallValidation,
   AgentObservation,
+  ToolObservation,
 } from "./tools.js";
-import type { PtyObservation } from "../terminal/types.js";
 import type {
   EnvironmentEvent,
   IoWaitRequest,
@@ -210,7 +210,7 @@ export type RunEvent =
       type: "tool_execution_finished";
       stepIndex: number;
       request: ToolRequest;
-      observation: PtyObservation | AgentObservation;
+      observation: ToolObservation;
       timestamp: string;
     }
   | {

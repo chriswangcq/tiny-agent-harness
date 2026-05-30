@@ -65,7 +65,7 @@ project/
 第一版需要 build 的 CLI：
 
 ```text
-tiny-agent       # run orchestrator, agent run state, bash tool execution
+tiny-agent       # run orchestrator, agent run state, terminal/session tool execution
 tiny-agent tui   # transcript / state player
 im               # local mock user-message transport
 skill            # local skill discovery, run, close, review-complete
@@ -74,7 +74,7 @@ skill            # local skill discovery, run, close, review-complete
 不需要 build 成独立 CLI 的部分：
 
 ```text
-bash session controls  # 模型通过 bash tool call 内部调用，不是用户命令
+PTY session controls   # 模型通过 session_* tool call 内部调用，不是用户命令
 mcp                    # 外部 mcp CLI，agent 通过 bash 执行
 memory/sub-agent        # 第一版不是核心路径
 ```
@@ -164,7 +164,7 @@ memory/sub-agent        # 第一版不是核心路径
 - `runs/<runId>/session.json` 是 agent-loop history snapshot，用于 resume。
 - `runs/<runId>/debug/prompts/` 保存由 transcript/history 通过 `promptRef` 引用的大 prompt artifact。
 - `environment/events.jsonl` 是跨 run 的外部环境事件 ledger。
-- `sessions/<sessionId>/output.log` 是完整 bash 输出，observation 只返回新增窗口。
+- `sessions/<sessionId>/output.log` 是完整 PTY 输出，observation 只返回一屏 terminal viewport。
 - `skill-runs/<id>/execution.txt` 和 `review-task.txt` 只给 agent 通过 bash 原生命令读取，不直接塞进 prompt。
 
 ## File Types

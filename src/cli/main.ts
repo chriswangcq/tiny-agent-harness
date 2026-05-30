@@ -19,10 +19,6 @@ import { Environment } from "../environment/environment.js";
 import { ImCliTransport } from "../im/transport.js";
 import { SkillRunStore } from "../skill/store.js";
 import { buildCliTerminalEnv } from "./terminal-env.js";
-import { StashFileStore } from "../stash/file-store.js";
-import {
-  DEFAULT_PTY_ACTION_LIMITS,
-} from "../terminal/validator.js";
 import type { V4ChatMessage } from "../types/model.js";
 import type { AgentRunStateData, RunEvent } from "../types/run.js";
 import {
@@ -130,26 +126,11 @@ function createCliTerminalPort(channel: string) {
     cwd: process.cwd(),
     promptNonce: `cli-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     env: buildCliTerminalEnv(process.env, channel),
-    actionLimits: DEFAULT_PTY_ACTION_LIMITS,
-    observationLimits: { maxPreviewChars: 200, maxOutputTailChars: 2048 },
+    screenRows: 24,
+    screenCols: 80,
     postWriteReadDelayMs: 100,
   });
   return runtime.createRunPort();
-}
-
-function createCliStashFilePort(stateDir?: string) {
-  const baseDir = path.resolve(stateDir ?? ".tiny-agent");
-  const defaultBaseDir = path.resolve(".tiny-agent");
-  const store = new StashFileStore({
-    rootDir: path.join(baseDir, "stash", "files"),
-    cwd: process.cwd(),
-    stateDir: baseDir === defaultBaseDir ? undefined : baseDir,
-  });
-  return {
-    async stash(request: Parameters<StashFileStore["stash"]>[0]) {
-      return store.stash(request);
-    },
-  };
 }
 
 function createCliRunSessionPort(store: RunSessionStore) {
@@ -273,7 +254,7 @@ function appendResumeReminder(history: HistoryItem[]): HistoryItem[] {
     {
       type: "environment_reminder",
       content:
-        "Run resumed from persisted state. Agent-loop history was loaded from the run session. The bash PTY process is fresh after resume; inspect with bash status/poll and use the latest terminal.inputSeq before sending PTY input. Do not assume prior ssh, vim, cat, or other foreground processes survived the resume.",
+        "Run resumed from persisted state. Agent-loop history was loaded from the run session. Terminal processes are fresh after resume; inspect with session_observe/session_list and use the latest terminal.inputSeq before sending terminal input. Do not assume prior ssh, vim, cat, or other foreground processes survived the resume.",
     },
   ];
 }
@@ -453,7 +434,7 @@ async function waitForFirstMessage(
 // Main
 // ---------------------------------------------------------------------------
 
-const HELP_TEXT = `tiny-agent — AI agent harness with PTY actions and staged files
+const HELP_TEXT = `tiny-agent — AI agent harness with terminal/session tools
 
 Usage:
   tiny-agent <task>                                   Run with inline task
@@ -465,7 +446,6 @@ Usage:
                                                         Resume + TUI in one command
   tiny-agent tui --run <runId|latest>                 Attach TUI to existing run
   tiny-agent im  <subcommand> [options]               IM message operations
-  tiny-agent file <subcommand> [options]              Stashed file operations
   tiny-agent skill <subcommand> [options]             Skill management
   tiny-agent --help                                   Show this help
 
@@ -476,12 +456,6 @@ IM subcommands:
                                                  Send agent message to outbox
   ack    --channel <ch> --message-id <id>      Acknowledge (advance cursor)
   listen --channel <ch> [--cursor <id>]        Poll for new messages
-
-File subcommands:
-  list                          List stashed files
-  show <stashId>                Show stashed file metadata
-  materialize <stashId> <path>  Write stashed file to path
-  cat <stashId>                 Write stashed file bytes to stdout
 
 Skill subcommands:
   list                          List available skills
@@ -527,12 +501,6 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (firstArg === "file") {
-    const { runFile } = await import("./file.js");
-    await runFile(process.argv.slice(3));
-    return;
-  }
-
   if (firstArg === "skill") {
     const { runSkill } = await import("./skill.js");
     await runSkill(process.argv.slice(3));
@@ -571,7 +539,7 @@ async function main(): Promise<void> {
   } else if (args[0]) {
     const reserved = ["io_wait", "io-wait", "final"];
     if (reserved.includes(args[0])) {
-      die(`"${args[0]}" is a tool call, not a CLI command. Do not run it via bash.`);
+      die(`"${args[0]}" is a tool call, not a CLI command.`);
     }
     const parsed = parseCliOptions(args.slice(1));
     channel = parsed.channel;
@@ -744,7 +712,6 @@ async function main(): Promise<void> {
     validator,
     reviewer,
     terminal: createCliTerminalPort(channel),
-    stashFiles: createCliStashFilePort(baseDir),
     contextWindow: createCliContextWindowPort(promptBuilder),
     session: createCliRunSessionPort(new RunSessionStore(runDir)),
     prompt: {

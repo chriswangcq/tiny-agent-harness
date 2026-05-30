@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { createTerminalRunPort } from "../src/application/terminal-run-port.js";
-import type { PtyObservation } from "../src/terminal/types.js";
+import type { TerminalObservation } from "../src/terminal/types.js";
 
 describe("createTerminalRunPort", () => {
-  it("forwards PTY actions to TerminalService.handleAction", async () => {
+  it("forwards terminal tool requests to TerminalService.handleAction", async () => {
     const calls: unknown[] = [];
-    const observation: PtyObservation = {
-      session: "default",
+    const observation: TerminalObservation = {
+      currentSession: "default",
+      observedSession: "default",
       terminal: {
         inputSeq: 2,
         alive: true,
@@ -18,23 +19,30 @@ describe("createTerminalRunPort", () => {
         },
         lastContinuationPrompt: null,
         termination: null,
+        foregroundProcess: null,
       },
-      action: { kind: "write_text", preview: "pwd" },
+      request: "terminal_write",
       result: "ok",
-      eventCount: 0,
       returnedToPrompt: false,
+      screen: {
+        text: "pwd",
+        rows: 24,
+        cols: 80,
+        truncated: false,
+        logRef: { path: "managed-pty://default" },
+      },
     };
     const port = createTerminalRunPort({
-      async handleAction(action) {
-        calls.push(action);
+      async handleAction(request) {
+        calls.push(request);
         return observation;
       },
     });
 
     await expect(
       port.execute({
-        action: {
-          kind: "write_text",
+        request: {
+          kind: "terminal_write",
           expectedInputSeq: 1,
           text: "pwd",
         },
@@ -42,7 +50,7 @@ describe("createTerminalRunPort", () => {
     ).resolves.toBe(observation);
     expect(calls).toEqual([
       {
-        kind: "write_text",
+        kind: "terminal_write",
         expectedInputSeq: 1,
         text: "pwd",
       },

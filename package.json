@@ -1,7 +1,7 @@
 {
   "name": "tiny-agent-harness",
   "version": "0.1.0",
-  "description": "An open coding agent harness with a PTY action surface and staged file materialization.",
+  "description": "An open coding agent harness with terminal/session tools and durable agent-loop traces.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {

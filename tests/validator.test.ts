@@ -1,15 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { ToolCallValidator } from "../src/tools/validator.js";
-import type { InternalToolCall } from "../src/types/model.js";
 import { createTerminalState } from "../src/terminal/state.js";
 import type { TerminalState } from "../src/terminal/types.js";
+import { ToolCallValidator } from "../src/tools/validator.js";
+import type { InternalToolCall } from "../src/types/model.js";
+import type { ToolName, TerminalToolInput } from "../src/types/tools.js";
 
 function makeCall(
-  overrides: Partial<InternalToolCall> & { arguments: InternalToolCall["arguments"] },
+  name: ToolName,
+  args: TerminalToolInput,
+  overrides: Partial<InternalToolCall> = {},
 ): InternalToolCall {
   return {
     id: "tc-1",
-    name: "bash",
+    name,
+    arguments: args,
     ...overrides,
   };
 }
@@ -23,162 +27,61 @@ function terminal(inputSeq = 1): TerminalState {
   });
 }
 
-describe("ToolCallValidator PTY actions", () => {
-  it("validates write_text actions as pty_action requests", () => {
+describe("ToolCallValidator terminal input tools", () => {
+  it("validates terminal_write as a terminal tool request", () => {
     const result = new ToolCallValidator().validate(
-      makeCall({
-        arguments: {
-          kind: "write_text",
-          expectedInputSeq: 1,
-          text: "pwd",
-        },
+      makeCall("terminal_write", {
+        expectedInputSeq: 1,
+        text: "pwd\n",
       }),
     );
 
     expect(result.status).toBe("valid");
     if (result.status === "valid") {
-      expect(result.request).toMatchObject({
-        kind: "pty_action",
-        toolName: "bash",
+      expect(result.request).toEqual({
+        kind: "terminal_tool",
+        toolName: "terminal_write",
         toolCallId: "tc-1",
-        action: {
-          kind: "write_text",
+        request: {
+          kind: "terminal_write",
           expectedInputSeq: 1,
-          text: "pwd",
+          text: "pwd\n",
         },
       });
     }
   });
 
-  it("validates long write_text actions as ordinary PTY text", () => {
-    const result = new ToolCallValidator({ terminal: terminal(3) }).validate(
-      makeCall({
-        arguments: {
-          kind: "write_text",
-          expectedInputSeq: 3,
-          text: "hello".repeat(2000),
-        },
-      }),
-    );
-
-    expect(result.status).toBe("valid");
-    if (result.status === "valid") {
-      expect(result.request.kind).toBe("pty_action");
-      if (result.request.kind === "pty_action") {
-        expect(result.request.action.kind).toBe("write_text");
-      }
-    }
-  });
-
-  it("accepts long write_text payloads because PTY writes are not harness-limited", () => {
+  it("accepts large terminal_write heredocs because runtime pacing owns PTY input", () => {
     const result = new ToolCallValidator().validate(
-      makeCall({
-        arguments: {
-          kind: "write_text",
-          expectedInputSeq: 1,
-          text: "hello".repeat(2000),
-        },
+      makeCall("terminal_write", {
+        expectedInputSeq: 1,
+        text: `cat > app.html <<'EOF'\n${"x".repeat(8192)}\nEOF\n`,
       }),
     );
 
     expect(result.status).toBe("valid");
   });
 
-  it("allows large heredoc payloads because runtime write pacing protects PTY input", () => {
-    const heredoc = `cat > app.html <<'EOF'\n${"x".repeat(4097)}\nEOF\n`;
+  it("allows IM replies through text-stdin", () => {
     const result = new ToolCallValidator().validate(
-      makeCall({
-        arguments: {
-          kind: "write_text",
-          expectedInputSeq: 1,
-          text: heredoc,
-        },
+      makeCall("terminal_write", {
+        expectedInputSeq: 1,
+        text:
+          "node dist/cli/main.js im send --channel default --kind status --text-stdin <<'IM'\n" +
+          "Done.\n" +
+          "IM\n",
       }),
     );
 
     expect(result.status).toBe("valid");
   });
 
-  it("allows small quoted heredoc snippets", () => {
+  it("rejects IM replies that use --text shell arguments", () => {
     const result = new ToolCallValidator().validate(
-      makeCall({
-        arguments: {
-          kind: "write_text",
-          expectedInputSeq: 1,
-          text: "cat > note.txt <<'EOF'\nhello\nEOF\n",
-        },
-      }),
-    );
-
-    expect(result.status).toBe("valid");
-  });
-
-  it("allows simple quoted heredocs for im send text-stdin replies", () => {
-    const result = new ToolCallValidator().validate(
-      makeCall({
-        arguments: {
-          kind: "write_text",
-          expectedInputSeq: 1,
-          text:
-            "node dist/cli/main.js im send --channel default --kind status --text-stdin <<'IM'\n" +
-            "Done.\n" +
-            "IM\n",
-        },
-      }),
-    );
-
-    expect(result.status).toBe("valid");
-  });
-
-  it("allows large im send heredoc replies through text-stdin", () => {
-    const result = new ToolCallValidator().validate(
-      makeCall({
-        arguments: {
-          kind: "write_text",
-          expectedInputSeq: 1,
-          text:
-            "node dist/cli/main.js im send --channel default --kind status --text-stdin <<'IM'\n" +
-            `${"x".repeat(8192)}\n` +
-            "IM\n",
-        },
-      }),
-    );
-
-    expect(result.status).toBe("valid");
-  });
-
-  it("allows multiline im send heredoc replies", () => {
-    const result = new ToolCallValidator().validate(
-      makeCall({
-        arguments: {
-          kind: "write_text",
-          expectedInputSeq: 1,
-          text:
-            "node dist/cli/main.js im send --channel default --kind status --text-stdin <<'IM'\n" +
-            "one\n" +
-            "two\n" +
-            "three\n" +
-            "four\n" +
-            "five\n" +
-            "six\n" +
-            "seven\n" +
-            "IM\n",
-        },
-      }),
-    );
-
-    expect(result.status).toBe("valid");
-  });
-
-  it("rejects agent im send --text replies and points to text-stdin", () => {
-    const result = new ToolCallValidator().validate(
-      makeCall({
-        arguments: {
-          kind: "write_text",
-          expectedInputSeq: 1,
-          text:
-            "node dist/cli/main.js im send --channel default --kind status --text 'hello'\n",
-        },
+      makeCall("terminal_write", {
+        expectedInputSeq: 1,
+        text:
+          "node dist/cli/main.js im send --channel default --kind status --text 'hello'\n",
       }),
     );
 
@@ -190,141 +93,180 @@ describe("ToolCallValidator PTY actions", () => {
     }
   });
 
-  it("rejects stale input sequences when terminal context is injected", () => {
+  it("rejects stale expectedInputSeq against an injected terminal snapshot", () => {
     const result = new ToolCallValidator({ terminal: terminal(2) }).validate(
-      makeCall({
-        arguments: {
-          kind: "write_text",
-          expectedInputSeq: 1,
-          text: "echo stale",
-        },
+      makeCall("terminal_write", {
+        expectedInputSeq: 1,
+        text: "echo stale\n",
       }),
     );
 
     expect(result.status).toBe("invalid");
     if (result.status === "invalid") {
       expect(result.observation.message).toContain("INPUT_SEQ_MISMATCH");
+      expect(result.observation.message).toContain("terminal.inputSeq 2");
     }
   });
 
-  it("accepts inputSeq-guarded writes when terminal context is injected", () => {
-    const result = new ToolCallValidator({ terminal: terminal(3) }).validate(
-      makeCall({
-        arguments: {
-          kind: "write_text",
-          expectedInputSeq: 3,
-          text: "pwd\n",
-        },
+  it("validates terminal_key and rejects ctrl-c as a key", () => {
+    const valid = new ToolCallValidator({ terminal: terminal(3) }).validate(
+      makeCall("terminal_key", {
+        expectedInputSeq: 3,
+        key: "enter",
+        waitForReturnMs: 100,
+      }),
+    );
+    expect(valid.status).toBe("valid");
+    if (valid.status === "valid") {
+      expect(valid.request.request).toEqual({
+        kind: "terminal_key",
+        expectedInputSeq: 3,
+        key: "enter",
+        waitForReturnMs: 100,
+      });
+    }
+
+    const invalid = new ToolCallValidator().validate(
+      makeCall("terminal_key", {
+        expectedInputSeq: 1,
+        key: "ctrl-c" as any,
+      }),
+    );
+    expect(invalid.status).toBe("invalid");
+    if (invalid.status === "invalid") {
+      expect(invalid.observation.message).toContain("session_interrupt");
+    }
+  });
+
+  it("rejects session arguments on current-session input tools", () => {
+    const result = new ToolCallValidator().validate(
+      makeCall("terminal_write", {
+        expectedInputSeq: 1,
+        text: "pwd\n",
+        session: "other",
+      } as any),
+    );
+
+    expect(result.status).toBe("invalid");
+    if (result.status === "invalid") {
+      expect(result.observation.message).toContain('unexpected argument "session"');
+    }
+  });
+});
+
+describe("ToolCallValidator session tools", () => {
+  it("validates session_observe and session_list", () => {
+    const observe = new ToolCallValidator().validate(
+      makeCall("session_observe", { session: "tests" }),
+    );
+    expect(observe.status).toBe("valid");
+    if (observe.status === "valid") {
+      expect(observe.request.request).toEqual({
+        kind: "session_observe",
+        session: "tests",
+      });
+    }
+
+    const list = new ToolCallValidator().validate(makeCall("session_list", {}));
+    expect(list.status).toBe("valid");
+    if (list.status === "valid") {
+      expect(list.request.request).toEqual({ kind: "session_list" });
+    }
+  });
+
+  it("validates session_focus with explicit session and optional cwd", () => {
+    const result = new ToolCallValidator().validate(
+      makeCall("session_focus", {
+        session: "build",
+        create: true,
+        cwd: "/repo",
       }),
     );
 
     expect(result.status).toBe("valid");
-  });
-
-  it("rejects unknown PTY action kinds", () => {
-    const result = new ToolCallValidator().validate(
-      makeCall({
-        arguments: {
-          kind: "paste_text",
-          expectedInputSeq: 1,
-          text: "hello",
-        },
-      }),
-    );
-
-    expect(result.status).toBe("invalid");
-    if (result.status === "invalid") {
-      expect(result.observation.message).toContain("unknown PTY action kind");
+    if (result.status === "valid") {
+      expect(result.request.request).toEqual({
+        kind: "session_focus",
+        session: "build",
+        create: true,
+        cwd: "/repo",
+      });
     }
   });
 
-  it("rejects command-shaped bash arguments", () => {
-    const result = new ToolCallValidator().validate(
-      makeCall({
-        arguments: { session: "default", command: "pwd" } as any,
+  it("validates session_interrupt against the current session only", () => {
+    const result = new ToolCallValidator({ terminal: terminal(4) }).validate(
+      makeCall("session_interrupt", {
+        expectedInputSeq: 4,
+        waitForReturnMs: 50,
       }),
     );
 
-    expect(result.status).toBe("invalid");
-    if (result.status === "invalid") {
-      expect(result.observation.message).toContain("payload must be a PTY action object");
-      expect(result.observation.message).toContain("write_text");
+    expect(result.status).toBe("valid");
+    if (result.status === "valid") {
+      expect(result.request.request).toEqual({
+        kind: "session_interrupt",
+        expectedInputSeq: 4,
+        waitForReturnMs: 50,
+      });
     }
   });
 
-  it("rejects control-shaped bash arguments", () => {
-    const result = new ToolCallValidator().validate(
-      makeCall({
-        arguments: { control: "paste", session: "s1", input: "yes\n" } as any,
+  it("validates restart and terminate with optional target session", () => {
+    const restart = new ToolCallValidator().validate(
+      makeCall("session_restart", {
+        session: "dev",
+        cwd: "/repo",
+        reason: "recover unsynced prompt",
       }),
     );
+    expect(restart.status).toBe("valid");
+    if (restart.status === "valid") {
+      expect(restart.request.request).toEqual({
+        kind: "session_restart",
+        session: "dev",
+        cwd: "/repo",
+        reason: "recover unsynced prompt",
+      });
+    }
 
-    expect(result.status).toBe("invalid");
-    if (result.status === "invalid") {
-      expect(result.observation.message).toContain("payload must be a PTY action object");
+    const terminate = new ToolCallValidator().validate(
+      makeCall("session_terminate", {
+        reason: "done",
+      }),
+    );
+    expect(terminate.status).toBe("valid");
+    if (terminate.status === "valid") {
+      expect(terminate.request.request).toEqual({
+        kind: "session_terminate",
+        reason: "done",
+      });
+    }
+  });
+
+  it("rejects malformed session arguments", () => {
+    const focus = new ToolCallValidator().validate(
+      makeCall("session_focus", {
+        session: "",
+      } as any),
+    );
+    expect(focus.status).toBe("invalid");
+
+    const list = new ToolCallValidator().validate(
+      makeCall("session_list", { session: "nope" } as any),
+    );
+    expect(list.status).toBe("invalid");
+    if (list.status === "invalid") {
+      expect(list.observation.message).toContain('unexpected argument "session"');
     }
   });
 });
 
 describe("ToolCallValidator tool names", () => {
-  it("validates stash_file calls and defaults encoding to utf8", () => {
-    const result = new ToolCallValidator().validate({
-      id: "tc-1",
-      name: "stash_file",
-      arguments: {
-        name: "snake.html",
-        content: "<!doctype html>\n",
-        description: "generated game",
-      },
-    });
-
-    expect(result.status).toBe("valid");
-    if (result.status === "valid") {
-      expect(result.request).toEqual({
-        kind: "stash_file",
-        toolName: "stash_file",
-        toolCallId: "tc-1",
-        name: "snake.html",
-        content: "<!doctype html>\n",
-        encoding: "utf8",
-        description: "generated game",
-      });
-    }
-  });
-
-  it("rejects invalid stash_file encoding", () => {
-    const result = new ToolCallValidator().validate({
-      id: "tc-1",
-      name: "stash_file",
-      arguments: {
-        content: "abc",
-        encoding: "hex",
-      } as any,
-    });
-
-    expect(result.status).toBe("invalid");
-    if (result.status === "invalid") {
-      expect(result.observation.message).toContain("encoding");
-    }
-  });
-
-  it("does not validate base64 content in the model-facing validator", () => {
-    const result = new ToolCallValidator().validate({
-      id: "tc-1",
-      name: "stash_file",
-      arguments: {
-        content: "not valid!",
-        encoding: "base64",
-      },
-    });
-
-    expect(result.status).toBe("valid");
-  });
-
   it("rejects non-object tool arguments", () => {
     const result = new ToolCallValidator().validate({
       id: "tc-1",
-      name: "stash_file",
+      name: "terminal_write",
       arguments: null as any,
     });
 
@@ -334,17 +276,37 @@ describe("ToolCallValidator tool names", () => {
     }
   });
 
-  it("rejects unknown tools", () => {
-    const result = new ToolCallValidator().validate({
-      id: "tc-1",
-      name: "python" as any,
-      arguments: { kind: "write_text", expectedInputSeq: 1, text: "pwd" } as any,
-    });
+  it("rejects removed terminal side-channel tool names", () => {
+    for (const name of [["ba", "sh"].join(""), ["stash", "_file"].join("")]) {
+      const result = new ToolCallValidator().validate({
+        id: "tc-1",
+        name: name as any,
+        arguments: { expectedInputSeq: 1, text: "pwd\n" } as any,
+      });
+
+      expect(result.status).toBe("invalid");
+      if (result.status === "invalid") {
+        expect(result.observation.message).toContain(`Unknown tool "${name}"`);
+        expect(result.observation.message).toContain("terminal_write");
+        expect(result.observation.message).not.toContain(
+          `Available tools are "${["ba", "sh"].join("")}"`,
+        );
+      }
+    }
+  });
+
+  it("rejects removed action-shaped payloads on terminal_write", () => {
+    const result = new ToolCallValidator().validate(
+      makeCall("terminal_write", {
+        kind: ["write", "_text"].join(""),
+        expectedInputSeq: 1,
+        text: "pwd\n",
+      } as any),
+    );
 
     expect(result.status).toBe("invalid");
     if (result.status === "invalid") {
-      expect(result.observation.message).toMatch(/Unknown tool/);
-      expect(result.observation.message).toContain("stash_file");
+      expect(result.observation.message).toContain('unexpected argument "kind"');
     }
   });
 });

@@ -9,8 +9,8 @@
 它继续遵守当前边界：
 
 ```text
-Model visible action surface: bash PTY actions only
-External capabilities: called as CLI commands through write_text when the terminal output shows a shell prompt
+Model visible action surface: terminal/session PTY tools only
+External capabilities: called as CLI commands through terminal_write when the current session screen shows a shell prompt
 ```
 
 Agent 如果需要代码智能，本质上仍然是在 PTY 里确认 shell prompt 后执行：
@@ -41,7 +41,7 @@ codeq references src/run/orchestrator.ts:37:18 --json
 ```text
 Codeq CLI
   owns: argv parsing, workspace resolution, JSON output contract, limits, error shape
-  does not own: agent loop, tool review, bash runtime, transcript
+  does not own: agent loop, tool review, PTY runtime, transcript
 
 LanguageBackend
   owns: selecting and speaking to one language server
@@ -57,7 +57,7 @@ ManagedTerminalRuntime
   owns: command return code, output window, session log
 
 RunOrchestrator
-  sees: one normal bash PTY action
+  sees: one normal terminal_write action
   does not know: whether the command is codeq, skill, test, git, or project script
 ```
 
@@ -74,7 +74,7 @@ The agent decides what to do with those facts.
 
 - 把 LSP 注册成 provider-native tool
 - 在 harness 内部维护 language server 长连接
-- 让 LSP 绕过 bash tool review
+- 让 LSP 绕过 terminal/session tool review
 - 让 CLI 默认修改文件
 - 自动安装任意 language server
 - 支持所有语言的完整差异
@@ -410,7 +410,7 @@ Read-only by default.
 No command writes files unless it has an explicit --apply flag.
 ```
 
-Even with `--apply`, codeq should emit the exact `WorkspaceEdit` summary before writing, and the agent's PTY action still goes through tool review. For the tiny-agent-harness first pass, prefer `--dry-run` only and let the agent apply edits through normal patch workflow.
+Even with `--apply`, codeq should emit the exact `WorkspaceEdit` summary before writing, and the agent's terminal/session request still goes through tool review. For the tiny-agent-harness first pass, prefer `--dry-run` only and let the agent apply edits through normal patch workflow.
 
 Dry-run rename output:
 

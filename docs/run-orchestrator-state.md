@@ -2,13 +2,13 @@
 
 本文记录 tiny-agent-harness 第一版 run loop、agent run state、effect 和 event 协议。
 
-> Current implementation note: model-level `final` is no longer part of the supported `ModelTurn` contract. Completion replies are sent to the user through IM via the bash tool, then the agent returns `io_wait` to wait for the next environment event.
+> Current implementation note: model-level `final` is no longer part of the supported `ModelTurn` contract. Completion replies are sent to the user through IM via the current PTY session, then the agent returns `io_wait` to wait for the next environment event.
 
 ## Design Principles
 
 1. Run orchestrator 本质是一个 `for` / `while` loop。
 2. Agent run state 是该 loop 的显式状态机，负责判断下一步要产生什么 effect。
-3. Orchestrator 负责执行副作用：调用模型、审核工具、执行 bash、写 transcript。
+3. Orchestrator 负责执行副作用：调用模型、审核工具、执行 terminal/session tool、写 transcript。
 4. State transition 尽量保持纯逻辑：`state + event -> next state`。
 5. 不用一堆局部变量隐式保存 pending model output、pending tool call、pending review。
 6. Run state 必须能落盘，后续才方便 debug、resume、eval 和 self-improve。
@@ -45,7 +45,7 @@ ToolReviewer
   owns: approve/reject decision before execution
 
 ManagedTerminalRuntime
-  owns: bash sessions and observations
+  owns: terminal sessions and observations
 
 TranscriptStore
   owns: append-only run events on disk
@@ -109,7 +109,7 @@ type AgentRunState = {
 model output -> optional tool validation -> optional tool review -> optional tool execution -> observation
 ```
 
-如果任务已经完成，模型仍然不直接返回用户可见正文；Agent 应通过 bash 调用 `im send --text-stdin` 发送用户可见答复，然后返回 `io_wait`，让 run 等待下一条用户消息或环境事件。`im post` 只用于外部/本地 demo 注入用户消息，不能作为 agent 回复出口。所有 Agent 回复都应走 `im send --text-stdin`；普通文本回复可以直接用 quoted heredoc，例如 `im send --text-stdin <<'IM' ... IM`，也可以在更简单时使用 `< reply.md` 或 `file cat` process substitution。发送后 poll 到 shell prompt/成功输出再 `io_wait`。如果最近一次 IM send 的 PTY observation 尚未回到 shell prompt，orchestrator 会把 `io_wait` 转成 recoverable observation，要求模型先 poll。所有 `write_text` PTY 输入都会由 runtime 保护性 pacing；生成文件、代码、HTML、JSON 等文本 payload 可以使用 heredoc，`stash_file` 仅作为显式 staged bytes 的可选通道。
+如果任务已经完成，模型仍然不直接返回用户可见正文；Agent 应通过 current PTY session 调用 `im send --text-stdin` 发送用户可见答复，然后返回 `io_wait`，让 run 等待下一条用户消息或环境事件。`im post` 只用于外部/本地 demo 注入用户消息，不能作为 agent 回复出口。所有 Agent 回复都应走 `im send --text-stdin`；普通文本回复可以直接用 quoted heredoc，例如 `im send --text-stdin <<'IM' ... IM`，也可以在更简单时使用 `< reply.md` stdin redirection。发送后用 `session_observe` 确认 shell prompt/成功输出再 `io_wait`。如果最近一次 IM send 的 PTY observation 尚未回到 shell prompt，orchestrator 会把 `io_wait` 转成 recoverable observation，要求模型先 observe。所有 `terminal_write` PTY 输入都会由 runtime 保护性 pacing；生成文件、代码、HTML、JSON 等文本 payload 使用 shell-native heredoc/redirection，不再保留 staged bytes 旁路。
 
 ## Model Turn
 
@@ -142,7 +142,7 @@ type ModelTurn =
 
 `invalid_output` 不一定让 run 失败。第一版可以把 invalid output 转成 observation，让 Agent 下一轮自我修正。
 
-`io_wait` 是 Agent 向自己的 run state machine 提交等待请求。它不是 bash tool，也不执行外部业务动作；orchestrator 会等待 Environment 中出现满足条件的事件，满足后才允许下一轮 model step。
+`io_wait` 是 Agent 向自己的 run state machine 提交等待请求。它不是 terminal/session tool，也不执行外部业务动作；orchestrator 会等待 Environment 中出现满足条件的事件，满足后才允许下一轮 model step。
 
 First version supports only new user message wait:
 
@@ -386,7 +386,7 @@ type RunEvent =
       type: "tool_execution_finished";
       stepIndex: number;
       request: ToolRequest;
-      observation: PtyObservation | AgentObservation;
+      observation: TerminalObservation | SessionListObservation | AgentObservation;
       timestamp: string;
     }
   | {
@@ -438,7 +438,7 @@ async function runAgent(initialState: AgentRunState, ports: RunPorts) {
       });
 
       const output = await ports.fim.generateTurn(effect.context, {
-        bashTool: ports.tools.bash
+        tools: ports.tools.modelVisibleCatalog
       });
       const turn = output.turn;
 
@@ -493,7 +493,7 @@ async function runAgent(initialState: AgentRunState, ports: RunPorts) {
         timestamp: ports.clock.now()
       });
 
-      const observation = await ports.bash.execute(effect.request);
+      const observation = await ports.terminal.execute(effect.request);
 
       await record({
         type: "tool_execution_finished",
@@ -689,7 +689,7 @@ Tool validation observation:
 ```json
 {
   "kind": "tool_validation",
-  "message": "Invalid bash tool arguments: command input requires a non-empty command.",
+  "message": "Invalid terminal_write arguments: expectedInputSeq must match current session inputSeq.",
   "recoverable": true
 }
 ```
@@ -723,7 +723,7 @@ IO wait satisfied observation:
 }
 ```
 
-These observations enter the transcript exactly like bash observations, while the full EnvironmentEvent is also consumed into the next FIM step as environment context.
+These observations enter the transcript exactly like terminal observations, while the full EnvironmentEvent is also consumed into the next FIM step as environment context.
 
 ## Step Counting
 

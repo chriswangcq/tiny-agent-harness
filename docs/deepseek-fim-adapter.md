@@ -42,8 +42,7 @@ Decision pass 贴近 DeepSeek V4 post-train 的 DSML tool-call 格式：
 </think>
 
 <｜DSML｜tool_calls>
-<｜DSML｜invoke name="bash">
-<｜DSML｜parameter name="kind" string="true">write_text</｜DSML｜parameter>
+<｜DSML｜invoke name="terminal_write">
 <｜DSML｜parameter name="expectedInputSeq" string="false">0</｜DSML｜parameter>
 <｜DSML｜parameter name="text" string="true">pwd
 </｜DSML｜parameter>
@@ -93,7 +92,7 @@ type ModelStepContext = {
 };
 ```
 
-The adapter encodes the messages prepared by the orchestrator. There is no special persistent User main message in this harness. User input is part of the Environment; `user_message_received` events are rendered into environment reminders and passed as `latest_reminder` messages. Large bash output is not pasted wholesale; observations carry the current session `outputTail` plus log paths and offsets.
+The adapter encodes the messages prepared by the orchestrator. There is no special persistent User main message in this harness. User input is part of the Environment; `user_message_received` events are rendered into environment reminders and passed as `latest_reminder` messages. Large PTY output is not pasted wholesale; observations carry one terminal viewport `screen.text` plus a persisted log path.
 
 ## Pass 1: Generate Thinking
 
@@ -221,15 +220,20 @@ parsing so a provider-side suffix cannot poison continuation prompts.
 
 Allowed decision functions:
 
-- `bash`: PTY action tool call.
-- `stash_file`: staged file bytes tool call.
+- `terminal_write`: write exact text bytes to current PTY session.
+- `terminal_key`: send a terminal key to current PTY session.
+- `session_observe`: observe a PTY session as one terminal viewport screen.
+- `session_list`: list managed PTY sessions.
+- `session_focus`: set the current PTY session.
+- `session_interrupt`: interrupt current PTY session.
+- `session_restart`: restart current or specified PTY session.
+- `session_terminate`: terminate current or specified PTY session.
 - `io_wait`: internal wait request.
 
 Examples:
 
 ```text
-bash">
-<｜DSML｜parameter name="kind" string="true">write_text</｜DSML｜parameter>
+terminal_write">
 <｜DSML｜parameter name="expectedInputSeq" string="false">0</｜DSML｜parameter>
 <｜DSML｜parameter name="text" string="true">pwd && ls -la
 </｜DSML｜parameter>
@@ -256,7 +260,7 @@ Parsing steps:
 
 1. Trim whitespace.
 2. Extract the DSML invoke name and parameters.
-3. Validate function name is one of `bash`, `stash_file`, or `io_wait`.
+3. Validate function name is one of the catalog entries in [Model Visible Tool Catalog](model-visible-tool-catalog.md).
 4. Parse parameter values according to their `string` flag.
 5. Normalize into `ModelTurn`.
 6. Reject any extra assistant content before or after the single tool call.
@@ -264,11 +268,8 @@ Parsing steps:
 Normalization:
 
 ```text
-bash(args)
-  -> ModelTurn.tool_call with InternalToolCall(name="bash", arguments=args)
-
-stash_file(args)
-  -> ModelTurn.tool_call with InternalToolCall(name="stash_file", arguments=args)
+terminal/session tool(args)
+  -> ModelTurn.tool_call with InternalToolCall(name=<tool>, arguments=args)
 
 io_wait(args)
   -> ModelTurn.io_wait
@@ -334,8 +335,16 @@ Tool call normalization:
 ```ts
 type InternalToolCall = {
   id: string;
-  name: "bash" | "stash_file";
-  arguments: BashToolInput | StashFileInput;
+  name:
+    | "terminal_write"
+    | "terminal_key"
+    | "session_observe"
+    | "session_list"
+    | "session_focus"
+    | "session_interrupt"
+    | "session_restart"
+    | "session_terminate";
+  arguments: Record<string, unknown>;
   raw?: unknown;
 };
 ```
@@ -347,7 +356,7 @@ Decision generation can fail in normal model ways:
 - missing `<｜tool▁sep｜>`
 - unsupported function name
 - arguments are not valid JSON
-- function arguments do not match `bash` or `io_wait` schema
+- function arguments do not match the selected terminal/session tool or `io_wait` schema
 - extra assistant content appears before or after the single native tool call middle
 
 Parser-level failures become `ModelTurn.invalid_output`.
@@ -463,10 +472,10 @@ The tool definition provides:
 
 The decision grammar provides:
 
-- native decision function `bash`
+- native decision functions from [Model Visible Tool Catalog](model-visible-tool-catalog.md)
 - native decision function `io_wait`
-- special separator `<｜tool▁sep｜>`
-- JSON argument schemas for each decision function
+- DSML invoke/parameter frame syntax
+- JSON-compatible parameter schemas for each decision function
 
 The prompt should not include alternate historical APIs or examples that contradict the current path.
 

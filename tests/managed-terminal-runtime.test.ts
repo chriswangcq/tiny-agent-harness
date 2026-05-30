@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatPromptMarker } from "../src/application/managed-shell.js";
 import { ManagedTerminalRuntime } from "../src/bash/managed-terminal-runtime.js";
 import type { ForegroundInspector } from "../src/bash/managed-session.js";
-import { formatPromptMarker } from "../src/application/managed-shell.js";
 
 const ptyMock = vi.hoisted(() => {
   type DataHandler = (data: string) => void;
@@ -59,31 +59,32 @@ function makeRuntime(options: {
     defaultSessionId: "default",
     cwd: "/repo",
     promptNonce: "nonce",
-    actionLimits: {},
-    observationLimits: {
-      maxPreviewChars: 80,
-    },
+    screenRows: 24,
+    screenCols: 80,
     postWriteReadDelayMs: options.postWriteReadDelayMs ?? 0,
     startupReadDelayMs: options.startupReadDelayMs ?? 0,
-    nowIso: () => "2026-05-27T00:00:00.000Z",
-    monotonicMs: () => 1,
-    newId: (prefix) => `${prefix}-1`,
-    newNonce: () => "nonce",
     foregroundInspector: options.foregroundInspector ?? (() => null),
   });
 }
 
 describe("ManagedTerminalRuntime", () => {
-  it("creates a live managed PTY for status and observes later prompt output", async () => {
+  it("creates a live default session and observes prompt output as one screen", async () => {
     const port = makeRuntime().createRunPort();
 
-    const first = await port.execute({ action: { kind: "status" } });
+    const first = await port.execute({ request: { kind: "session_observe" } });
 
     expect(first).toMatchObject({
       result: "ok",
+      currentSession: "default",
+      observedSession: "default",
       terminal: {
         inputSeq: 0,
         alive: true,
+      },
+      screen: {
+        rows: 24,
+        cols: 80,
+        logRef: { path: "managed-pty://default" },
       },
     });
     expect(ptyMock.spawn).toHaveBeenCalledTimes(1);
@@ -97,7 +98,7 @@ describe("ManagedTerminalRuntime", () => {
       })}\n`,
     );
 
-    const second = await port.execute({ action: { kind: "status" } });
+    const second = await port.execute({ request: { kind: "session_observe" } });
 
     expect(second).toMatchObject({
       result: "ok",
@@ -107,80 +108,103 @@ describe("ManagedTerminalRuntime", () => {
           promptSeq: 1,
         },
       },
-      eventCount: 1,
       returnedToPrompt: true,
+      screen: {
+        logRef: { path: "managed-pty://default" },
+      },
     });
-    expect(second.terminal.foregroundProcess).toBeNull();
+    if ("terminal" in second) {
+      expect(second.terminal.foregroundProcess).toBeNull();
+    }
   });
 
   it("resolves foregroundProcess via injected inspector", async () => {
     const inspector = vi.fn((_pid: number) => "sleep");
     const runtime = makeRuntime({ foregroundInspector: inspector });
     const port = runtime.createRunPort();
-    const obs = await port.execute({ action: { kind: "status" } });
-    expect(obs.terminal.foregroundProcess).toBe("sleep");
+    const obs = await port.execute({ request: { kind: "session_observe" } });
+    expect("terminal" in obs && obs.terminal.foregroundProcess).toBe("sleep");
     expect(inspector).toHaveBeenCalledWith(99999);
   });
 
-  it("drains managed shell startup output before the first observation", async () => {
-    const port = makeRuntime({ startupReadDelayMs: 20 }).createRunPort();
-
-    const pending = port.execute({ action: { kind: "status" } });
-    setTimeout(() => {
-      ptyMock.spawned[0]?.emit(
-        [
-          "export TAH_PROMPT_NONCE='nonce'",
-          formatPromptMarker({
-            nonce: "nonce",
-            returnCode: 0,
-            cwd: "/repo",
-            promptSeq: 1,
-          }),
-          "",
-        ].join("\n"),
-      );
-    }, 5);
-
-    const observation = await pending;
-
-    expect(observation).toMatchObject({
-      result: "ok",
-      terminal: {
-        inputSeq: 1,
-        lastShellPrompt: {
-          cwd: "/repo",
-          promptSeq: 1,
-        },
-      },
-      eventCount: 0,
-      returnedToPrompt: false,
-    });
-    expect(observation.outputPreview).toBeUndefined();
-  });
-
-  it("writes write_text input through the managed PTY", async () => {
+  it("focuses sessions, lists them, and writes to the current session", async () => {
     const port = makeRuntime().createRunPort();
-    await port.execute({ action: { kind: "status" } });
+    await port.execute({ request: { kind: "session_observe" } });
 
-    const observation = await port.execute({
-      action: {
-        kind: "write_text",
+    const focus = await port.execute({
+      request: {
+        kind: "session_focus",
+        session: "build",
+        create: true,
+        cwd: "/repo/build",
+      },
+    });
+    const list = await port.execute({ request: { kind: "session_list" } });
+    const write = await port.execute({
+      request: {
+        kind: "terminal_write",
         expectedInputSeq: 0,
         text: "pwd\n",
       },
     });
 
-    expect(observation.result).toBe("ok");
-    expect(ptyMock.spawned[0]?.writes.at(-1)).toBe("pwd\n");
+    expect(focus).toMatchObject({
+      currentSession: "build",
+      observedSession: "build",
+      result: "ok",
+    });
+    expect(ptyMock.spawn).toHaveBeenCalledTimes(2);
+    expect(ptyMock.spawn).toHaveBeenLastCalledWith(
+      "/bin/bash",
+      ["--noprofile", "--norc", "-i"],
+      expect.objectContaining({ cwd: "/repo/build" }),
+    );
+    expect(list).toMatchObject({ currentSession: "build" });
+    if ("sessions" in list) {
+      expect(list.sessions.map((session) => session.session).sort()).toEqual([
+        "build",
+        "default",
+      ]);
+    }
+    expect(write).toMatchObject({ currentSession: "build", result: "ok" });
+    expect(ptyMock.spawned[1]?.writes.at(-1)).toBe("pwd\n");
   });
 
-  it("waits briefly after write_text so immediate PTY output lands in the observation", async () => {
+  it("observes a named session without changing focus", async () => {
+    const port = makeRuntime().createRunPort();
+    await port.execute({ request: { kind: "session_observe" } });
+    await port.execute({
+      request: {
+        kind: "session_focus",
+        session: "build",
+        create: true,
+      },
+    });
+    ptyMock.spawned[0]?.emit("default-output\n");
+
+    const observed = await port.execute({
+      request: {
+        kind: "session_observe",
+        session: "default",
+      },
+    });
+    const list = await port.execute({ request: { kind: "session_list" } });
+
+    expect(observed).toMatchObject({
+      currentSession: "build",
+      observedSession: "default",
+      screen: { text: expect.stringContaining("default-output") },
+    });
+    expect(list).toMatchObject({ currentSession: "build" });
+  });
+
+  it("waits briefly after terminal_write so immediate PTY output lands in screen.text", async () => {
     const port = makeRuntime({ postWriteReadDelayMs: 20 }).createRunPort();
-    await port.execute({ action: { kind: "status" } });
+    await port.execute({ request: { kind: "session_observe" } });
 
     const pending = port.execute({
-      action: {
-        kind: "write_text",
+      request: {
+        kind: "terminal_write",
         expectedInputSeq: 0,
         text: "pwd\n",
       },
@@ -193,20 +217,20 @@ describe("ManagedTerminalRuntime", () => {
 
     expect(observation).toMatchObject({
       result: "ok",
-      eventCount: 1,
       returnedToPrompt: false,
+      screen: {
+        text: expect.stringContaining("/repo"),
+      },
     });
-    expect(observation.outputPreview).toContain("/repo");
-    expect(observation.outputTail).toContain("/repo");
   });
 
-  it("keeps tail success output and prompt after noisy multiline PTY output", async () => {
+  it("keeps success output and prompt in screen.text after noisy multiline PTY output", async () => {
     const port = makeRuntime({ postWriteReadDelayMs: 20 }).createRunPort();
-    await port.execute({ action: { kind: "status" } });
+    await port.execute({ request: { kind: "session_observe" } });
 
     const pending = port.execute({
-      action: {
-        kind: "write_text",
+      request: {
+        kind: "terminal_write",
         expectedInputSeq: 0,
         text:
           "node dist/cli/main.js im send --channel default --kind status --text-stdin <<'IM'\n" +
@@ -234,29 +258,34 @@ describe("ManagedTerminalRuntime", () => {
 
     const observation = await pending;
 
-    expect(observation.eventCount).toBeGreaterThan(50);
-    expect(observation.returnedToPrompt).toBe(true);
-    expect("events" in observation).toBe(false);
-    expect(observation.outputTail).toContain("ok=true");
-    expect(observation.outputTail).toContain("id=agent-1");
-    expect(observation.outputTail).not.toContain("__TAH_PROMPT__");
+    expect(observation).toMatchObject({
+      returnedToPrompt: true,
+      screen: {
+        text: expect.stringContaining("ok=true"),
+      },
+    });
+    if ("screen" in observation) {
+      expect(observation.screen.text).toContain("id=agent-1");
+      expect(observation.screen.text).not.toContain("__TAH_PROMPT__");
+      expect(["output", "Tail"].join("") in observation).toBe(false);
+    }
   });
 
-  it("paces large write_text input into PTY chunks without dropping bytes", async () => {
+  it("paces large terminal_write input into PTY chunks without dropping bytes", async () => {
     const port = makeRuntime().createRunPort();
-    await port.execute({ action: { kind: "status" } });
+    await port.execute({ request: { kind: "session_observe" } });
     const largeText = `${"a".repeat(1300)}${"你".repeat(300)}\n`;
 
     const observation = await port.execute({
-      action: {
-        kind: "write_text",
+      request: {
+        kind: "terminal_write",
         expectedInputSeq: 0,
         text: largeText,
       },
     });
 
     const writes = ptyMock.spawned[0]?.writes.slice(1) ?? [];
-    expect(observation.result).toBe("ok");
+    expect(observation).toMatchObject({ result: "ok" });
     expect(writes.length).toBeGreaterThan(1);
     expect(writes.join("")).toBe(largeText);
     for (const chunk of writes) {
@@ -264,39 +293,13 @@ describe("ManagedTerminalRuntime", () => {
     }
   });
 
-  it("uses protected pacing for heredocs", async () => {
-    const port = makeRuntime().createRunPort();
-    await port.execute({ action: { kind: "status" } });
-    const heredoc =
-      "cat > note.md <<'EOF'\n" +
-      `${"中文✅".repeat(60)}\n` +
-      "EOF\n";
-
-    const observation = await port.execute({
-      action: {
-        kind: "write_text",
-        expectedInputSeq: 0,
-        text: heredoc,
-      },
-    });
-
-    const writes = ptyMock.spawned[0]?.writes.slice(1) ?? [];
-    expect(observation.result).toBe("ok");
-    expect(Buffer.byteLength(heredoc, "utf8")).toBeLessThanOrEqual(1024);
-    expect(writes.length).toBeGreaterThan(1);
-    expect(writes.join("")).toBe(heredoc);
-    for (const chunk of writes) {
-      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(128);
-    }
-  });
-
   it("restarts by killing the old PTY and spawning a fresh shell", async () => {
     const port = makeRuntime().createRunPort();
-    await port.execute({ action: { kind: "status" } });
+    await port.execute({ request: { kind: "session_observe" } });
 
     const observation = await port.execute({
-      action: {
-        kind: "restart",
+      request: {
+        kind: "session_restart",
         cwd: "/tmp",
       },
     });

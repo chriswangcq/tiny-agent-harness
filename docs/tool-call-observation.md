@@ -1,15 +1,17 @@
 # Tool Call And Observation Design
 
-当前 harness 的 tool call 协议是 PTY-first：模型通过 `bash` 发 PTY action，harness 校验 inputSeq 后写入真实 PTY 或执行 PTY control；所有 `write_text` 输入由 runtime 保护性 pacing。模型也可以通过 `stash_file` 把完整 bytes 暂存在 harness state，再通过 PTY 内 `file materialize` CLI 显式落盘，或通过 `file cat` CLI 将 bytes 输出到 stdin consumer。观察结果统一为 `PtyObservation` 或 `AgentObservation`。
+当前目标协议仍然是 PTY-first，但模型不再看到一个混杂的 `bash` action union。可见动作拆成 terminal input tools 和 session management tools。所有 PTY observation 统一成「人类看一眼终端当前屏幕」的 bounded glance。
 
 ## Design Principles
 
-1. 模型可见的外部动作面只有 `bash` 和 `stash_file`。
-2. `bash` arguments 必须是 PTY action，不存在命令级双轨。
-3. PTY 是字节和按键流，不是 shell line API；Enter 是 `\n` 或 `key: "enter"`。
-4. 文本 payload 可以通过 PTY/heredoc 完成；runtime 会对所有 `write_text` 输入做保护性 pacing。`stash_file` 仅作为显式 staged bytes 的可选通道；不存在 frame action 或 receiver 协议。
-5. Tool review 仍位于执行前；demo 模式可以默认 approve。
-6. Observation 返回 terminal facts、action summary、`outputTail`、`returnedToPrompt`、log ref 和错误码；完整输出留在 session log。
+1. 模型可见工具见 [Model Visible Tool Catalog](model-visible-tool-catalog.md)。
+2. PTY 是字节和按键流，不是 shell line API；Enter 是 `\n` 或 `terminal_key({ key: "enter" })`。
+3. `terminal_write` / `terminal_key` 没有 `session` 参数，只能写 current session。
+4. `session_focus` 是改变 current session 的唯一常规入口。
+5. `session_observe` 返回 current 或指定 session 的一屏 terminal viewport，不改变 current session。
+6. Observation 不是日志分页 API。完整输出写入 session log；需要更多历史时，agent 使用 bash 原生命令读取日志。
+7. Tool review 仍位于执行前；demo 模式可以默认 approve。
+8. `io_wait` 是 run state decision，不是 shell 命令，也不是 PTY control。
 
 ## FIM Decision Tool Call Protocol
 
@@ -33,96 +35,119 @@ Decision pass 由 harness 预填：
 
 允许的 function name：
 
-- `bash`
+- `terminal_write`
+- `terminal_key`
+- `session_observe`
+- `session_list`
+- `session_focus`
+- `session_interrupt`
+- `session_restart`
+- `session_terminate`
 - `io_wait`
 
-## Bash PTY Actions
+## Current Session Rule
 
-Example shell command submission:
+`currentSession` 是 TerminalRuntime 的显式状态，不是每次 tool call 的隐式猜测。
+
+```text
+session_focus("server")
+  -> currentSession = "server"
+  -> returns screen for server
+
+terminal_write("npm test\n")
+  -> writes to currentSession only
+  -> no session argument exists
+
+session_observe("default")
+  -> observes default
+  -> currentSession remains server
+```
+
+这条规则避免 agent 看着 `default` 的 observation，却把输入发到 `server`。凡是会影响前台交互的输入，都必须先 focus，再拿到该 session 的最新 `inputSeq`。
+
+## Example Tool Calls
+
+Submit a shell command to current session:
 
 ```json
 {
-  "kind": "write_text",
-  "session": "default",
   "expectedInputSeq": 7,
   "text": "npm test\n"
 }
 ```
 
-Example key input:
+Send Enter to current session:
 
 ```json
 {
-  "kind": "key",
-  "session": "default",
   "expectedInputSeq": 8,
-  "key": "ctrl-c"
+  "key": "enter"
 }
 ```
 
-Example generated text file write:
+Observe another session without changing focus:
 
 ```json
 {
-  "kind": "write_text",
-  "session": "default",
+  "session": "server"
+}
+```
+
+Focus or create a session:
+
+```json
+{
+  "session": "test",
+  "create": true,
+  "cwd": "/repo"
+}
+```
+
+Generated text files should use normal shell syntax, usually a quoted heredoc through `terminal_write`:
+
+```json
+{
   "expectedInputSeq": 10,
-  "text": "cat > app.html <<'HTML'\\n<!doctype html>\\n<title>App</title>\\nHTML\\n"
+  "text": "cat > app.html <<'HTML'\n<!doctype html>\n<title>App</title>\nHTML\n"
 }
 ```
 
-Generated text files should use normal shell syntax, usually a quoted heredoc. The runtime protects every `write_text` with pacing, so the model should not manually chunk ordinary text. Poll until the prompt or a clear command result returns before sending the next command. `stash_file` is only the optional staged-bytes path.
-
-Example staged file write:
-
-```json
-{
-  "name": "app.html",
-  "content": "<!doctype html>\n<title>App</title>\n",
-  "encoding": "utf8"
-}
-```
-
-The returned observation includes a `stashId`. The next bash action should run:
-
-```bash
-node dist/cli/main.js file materialize <stashId> app.html
-```
-
-For one-shot stdin consumers, the next bash action can instead stream bytes:
-
-```bash
-node dist/cli/main.js file cat <stashId> | bash
-node dist/cli/main.js im send --channel default --kind status --text-stdin < <(node dist/cli/main.js file cat <stashId>)
-```
+There is no file-staging side channel in this target design. Ordinary generated files, IM replies, reports, and scripts are all created through shell-native flows.
 
 ## Observation Shape
 
+All PTY-observing tools return `TerminalObservation`.
+
 ```ts
-type PtyObservation = {
-  session: string;
-  terminal: TerminalState;
-  action: PtyActionSummary;
+type TerminalObservation = {
+  currentSession: string;
+  observedSession: string;
   result: "ok" | "rejected" | "timeout" | "interrupted";
-  eventCount: number;
+  terminal: TerminalFacts;
   returnedToPrompt: boolean;
-  outputTail?: string;
-  outputTailBytes?: number;
-  newOutputBytes?: number;
-  outputPreview?: string;
-  logRef?: string;
-  errorCode?: TerminalErrorCode;
+  screen: PtyScreen;
   message?: string;
+  errorCode?: TerminalErrorCode;
+};
+
+type PtyScreen = {
+  text: string;
+  rows: number;
+  cols: number;
+  truncated: boolean;
+  logRef?: {
+    path: string;
+  };
 };
 ```
 
-The referenced `TerminalState` is the durable terminal fact surface:
+The referenced `TerminalFacts` is the durable terminal fact surface:
 
 ```ts
-type TerminalState = {
+type TerminalFacts = {
   inputSeq: number;
   alive: boolean;
-  syncStatus: TerminalSyncStatus;
+  syncStatus: "trusted" | "unsynced";
   lastShellPrompt: ShellPromptSnapshot | null;
   lastContinuationPrompt: ContinuationPromptSnapshot | null;
   termination: TerminalTermination | null;
@@ -130,25 +155,58 @@ type TerminalState = {
 };
 ```
 
-`PtyObservation` is a bounded terminal glance for the next model prompt, not the full PTY log. `outputTail` is the primary model-facing PTY view: after `write_text` or `key`, the managed runtime waits briefly, then returns the current session's last 2K characters; `poll` and `status` return the same current-session tail without writing input. `outputPreview` is kept as a compatibility alias for the same tail. `returnedToPrompt` is the compact success signal for "the last read observed a shell prompt"; it is more important than raw event details for ordinary command sequencing. Full output stays in the session log; `eventCount`, `newOutputBytes`, and `logRef` show when more output exists. Serialized assistant tool-call history is different: historical assistant tool-call arguments are replayed exactly as generated, including large `write_text.text` and `stash_file.content` fields.
+`screen.text` is a terminal viewport snapshot, not a log tail. It should fit at most one configured terminal screen, such as `rows=30`, `cols=120`. The implementation may keep an internal scrollback buffer, but the model-facing observation should not expose arbitrary offsets, `sinceOutputOffset`, `newOutputBytes`, or page-sized history.
 
-`foregroundProcess` is a best-effort fact captured from the PTY's foreground process group when the session is loaded. It may be `null`, and it should be treated as a clue for whether the next bytes might reach `sleep`, `vim`, `python`, `ssh`, `cat`, or the shell, not as a security boundary or a perfect routing oracle.
+`returnedToPrompt` is the compact success signal for normal command sequencing: it means the latest observation saw a shell or continuation prompt. The agent should still inspect `screen.text` and `terminal.lastShellPrompt` when deciding the next input.
 
-After `write_text` or `key` input, the managed runtime waits about 100ms before reading the PTY and building this observation. The delay is intentionally small: it captures immediate terminal echo and fast command output without turning every action into a long wait. Longer-running commands still require `poll` or `io_wait`.
+`screen.truncated` means the screen is not the full output history. The agent should read `screen.logRef.path` with bash-native commands when it needs more context:
 
-New managed PTY sessions drain the shell initialization prompt before the first model-visible observation when it arrives within the startup window. Prompt parsing also tolerates terminal-control residue such as Ctrl-D echo/backspace before a trusted prompt marker, so prompt return is not mistaken for ordinary output.
+```bash
+tail -n 200 .tiny-agent/sessions/default/output.log
+rg "error|failed" .tiny-agent/sessions/default/output.log
+sed -n '120,180p' .tiny-agent/sessions/default/output.log
+```
 
-For user-visible IM replies, a `write_text` observation without a shell prompt is not proof that the reply was sent. The agent must poll until the prompt returns and should use `im send --text-stdin`. A quoted heredoc is valid for normal text replies; input redirection and `file cat` process substitution are also valid when they make the command simpler.
+If inspecting a log would disturb a live foreground process, the agent should `session_focus` a scratch/default shell first, then run the log-inspection command there.
 
-Rejected input is recoverable. For `INPUT_SEQ_MISMATCH`, the terminal service tries to read any pending PTY output first, save the refreshed snapshot, and return a rejection carrying the latest `inputSeq` and prompt facts. The model should inspect the terminal facts and PTY output, then choose `poll`, `status`, `interrupt`, `terminate`, `restart`, or a corrected inputSeq-guarded action.
+## Return Timing
+
+`terminal_write`, `terminal_key`, and `session_interrupt` wait up to `waitForReturnMs` for a shell or continuation prompt. Default is 30 seconds.
+
+Timeout means:
+
+```text
+the action was sent,
+no prompt returned before the wait budget,
+the foreground process is still allowed to run,
+the agent should use session_observe, session_interrupt, session_restart, or io_wait next.
+```
+
+Timeout never kills the PTY process. It only releases the agent loop from focusing on that action.
+
+## Input Sequence
+
+Write-like and foreground-impacting actions require `expectedInputSeq`.
+
+```text
+terminal_write
+terminal_key
+session_interrupt
+```
+
+If `expectedInputSeq` is stale, the action is rejected before writing to the PTY. The rejection should include a fresh one-screen observation with the latest `terminal.inputSeq` whenever possible.
+
+`session_observe`, `session_list`, `session_focus`, `session_restart`, and `session_terminate` do not need `expectedInputSeq` because they either do not send foreground bytes or intentionally reset/terminate a PTY.
 
 ## Current Execution Path
 
 ```text
-ModelTurn(tool_call bash|stash_file)
+ModelTurn(tool_call terminal_* | session_* | io_wait)
   -> ToolCallValidator
   -> ToolReviewer
   -> RunOrchestrator
-  -> TerminalPort | StashFileStore
-  -> PtyObservation | AgentObservation
+  -> TerminalPort | Environment.waitFor
+  -> TerminalObservation | AgentObservation
 ```
+
+`io_wait` observations remain synthetic `AgentObservation` entries. PTY screen observations remain bounded and human-aligned.

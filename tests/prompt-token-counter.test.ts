@@ -14,8 +14,8 @@ describe("prompt token counting helpers", () => {
       {
         role: "assistant_tool_call",
         toolCallId: "call-1",
-        name: "bash",
-        arguments: { kind: "poll" },
+        name: "session_observe",
+        arguments: {},
       },
       {
         role: "tool_result",

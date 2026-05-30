@@ -2,27 +2,43 @@ import { describe, expect, it } from "vitest";
 import { toCompactTerminalHistoryEntry } from "../src/application/terminal-history.js";
 
 describe("terminal compact history helper", () => {
-  it("returns the current run-history observation shape", () => {
+  it("returns the current terminal observation shape", () => {
     const entry = toCompactTerminalHistoryEntry({
-      session: "default",
+      currentSession: "default",
+      observedSession: "default",
       result: "ok",
-      action: { kind: "status" },
+      request: "session_observe",
+      screen: {
+        text: "ready",
+        rows: 24,
+        cols: 80,
+        truncated: false,
+        logRef: { path: "managed-pty://default" },
+      },
     });
 
     expect(entry.type).toBe("observation");
     expect(entry.observation).toMatchObject({
-      session: "default",
+      currentSession: "default",
+      observedSession: "default",
       result: "ok",
-      action: { kind: "status" },
+      request: "session_observe",
+      screen: {
+        text: "ready",
+        logRef: { path: "managed-pty://default" },
+      },
     });
   });
 
-  it("redacts payload-like fields before history storage", () => {
+  it("redacts terminal_write payload-like fields before history storage", () => {
     const entry = toCompactTerminalHistoryEntry(
       {
-        session: "default",
-        action: {
-          kind: "write_text",
+        currentSession: "default",
+        observedSession: "default",
+        result: "ok",
+        request: "terminal_write",
+        requestPayload: {
+          kind: "terminal_write",
           text: `${"a".repeat(512)}\n`,
         },
         fullOutput: "full output should not survive",
@@ -37,10 +53,13 @@ describe("terminal compact history helper", () => {
     expect(entry).toEqual({
       type: "observation",
       observation: {
-        session: "default",
-        action: {
-          kind: "write_text",
-          text: "[redacted write_text payload 513 bytes]",
+        currentSession: "default",
+        observedSession: "default",
+        result: "ok",
+        request: "terminal_write",
+        requestPayload: {
+          kind: "terminal_write",
+          text: "[redacted terminal_write payload 513 bytes]",
         },
         fullOutput: "[redacted]",
         nested: {

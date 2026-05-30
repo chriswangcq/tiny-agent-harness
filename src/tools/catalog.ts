@@ -1,165 +1,199 @@
-import type { ToolDefinition, JsonSchema } from "../types/index.js";
+import type { JsonSchema, ToolDefinition } from "../types/index.js";
 
-// ---------------------------------------------------------------------------
-// Bash Tool Input JSON Schema (PTY action variants)
-// ---------------------------------------------------------------------------
+const ExpectedInputSeqProperty: JsonSchema = {
+  type: "integer",
+  minimum: 0,
+  description:
+    "The current terminal.inputSeq observed before choosing this input action.",
+};
 
-const SessionProperty = {
+const WaitForReturnMsProperty: JsonSchema = {
+  type: "integer",
+  minimum: 0,
+  description:
+    "Optional maximum time to stay focused waiting for the terminal to return to a prompt.",
+};
+
+const SessionProperty: JsonSchema = {
   type: "string",
-  description: "Optional persistent PTY session id. Defaults to default when omitted.",
+  minLength: 1,
+  description: "Persistent PTY session id.",
 };
 
-const ExpectedInputSeqProperty = {
-  type: "number",
-  description:
-    "Terminal inputSeq observed before choosing this input action. Stale sequences are rejected.",
+const ReasonProperty: JsonSchema = {
+  type: "string",
+  minLength: 1,
+  description: "Short reason for the session control operation.",
 };
 
-const BashToolInputSchema: JsonSchema = {
+const CwdProperty: JsonSchema = {
+  type: "string",
+  minLength: 1,
+  description: "Working directory for a newly created or restarted session.",
+};
+
+const terminalWriteSchema: JsonSchema = {
   type: "object",
-  oneOf: [
-    {
-      title: "PtyWriteTextAction",
-      required: ["kind", "expectedInputSeq", "text"],
-      properties: {
-        kind: { const: "write_text" },
-        session: SessionProperty,
-        expectedInputSeq: ExpectedInputSeqProperty,
-        text: {
-          type: "string",
-          description:
-            "Text bytes to write to the PTY. Include newline explicitly or use key enter.",
-        },
-      },
-      additionalProperties: false,
-    },
-    {
-      title: "PtyKeyAction",
-      required: ["kind", "expectedInputSeq", "key"],
-      properties: {
-        kind: { const: "key" },
-        session: SessionProperty,
-        expectedInputSeq: ExpectedInputSeqProperty,
-        key: {
-          enum: ["enter", "ctrl-c", "ctrl-d", "escape", "tab", "up", "down"],
-        },
-      },
-      additionalProperties: false,
-    },
-    {
-      title: "PtyPollAction",
-      required: ["kind"],
-      properties: {
-        kind: { const: "poll" },
-        session: SessionProperty,
-        sinceSeq: { type: "number" },
-      },
-      additionalProperties: false,
-    },
-    {
-      title: "PtyStatusAction",
-      required: ["kind"],
-      properties: {
-        kind: { const: "status" },
-        session: SessionProperty,
-      },
-      additionalProperties: false,
-    },
-    {
-      title: "PtyInterruptAction",
-      required: ["kind"],
-      properties: {
-        kind: { const: "interrupt" },
-        session: SessionProperty,
-        expectedInputSeq: ExpectedInputSeqProperty,
-      },
-      additionalProperties: false,
-    },
-    {
-      title: "PtyTerminateAction",
-      required: ["kind"],
-      properties: {
-        kind: { const: "terminate" },
-        session: SessionProperty,
-      },
-      additionalProperties: false,
-    },
-    {
-      title: "PtyRestartAction",
-      required: ["kind"],
-      properties: {
-        kind: { const: "restart" },
-        session: SessionProperty,
-        cwd: { type: "string" },
-      },
-      additionalProperties: false,
-    },
-  ],
-};
-
-// ---------------------------------------------------------------------------
-// Tool Definition constant
-// ---------------------------------------------------------------------------
-
-export const BASH_TOOL_DEFINITION: ToolDefinition = {
-  name: "bash",
-  description:
-    "Operate a persistent PTY session with inputSeq-guarded actions. " +
-    "This is a pure PTY interface: write_text writes exact bytes to the terminal and never appends Enter for you; include \\n explicitly or use key enter. All write_text input is protected-paced by the runtime at about 128 bytes per chunk with a small delay so interactive bash can keep up. Do not manually split, throttle, or sleep to protect PTY input. " +
-    "After write_text/key input, the runtime waits about 100ms before glancing at the PTY. bash observations expose outputTail, the current session's last 2K characters, as the primary terminal view. poll/status refresh the same terminal tail without writing input. " +
-    "Use key only for terminal keys such as enter, ctrl-c, ctrl-d, escape, tab, up, and down. " +
-    "Use poll/status to observe and interrupt/terminate/restart to recover. The runtime reports terminal facts such as lastShellPrompt, lastContinuationPrompt, syncStatus, alive, and inputSeq; it does not infer whether shell, Python, ssh, cat, vim, or another foreground program should receive the next bytes. The agent must inspect the PTY output and terminal facts before deciding what to type. " +
-    "Every write_text/key action must include the latest terminal.inputSeq from the prior observation. The sequence only prevents stale input; it is not a foreground process claim. " +
-    "Use normal shell syntax for textual payloads. Quoted shell heredocs are the default for generated files, code, HTML, Markdown, JSON, and multiline messages; choose a delimiter that does not appear alone in the payload. Avoid using PTY text for binary data or giant single-line/minified payloads; use line-broken text when possible. stash_file is not required for ordinary textual heredocs; use it only when explicit staged bytes are useful, then materialize with `node dist/cli/main.js file materialize ...` or stream with `node dist/cli/main.js file cat ...`. " +
-    "After any multiline command or stdin flow, poll until the shell prompt or a clear command result returns before sending the next command. " +
-    "For user-visible IM replies, use `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin`. A quoted heredoc is the normal form, including for Markdown, Chinese, emoji, and tables, for example `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin <<'IM'\\nDone.\\nIM\\n`. Input redirection such as `< reply.md` and process substitution with `file cat` are also valid when they make the command simpler. Do not use `im send --text` from the agent. " +
-    "Runtime pacing protects every write_text input. " +
-    "Historical assistant tool-call arguments are serialized exactly as generated. PTY observations remain bounded summaries; use outputTail first, terminal facts second, returnedToPrompt to tell whether the latest observation saw a shell prompt, and eventCount/logRef only for debugging or fetching more terminal history. " +
-    "Do not invent frame actions, side-channel payload protocols, or command-shaped bash payloads.",
-  inputSchema: BashToolInputSchema,
-};
-
-const StashFileInputSchema: JsonSchema = {
-  type: "object",
-  required: ["content"],
+  required: ["expectedInputSeq", "text"],
   properties: {
-    name: {
+    expectedInputSeq: ExpectedInputSeqProperty,
+    text: {
       type: "string",
       description:
-        "Optional filename hint, for example snake.html. This does not write the target file.",
+        "Exact bytes to write to the current terminal session. It does not append Enter.",
     },
-    content: {
-      type: "string",
+    waitForReturnMs: WaitForReturnMsProperty,
+  },
+  additionalProperties: false,
+};
+
+const terminalKeySchema: JsonSchema = {
+  type: "object",
+  required: ["expectedInputSeq", "key"],
+  properties: {
+    expectedInputSeq: ExpectedInputSeqProperty,
+    key: {
+      enum: ["enter", "ctrl-d", "escape", "tab", "up", "down", "left", "right"],
       description:
-        "Complete file content to stash in harness state. Use stash_file only when you explicitly want staged bytes outside the PTY command stream.",
+        "A terminal key sent to the current session. Use session_interrupt for Ctrl-C.",
     },
-    encoding: {
-      type: "string",
-      enum: ["utf8", "base64"],
-      description: "How to decode content into bytes. Defaults to utf8.",
-    },
-    description: {
-      type: "string",
-      description: "Optional short note describing the stashed file.",
+    waitForReturnMs: WaitForReturnMsProperty,
+  },
+  additionalProperties: false,
+};
+
+const sessionObserveSchema: JsonSchema = {
+  type: "object",
+  properties: {
+    session: {
+      ...SessionProperty,
+      description:
+        "Optional PTY session id to observe without changing the current session.",
     },
   },
   additionalProperties: false,
 };
 
-export const STASH_FILE_TOOL_DEFINITION: ToolDefinition = {
-  name: "stash_file",
-  description:
-    "Stage complete file bytes in harness-managed state without writing the workspace. " +
-    "Use this only when the agent explicitly needs staged bytes outside the PTY command stream, such as binary or opaque payloads. " +
-    "The tool returns a short stashId, byte count, a materialize command, and a cat command. After it succeeds, use bash to run the returned `node dist/cli/main.js file materialize ...` command for filesystem writes, or `node dist/cli/main.js file cat ...` to stream the bytes into a stdin consumer.",
-  inputSchema: StashFileInputSchema,
+const sessionListSchema: JsonSchema = {
+  type: "object",
+  properties: {},
+  additionalProperties: false,
 };
 
-// ---------------------------------------------------------------------------
-// Static Tool Catalog
-// ---------------------------------------------------------------------------
+const sessionFocusSchema: JsonSchema = {
+  type: "object",
+  required: ["session"],
+  properties: {
+    session: SessionProperty,
+    create: {
+      type: "boolean",
+      description: "Create the session if it does not exist.",
+    },
+    cwd: CwdProperty,
+  },
+  additionalProperties: false,
+};
+
+const sessionInterruptSchema: JsonSchema = {
+  type: "object",
+  required: ["expectedInputSeq"],
+  properties: {
+    expectedInputSeq: ExpectedInputSeqProperty,
+    waitForReturnMs: WaitForReturnMsProperty,
+  },
+  additionalProperties: false,
+};
+
+const sessionRestartSchema: JsonSchema = {
+  type: "object",
+  properties: {
+    session: {
+      ...SessionProperty,
+      description:
+        "Optional PTY session id. Defaults to the current session when omitted.",
+    },
+    cwd: CwdProperty,
+    reason: ReasonProperty,
+  },
+  additionalProperties: false,
+};
+
+const sessionTerminateSchema: JsonSchema = {
+  type: "object",
+  properties: {
+    session: {
+      ...SessionProperty,
+      description:
+        "Optional PTY session id. Defaults to the current session when omitted.",
+    },
+    reason: ReasonProperty,
+  },
+  additionalProperties: false,
+};
+
+export const TERMINAL_WRITE_TOOL_DEFINITION: ToolDefinition = {
+  name: "terminal_write",
+  description:
+    "Write exact text to the current PTY session. This never appends Enter; include a newline or use terminal_key with enter. The observation returns one terminal screen and the latest terminal.inputSeq.",
+  inputSchema: terminalWriteSchema,
+};
+
+export const TERMINAL_KEY_TOOL_DEFINITION: ToolDefinition = {
+  name: "terminal_key",
+  description:
+    "Send a non-interrupt terminal key to the current PTY session. Use session_interrupt for Ctrl-C. The observation returns one terminal screen and the latest terminal.inputSeq.",
+  inputSchema: terminalKeySchema,
+};
+
+export const SESSION_OBSERVE_TOOL_DEFINITION: ToolDefinition = {
+  name: "session_observe",
+  description:
+    "Observe a PTY session without sending input. Omit session to observe the current session. The observation is one terminal screen plus terminal facts.",
+  inputSchema: sessionObserveSchema,
+};
+
+export const SESSION_LIST_TOOL_DEFINITION: ToolDefinition = {
+  name: "session_list",
+  description:
+    "List known PTY sessions and identify the current session.",
+  inputSchema: sessionListSchema,
+};
+
+export const SESSION_FOCUS_TOOL_DEFINITION: ToolDefinition = {
+  name: "session_focus",
+  description:
+    "Set the current PTY session. Optionally create it with an explicit cwd.",
+  inputSchema: sessionFocusSchema,
+};
+
+export const SESSION_INTERRUPT_TOOL_DEFINITION: ToolDefinition = {
+  name: "session_interrupt",
+  description:
+    "Send Ctrl-C to the current PTY session using the latest expectedInputSeq guard.",
+  inputSchema: sessionInterruptSchema,
+};
+
+export const SESSION_RESTART_TOOL_DEFINITION: ToolDefinition = {
+  name: "session_restart",
+  description:
+    "Restart a PTY session. Omit session to restart the current session.",
+  inputSchema: sessionRestartSchema,
+};
+
+export const SESSION_TERMINATE_TOOL_DEFINITION: ToolDefinition = {
+  name: "session_terminate",
+  description:
+    "Terminate a PTY session. Omit session to terminate the current session.",
+  inputSchema: sessionTerminateSchema,
+};
 
 export const STATIC_TOOL_CATALOG = [
-  BASH_TOOL_DEFINITION,
-  STASH_FILE_TOOL_DEFINITION,
+  TERMINAL_WRITE_TOOL_DEFINITION,
+  TERMINAL_KEY_TOOL_DEFINITION,
+  SESSION_OBSERVE_TOOL_DEFINITION,
+  SESSION_LIST_TOOL_DEFINITION,
+  SESSION_FOCUS_TOOL_DEFINITION,
+  SESSION_INTERRUPT_TOOL_DEFINITION,
+  SESSION_RESTART_TOOL_DEFINITION,
+  SESSION_TERMINATE_TOOL_DEFINITION,
 ] as const;

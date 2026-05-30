@@ -9,8 +9,8 @@ Skill 不是 harness 内置工具，也不是模型可见的第二套 tool regis
 第一版仍然坚持：
 
 ```text
-Model visible action surface: bash PTY actions only
-External capabilities: called as CLI commands through write_text when the terminal output shows a shell prompt
+Model visible action surface: terminal/session PTY tools only
+External capabilities: called as CLI commands through terminal_write when the current session screen shows a shell prompt
 ```
 
 所以 skill 的入口是一个普通命令：
@@ -28,14 +28,14 @@ Agent 如果想使用 skill，本质上是在 PTY 里确认 shell prompt 后执�
 ```text
 Skill CLI
   owns: skill discovery, skill metadata, skill command invocation
-  does not own: agent loop, model prompting, tool review, bash session runtime
+  does not own: agent loop, model prompting, tool review, PTY session runtime
 
 ManagedTerminalRuntime
   owns: running `skill ...` as a shell command
   owns: return code, incremental output, session log
 
 RunOrchestrator
-  sees: one normal bash PTY action
+  sees: one normal terminal_write action
   does not know: whether the command is skill, mcp, memory, test, or git
 ```
 
@@ -47,7 +47,7 @@ RunOrchestrator
 
 - 把 skill 注册成 provider-native tool
 - 在 harness 里加载 skill 代码
-- 让 skill 绕过 bash session manager
+- 让 skill 绕过 PTY session manager
 - 让 skill 绕过 tool review
 - 自动安装远程 skill
 - 让模型直接调用 `skill` SDK
@@ -417,10 +417,10 @@ skill run coding-review --json '{"path":"src"}'
 事件流是：
 
 ```text
-bash PTY action starts
-skill process runs inside the bash session
-bash PTY observation returns or requires polling
-ManagedTerminalRuntime returns PtyObservation through the tool-result path
+terminal_write action starts
+skill process runs inside the current PTY session
+terminal screen observation returns or requires session_observe
+ManagedTerminalRuntime returns TerminalObservation through the tool-result path
 Skill CLI state keeps skillRun status as running until close
 next agent loop renders active skill run as persistent reminder
 ```
@@ -530,7 +530,7 @@ skill accept <proposal-id> --json
 推荐只在工具说明里告诉 agent：
 
 ```text
-All external capabilities are available through PTY actions after the agent has inspected the terminal output.
+All external capabilities are available through terminal/session tool calls after the agent has inspected the terminal output.
 Use `skill list --json`, `skill search <query> --json`, and `skill show <name> --json`
 to discover reusable local skills.
 Run a skill with `skill run <name> --json '<args>'`.

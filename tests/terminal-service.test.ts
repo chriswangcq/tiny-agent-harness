@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { formatPromptMarker } from "../src/application/managed-shell.js";
 import { TerminalService } from "../src/application/terminal-service.js";
 import type {
+  PtyReadResult,
   TerminalRuntimeSnapshot,
   TerminalServiceConfig,
   TerminalServicePorts,
 } from "../src/application/terminal-ports.js";
 import { createTerminalState } from "../src/terminal/state.js";
-import { formatPromptMarker } from "../src/application/managed-shell.js";
-import type { TerminalState } from "../src/terminal/index.js";
+import type { TerminalScreen, TerminalState } from "../src/terminal/index.js";
 
 function terminal(inputSeq = 1): TerminalState {
   return createTerminalState({
@@ -18,11 +19,24 @@ function terminal(inputSeq = 1): TerminalState {
   });
 }
 
-function makeSnapshot(state: TerminalState = terminal()): TerminalRuntimeSnapshot {
+function makeSnapshot(
+  session = "default",
+  state: TerminalState = terminal(),
+): TerminalRuntimeSnapshot {
   return {
-    session: "default",
+    session,
     terminal: state,
     parserState: { pending: "", totalBytes: 0 },
+  };
+}
+
+function makeScreen(session: string, text: string): TerminalScreen {
+  return {
+    text,
+    rows: 24,
+    cols: 80,
+    truncated: false,
+    logRef: { path: `.tiny-agent/sessions/${session}/output.log` },
   };
 }
 
@@ -30,228 +44,281 @@ function makeConfig(): TerminalServiceConfig {
   return {
     defaultSessionId: "default",
     promptNonce: "nonce",
-    actionLimits: {},
-    observationLimits: {
-      maxPreviewChars: 80,
-    },
+    screenRows: 24,
+    screenCols: 80,
+  };
+}
+
+function makeRead(session: string, chunk: string): PtyReadResult {
+  return {
+    chunk,
+    logRef: { kind: "log", ref: `.tiny-agent/sessions/${session}/output.log` },
+    screen: makeScreen(session, chunk),
   };
 }
 
 function makePorts(options: {
-  snapshot?: TerminalRuntimeSnapshot | null;
-  readChunk?: string;
+  currentSession?: string;
+  snapshots?: TerminalRuntimeSnapshot[];
+  reads?: Record<string, string[]>;
 } = {}): {
   ports: TerminalServicePorts;
-  writes: string[];
+  current: () => string;
+  writes: Array<{ session: string; data: string }>;
   saves: TerminalRuntimeSnapshot[];
-  logs: unknown[];
+  restarts: Array<{ session: string; cwd?: string }>;
+  interrupts: string[];
+  terminates: string[];
 } {
-  const writes: string[] = [];
+  let currentSession = options.currentSession ?? "default";
+  const snapshots = new Map<string, TerminalRuntimeSnapshot>();
+  for (const snapshot of options.snapshots ?? [makeSnapshot()]) {
+    snapshots.set(snapshot.session, snapshot);
+  }
+  const reads = new Map<string, string[]>();
+  for (const [session, chunks] of Object.entries(options.reads ?? {})) {
+    reads.set(session, [...chunks]);
+  }
+
+  const writes: Array<{ session: string; data: string }> = [];
   const saves: TerminalRuntimeSnapshot[] = [];
-  const logs: unknown[] = [];
+  const restarts: Array<{ session: string; cwd?: string }> = [];
+  const interrupts: string[] = [];
+  const terminates: string[] = [];
 
   return {
+    current: () => currentSession,
     writes,
     saves,
-    logs,
+    restarts,
+    interrupts,
+    terminates,
     ports: {
-      clock: {
-        nowIso: () => "2026-05-27T00:00:00.000Z",
-        monotonicMs: () => 1,
-      },
-      ids: {
-        newId: (prefix) => `${prefix}-1`,
-        newNonce: () => "nonce",
-      },
       pty: {
-        write: async (_session, data) => {
-          writes.push(data);
+        write: async (session, data) => {
+          writes.push({ session, data });
         },
-        read: async () => ({
-          chunk: options.readChunk ?? "",
-          logRef: { kind: "log", ref: "log-1" },
-        }),
-        interrupt: async () => {},
-        terminate: async () => {},
-        restart: async () => makeSnapshot(terminal(0)),
+        read: async (session) => {
+          const chunk = reads.get(session)?.shift() ?? "";
+          return makeRead(session, chunk);
+        },
+        interrupt: async (session) => {
+          interrupts.push(session);
+        },
+        terminate: async (session) => {
+          terminates.push(session);
+        },
+        restart: async (session, restartOptions) => {
+          restarts.push({ session, cwd: restartOptions?.cwd });
+          const snapshot = makeSnapshot(session, terminal(0));
+          snapshots.set(session, snapshot);
+          return snapshot;
+        },
       },
       sessions: {
-        load: async () => options.snapshot ?? makeSnapshot(),
+        getCurrent: async () => currentSession,
+        setCurrent: async (session) => {
+          currentSession = session;
+        },
+        list: async () => [...snapshots.values()],
+        load: async (session) => snapshots.get(session) ?? null,
         save: async (snapshot) => {
+          snapshots.set(snapshot.session, snapshot);
           saves.push(snapshot);
         },
       },
       logger: {
-        event: (event) => {
-          logs.push(event);
-        },
+        event: () => {},
       },
     },
   };
 }
 
 describe("TerminalService", () => {
-  it("rejects stale input sequences and refreshes snapshot so the rejection carries the latest inputSeq", async () => {
-    const promptChunk = formatPromptMarker({
-      nonce: "nonce",
-      returnCode: 0,
-      cwd: "/repo",
-      promptSeq: 3,
-    }) + "\n";
-
+  it("writes terminal_write input to the current session and returns a screen observation", async () => {
+    const promptChunk =
+      "ok\n" +
+      formatPromptMarker({
+        nonce: "nonce",
+        returnCode: 0,
+        cwd: "/repo/next",
+        promptSeq: 2,
+      }) +
+      "\n";
     const { ports, writes, saves } = makePorts({
-      snapshot: makeSnapshot(terminal(2)),
-      readChunk: promptChunk,
+      currentSession: "work",
+      snapshots: [makeSnapshot("work", terminal(1))],
+      reads: { work: [promptChunk] },
     });
     const service = new TerminalService(ports, makeConfig());
 
     const observation = await service.handleAction({
-      kind: "write_text",
-      expectedInputSeq: 1,
-      text: "echo stale",
-    });
-
-    expect(observation).toMatchObject({
-      result: "rejected",
-      errorCode: "INPUT_SEQ_MISMATCH",
-      terminal: {
-        inputSeq: 3,
-        lastShellPrompt: {
-          cwd: "/repo",
-          promptSeq: 3,
-          lastReturnCode: 0,
-        },
-      },
-    });
-    expect(writes).toEqual([]);
-    // On mismatch the service reads latest output and saves the refreshed snapshot
-    // so the rejection carries the correct inputSeq.
-    expect(saves.length).toBe(1);
-    expect(saves[0].terminal.inputSeq).toBe(3);
-    expect(saves[0].terminal.lastShellPrompt).toMatchObject({
-      cwd: "/repo",
-      promptSeq: 3,
-      lastReturnCode: 0,
-    });
-    expect(saves[0].parserState.totalBytes).toBeGreaterThan(0);
-  });
-
-  it("writes input, parses prompt output, saves snapshot, and returns compact observation", async () => {
-    const { ports, writes, saves } = makePorts({
-      snapshot: makeSnapshot(terminal(1)),
-      readChunk: "__TAH_PROMPT__ nonce=nonce rc=0 cwd=%2Frepo%2Fnext seq=2\n",
-    });
-    const service = new TerminalService(ports, makeConfig());
-
-    const observation = await service.handleAction({
-      kind: "write_text",
+      kind: "terminal_write",
       expectedInputSeq: 1,
       text: "echo ok\n",
     });
 
-    expect(writes).toEqual(["echo ok\n"]);
+    expect(writes).toEqual([{ session: "work", data: "echo ok\n" }]);
     expect(saves).toHaveLength(1);
     expect(saves[0]?.terminal).toMatchObject({
       inputSeq: 2,
-      lastShellPrompt: {
-        cwd: "/repo/next",
-        promptSeq: 2,
-      },
+      lastShellPrompt: { cwd: "/repo/next", promptSeq: 2 },
     });
     expect(observation).toMatchObject({
+      currentSession: "work",
+      observedSession: "work",
+      request: "terminal_write",
       result: "ok",
-      terminal: {
-        inputSeq: 2,
-        lastShellPrompt: {
-          cwd: "/repo/next",
-          promptSeq: 2,
-        },
-      },
-      action: {
-        kind: "write_text",
-        preview: "echo ok\n",
-      },
-      eventCount: 1,
       returnedToPrompt: true,
-    });
-  });
-
-  it("surfaces partial PTY output without waiting for a newline", async () => {
-    const { ports, saves } = makePorts({
-      snapshot: makeSnapshot(terminal(1)),
-      readChunk: ">>> ",
-    });
-    const service = new TerminalService(ports, makeConfig());
-
-    const observation = await service.handleAction({
-      kind: "poll",
-    });
-
-    expect(saves[0]?.terminal.inputSeq).toBe(2);
-    expect(saves[0]?.parserState.pending).toBe(">>> ");
-    expect(observation).toMatchObject({
-      result: "ok",
-      terminal: {
-        inputSeq: 2,
+      screen: {
+        text: promptChunk,
+        logRef: { path: ".tiny-agent/sessions/work/output.log" },
       },
-      eventCount: 0,
-      returnedToPrompt: false,
-      outputPreview: ">>> ",
     });
+    expect(["output", "Tail"].join("") in observation).toBe(false);
+    expect(["output", "Preview"].join("") in observation).toBe(false);
   });
 
-  it("restarts through the PTY port and saves the fresh snapshot", async () => {
-    const restarted = makeSnapshot(terminal(0));
-    const { ports, saves } = makePorts({ snapshot: makeSnapshot(terminal(3)) });
-    let restartCall: unknown;
-    ports.pty.restart = async (session, options) => {
-      restartCall = { session, options };
-      return restarted;
-    };
+  it("rejects stale input sequences and refreshes the snapshot before reporting", async () => {
+    const promptChunk =
+      formatPromptMarker({
+        nonce: "nonce",
+        returnCode: 0,
+        cwd: "/repo",
+        promptSeq: 3,
+      }) + "\n";
+    const { ports, writes, saves } = makePorts({
+      snapshots: [makeSnapshot("default", terminal(2))],
+      reads: { default: [promptChunk] },
+    });
     const service = new TerminalService(ports, makeConfig());
 
     const observation = await service.handleAction({
-      kind: "restart",
+      kind: "terminal_write",
+      expectedInputSeq: 1,
+      text: "echo stale\n",
+    });
+
+    expect(writes).toEqual([]);
+    expect(saves).toHaveLength(1);
+    expect(saves[0]?.terminal.inputSeq).toBe(3);
+    expect(observation).toMatchObject({
+      result: "rejected",
+      errorCode: "INPUT_SEQ_MISMATCH",
+      terminal: { inputSeq: 3 },
+      screen: { text: promptChunk },
+    });
+  });
+
+  it("uses current session for terminal_key and session_interrupt", async () => {
+    const { ports, writes, interrupts } = makePorts({
+      currentSession: "shell",
+      snapshots: [makeSnapshot("shell", terminal(1))],
+    });
+    const service = new TerminalService(ports, makeConfig());
+
+    await service.handleAction({
+      kind: "terminal_key",
+      expectedInputSeq: 1,
+      key: "enter",
+    });
+    await service.handleAction({
+      kind: "session_interrupt",
+      expectedInputSeq: 2,
+    });
+
+    expect(writes[0]).toEqual({ session: "shell", data: "\n" });
+    expect(interrupts).toEqual(["shell"]);
+  });
+
+  it("observes a named session without changing focus", async () => {
+    const { ports, current } = makePorts({
+      currentSession: "default",
+      snapshots: [
+        makeSnapshot("default", terminal(1)),
+        makeSnapshot("logs", terminal(5)),
+      ],
+      reads: { logs: ["tail\n"] },
+    });
+    const service = new TerminalService(ports, makeConfig());
+
+    const observation = await service.handleAction({
+      kind: "session_observe",
+      session: "logs",
+    });
+
+    expect(current()).toBe("default");
+    expect(observation).toMatchObject({
+      currentSession: "default",
+      observedSession: "logs",
+      request: "session_observe",
+      screen: { text: "tail\n" },
+    });
+  });
+
+  it("focuses a newly created session and lists current session state", async () => {
+    const { ports, current, restarts } = makePorts({
+      currentSession: "default",
+      snapshots: [makeSnapshot("default", terminal(1))],
+    });
+    const service = new TerminalService(ports, makeConfig());
+
+    const focus = await service.handleAction({
+      kind: "session_focus",
+      session: "build",
+      create: true,
+      cwd: "/repo",
+    });
+    const list = await service.handleAction({ kind: "session_list" });
+
+    expect(restarts).toEqual([{ session: "build", cwd: "/repo" }]);
+    expect(current()).toBe("build");
+    expect(focus).toMatchObject({
+      currentSession: "build",
+      request: "session_focus",
+      result: "ok",
+    });
+    expect(list).toMatchObject({
+      currentSession: "build",
+    });
+    if ("sessions" in list) {
+      expect(list.sessions.map((session) => session.session).sort()).toEqual([
+        "build",
+        "default",
+      ]);
+    }
+  });
+
+  it("restarts and terminates the requested session", async () => {
+    const { ports, restarts, terminates, saves } = makePorts({
+      currentSession: "default",
+      snapshots: [makeSnapshot("default", terminal(3))],
+    });
+    const service = new TerminalService(ports, makeConfig());
+
+    const restart = await service.handleAction({
+      kind: "session_restart",
       cwd: "/tmp",
     });
-
-    expect(restartCall).toEqual({ session: "default", options: { cwd: "/tmp" } });
-    expect(saves).toEqual([restarted]);
-    expect(observation).toMatchObject({
-      result: "ok",
-      terminal: {
-        inputSeq: 0,
-      },
-      action: {
-        kind: "restart",
-      },
-    });
-  });
-
-  it("terminates through the PTY port and saves a terminated terminal", async () => {
-    const { ports, saves } = makePorts({ snapshot: makeSnapshot(terminal(3)) });
-    let terminatedSession: string | undefined;
-    ports.pty.terminate = async (session) => {
-      terminatedSession = session;
-    };
-    const service = new TerminalService(ports, makeConfig());
-
-    const observation = await service.handleAction({
-      kind: "terminate",
+    const terminate = await service.handleAction({
+      kind: "session_terminate",
+      reason: "done",
     });
 
-    expect(terminatedSession).toBe("default");
-    expect(saves[0]?.terminal).toMatchObject({
-      inputSeq: 4,
+    expect(restarts).toEqual([{ session: "default", cwd: "/tmp" }]);
+    expect(terminates).toEqual(["default"]);
+    expect(saves.at(-1)?.terminal).toMatchObject({
       alive: false,
       termination: {
         exitCode: null,
-        reason: "terminated_by_action",
+        reason: "done",
       },
     });
-    expect(observation).toMatchObject({
-      eventCount: 1,
-      returnedToPrompt: false,
+    expect(restart).toMatchObject({ request: "session_restart", result: "ok" });
+    expect(terminate).toMatchObject({
+      request: "session_terminate",
+      result: "ok",
+      terminal: { alive: false },
     });
   });
 });

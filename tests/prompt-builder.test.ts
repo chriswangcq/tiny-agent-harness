@@ -1,56 +1,77 @@
 import { describe, expect, it } from "vitest";
 import { PromptBuilder } from "../src/model/prompt-builder.js";
 import type { HistoryEntry } from "../src/model/prompt-builder.js";
+import type { TerminalObservation } from "../src/terminal/types.js";
+
+function terminalObservation(
+  overrides: Partial<TerminalObservation> = {},
+): TerminalObservation {
+  return {
+    currentSession: "default",
+    observedSession: "default",
+    terminal: {
+      inputSeq: 1,
+      alive: true,
+      syncStatus: { kind: "trusted" },
+      lastShellPrompt: {
+        cwd: "/repo",
+        promptSeq: 1,
+        lastReturnCode: 0,
+      },
+      lastContinuationPrompt: null,
+      termination: null,
+      foregroundProcess: null,
+    },
+    request: "terminal_write",
+    result: "ok",
+    returnedToPrompt: true,
+    screen: {
+      text: "pwd\n/repo\n",
+      rows: 24,
+      cols: 80,
+      truncated: false,
+      logRef: { path: "managed-pty://default" },
+    },
+    ...overrides,
+  };
+}
 
 describe("PromptBuilder", () => {
-  it("buildInitialPrompt creates only the system message", () => {
+  it("buildInitialPrompt creates only the current terminal/session system message", () => {
     const prompt = new PromptBuilder().buildInitialPrompt("fix tests");
 
     expect(prompt.messages).toHaveLength(1);
     expect(prompt.messages[0]).toMatchObject({
       role: "system",
-      content: expect.stringContaining("inputSeq-guarded actions"),
+      content: expect.stringContaining("terminal/session tools"),
     });
-    expect(prompt.messages[0]!.content).toContain("PTY action kinds");
-    expect(prompt.messages[0]!.content).toContain("write_text, key, poll");
-    expect(prompt.messages[0]!.content).not.toContain(["input", "_frame"].join(""));
-    expect(prompt.messages[0]!.content).not.toContain(["end", "_input"].join(""));
-    expect(prompt.messages[0]!.content).not.toContain(["rece", "iver"].join(""));
+    expect(prompt.messages[0]!.content).toContain("terminal_write");
+    expect(prompt.messages[0]!.content).toContain("terminal_key");
+    expect(prompt.messages[0]!.content).toContain("session_observe");
+    expect(prompt.messages[0]!.content).toContain("session_list");
+    expect(prompt.messages[0]!.content).toContain("session_focus");
+    expect(prompt.messages[0]!.content).toContain("session_interrupt");
+    expect(prompt.messages[0]!.content).toContain("session_restart");
+    expect(prompt.messages[0]!.content).toContain("session_terminate");
+    expect(prompt.messages[0]!.content).toContain("terminal.inputSeq");
+    expect(prompt.messages[0]!.content).toContain("screen.text");
+    expect(prompt.messages[0]!.content).toContain("screen.logRef.path");
     expect(prompt.messages[0]!.content).toContain("im send --channel");
     expect(prompt.messages[0]!.content).toContain("--text-stdin");
-    expect(prompt.messages[0]!.content).toContain("quoted heredoc");
-    expect(prompt.messages[0]!.content).toContain("<<'IM'");
-    expect(prompt.messages[0]!.content).toContain("normal form");
-    expect(prompt.messages[0]!.content).toContain("< reply.md");
-    expect(prompt.messages[0]!.content).toContain("protected-paced");
-    expect(prompt.messages[0]!.content).toContain("Do not manually split");
-    expect(prompt.messages[0]!.content).toContain("Do not use `im send --text`");
-    expect(prompt.messages[0]!.content).toContain("All write_text input");
-    expect(prompt.messages[0]!.content).toContain("stash_file");
-    expect(prompt.messages[0]!.content).toContain("file materialize");
-    expect(prompt.messages[0]!.content).toContain("file cat");
-    expect(prompt.messages[0]!.content).toContain("ordinary textual heredocs");
-    expect(prompt.messages[0]!.content).not.toContain("<<'EOF'");
-    expect(prompt.messages[0]!.content).not.toContain("cat > path");
-    expect(prompt.messages[0]!.content).not.toContain(
-      "interactive foreground stdin programs",
-    );
-    expect(prompt.messages[0]!.content).not.toContain("one ctrl-d may only flush the current line");
-    expect(prompt.messages[0]!.content).not.toContain("do not send any further shell command until a prompt returns");
-    expect(prompt.messages[0]!.content).toContain("terminal.inputSeq");
-    expect(prompt.messages[0]!.content).toContain("outputTail");
-    expect(prompt.messages[0]!.content).toContain("last 2K characters");
-    expect(prompt.messages[0]!.content).toContain("does not infer whether");
-    expect(prompt.messages[0]!.content).toContain("side-channel payload protocols");
-    expect(prompt.messages[0]!.content).not.toContain("small/simple generated text files");
-    expect(prompt.messages[0]!.content).not.toContain("Do not put long Markdown");
-    expect(prompt.messages[0]!.content).not.toContain("bash command fields");
-    expect(prompt.messages[0]!.content).not.toContain("UnsupportedControlPayload");
-    expect(prompt.messages[0]!.content).not.toContain("artifact write");
+    expect(prompt.messages[0]!.content).toContain("io_wait");
     expect(prompt.messages[0]!.content).toContain("Thinking is reasoning-only");
-    expect(prompt.messages[0]!.content).not.toContain("DSML");
     expect(prompt.messages[0]!.content).toContain("no special User main message");
     expect(prompt.messages[0]!.content).toContain("role=user for chat-template compatibility");
+
+    expect(prompt.messages[0]!.content).not.toContain("PTY action kinds");
+    expect(prompt.messages[0]!.content).not.toContain(
+      `${["write", "_text"].join("")}, key, poll`,
+    );
+    expect(prompt.messages[0]!.content).not.toContain(["stash", "_file"].join(""));
+    expect(prompt.messages[0]!.content).not.toContain("file materialize");
+    expect(prompt.messages[0]!.content).not.toContain(["output", "Tail"].join(""));
+    expect(prompt.messages[0]!.content).not.toContain("last 2K characters");
+    expect(prompt.messages[0]!.content).not.toContain("DSML");
   });
 
   it("buildNextPrompt serializes tool call and observation history in order", () => {
@@ -58,31 +79,13 @@ describe("PromptBuilder", () => {
       {
         role: "assistant_tool_call",
         toolCallId: "call-1",
-        name: "bash",
-        arguments: { kind: "write_text", expectedInputSeq: 0, text: "pwd" },
+        name: "terminal_write",
+        arguments: { expectedInputSeq: 0, text: "pwd\n" },
       },
       {
         role: "tool_result",
         toolCallId: "call-1",
-        observation: {
-          session: "default",
-          terminal: {
-            inputSeq: 1,
-            alive: true,
-            syncStatus: { kind: "trusted" },
-            lastShellPrompt: {
-              cwd: "/repo",
-              promptSeq: 1,
-              lastReturnCode: 0,
-            },
-            lastContinuationPrompt: null,
-            termination: null,
-          },
-          action: { kind: "write_text", preview: "pwd" },
-          result: "ok",
-          eventCount: 1,
-          returnedToPrompt: true,
-        },
+        observation: terminalObservation(),
       },
     ];
 
@@ -103,11 +106,10 @@ describe("PromptBuilder", () => {
     expect(toolCalls[0]).toEqual({
       type: "function",
       function: {
-        name: "bash",
+        name: "terminal_write",
         arguments: JSON.stringify({
-          kind: "write_text",
           expectedInputSeq: 0,
-          text: "pwd",
+          text: "pwd\n",
         }),
       },
     });
@@ -115,25 +117,7 @@ describe("PromptBuilder", () => {
     const toolMsg = prompt.messages[2]! as Record<string, unknown>;
     expect(toolMsg.role).toBe("tool");
     expect(toolMsg.tool_call_id).toBe("call-1");
-    expect(toolMsg.content).toBe(JSON.stringify({
-      session: "default",
-      terminal: {
-        inputSeq: 1,
-        alive: true,
-        syncStatus: { kind: "trusted" },
-        lastShellPrompt: {
-          cwd: "/repo",
-          promptSeq: 1,
-          lastReturnCode: 0,
-        },
-        lastContinuationPrompt: null,
-        termination: null,
-      },
-      action: { kind: "write_text", preview: "pwd" },
-      result: "ok",
-      eventCount: 1,
-      returnedToPrompt: true,
-    }));
+    expect(toolMsg.content).toBe(JSON.stringify(terminalObservation()));
   });
 
   it("buildNextPrompt includes agent observations from validation failures", () => {
@@ -143,7 +127,7 @@ describe("PromptBuilder", () => {
         toolCallId: "bad-call",
         observation: {
           kind: "tool_validation",
-          message: "Invalid bash tool arguments",
+          message: "Invalid terminal_write arguments",
           recoverable: true,
         },
       },
@@ -156,7 +140,7 @@ describe("PromptBuilder", () => {
       tool_call_id: "bad-call",
       content: JSON.stringify({
         kind: "tool_validation",
-        message: "Invalid bash tool arguments",
+        message: "Invalid terminal_write arguments",
         recoverable: true,
       }),
     });
@@ -167,10 +151,8 @@ describe("PromptBuilder", () => {
       {
         role: "assistant_tool_call",
         toolCallId: "call-1",
-        name: "bash",
+        name: "terminal_write",
         arguments: {
-          kind: "write_text",
-          session: "default",
           expectedInputSeq: 0,
           text: "pwd\n",
         },
@@ -178,16 +160,11 @@ describe("PromptBuilder", () => {
       {
         role: "tool_result",
         toolCallId: "call-1",
-        observation: {
-          session: "default",
-          returnCode: 0,
-          output: "/repo\n",
-          outputTruncated: false,
-        },
+        observation: terminalObservation(),
       },
       {
         role: "environment_reminder",
-        content: "Environment reminder:\n- [env-im-001] user_message_received",
+        content: "Environment reminder:\n- [env-im-001] [user@default] hello",
       },
     ];
 
@@ -203,19 +180,18 @@ describe("PromptBuilder", () => {
       "System-generated environment reminder.",
     );
     expect(prompt.messages[3]!.content).toContain(
-      "Environment reminder:\n- [env-im-001] user_message_received",
+      "Environment reminder:\n- [env-im-001] [user@default] hello",
     );
   });
 
-  it("preserves historical write_text tool-call arguments exactly", () => {
+  it("preserves historical terminal_write tool-call arguments exactly", () => {
     const largeBase64 = `${"A".repeat(512)}\n`;
     const history: HistoryEntry[] = [
       {
         role: "assistant_tool_call",
         toolCallId: "call-1",
-        name: "bash",
+        name: "terminal_write",
         arguments: {
-          kind: "write_text",
           expectedInputSeq: 5,
           text: largeBase64,
           unexpectedFromModel: "keep-for-debugging",
@@ -229,40 +205,39 @@ describe("PromptBuilder", () => {
     const fn = toolCalls[0]!.function as Record<string, unknown>;
     const args = JSON.parse(fn.arguments as string) as Record<string, unknown>;
     expect(args).toEqual({
-      kind: "write_text",
       expectedInputSeq: 5,
       text: largeBase64,
       unexpectedFromModel: "keep-for-debugging",
     });
-    expect(fn.arguments).not.toContain("omitted write_text payload");
+    expect(fn.arguments).not.toContain("omitted terminal_write payload");
   });
 
-  it("preserves historical stash_file tool-call arguments exactly", () => {
-    const content = "x".repeat(1024);
+  it("preserves historical session_focus tool-call arguments exactly", () => {
     const history: HistoryEntry[] = [
       {
         role: "assistant_tool_call",
         toolCallId: "call-1",
-        name: "stash_file",
+        name: "session_focus",
         arguments: {
-          name: "snake.html",
-          content,
-          encoding: "utf8",
+          session: "build",
+          create: true,
+          cwd: "/repo",
+          unexpectedFromModel: "keep-for-debugging",
         },
       },
     ];
 
-    const prompt = new PromptBuilder().buildNextPrompt("write file", history);
+    const prompt = new PromptBuilder().buildNextPrompt("switch session", history);
     const assistantMsg = prompt.messages[1]! as Record<string, unknown>;
     const toolCalls = assistantMsg.tool_calls as Array<Record<string, unknown>>;
     const fn = toolCalls[0]!.function as Record<string, unknown>;
     const args = JSON.parse(fn.arguments as string) as Record<string, unknown>;
     expect(args).toEqual({
-      name: "snake.html",
-      content,
-      encoding: "utf8",
+      session: "build",
+      create: true,
+      cwd: "/repo",
+      unexpectedFromModel: "keep-for-debugging",
     });
-    expect(fn.arguments).not.toContain("omitted stash_file content");
   });
 
   it("serializes historical io_wait tool-call arguments exactly", () => {

@@ -1,18 +1,18 @@
 import type { ParserState } from "../terminal/parser.js";
 import type {
   LogRef,
-  PtyAction,
-  PtyObservation,
+  SessionListObservation,
+  TerminalObservation,
+  TerminalScreen,
   TerminalState,
+  TerminalToolRequest,
 } from "../terminal/types.js";
-import type { PtyActionLimits } from "../terminal/validator.js";
-import type { TerminalObservationLimits } from "../terminal/observation.js";
 
 export type TerminalServiceConfig = {
   defaultSessionId: string;
   promptNonce: string;
-  actionLimits: PtyActionLimits;
-  observationLimits: TerminalObservationLimits;
+  screenRows: number;
+  screenCols: number;
 };
 
 export type TerminalRuntimeSnapshot = {
@@ -24,28 +24,18 @@ export type TerminalRuntimeSnapshot = {
 
 export type PtyReadResult = {
   chunk: string;
-  outputTail?: string;
   cursor?: string;
   logRef?: LogRef;
+  screen: TerminalScreen;
 };
 
 export type StructuredLogEvent = {
   kind: string;
   session?: string;
-  action?: PtyAction["kind"];
-  observation?: PtyObservation;
+  action?: TerminalToolRequest["kind"];
+  observation?: TerminalObservation | SessionListObservation;
   message?: string;
 };
-
-export interface TerminalClock {
-  nowIso(): string;
-  monotonicMs(): number;
-}
-
-export interface TerminalIdGenerator {
-  newId(prefix: string): string;
-  newNonce(): string;
-}
 
 export interface PtyPort {
   write(session: string, data: string): Promise<void>;
@@ -59,6 +49,9 @@ export interface PtyPort {
 }
 
 export interface TerminalSessionStore {
+  getCurrent(): Promise<string>;
+  setCurrent(session: string): Promise<void>;
+  list(): Promise<TerminalRuntimeSnapshot[]>;
   load(session: string): Promise<TerminalRuntimeSnapshot | null>;
   save(snapshot: TerminalRuntimeSnapshot): Promise<void>;
 }
@@ -68,8 +61,6 @@ export interface TerminalLogger {
 }
 
 export type TerminalServicePorts = {
-  clock: TerminalClock;
-  ids: TerminalIdGenerator;
   pty: PtyPort;
   sessions: TerminalSessionStore;
   logger: TerminalLogger;

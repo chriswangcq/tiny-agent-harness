@@ -1,140 +1,52 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { ViewModelBuilder } from "../src/tui/view-model-builder.js";
 import type {
-  RunEvent,
   AgentRunStateData,
+  RunEvent,
 } from "../src/types/run.js";
 import type {
-  InternalToolCall,
   FimStepOutput,
+  InternalToolCall,
   ModelTurn,
 } from "../src/types/model.js";
-import type { ToolRequest, ToolReviewDecision, ToolCallValidation, AgentObservation } from "../src/types/tools.js";
-import type { PtyObservation, TerminalState } from "../src/terminal/types.js";
-import type { IoWaitRequest, UserMessage, AgentMessage, EnvironmentEvent } from "../src/types/environment.js";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+import type {
+  AgentObservation,
+  ToolName,
+  ToolRequest,
+  ToolReviewDecision,
+} from "../src/types/tools.js";
+import type {
+  EnvironmentEvent,
+  IoWaitRequest,
+  UserMessage,
+  AgentMessage,
+} from "../src/types/environment.js";
+import type {
+  SessionListObservation,
+  TerminalObservation,
+  TerminalState,
+  TerminalToolRequest,
+} from "../src/terminal/types.js";
 
 const NOW = "2026-01-01T00:00:00Z";
 const LATER = "2026-01-01T00:00:01Z";
 
-function makeToolCall(id = "tc-1"): InternalToolCall {
-  return {
-    id,
-    name: "bash",
-    arguments: { kind: "write_text", expectedInputSeq: 2, text: "echo hi\n" },
-  };
+function builderWithRunStarted(): ViewModelBuilder {
+  const builder = new ViewModelBuilder();
+  builder.applyEvent({
+    type: "run_started",
+    runId: "run-1",
+    task: "test task",
+    cwd: "/repo",
+    timestamp: NOW,
+  });
+  return builder;
 }
 
-function makeThinking() {
-  return { content: "thinking about it" };
-}
-
-function makeToolCallTurn(tc?: InternalToolCall): ModelTurn {
-  const toolCall = tc ?? makeToolCall();
-  return { kind: "tool_call", toolCall, thinking: makeThinking(), rawDecision: "tool_call" };
-}
-
-function makeToolCallOutput(tc?: InternalToolCall): FimStepOutput {
-  const turn = makeToolCallTurn(tc);
-  return { thinking: makeThinking(), rawDecision: "tool_call", turn };
-}
-
-function makeIoWaitTurn(): ModelTurn {
-  const wait: IoWaitRequest = { reason: "need input", condition: { kind: "new_user_message", channel: "cli" } };
-  return { kind: "io_wait", wait, thinking: makeThinking(), rawDecision: "io_wait" };
-}
-
-function makeIoWaitOutput(): FimStepOutput {
-  const turn = makeIoWaitTurn();
-  return { thinking: makeThinking(), rawDecision: "io_wait", turn };
-}
-
-function makeInvalidTurn(): ModelTurn {
-  return { kind: "invalid_output", message: "bad output" };
-}
-
-function makeInvalidOutput(): FimStepOutput {
-  return { thinking: makeThinking(), rawDecision: "not json", turn: makeInvalidTurn() };
-}
-
-function makePtyActionRequest(id = "tc-pty"): ToolRequest {
-  return {
-    kind: "pty_action",
-    toolName: "bash",
-    toolCallId: id,
-    action: {
-      kind: "write_text",
-      expectedInputSeq: 2,
-      text: "pwd",
-    },
-  };
-}
-
-function makeApproval(): ToolReviewDecision {
-  return { status: "approved", reason: "ok", reviewer: "test" };
-}
-
-function makeRejection(): ToolReviewDecision {
-  return { status: "rejected", reason: "nope", reviewer: "test" };
-}
-
-function makePtyObservation(result: PtyObservation["result"] = "ok"): PtyObservation {
-  return {
-    session: "default",
-    terminal: terminal(3),
-    action: { kind: "write_text", preview: "pwd" },
-    result,
-    eventCount: 0,
-    returnedToPrompt: false,
-    logRef: "/tmp/log.txt",
-  };
-}
-
-function makeRejectedPtyObservation(): PtyObservation {
-  return {
-    ...makePtyObservation("rejected"),
-    terminal: {
-      ...terminal(4),
-      syncStatus: { kind: "unsynced", reason: "state_gap" },
-    },
-    errorCode: "TERMINAL_UNSYNCED",
-    message: "Terminal state is unsynced.",
-  };
-}
-
-function makeLargeWriteRequest(): ToolRequest {
-  return {
-    kind: "pty_action",
-    toolName: "bash",
-    toolCallId: "tc-large",
-    action: {
-      kind: "write_text",
-      expectedInputSeq: 4,
-      text: `${"a".repeat(512)}\n`,
-    },
-  };
-}
-
-function makeLargeWriteObservation(): PtyObservation {
-  return {
-    session: "default",
-    terminal: terminal(5),
-    action: {
-      kind: "write_text",
-      bytes: 513,
-      preview: "aaaaaaaaaa",
-      redacted: true,
-    },
-    result: "ok",
-    eventCount: 1,
-    returnedToPrompt: true,
-  };
-}
-
-function terminal(inputSeq: number): TerminalState {
+function terminal(
+  inputSeq: number,
+  overrides: Partial<TerminalState> = {},
+): TerminalState {
   return {
     inputSeq,
     alive: true,
@@ -146,914 +58,764 @@ function terminal(inputSeq: number): TerminalState {
     },
     lastContinuationPrompt: null,
     termination: null,
+    foregroundProcess: null,
+    ...overrides,
   };
 }
 
-function makeAgentObservation(): AgentObservation {
-  return { kind: "tool_validation", message: "validation error", recoverable: true };
+function toolCall(
+  name: ToolName = "terminal_write",
+  args: InternalToolCall["arguments"] = {
+    expectedInputSeq: 2,
+    text: "echo hi\n",
+  },
+): InternalToolCall {
+  return {
+    id: `call-${name}`,
+    name,
+    arguments: args,
+  };
 }
 
-function makeUserMessage(): UserMessage {
-  return { id: "msg-1", channel: "cli", role: "user", text: "hello", createdAt: NOW };
+function thinking() {
+  return { content: "thinking about it", raw: "raw thinking" };
 }
 
-function makeAgentMessage(kind: "status" | "error" = "status"): AgentMessage {
-  return { channel: "cli", role: "agent", kind, text: "processing...", createdAt: NOW };
+function toolCallTurn(call = toolCall()): ModelTurn {
+  return {
+    kind: "tool_call",
+    toolCall: call,
+    thinking: thinking(),
+    rawDecision: "tool decision",
+    raw: { raw: true },
+  };
 }
 
-function makeEnvironmentEvent(): EnvironmentEvent {
-  return { id: "ev-1", kind: "user_message_received", source: "im", timestamp: NOW, message: makeUserMessage() };
+function toolCallOutput(call = toolCall()): FimStepOutput {
+  const turn = toolCallTurn(call);
+  return {
+    thinking: thinking(),
+    rawDecision: "tool decision",
+    turn,
+    usage: { total_tokens: 12 },
+  };
 }
 
-function makeIoWait(): IoWaitRequest {
-  return { reason: "need input", condition: { kind: "new_user_message", channel: "cli" } };
+function invalidOutput(): FimStepOutput {
+  return {
+    thinking: thinking(),
+    rawDecision: "not a valid tool decision",
+    turn: {
+      kind: "invalid_output",
+      message: "bad output",
+      thinking: thinking(),
+      rawDecision: "not a valid tool decision",
+      raw: "<raw>",
+    },
+  };
 }
 
-/** Create a fresh builder and apply run_started so header is initialized. */
-function builderWithRunStarted(): ViewModelBuilder {
-  const b = new ViewModelBuilder();
-  b.applyEvent({
-    type: "run_started",
-    runId: "run-1",
-    task: "test",
-    cwd: "/tmp",
+function ioWait(): IoWaitRequest {
+  return {
+    reason: "need input",
+    condition: { kind: "new_user_message", channel: "cli" },
+  };
+}
+
+function ioWaitOutput(): FimStepOutput {
+  const turn: ModelTurn = {
+    kind: "io_wait",
+    wait: ioWait(),
+    thinking: thinking(),
+    rawDecision: "wait decision",
+  };
+  return {
+    thinking: thinking(),
+    rawDecision: "wait decision",
+    turn,
+  };
+}
+
+function request(
+  toolName: ToolName = "terminal_write",
+  terminalRequest: TerminalToolRequest = {
+    kind: "terminal_write",
+    expectedInputSeq: 2,
+    text: "pwd\n",
+  },
+): ToolRequest {
+  return {
+    kind: "terminal_tool",
+    toolName,
+    toolCallId: `request-${toolName}`,
+    request: terminalRequest,
+  };
+}
+
+function terminalObservation(
+  overrides: Partial<TerminalObservation> = {},
+): TerminalObservation {
+  return {
+    currentSession: "default",
+    observedSession: "default",
+    terminal: terminal(3),
+    request: "terminal_write",
+    result: "ok",
+    returnedToPrompt: true,
+    screen: {
+      text: "pwd\n/repo\n",
+      rows: 24,
+      cols: 80,
+      truncated: false,
+      logRef: { path: "terminal-log://default" },
+    },
+    ...overrides,
+  };
+}
+
+function sessionListObservation(): SessionListObservation {
+  return {
+    currentSession: "build",
+    sessions: [
+      {
+        session: "default",
+        terminal: terminal(5),
+        outputLog: { kind: "log", ref: "terminal-log://default" },
+      },
+      {
+        session: "build",
+        terminal: terminal(8, { foregroundProcess: "npm test" }),
+        outputLog: { kind: "log", ref: "terminal-log://build" },
+      },
+    ],
+  };
+}
+
+function approval(): ToolReviewDecision {
+  return { status: "approved", reason: "ok", reviewer: "test" };
+}
+
+function agentObservation(): AgentObservation {
+  return {
+    kind: "tool_validation",
+    message: "validation error",
+    recoverable: true,
+  };
+}
+
+function userMessage(
+  id = "msg-1",
+  timestamp = NOW,
+  text = "hello",
+): UserMessage {
+  return { id, channel: "cli", role: "user", text, createdAt: timestamp };
+}
+
+function agentMessage(
+  kind: "status" | "error" = "status",
+  timestamp = NOW,
+): AgentMessage {
+  return {
+    channel: "cli",
+    role: "agent",
+    kind,
+    text: "processing...",
+    createdAt: timestamp,
+  };
+}
+
+function environmentEvent(): EnvironmentEvent {
+  return {
+    id: "ev-1",
+    kind: "user_message_received",
+    source: "im",
     timestamp: NOW,
-  });
-  return b;
+    message: userMessage(),
+  };
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+function findFrame(builder: ViewModelBuilder, title: string) {
+  return builder.getViewModel().loop.find((frame) => frame.title === title);
+}
 
 describe("ViewModelBuilder", () => {
-  // 1
-  it("run_started sets header and creates environment LoopFrame", () => {
-    const b = new ViewModelBuilder();
-    b.applyEvent({
-      type: "run_started",
+  it("projects run lifecycle into header and loop frames", () => {
+    const builder = builderWithRunStarted();
+
+    builder.applyEvent({
+      type: "run_resumed",
       runId: "run-1",
-      task: "test task",
-      cwd: "/tmp",
-      timestamp: NOW,
-    });
-    const vm = b.getViewModel();
-    expect(vm.run.runId).toBe("run-1");
-    expect(vm.run.status).toBe("running");
-    expect(vm.run.cwd).toBe("/tmp");
-    expect(vm.run.startedAt).toBe(NOW);
-    expect(vm.loop).toHaveLength(1);
-    expect(vm.loop[0].phase).toBe("environment");
-    expect(vm.loop[0].status).toBe("ok");
-    expect(vm.loop[0].title).toBe("run started");
-    expect(vm.loop[0].summary).toContain("test task");
-  });
-
-  // 2
-  it("model_requested creates model LoopFrame", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({ type: "model_requested", stepIndex: 1, timestamp: LATER });
-    const vm = b.getViewModel();
-    expect(vm.run.stepIndex).toBe(1);
-    expect(vm.run.status).toBe("waiting_for_model");
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("model");
-    expect(frame.status).toBe("running");
-    expect(frame.title).toBe("model requested");
-  });
-
-  it("model_thinking_delta updates the running model LoopFrame", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({ type: "model_requested", stepIndex: 0, timestamp: NOW });
-    b.applyEvent({
-      type: "model_thinking_delta",
-      stepIndex: 0,
-      delta: "checking context",
-      sequence: 0,
-      timestamp: LATER,
-    });
-    b.applyEvent({
-      type: "model_thinking_delta",
-      stepIndex: 0,
-      delta: " and choosing tool",
-      sequence: 1,
-      timestamp: "2026-01-01T00:00:02Z",
-    });
-
-    const vm = b.getViewModel();
-    const modelFrames = vm.loop.filter((frame) => frame.phase === "model");
-    const frame = modelFrames[modelFrames.length - 1];
-    expect(modelFrames).toHaveLength(1);
-    expect(frame.status).toBe("running");
-    expect(frame.title).toBe("model thinking");
-    expect(frame.summary).toBe("thinking... 34 chars");
-    expect(frame.detail).toContain("## thinking");
-    expect(frame.detail).toContain("checking context and choosing tool");
-    expect(vm.conversation).toHaveLength(0);
-  });
-
-  it("model_thinking_delta creates a model frame if replay is missing model_requested", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "model_thinking_delta",
-      stepIndex: 2,
-      delta: "late replay chunk",
-      sequence: 0,
+      previousStatus: "waiting_for_io",
       timestamp: LATER,
     });
 
-    const vm = b.getViewModel();
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.stepIndex).toBe(2);
-    expect(frame.phase).toBe("model");
-    expect(frame.status).toBe("running");
-    expect(frame.detail).toContain("late replay chunk");
+    const view = builder.getViewModel();
+    expect(view.run).toMatchObject({
+      runId: "run-1",
+      status: "running",
+      stepIndex: 0,
+      cwd: "/repo",
+      startedAt: NOW,
+      updatedAt: LATER,
+    });
+    expect(view.loop.map((frame) => frame.title)).toEqual([
+      "run started",
+      "run resumed",
+    ]);
+    expect(view.loop[0]!.summary).toContain("test task");
   });
 
-  it("model_output_received replaces live thinking detail with final model detail", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({ type: "model_requested", stepIndex: 0, timestamp: NOW });
-    b.applyEvent({
-      type: "model_thinking_delta",
-      stepIndex: 0,
-      delta: "partial",
-      sequence: 0,
-      timestamp: LATER,
-    });
-    b.applyEvent({
-      type: "model_output_received",
-      stepIndex: 0,
-      output: makeToolCallOutput(),
-      turn: makeToolCallTurn(),
-      timestamp: "2026-01-01T00:00:02Z",
-    });
-
-    const vm = b.getViewModel();
-    const modelFrame = vm.loop.find(
-      (frame) => frame.stepIndex === 0 && frame.phase === "model",
-    );
-    expect(modelFrame?.status).toBe("ok");
-    expect(modelFrame?.title).toBe("model completed");
-    expect(modelFrame?.detail).toContain("thinking about it");
-    expect(modelFrame?.detail).not.toContain("partial");
-    expect(modelFrame?.detail).toContain("## raw decision");
-  });
-
-  // 3
-  it("model_output_received tool_call creates decision LoopFrame", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "model_output_received",
-      stepIndex: 0,
-      output: makeToolCallOutput(),
-      turn: makeToolCallTurn(),
-      timestamp: LATER,
-    });
-    const vm = b.getViewModel();
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("decision");
-    expect(frame.status).toBe("ok");
-    expect(frame.title).toBe("tool call: bash");
-    expect(frame.summary).toContain("action=write_text");
-    expect(frame.detail).toContain("## tool call");
-    expect(frame.detail).toContain('"kind": "write_text"');
-    expect(frame.detail).toContain("## thinking");
-  });
-
-  it("model_output_received completes the matching model LoopFrame with thinking detail", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({ type: "model_requested", stepIndex: 0, timestamp: NOW });
-    b.applyEvent({
-      type: "model_output_received",
-      stepIndex: 0,
-      output: makeToolCallOutput(),
-      turn: makeToolCallTurn(),
-      timestamp: LATER,
-    });
-
-    const vm = b.getViewModel();
-    const modelFrame = vm.loop.find(
-      (frame) => frame.stepIndex === 0 && frame.phase === "model",
-    );
-
-    expect(modelFrame).toBeDefined();
-    expect(modelFrame!.status).toBe("ok");
-    expect(modelFrame!.title).toBe("model completed");
-    expect(modelFrame!.summary).toContain("decision=tool_call");
-    expect(modelFrame!.detail).toContain("## thinking");
-    expect(modelFrame!.detail).toContain("thinking about it");
-    expect(modelFrame!.detail).toContain("## raw decision");
-    expect(modelFrame!.detail).toContain("## turn");
-  });
-
-  // 5
-  it("model_output_received io_wait creates io_wait LoopFrame", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "model_output_received",
-      stepIndex: 0,
-      output: makeIoWaitOutput(),
-      turn: makeIoWaitTurn(),
-      timestamp: LATER,
-    });
-    const vm = b.getViewModel();
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("io_wait");
-    expect(frame.status).toBe("waiting");
-    expect(frame.title).toBe("io wait requested");
-  });
-
-  // 6
-  it("model_output_received invalid_output creates warn decision LoopFrame", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "model_output_received",
-      stepIndex: 0,
-      output: makeInvalidOutput(),
-      turn: makeInvalidTurn(),
-      timestamp: LATER,
-    });
-    const vm = b.getViewModel();
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("decision");
-    expect(frame.status).toBe("warn");
-    expect(frame.title).toBe("invalid model output");
-    expect(frame.summary).toBe("bad output");
-  });
-
-  it("model_output_received invalid_output compacts long diagnostic detail", () => {
-    const b = builderWithRunStarted();
-    const longRawDecision = `bash">\n${"x".repeat(5000)}`;
-    const turn: ModelTurn = {
-      kind: "invalid_output",
-      message: "Malformed DSML tool call: unclosed DSML parameter tag.",
-      rawDecision: longRawDecision,
-      thinking: { content: "thinking" },
+  it("applies persisted run state explicitly", () => {
+    const builder = new ViewModelBuilder();
+    const state: AgentRunStateData = {
+      runId: "run-2",
+      status: "waiting_for_io",
+      task: "task",
+      cwd: "/repo",
+      createdAt: NOW,
+      updatedAt: LATER,
+      stepIndex: 7,
+      transcriptPath: "/tmp/transcript.jsonl",
     };
 
-    b.applyEvent({ type: "model_requested", stepIndex: 0, timestamp: NOW });
-    b.applyEvent({
-      type: "model_output_received",
-      stepIndex: 0,
-      output: {
-        thinking: { content: "thinking" },
-        rawDecision: longRawDecision,
-        turn,
-      },
-      turn,
-      timestamp: LATER,
-    });
+    builder.applyState(state);
 
-    const vm = b.getViewModel();
-    const modelFrame = vm.loop.find(
-      (frame) => frame.stepIndex === 0 && frame.phase === "model",
-    );
-
-    expect(modelFrame?.detail).toContain("unclosed DSML parameter tag");
-    expect(modelFrame?.detail).toContain("<truncated");
-    expect(modelFrame?.detail).not.toContain("thinking raw");
-  });
-
-  // 7
-  it("tool_call_validated valid creates ok validation LoopFrame", () => {
-    const b = builderWithRunStarted();
-    const validResult: ToolCallValidation = { status: "valid", request: makePtyActionRequest() };
-    b.applyEvent({
-      type: "tool_call_validated",
-      stepIndex: 0,
-      toolCall: makeToolCall(),
-      result: validResult,
-      timestamp: LATER,
-    });
-    const vm = b.getViewModel();
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("validation");
-    expect(frame.status).toBe("ok");
-    expect(frame.title).toBe("tool call validated");
-    expect(frame.detail).toContain("## tool call");
-    expect(frame.detail).toContain("## validation result");
-    expect(frame.detail).toContain('"request"');
-  });
-
-  // 8
-  it("tool_call_validated invalid creates warn validation LoopFrame", () => {
-    const b = builderWithRunStarted();
-    const invalidResult: ToolCallValidation = { status: "invalid", observation: makeAgentObservation() };
-    b.applyEvent({
-      type: "tool_call_validated",
-      stepIndex: 0,
-      toolCall: makeToolCall(),
-      result: invalidResult,
-      timestamp: LATER,
-    });
-    const vm = b.getViewModel();
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("validation");
-    expect(frame.status).toBe("warn");
-    expect(frame.title).toBe("tool validation failed");
-    expect(frame.summary).toBe("validation error");
-    expect(frame.detail).toContain("## validation result");
-    expect(frame.detail).toContain("validation error");
-  });
-
-  // 9
-  it("tool_review_requested creates running review LoopFrame", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "tool_review_requested",
-      stepIndex: 0,
-      request: makePtyActionRequest(),
-      timestamp: LATER,
-    });
-    const vm = b.getViewModel();
-    expect(vm.run.status).toBe("waiting_for_review");
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("review");
-    expect(frame.status).toBe("running");
-    expect(frame.title).toBe("review requested");
-    expect(frame.detail).toContain("## request");
-    expect(frame.detail).toContain('"kind": "write_text"');
-  });
-
-  // 10
-  it("tool_reviewed approved creates ok review LoopFrame", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "tool_reviewed",
-      stepIndex: 0,
-      request: makePtyActionRequest(),
-      decision: makeApproval(),
-      timestamp: LATER,
-    });
-    const vm = b.getViewModel();
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("review");
-    expect(frame.status).toBe("ok");
-    expect(frame.title).toBe("approved");
-    expect(frame.summary).toBe("ok");
-    expect(frame.detail).toContain("## request");
-    expect(frame.detail).toContain("## decision");
-    expect(frame.detail).toContain('"status": "approved"');
-  });
-
-  // 11
-  it("tool_reviewed rejected creates warn review LoopFrame", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "tool_reviewed",
-      stepIndex: 0,
-      request: makePtyActionRequest(),
-      decision: makeRejection(),
-      timestamp: LATER,
-    });
-    const vm = b.getViewModel();
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("review");
-    expect(frame.status).toBe("warn");
-    expect(frame.title).toBe("rejected");
-    expect(frame.summary).toBe("nope");
-    expect(frame.detail).toContain("## decision");
-    expect(frame.detail).toContain('"status": "rejected"');
-  });
-
-  // 12
-  it("tool_execution_started creates running tool LoopFrame", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "tool_execution_started",
-      stepIndex: 0,
-      request: makePtyActionRequest(),
-      timestamp: LATER,
-    });
-    const vm = b.getViewModel();
-    expect(vm.run.status).toBe("waiting_for_tool");
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("tool");
-    expect(frame.status).toBe("running");
-    expect(frame.title).toBe("bash started");
-    expect(frame.detail).toContain("## request");
-    expect(frame.detail).toContain('"expectedInputSeq": 2');
-  });
-
-  // 13
-  it("tool_execution_finished PTY ok creates ok tool LoopFrame", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "tool_execution_finished",
-      stepIndex: 0,
-      request: makePtyActionRequest(),
-      observation: makePtyObservation("ok"),
-      timestamp: LATER,
-    });
-    const vm = b.getViewModel();
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("tool");
-    expect(frame.status).toBe("ok");
-    expect(frame.title).toBe("pty ok write_text");
-    expect(frame.logPath).toBe("/tmp/log.txt");
-    expect(frame.detail).toContain("## request");
-    expect(frame.detail).toContain("## observation");
-    expect(frame.detail).toContain('"result": "ok"');
-    expect(frame.detail).toContain('"logRef": "/tmp/log.txt"');
-  });
-
-  it("tool_execution_finished updates PTY session view", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "tool_execution_finished",
-      stepIndex: 0,
-      request: makePtyActionRequest(),
-      observation: {
-        ...makePtyObservation("ok"),
-        session: "default",
-        terminal: {
-          ...terminal(7),
-          foregroundProcess: "/bin/bash",
-          lastShellPrompt: {
-            cwd: "/repo",
-            promptSeq: 2,
-            lastReturnCode: 0,
-          },
-        },
-        outputTail: "file1.txt\nfile2.txt",
-        outputTailBytes: 42,
-        logRef: "pty://log/1",
-      },
-      timestamp: LATER,
-    });
-
-    const vm = b.getViewModel();
-    expect(vm.sessions).toHaveLength(1);
-    expect(vm.sessions[0]).toMatchObject({
-      session: "default",
-      state: "running",
-      currentCommand: "/bin/bash",
-      returnCode: 0,
-      logPath: "pty://log/1",
-      tail: "file1.txt\nfile2.txt",
-      tailOffset: 42,
+    expect(builder.getViewModel().run).toMatchObject({
+      runId: "run-2",
+      status: "waiting_for_io",
+      stepIndex: 7,
+      cwd: "/repo",
+      startedAt: NOW,
       updatedAt: LATER,
     });
   });
 
-  it("PTY sessions sort default first, then by session name", () => {
-    const b = builderWithRunStarted();
-    for (const [index, session] of ["sessB", "default", "sessA"].entries()) {
-      b.applyEvent({
-        type: "tool_execution_finished",
-        stepIndex: index,
-        request: makePtyActionRequest("tc-" + session),
-        observation: {
-          ...makePtyObservation("ok"),
-          session,
-          outputTail: session,
+  it("streams and completes model thinking detail", () => {
+    const builder = builderWithRunStarted();
+    builder.applyEvent({
+      type: "model_requested",
+      stepIndex: 1,
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "model_thinking_delta",
+      stepIndex: 1,
+      delta: "abc",
+      sequence: 1,
+      timestamp: LATER,
+    });
+
+    expect(findFrame(builder, "model thinking")).toMatchObject({
+      phase: "model",
+      status: "running",
+      summary: "thinking... 3 chars",
+    });
+
+    builder.applyEvent({
+      type: "model_output_received",
+      stepIndex: 1,
+      output: toolCallOutput(),
+      turn: toolCallTurn(),
+      timestamp: LATER,
+    });
+
+    const modelFrame = builder.getViewModel().loop.find(
+      (frame) => frame.phase === "model" && frame.stepIndex === 1,
+    );
+    expect(modelFrame).toMatchObject({
+      title: "model completed",
+      status: "ok",
+    });
+    expect(modelFrame!.detail).toContain("## thinking");
+    expect(modelFrame!.detail).toContain("## raw decision");
+  });
+
+  it("summarizes current terminal/session tool calls", () => {
+    const cases: Array<[ToolName, InternalToolCall["arguments"], string[]]> = [
+      [
+        "terminal_write",
+        { expectedInputSeq: 2, text: "echo hi\n", waitForReturnMs: 30 },
+        ["tool=terminal_write", "inputSeq=2", "bytes=8", "waitMs=30"],
+      ],
+      [
+        "terminal_key",
+        { expectedInputSeq: 3, key: "enter", waitForReturnMs: 10 },
+        ["tool=terminal_key", "key=enter", "inputSeq=3", "waitMs=10"],
+      ],
+      [
+        "session_observe",
+        { session: "build" },
+        ["tool=session_observe", "session=build"],
+      ],
+      ["session_list", {}, ["tool=session_list"]],
+      [
+        "session_focus",
+        { session: "build", create: true, cwd: "/repo" },
+        ["tool=session_focus", "session=build", "create=true", "cwd=/repo"],
+      ],
+      [
+        "session_interrupt",
+        { expectedInputSeq: 4, waitForReturnMs: 100 },
+        ["tool=session_interrupt", "inputSeq=4", "waitMs=100"],
+      ],
+      [
+        "session_restart",
+        { session: "build", cwd: "/repo", reason: "recover" },
+        ["tool=session_restart", "session=build", "cwd=/repo", "reason=recover"],
+      ],
+      [
+        "session_terminate",
+        { session: "build", reason: "done" },
+        ["tool=session_terminate", "session=build", "reason=done"],
+      ],
+    ];
+
+    for (const [name, args, expectedParts] of cases) {
+      const builder = builderWithRunStarted();
+      const call = toolCall(name, args);
+      builder.applyEvent({
+        type: "model_output_received",
+        stepIndex: 1,
+        output: toolCallOutput(call),
+        turn: toolCallTurn(call),
+        timestamp: NOW,
+      });
+
+      const decisionFrame = builder.getViewModel().loop.at(-1)!;
+      expect(decisionFrame.title).toBe(`tool call: ${name}`);
+      for (const part of expectedParts) {
+        expect(decisionFrame.summary).toContain(part);
+      }
+      expect(decisionFrame.detail).toContain("## tool call");
+    }
+  });
+
+  it("keeps invalid model output detail visible", () => {
+    const builder = builderWithRunStarted();
+    const output = invalidOutput();
+
+    builder.applyEvent({
+      type: "model_output_received",
+      stepIndex: 2,
+      output,
+      turn: output.turn,
+      timestamp: NOW,
+    });
+
+    const frames = builder.getViewModel().loop;
+    const decisionFrame = frames.at(-1)!;
+    expect(decisionFrame).toMatchObject({
+      phase: "decision",
+      status: "warn",
+      title: "invalid model output",
+      summary: "bad output",
+    });
+    expect(decisionFrame.detail).toContain("not a valid tool decision");
+    expect(decisionFrame.detail).toContain("bad output");
+  });
+
+  it("projects validation and review events with detail", () => {
+    const builder = builderWithRunStarted();
+    const call = toolCall();
+    const toolRequest = request();
+
+    builder.applyEvent({
+      type: "tool_call_validated",
+      stepIndex: 1,
+      toolCall: call,
+      result: { status: "invalid", observation: agentObservation() },
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "tool_review_requested",
+      stepIndex: 1,
+      request: toolRequest,
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "tool_reviewed",
+      stepIndex: 1,
+      request: toolRequest,
+      decision: approval(),
+      timestamp: LATER,
+    });
+
+    const view = builder.getViewModel();
+    expect(view.loop.at(-3)).toMatchObject({
+      phase: "validation",
+      status: "warn",
+      title: "tool validation failed",
+      summary: "validation error",
+    });
+    expect(view.loop.at(-2)!.detail).toContain("terminal_write");
+    expect(view.loop.at(-1)).toMatchObject({
+      phase: "review",
+      status: "ok",
+      title: "approved",
+      summary: "ok",
+    });
+  });
+
+  it("projects terminal observation frames and session cards", () => {
+    const builder = builderWithRunStarted();
+    const toolRequest = request();
+    const observation = terminalObservation();
+
+    builder.applyEvent({
+      type: "tool_execution_started",
+      stepIndex: 1,
+      request: toolRequest,
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "tool_execution_finished",
+      stepIndex: 1,
+      request: toolRequest,
+      observation,
+      timestamp: LATER,
+    });
+
+    const view = builder.getViewModel();
+    const started = view.loop.at(-2)!;
+    const finished = view.loop.at(-1)!;
+    expect(started).toMatchObject({
+      phase: "tool",
+      status: "running",
+      title: "terminal_write started",
+    });
+    expect(finished).toMatchObject({
+      phase: "tool",
+      status: "ok",
+      title: "terminal_write ok",
+      logPath: "terminal-log://default",
+    });
+    expect(finished.summary).toContain("request=terminal_write");
+    expect(finished.summary).toContain("session=default");
+    expect(finished.summary).toContain("inputSeq=3");
+    expect(finished.summary).toContain("returnedToPrompt=true");
+    expect(finished.detail).toContain("pwd\\n/repo\\n");
+    expect(finished.detail).toContain("terminal-log://default");
+    expect(view.sessions).toEqual([
+      {
+        session: "default",
+        state: "idle",
+        returnCode: 0,
+        logPath: "terminal-log://default",
+        tail: "pwd\n/repo\n",
+        updatedAt: LATER,
+      },
+    ]);
+  });
+
+  it("marks terminal timeout and rejected observations distinctly", () => {
+    const builder = builderWithRunStarted();
+    builder.applyEvent({
+      type: "tool_execution_finished",
+      stepIndex: 1,
+      request: request("terminal_key", {
+        kind: "terminal_key",
+        expectedInputSeq: 3,
+        key: "enter",
+      }),
+      observation: terminalObservation({
+        request: "terminal_key",
+        result: "timeout",
+        returnedToPrompt: false,
+        screen: {
+          text: "still running",
+          rows: 24,
+          cols: 80,
+          truncated: true,
+          logRef: { path: "terminal-log://default" },
         },
+      }),
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "tool_execution_finished",
+      stepIndex: 2,
+      request: request("session_interrupt", {
+        kind: "session_interrupt",
+        expectedInputSeq: 4,
+      }),
+      observation: terminalObservation({
+        request: "session_interrupt",
+        result: "rejected",
+        errorCode: "TERMINAL_UNSYNCED",
+        message: "Terminal state is unsynced.",
+        terminal: terminal(4, {
+          syncStatus: { kind: "unsynced", reason: "state_gap" },
+        }),
+      }),
+      timestamp: LATER,
+    });
+
+    const timeoutFrame = builder.getViewModel().loop.at(-2)!;
+    const rejectedFrame = builder.getViewModel().loop.at(-1)!;
+    expect(timeoutFrame.status).toBe("waiting");
+    expect(timeoutFrame.summary).toContain("screen=truncated");
+    expect(rejectedFrame).toMatchObject({
+      status: "warn",
+      title: "session_interrupt rejected TERMINAL_UNSYNCED",
+    });
+    expect(rejectedFrame.summary).toContain("sync=unsynced:state_gap");
+    expect(rejectedFrame.summary).toContain("Terminal state is unsynced.");
+  });
+
+  it("projects session list observations into session cards", () => {
+    const builder = builderWithRunStarted();
+    builder.applyEvent({
+      type: "tool_execution_finished",
+      stepIndex: 1,
+      request: request("session_list", { kind: "session_list" }),
+      observation: sessionListObservation(),
+      timestamp: NOW,
+    });
+
+    const view = builder.getViewModel();
+    expect(view.loop.at(-1)).toMatchObject({
+      phase: "tool",
+      status: "ok",
+      title: "session_list finished",
+      summary: "currentSession=build sessions=2",
+    });
+    expect(view.sessions).toEqual([
+      {
+        session: "default",
+        state: "idle",
+        returnCode: 0,
+        logPath: "terminal-log://default",
+        tail: "",
+        updatedAt: NOW,
+      },
+      {
+        session: "build",
+        state: "running",
+        currentCommand: "npm test",
+        returnCode: 0,
+        logPath: "terminal-log://build",
+        tail: "",
+        updatedAt: NOW,
+      },
+    ]);
+  });
+
+  it("redacts large terminal_write text in frame details", () => {
+    const builder = builderWithRunStarted();
+    const largeText = `${"a".repeat(512)}\n`;
+    const toolRequest = request("terminal_write", {
+      kind: "terminal_write",
+      expectedInputSeq: 5,
+      text: largeText,
+    });
+    const call = toolCall("terminal_write", {
+      expectedInputSeq: 5,
+      text: largeText,
+    });
+
+    builder.applyEvent({
+      type: "model_output_received",
+      stepIndex: 1,
+      output: toolCallOutput(call),
+      turn: toolCallTurn(call),
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "tool_execution_started",
+      stepIndex: 1,
+      request: toolRequest,
+      timestamp: LATER,
+    });
+
+    const decisionFrame = builder.getViewModel().loop.at(-2)!;
+    const startedFrame = builder.getViewModel().loop.at(-1)!;
+    expect(decisionFrame.detail).toContain(
+      "[redacted terminal_write payload 513 bytes]",
+    );
+    expect(startedFrame.detail).toContain(
+      "[redacted terminal_write payload 513 bytes]",
+    );
+    expect(`${decisionFrame.detail}\n${startedFrame.detail}`).not.toContain(
+      "aaaaaaaaaa",
+    );
+  });
+
+  it("projects generic agent observations without terminal assumptions", () => {
+    const builder = builderWithRunStarted();
+    builder.applyEvent({
+      type: "tool_execution_finished",
+      stepIndex: 1,
+      request: request(),
+      observation: agentObservation(),
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "observation_appended",
+      stepIndex: 1,
+      observation: agentObservation(),
+      timestamp: LATER,
+    });
+
+    expect(builder.getViewModel().loop.at(-2)).toMatchObject({
+      phase: "tool",
+      status: "ok",
+      title: "terminal_write finished",
+      summary: "validation error",
+    });
+    expect(builder.getViewModel().loop.at(-1)).toMatchObject({
+      phase: "observation",
+      status: "ok",
+      title: "observation appended",
+    });
+  });
+
+  it("projects io wait and environment events", () => {
+    const builder = builderWithRunStarted();
+    builder.applyEvent({
+      type: "model_output_received",
+      stepIndex: 1,
+      output: ioWaitOutput(),
+      turn: ioWaitOutput().turn,
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "io_wait_started",
+      stepIndex: 1,
+      wait: ioWait(),
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "io_wait_satisfied",
+      stepIndex: 1,
+      wait: ioWait(),
+      event: environmentEvent(),
+      timestamp: LATER,
+    });
+    builder.applyEvent({
+      type: "environment_events_consumed",
+      runId: "run-1",
+      eventIds: ["ev-1", "ev-2"],
+      timestamp: LATER,
+    });
+
+    const view = builder.getViewModel();
+    expect(view.loop.find((frame) => frame.title === "io wait requested")).toMatchObject({
+      phase: "io_wait",
+      status: "waiting",
+      summary: "need input",
+    });
+    expect(view.loop.find((frame) => frame.title === "IO wait satisfied")!.summary)
+      .toContain("[user@cli] hello");
+    expect(view.loop.at(-1)).toMatchObject({
+      phase: "environment",
+      title: "2 events consumed",
+      summary: "ev-1, ev-2",
+    });
+  });
+
+  it("keeps conversation sorted by timestamp and deduped by id", () => {
+    const builder = builderWithRunStarted();
+    builder.applyEvent({
+      type: "agent_message_sent",
+      runId: "run-1",
+      message: agentMessage("status", LATER),
+      timestamp: LATER,
+    });
+    builder.applyEvent({
+      type: "user_message_received",
+      runId: "run-1",
+      message: userMessage("msg-1", NOW, "first"),
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "user_message_received",
+      runId: "run-1",
+      message: userMessage("msg-1", NOW, "first duplicate"),
+      timestamp: NOW,
+    });
+
+    expect(builder.getViewModel().conversation).toEqual([
+      {
+        id: "user:msg-1",
+        kind: "user",
+        timestamp: NOW,
+        channel: "cli",
+        text: "first",
+        sourceEventId: "msg-1",
+      },
+      {
+        id: `agent:${LATER}:status:processing...`,
+        kind: "agent",
         timestamp: LATER,
+        text: "processing...",
+        messageKind: "status",
+      },
+    ]);
+  });
+
+  it("applies conversation and loop limits after projection", () => {
+    const builder = new ViewModelBuilder({
+      maxConversationItems: 2,
+      maxLoopFrames: 3,
+    });
+    builder.applyEvent({
+      type: "run_started",
+      runId: "run-1",
+      task: "test task",
+      cwd: "/repo",
+      timestamp: NOW,
+    });
+    for (let i = 0; i < 5; i++) {
+      builder.addImUserMessage(userMessage(`msg-${i}`, NOW, `m${i}`));
+      builder.applyEvent({
+        type: "model_requested",
+        stepIndex: i,
+        timestamp: NOW,
       });
     }
 
-    const vm = b.getViewModel();
-    expect(vm.sessions.map((session) => session.session)).toEqual([
-      "default",
-      "sessA",
-      "sessB",
+    const view = builder.getViewModel();
+    expect(view.conversation.map((item) => item.id)).toEqual([
+      "user:msg-3",
+      "user:msg-4",
     ]);
+    expect(view.loop).toHaveLength(3);
+    expect(view.loop.map((frame) => frame.stepIndex)).toEqual([2, 3, 4]);
   });
 
-  it("PTY session tail falls back from outputPreview to message", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "tool_execution_finished",
-      stepIndex: 0,
-      request: makePtyActionRequest("tc-preview"),
-      observation: {
-        ...makePtyObservation("ok"),
-        session: "preview",
-        outputPreview: "preview tail",
-        message: "message tail",
+  it("projects history compaction and final run state", () => {
+    const builder = builderWithRunStarted();
+    builder.applyEvent({
+      type: "history_compacted",
+      stepIndex: 4,
+      compaction: {
+        tokenCount: 100,
+        maxTokens: 80,
+        summary: "compressed",
+        originalItemCount: 10,
+        retainedItemCount: 3,
+        droppedItemCount: 7,
       },
-      timestamp: LATER,
+      timestamp: NOW,
     });
-    b.applyEvent({
-      type: "tool_execution_finished",
-      stepIndex: 1,
-      request: makePtyActionRequest("tc-message"),
-      observation: {
-        ...makePtyObservation("ok"),
-        session: "message",
-        message: "message tail",
-      },
-      timestamp: "2026-01-01T00:00:02Z",
-    });
-
-    const vm = b.getViewModel();
-    expect(vm.sessions.find((session) => session.session === "preview")?.tail).toBe(
-      "preview tail",
-    );
-    expect(vm.sessions.find((session) => session.session === "message")?.tail).toBe(
-      "message tail",
-    );
-  });
-
-  // 14
-  it("tool_execution_finished PTY rejected creates warn tool LoopFrame", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "tool_execution_finished",
-      stepIndex: 0,
-      request: makePtyActionRequest(),
-      observation: makeRejectedPtyObservation(),
-      timestamp: LATER,
-    });
-    const vm = b.getViewModel();
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("tool");
-    expect(frame.status).toBe("warn");
-    expect(frame.title).toBe("pty rejected TERMINAL_UNSYNCED");
-  });
-
-  it("tool_execution_finished PTY timeout keeps the tool frame waiting", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "tool_execution_finished",
-      stepIndex: 0,
-      request: makePtyActionRequest(),
-      observation: makePtyObservation("timeout"),
-      timestamp: LATER,
-    });
-
-    const vm = b.getViewModel();
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("tool");
-    expect(frame.status).toBe("waiting");
-    expect(frame.title).toBe("pty timeout write_text");
-    expect(frame.summary).toContain("action=write_text");
-    expect(frame.logPath).toBe("/tmp/log.txt");
-    expect(frame.detail).toContain('"result": "timeout"');
-  });
-
-  it("tool_execution_finished with PTY errorCode shows the actionable message", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "tool_execution_finished",
-      stepIndex: 0,
-      request: makePtyActionRequest(),
-      observation: makeRejectedPtyObservation(),
-      timestamp: LATER,
-    });
-
-    const vm = b.getViewModel();
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("tool");
-    expect(frame.status).toBe("warn");
-    expect(frame.title).toBe("pty rejected TERMINAL_UNSYNCED");
-    expect(frame.summary).toContain("Terminal state is unsynced");
-    expect(frame.detail).toContain('"errorCode": "TERMINAL_UNSYNCED"');
-  });
-
-  it("tool_execution_finished with PTY observation shows terminal state and action", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "tool_execution_finished",
-      stepIndex: 0,
-      request: makePtyActionRequest(),
-      observation: makePtyObservation(),
-      timestamp: LATER,
-    });
-
-    const vm = b.getViewModel();
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("tool");
-    expect(frame.status).toBe("ok");
-    expect(frame.title).toBe("pty ok write_text");
-    expect(frame.summary).toContain("action=write_text");
-    expect(frame.summary).toContain("inputSeq=3");
-    expect(frame.summary).toContain("alive=true");
-    expect(frame.detail).toContain('"kind": "pty_action"');
-  });
-
-  it("tool_execution_finished with rejected PTY observation shows error code", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "tool_execution_finished",
-      stepIndex: 0,
-      request: makePtyActionRequest(),
-      observation: {
-        ...makePtyObservation("rejected"),
-        terminal: {
-          ...terminal(5),
-          syncStatus: { kind: "unsynced", reason: "state_gap" },
-        },
-        errorCode: "TERMINAL_UNSYNCED",
-        message: "Terminal state is unsynced.",
-      },
-      timestamp: LATER,
-    });
-
-    const vm = b.getViewModel();
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("tool");
-    expect(frame.status).toBe("warn");
-    expect(frame.title).toBe("pty rejected TERMINAL_UNSYNCED");
-    expect(frame.summary).toContain("inputSeq=5");
-    expect(frame.summary).toContain("sync=unsynced:state_gap");
-    expect(frame.summary).toContain("Terminal state is unsynced.");
-  });
-
-  it("tool_execution_finished with large write_text redacts payload detail", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "tool_execution_finished",
-      stepIndex: 0,
-      request: makeLargeWriteRequest(),
-      observation: makeLargeWriteObservation(),
-      timestamp: LATER,
-    });
-
-    const vm = b.getViewModel();
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("tool");
-    expect(frame.status).toBe("ok");
-    expect(frame.summary).toContain("inputSeq=5");
-    expect(frame.summary).toContain("bytes=513");
-    expect(frame.summary).toContain("redacted=true");
-    expect(frame.detail).toContain("[redacted write_text payload 513 bytes]");
-    expect(frame.detail).not.toContain("aaaaaaaaaa");
-  });
-
-  // 15
-  it("observation_appended creates observation LoopFrame", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "observation_appended",
-      stepIndex: 0,
-      observation: makeAgentObservation(),
-      timestamp: LATER,
-    });
-    const vm = b.getViewModel();
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("observation");
-    expect(frame.status).toBe("ok");
-    expect(frame.title).toBe("observation appended");
-    expect(frame.detail).toContain("## observation");
-    expect(frame.detail).toContain("validation error");
-  });
-
-  // 16
-  it("io_wait_started creates waiting io_wait LoopFrame", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "io_wait_started",
-      stepIndex: 0,
-      wait: makeIoWait(),
-      timestamp: LATER,
-    });
-    const vm = b.getViewModel();
-    expect(vm.run.status).toBe("waiting_for_io");
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("io_wait");
-    expect(frame.status).toBe("waiting");
-    expect(frame.title).toBe("waiting for IO");
-    expect(frame.summary).toBe("need input");
-    expect(frame.detail).toContain("## wait");
-    expect(frame.detail).toContain('"new_user_message"');
-  });
-
-  // 17
-  it("io_wait_satisfied creates ok io_wait LoopFrame", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "io_wait_satisfied",
-      stepIndex: 0,
-      wait: makeIoWait(),
-      event: makeEnvironmentEvent(),
-      timestamp: LATER,
-    });
-    const vm = b.getViewModel();
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("io_wait");
-    expect(frame.status).toBe("ok");
-    expect(frame.title).toBe("IO wait satisfied");
-    expect(frame.summary).toContain("event=ev-1");
-    expect(frame.summary).toContain("[user@cli] hello");
-    expect(frame.detail).toContain('"kind": "user_message_received"');
-  });
-
-  // 18
-  it("environment_events_consumed creates environment LoopFrame", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "environment_events_consumed",
-      runId: "run-1",
-      eventIds: ["ev-1", "ev-2", "ev-3"],
-      timestamp: LATER,
-    });
-    const vm = b.getViewModel();
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("environment");
-    expect(frame.status).toBe("ok");
-    expect(frame.title).toBe("3 events consumed");
-    expect(frame.summary).toBe("ev-1, ev-2, ev-3");
-    expect(frame.detail).toContain("## event ids");
-    expect(frame.detail).toContain("ev-2");
-  });
-
-  // 19
-  it("agent_message_sent creates agent ConversationItem", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "agent_message_sent",
-      runId: "run-1",
-      message: makeAgentMessage("status"),
-      timestamp: LATER,
-    });
-    const vm = b.getViewModel();
-    expect(vm.conversation).toHaveLength(1);
-    const item = vm.conversation[0];
-    expect(item.kind).toBe("agent");
-    if (item.kind === "agent") {
-      expect(item.messageKind).toBe("status");
-      expect(item.text).toBe("processing...");
-    }
-  });
-
-  // 20
-  it("user_message_received creates user ConversationItem", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "user_message_received",
-      runId: "run-1",
-      message: makeUserMessage(),
-      timestamp: LATER,
-    });
-    const vm = b.getViewModel();
-    expect(vm.conversation).toHaveLength(1);
-    const item = vm.conversation[0];
-    expect(item.kind).toBe("user");
-    if (item.kind === "user") {
-      expect(item.channel).toBe("cli");
-      expect(item.text).toBe("hello");
-      expect(item.sourceEventId).toBe("msg-1");
-    }
-  });
-
-  it("sorts conversation items by timestamp with stable insertion order for ties", () => {
-    const b = builderWithRunStarted();
-    b.addImUserMessage({
-      id: "late-user",
-      channel: "cli",
-      role: "user",
-      text: "late",
-      createdAt: "2026-01-01T00:00:03Z",
-    });
-    b.addImAgentMessage({
-      channel: "cli",
-      role: "agent",
-      kind: "status",
-      text: "early agent",
-      createdAt: "2026-01-01T00:00:01Z",
-    });
-    b.addImUserMessage({
-      id: "early-user",
-      channel: "cli",
-      role: "user",
-      text: "early user",
-      createdAt: "2026-01-01T00:00:01Z",
-    });
-
-    expect(b.getViewModel().conversation.map((item) => item.text)).toEqual([
-      "early agent",
-      "early user",
-      "late",
-    ]);
-  });
-
-  it("deduplicates user and agent messages across transcript and IM sources", () => {
-    const b = builderWithRunStarted();
-    const user = makeUserMessage();
-    const agent = makeAgentMessage();
-
-    b.applyEvent({
-      type: "user_message_received",
-      runId: "run-1",
-      message: user,
-      timestamp: user.createdAt,
-    });
-    b.addImUserMessage(user);
-    b.applyEvent({
-      type: "agent_message_sent",
-      runId: "run-1",
-      message: agent,
-      timestamp: agent.createdAt,
-    });
-    b.addImAgentMessage(agent);
-
-    expect(b.getViewModel().conversation.map((item) => item.text)).toEqual([
-      "hello",
-      "processing...",
-    ]);
-  });
-
-  // 21
-  it("run_finished creates environment LoopFrame and updates header", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
-      type: "run_finished",
-      status: "cancelled",
-      timestamp: LATER,
-    });
-    const vm = b.getViewModel();
-    expect(vm.run.status).toBe("cancelled");
-    expect(vm.run.updatedAt).toBe(LATER);
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.phase).toBe("environment");
-    expect(frame.status).toBe("ok");
-    expect(frame.title).toBe("run finished");
-    expect(frame.summary).toBe("cancelled");
-  });
-
-  // 21b - run_finished with failure
-  it("run_finished failed creates error LoopFrame", () => {
-    const b = builderWithRunStarted();
-    b.applyEvent({
+    builder.applyEvent({
       type: "run_finished",
       status: "failed",
       error: { message: "boom" },
       timestamp: LATER,
     });
-    const vm = b.getViewModel();
-    expect(vm.run.status).toBe("failed");
-    const frame = vm.loop[vm.loop.length - 1];
-    expect(frame.status).toBe("error");
-    expect(frame.summary).toBe("failed");
-  });
 
-  // 22
-  it("enforces maxConversationItems limit", () => {
-    const b = new ViewModelBuilder({ maxConversationItems: 3 });
-    b.applyEvent({
-      type: "run_started",
-      runId: "run-1",
-      task: "test",
-      cwd: "/tmp",
-      timestamp: NOW,
+    const view = builder.getViewModel();
+    expect(view.loop.at(-2)).toMatchObject({
+      title: "history compacted",
+      summary: "tokens=100/80 dropped=7 retained=3",
+      detail: "compressed",
     });
-    for (let i = 0; i < 5; i++) {
-      b.applyEvent({
-        type: "user_message_received",
-        runId: "run-1",
-        message: { id: `msg-${i}`, channel: "cli", role: "user", text: `msg ${i}`, createdAt: NOW },
-        timestamp: NOW,
-      });
-    }
-    const vm = b.getViewModel();
-    expect(vm.conversation).toHaveLength(3);
-    // Should keep the latest 3 after timestamp/order sorting.
-    if (vm.conversation[0].kind === "user") {
-      expect(vm.conversation[0].text).toBe("msg 2");
-    }
-  });
-
-  // 23
-  it("enforces maxLoopFrames limit", () => {
-    const b = new ViewModelBuilder({ maxLoopFrames: 3 });
-    b.applyEvent({
-      type: "run_started",
-      runId: "run-1",
-      task: "test",
-      cwd: "/tmp",
-      timestamp: NOW,
+    expect(view.loop.at(-1)).toMatchObject({
+      title: "run finished",
+      status: "error",
+      summary: "failed",
     });
-    // run_started already adds 1 frame, add 4 more
-    for (let i = 0; i < 4; i++) {
-      b.applyEvent({ type: "model_requested", stepIndex: i, timestamp: NOW });
-    }
-    const vm = b.getViewModel();
-    expect(vm.loop).toHaveLength(3);
-    // Should be the last 3 frames
-    expect(vm.loop[0].title).toBe("model requested");
-  });
-
-  // 24
-  it("applyState updates header", () => {
-    const b = new ViewModelBuilder();
-    const state: AgentRunStateData = {
-      runId: "run-2",
-      status: "waiting_for_model",
-      task: "some task",
-      cwd: "/home",
-      createdAt: NOW,
-      updatedAt: LATER,
-      stepIndex: 5,
-      transcriptPath: "/tmp/transcript.jsonl",
-    };
-    b.applyState(state);
-    const vm = b.getViewModel();
-    expect(vm.run.runId).toBe("run-2");
-    expect(vm.run.status).toBe("waiting_for_model");
-    expect(vm.run.stepIndex).toBe(5);
-    expect(vm.run.cwd).toBe("/home");
-    expect(vm.run.startedAt).toBe(NOW);
-    expect(vm.run.updatedAt).toBe(LATER);
+    expect(view.run.status).toBe("failed");
   });
 });

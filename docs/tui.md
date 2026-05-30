@@ -11,7 +11,7 @@ TUI 是 observer / control surface，不是 harness 核心状态机。
 ```text
 RunOrchestrator owns agent loop.
 TranscriptStore owns run events.
-ManagedTerminalRuntime owns bash sessions.
+ManagedTerminalRuntime owns PTY sessions.
 Environment owns environment events and persistent reminder facts.
 SkillRunStore owns skill run lifecycle.
 
@@ -32,9 +32,9 @@ TUI reads those facts and renders them.
 │ Agent Loop Player                                                          │
 │ step 000 model_requested                                                   │
 │ step 000 thinking_received                                                 │
-│ step 000 decision tool_call bash(action=write_text inputSeq=3)              │
+│ step 000 decision tool_call terminal_write(inputSeq=3)                      │
 │ step 000 review approved                                                   │
-│ step 000 bash finished rc=0 log=.tiny-agent/sessions/default.log           │
+│ step 000 terminal_write finished log=.tiny-agent/sessions/default.log       │
 │ step 001 environment reminder ...                                          │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -47,7 +47,7 @@ TUI reads those facts and renders them.
 2. TUI 的可恢复状态只能是 UI 状态，例如当前 focus、scroll offset、follow mode。
 3. 所有业务事实都来自 transcript、state snapshot、session log、environment、skill run state。
 4. 用户输入不能直接塞进模型上下文，必须通过 IM transport 或已有控制端口。
-5. Bash 输出默认只显示 tail / excerpt，完整内容通过 log path 翻页。
+5. PTY 输出默认只显示一屏 screen / excerpt，完整内容通过 log path 翻页。
 6. TUI 退出不停止 run；run 停止也不要求 TUI 退出。
 7. 第一版以清楚可调试为目标，不追求华丽动画。
 
@@ -58,7 +58,7 @@ TUI reads those facts and renders them.
 - Web UI
 - 多 run 并排监控
 - 在 TUI 内编辑文件
-- 在 TUI 内重新实现 bash session manager
+- 在 TUI 内重新实现 PTY session manager
 - TUI 私有保存 agent 状态
 - 让 TUI 绕过 tool review 执行命令
 - 高级可视化图表
@@ -301,7 +301,7 @@ model_thinking_delta
   -> Append delta into LoopFrame detail section "thinking"
 
 model_output_received(tool_call)
-  -> LoopFrame phase=decision status=ok title="tool call: bash"
+  -> LoopFrame phase=decision status=ok title="tool call: terminal_write"
   -> Complete current model LoopFrame with final thinking/raw decision detail
 
 model_output_received(io_wait)
@@ -328,10 +328,10 @@ tool_reviewed(rejected)
   -> LoopFrame phase=review status=warn title="rejected"
 
 tool_execution_started
-  -> LoopFrame phase=tool status=running title="bash started"
+  -> LoopFrame phase=tool status=running title="<tool> started"
 
 tool_execution_finished
-  -> LoopFrame phase=tool status=ok/error title="bash finished rc=<returnCode>"
+  -> LoopFrame phase=tool status=ok/error title="<tool> finished"
 
 observation_appended
   -> LoopFrame phase=observation status=warn/ok title="synthetic observation"
@@ -513,7 +513,7 @@ Ctrl-C       request interrupt selected session
 R            request restart selected session
 ```
 
-这些控制动作必须走已有 PTY action boundary，并写入 transcript / environment，不能由 TUI 私下改 session 状态。
+这些控制动作必须走已有 terminal/session tool boundary，并写入 transcript / environment，不能由 TUI 私下改 session 状态。
 
 ## Control Actions
 

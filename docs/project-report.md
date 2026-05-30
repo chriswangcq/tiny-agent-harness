@@ -4,27 +4,25 @@
 >
 > 统计口径：基于当前工作区快照；排除 `node_modules/`、`dist/`、`.git/`、`.complex-problems/`、锁文件、日志文件、`package-lock.json` 和明显生成文件。行数统计覆盖 `.ts`、`.js`、`.mjs`、`.md`、`.json` 等源码、脚本、测试与文档文件；本报告自身未纳入统计。统计结果用于工程规模估算，不等同于最终发行包体积。
 >
-> Legacy note: this is a historical report for the pre-managed-PTY architecture.
-> Active guidance is the PTY action runtime with terminal facts, `inputSeq`,
-> best-effort `foregroundProcess`, protected-paced `write_text`, optional
-> `stash_file` staged bytes, and run debug artifacts for large model prompts.
-> Owner: P036. Removal condition: regenerate the report after the PTY cutover
-> fully replaces historical wording.
+> 当前口径：本报告已按 terminal/session tool surface 更新。模型可见动作是
+> `terminal_write`、`terminal_key`、`session_*` 和内部 `io_wait`；普通文件、
+> 回复和脚本通过 shell-native heredoc/stdin 流程完成；observation 返回一屏
+> `screen.text`、terminal facts 和 `screen.logRef.path`。
 
 ## 1. 项目定位
 
-`tiny-agent-harness` 是一个开放式 coding agent harness 实验项目。它不是一个大而全的 agent SDK，也不是简单把若干工具注册给模型的 provider-native tool demo。它的核心目标是把 coding agent 的推理循环、外部动作、长期 bash session、用户消息、环境事件、skill 生命周期、日志和可恢复状态拆成清楚边界，让每一步都可审阅、可回放、可恢复、可替换。
+`tiny-agent-harness` 是一个开放式 coding agent harness 实验项目。它不是一个大而全的 agent SDK，也不是简单把若干工具注册给模型的 provider-native tool demo。它的核心目标是把 coding agent 的推理循环、外部动作、长期 terminal session、用户消息、环境事件、skill 生命周期、日志和可恢复状态拆成清楚边界，让每一步都可审阅、可回放、可恢复、可替换。
 
 项目当前可以概括为：
 
-> tiny-agent-harness 是一个以 bash PTY 和受限 `stash_file` 为外部动作面、以显式状态机、PTY 输入和 durable artifacts 为核心的 coding agent runtime 骨架。
+> tiny-agent-harness 是一个以 terminal/session tools 为外部动作面、以显式状态机、PTY 输入和 durable artifacts 为核心的 coding agent runtime 骨架。
 
 从产品和工程形态看，它覆盖三类能力：
 
 | 能力 | 说明 |
 | --- | --- |
 | Agent ReAct loop | `AgentRunState` 决定下一步 effect，`RunOrchestrator` 执行模型调用、工具校验、审核、bash 执行和 transcript 写入。 |
-| 统一外部动作面 | 交互动作通过 `bash` PTY；大文件/生成内容可先用 `stash_file` 暂存，再通过 PTY 内 `file materialize` CLI 落盘。MCP、memory、skills、sub-agent、code intelligence、测试、git 等能力都通过 CLI 进入 bash session。 |
+| 统一外部动作面 | 交互动作通过 terminal/session tools；文件和生成内容通过 shell-native heredoc、stdin redirection 或 CLI 落盘。MCP、memory、skills、sub-agent、code intelligence、测试、git 等能力都通过 CLI 进入 terminal session。 |
 | 可观察与可恢复执行 | run state、transcript JSONL、session history、debug prompt artifacts、session log、environment events、skill run state、TUI view model 共同构成可审计执行轨迹。 |
 
 ## 2. 系统整体架构
@@ -60,8 +58,8 @@ TUI
 | --- | --- | --- |
 | 模型适配层 | `src/model` | DeepSeek V4 FIM two-pass、native tool-call frame 解析、`ModelTurn` 归一化、prompt 构造。 |
 | 运行编排层 | `src/run` | agent run 状态机、effect 选择、事件驱动状态转移、run lifecycle。 |
-| 工具执行层 | `src/tools`、`src/bash` | 静态 bash tool catalog、tool validation、review boundary、PTY-backed bash session 和 observation。 |
-| 外部事件层 | `src/environment`、`src/im` | IM 消息、bash/skill/environment events、`io_wait`、事件消费游标和 factual reminder。 |
+| 工具执行层 | `src/tools`、`src/bash` | 静态 terminal/session tool catalog、tool validation、review boundary、PTY-backed terminal session 和 observation。 |
+| 外部事件层 | `src/environment`、`src/im` | IM 消息、terminal/skill/environment events、`io_wait`、事件消费游标和 factual reminder。 |
 | 能力 CLI 层 | `src/skill`、`src/code-intel`、`src/cli` | skill discovery/run/review，`codeq` LSP 查询，`im` mock transport，用户命令入口。 |
 | 可观察层 | `src/transcript`、`src/tui`、`src/state` | transcript/state 持久化、文件锁、JSONL ledger、TUI transcript player 和 view model。 |
 
@@ -81,7 +79,7 @@ task / environment reminder
   -> ToolCallValidator
   -> ToolReviewer
   -> ManagedTerminalRuntime
-  -> PtyObservation
+  -> TerminalObservation | SessionListObservation
   -> TranscriptStore
   -> next model step
 ```
@@ -92,9 +90,9 @@ task / environment reminder
 
    DeepSeek FIM 输出必须先被 adapter 解析为 `ModelTurn`，再由 run state 决定下一步 effect。无效输出、schema 错误和 review 拒绝都会转成 recoverable observation。
 
-2. **所有交互能力共享 bash PTY 边界**
+2. **所有交互能力共享 terminal/session 边界**
 
-   `skill run ...`、`codeq diagnostics ...`、`npm test`、`git`、MCP CLI 调用，本质上都是 bash session 中的一条命令。生成文件可先通过 `stash_file` 暂存，但最终 workspace 写入仍由 PTY 内 CLI 完成。它们共享 tool review、session log、observation truncation 和 transcript。
+   `skill run ...`、`codeq diagnostics ...`、`npm test`、`git`、MCP CLI 调用，本质上都是 terminal session 中的一条命令。生成文件、IM 回复和报告通过 heredoc、stdin redirection 或项目内 CLI 完成。它们共享 tool review、session log、one-screen observation 和 transcript。
 
 3. **`io_wait` 是状态机决策**
 
@@ -102,7 +100,7 @@ task / environment reminder
 
 4. **大输出外化到日志**
 
-   Observation 只返回当前 session 尾部 `outputTail`、terminal facts、`returnedToPrompt`、offset 和 log path。完整输出由 session log 保存，agent 需要更多细节时再通过 bash 使用 `tail`、`sed`、`rg` 查看。FIM prompt 这类大调试 payload 通过 `debug/prompts/` artifact 外置，transcript/history 只保留 `promptRef`。
+   Active target design 中，Observation 只返回当前 terminal viewport 的一屏 `screen.text`、terminal facts、`returnedToPrompt` 和 log path。完整输出由 session log 保存，agent 需要更多细节时再通过 bash 使用 `tail`、`sed`、`rg` 查看。FIM prompt 这类大调试 payload 通过 `debug/prompts/` artifact 外置，transcript/history 只保留 `promptRef`。
 
 5. **执行轨迹可播放**
 
@@ -131,26 +129,28 @@ Decision pass 允许的 function name 是：
 
 | function | 含义 |
 | --- | --- |
-| `bash` | PTY 动作工具，用于 CLI 命令、交互输入和 session control。 |
-| `stash_file` | 受限文件暂存工具，用于生成文件等不应经过 shell 解析的大 payload；落盘仍通过 bash 内 `file materialize`。 |
-| PTY input | `write_text` 和 `key` 是 PTY 输入路径；长文本写入由 runtime 内部 pacing。 |
+| `terminal_write` | 向 current session 写入精确文本，用于 CLI 命令、heredoc、REPL 输入和交互回答。 |
+| `terminal_key` | 向 current session 发送 enter、tab、方向键、escape、ctrl-d 等按键。 |
+| `session_observe` / `session_list` / `session_focus` | 观察、列出或切换 PTY session。 |
+| `session_interrupt` / `session_restart` / `session_terminate` | 中断、重启或终止 PTY session。 |
 | `io_wait` | 内部等待请求，不是外部工具。 |
 
-这种做法既利用 DeepSeek V4 tool-call post-training 的输出形式，又不把 provider-native tool calling 变成 harness 的核心协议。orchestrator 只消费归一化后的 `ModelTurn`。当任务完成时，Agent 仍然通过 `bash` 调用 IM CLI 发送用户可见答复，然后返回 `io_wait` 等待下一条环境事件。
+这种做法既利用 DeepSeek V4 tool-call post-training 的输出形式，又不把 provider-native tool calling 变成 harness 的核心协议。orchestrator 只消费归一化后的 `ModelTurn`。当任务完成时，Agent 通过 terminal session 调用 IM CLI 发送用户可见答复，然后返回 `io_wait` 等待下一条环境事件。
 
-### 4.3 Bash Tool 与 Session Manager
+### 4.3 Terminal/Session Tools 与 Session Manager
 
-`src/tools` 定义静态 tool catalog：`bash` 负责 PTY action，`stash_file` 负责受限文件暂存。`ToolCallValidator` 将模型产生的 `InternalToolCall` 转成可审核的 `ToolRequest`。
+`src/tools` 定义静态 tool catalog：`terminal_write` / `terminal_key` 负责 current session 输入，`session_observe` / `session_list` / `session_focus` / `session_interrupt` / `session_restart` / `session_terminate` 负责 session 管理。`ToolCallValidator` 将模型产生的 `InternalToolCall` 转成可审核的 `ToolRequest`。
 
 `src/bash` 基于 `node-pty` 管理长期 session，支持：
 
-- 控制命令：`list`、`create`、`status`、`poll`、`write_text` or `key`、`interrupt`、`terminate`、`restart`
+- 输入工具：`terminal_write`、`terminal_key`
+- 管理工具：`session_observe`、`session_list`、`session_focus`、`session_interrupt`、`session_terminate`、`session_restart`
 
-当前 bash payload 是 PTY action，不再是命令级 `{ command }` 对象。timeout 只释放 agent focus，不 kill 进程；长任务可以继续运行，后续通过 `poll`、`write_text` or `key`、`interrupt` 或 `restart` 管理。runtime 还会在 session load 时附带 best-effort `foregroundProcess`，并在 stale `inputSeq` rejection 前尽量刷新一次 PTY 输出，让 agent 拿到新的 prompt facts。
+timeout 只释放 agent focus，不 kill 进程；长任务可以继续运行，后续通过 `session_observe`、`terminal_write` / `terminal_key`、`session_interrupt` 或 `session_restart` 管理。runtime 还会在 session load 时附带 best-effort `foregroundProcess`，并在 stale `inputSeq` rejection 前尽量刷新一次 PTY 输出，让 agent 拿到新的 prompt facts。
 
 ### 4.4 Environment 与 IM Transport
 
-`src/environment` 是外部世界事件模型。IM 新消息、bash session 状态、命令完成/超时、skill run started/closed/review pending/review completed 都应进入 `EnvironmentEvent`。
+`src/environment` 是外部世界事件模型。IM 新消息、terminal session 状态、命令完成/超时、skill run started/closed/review pending/review completed 都应进入 `EnvironmentEvent`。
 
 事件分两类：
 
@@ -159,7 +159,7 @@ Decision pass 允许的 function name 是：
 | one-shot event | 按 run cursor 消费一次，渲染成 factual environment reminder。 |
 | persistent fact | 例如 active skill run，每轮持续提醒，直到状态关闭。 |
 
-`src/im` 则提供用户消息 transport 的边界。设计上用户通信不是模型工具，而是 orchestrator port。agent 如果需要等待用户输入，应使用 `io_wait`，而不是 bash sleep 或直接阻塞模型循环。
+`src/im` 则提供用户消息 transport 的边界。设计上用户通信不是模型工具，而是 orchestrator port。agent 如果需要等待用户输入，应使用 `io_wait`，而不是 shell sleep 或直接阻塞模型循环。
 
 ### 4.5 Skill CLI
 
@@ -283,11 +283,11 @@ TUI 不拥有 agent 状态，不参与模型决策，也不直接改写 run stat
 
 2. **边界清楚**
 
-   Model adapter、run orchestrator、validator、reviewer、bash manager、environment、skill、codeq、TUI 都有相对明确的职责边界。
+   Model adapter、run orchestrator、validator、reviewer、terminal manager、environment、skill、codeq、TUI 都有相对明确的职责边界。
 
 3. **测试覆盖关键骨架**
 
-   当前测试覆盖 run state、environment、validator、bash session、skill discovery/store/CLI、state lock/jsonl/root、code-intel、IM transport、TUI view model 等关键边界。
+   当前测试覆盖 run state、environment、validator、terminal session、skill discovery/store/CLI、state lock/jsonl/root、code-intel、IM transport、TUI view model 等关键边界。
 
 4. **文档驱动明显**
 
@@ -311,7 +311,7 @@ TUI 不拥有 agent 状态，不参与模型决策，也不直接改写 run stat
 
 | 差异点 | 说明 |
 | --- | --- |
-| bash PTY action boundary | 不把能力注册成一组 provider tools，而是把交互能力统一收敛到 bash session；大文件/生成内容通过 `stash_file` 暂存后由 PTY 内 CLI 落盘。 |
+| terminal/session boundary | 不把能力注册成一组 provider tools，而是把交互能力统一收敛到 terminal session；文件/生成内容通过 heredoc、stdin redirection 或 CLI 落盘。 |
 | FIM two-pass decision | 用 FIM 控制 thinking 与 decision 的生成边界，并贴近 DeepSeek V4 native tool-call 格式。 |
 | explicit run state | pending model/tool/review/io 都是 state，不靠 orchestrator 临时变量。 |
 | durable artifacts | state、transcript、session history、debug prompt artifacts、session log、skill run state、environment events 都是可读文件。 |
@@ -320,18 +320,18 @@ TUI 不拥有 agent 状态，不参与模型决策，也不直接改写 run stat
 
 因此项目不适合被描述为“又一个工具调用 demo”。更准确的叙事是：
 
-> 它在探索一个 coding agent runtime 的最小内核：模型只负责决策，外部世界通过 bash 和事件进入，执行轨迹以 durable artifacts 留下。
+> 它在探索一个 coding agent runtime 的最小内核：模型只负责决策，外部世界通过 terminal session 和事件进入，执行轨迹以 durable artifacts 留下。
 
 ## 8. 当前优势
 
 | 优势 | 说明 |
 | --- | --- |
-| 核心约束简单 | bash 是 PTY 动作面，`stash_file` 是受限文件暂存面；模型只需要掌握 PTY byte/key/control action 和明确的 file materialize 流程。 |
+| 核心约束简单 | terminal/session tools 是唯一交互动作面；模型只需要掌握 current-session 输入、session 管理和 shell-native payload 流程。 |
 | 调试友好 | state、JSONL、log path、offset、TUI view model 让执行过程可检查。 |
 | 长任务友好 | PTY session 支持 timeout 后继续运行、poll、interactive PTY input、interrupt 和 restart。 |
-| 可审计 | tool review 位于所有 PTY action 和 `stash_file` request 前，未来可接权限策略和人工审批。 |
+| 可审计 | tool review 位于所有 terminal/session request 前，未来可接权限策略和人工审批。 |
 | 可进化 skill | agent 可以按需触发复盘，把 lessons 写回 skill 附件，形成经验沉淀闭环。 |
-| 代码理解能力不污染内核 | LSP 能力通过 `codeq` CLI 暴露，不改变能力通过 bash PTY 边界进入 harness 的约束。 |
+| 代码理解能力不污染内核 | LSP 能力通过 `codeq` CLI 暴露，不改变能力通过 terminal/session 边界进入 harness 的约束。 |
 | 测试保护状态边界 | 测试重点落在状态转移、CLI、锁、JSONL、validator 和 view model。 |
 
 ## 9. 当前风险与短板
@@ -341,7 +341,7 @@ TUI 不拥有 agent 状态，不参与模型决策，也不直接改写 run stat
 | 持续验证要跟上 | 最新审计中 `npm run build` 和全量 `npm test` 已通过；后续改动仍要保持这条线常绿。 | 把 build/test/diff check 固定为提交前检查。 |
 | 文档与实现快速变化 | README 已包含 codeq/state/IM/skill 新能力，部分实现仍在未提交工作区中快速演进。 | 每次功能落地后同步更新对应设计文档和 project report。 |
 | 状态持久化仍需闭环 | 设计中有 `.tiny-agent/`、locks、JSONL ledger，但所有 CLI 是否都完全使用同一 resolver 还需要持续验证。 | 用集成测试覆盖多 CLI 共用 state root、并发写、resume/replay。 |
-| bash PTY 约束对模型要求高 | 模型必须学会通过 bash 调 skill/codeq/im 等 CLI，并在小 heredoc、前台 stdin consumer、`stash_file` materialize 之间做正确选择，而不是直接获得 typed business tool affordance。 | 在 system prompt 和 examples 中强化小 heredoc / `stash_file` / `--text-stdin` 的边界，并避免 heredoc 示例污染大生成文件路径。 |
+| terminal/session 约束对模型要求高 | 模型必须学会通过 shell 调 skill/codeq/im 等 CLI，并在 heredoc、前台 stdin consumer、`--text-stdin` 和 session 管理之间做正确选择，而不是直接获得 typed business tool affordance。 | 在 system prompt 和 examples 中强化 heredoc / `--text-stdin` / session observe 的边界，并避免示例污染大生成文件路径。 |
 | review 目前默认 approve | 安全边界存在，但策略能力还未产品化。 | 增加危险命令分类、workspace policy、网络/文件权限和人工确认模式。 |
 | TUI 仍偏观察 | 当前 TUI 更像 transcript player，控制动作和 session tail 仍可增强。 | 增加 session log tail、active skill、review pending、approval 操作和 replay/follow。 |
 
@@ -376,8 +376,8 @@ TUI 不拥有 agent 状态，不参与模型决策，也不直接改写 run stat
 
 ```text
 capability as CLI
-  -> run through bash
-  -> reviewed as a PTY action request
+  -> run through terminal session
+  -> reviewed as a terminal/session request
   -> output as JSON
   -> logged in session
   -> summarized into observation / environment reminder
@@ -389,19 +389,19 @@ capability as CLI
 
 建议对外表达可以聚焦为：
 
-1. tiny-agent-harness keeps bash as the PTY action surface and protected-paces every `write_text` input.
+1. tiny-agent-harness keeps terminal/session tools as the action surface and protected-paces every terminal write.
 2. tiny-agent-harness turns agent execution into explicit state and durable logs.
 3. tiny-agent-harness lets skills, code intelligence, IM, and future tools evolve as CLIs without bloating the core runtime.
 
 中文版本：
 
-1. tiny-agent-harness 让 bash 成为 PTY 动作面，并对每次 `write_text` 输入进行保护性 pacing。
+1. tiny-agent-harness 让 terminal/session tools 成为动作面，并对每次 terminal write 进行保护性 pacing。
 2. tiny-agent-harness 把 agent 执行过程变成显式状态和可持久化日志。
 3. tiny-agent-harness 让 skill、代码智能、IM 和未来工具以 CLI 生态演进，而不是膨胀内核。
 
 ## 11. 结论
 
-`tiny-agent-harness` 已经形成一个清晰的 coding agent runtime 骨架：DeepSeek V4 FIM two-pass model adapter、显式 run state、orchestrator effect loop、bash PTY 动作边界、受限文件暂存、PTY 输入模型、PTY session manager、environment event model、skill lifecycle、code intelligence CLI、state storage、transcript 和 TUI player。
+`tiny-agent-harness` 已经形成一个清晰的 coding agent runtime 骨架：DeepSeek V4 FIM two-pass model adapter、显式 run state、orchestrator effect loop、terminal/session tool 边界、PTY 输入模型、PTY session manager、environment event model、skill lifecycle、code intelligence CLI、state storage、transcript 和 TUI player。
 
 按当前快照估算，项目约 1.95 万行统计源码/文档/测试，其中测试约 6 千行、文档约 5 千行。它的工程投入重点不是堆功能，而是把 agent 执行过程变得可解释、可审计、可恢复。
 

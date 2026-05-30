@@ -8,14 +8,13 @@ import type {
 } from "../types/model.js";
 import type {
   AgentObservation,
-  BashToolRequest,
-  StashFileToolRequest,
   ToolCallValidation,
   ToolDefinition,
+  ToolObservation,
   ToolRequest,
   ToolReviewDecision,
 } from "../types/tools.js";
-import type { PtyObservation } from "../terminal/types.js";
+import type { TerminalObservation } from "../terminal/types.js";
 import type { InternalToolCall } from "../types/model.js";
 import type { EnvironmentPort, EnvironmentEvent, IoWaitRequest } from "../types/environment.js";
 import { Environment } from "../environment/environment.js";
@@ -47,11 +46,7 @@ export interface ReviewerPort {
 }
 
 export interface TerminalPort {
-  execute(request: BashToolRequest): Promise<PtyObservation>;
-}
-
-export interface StashFilePort {
-  stash(request: StashFileToolRequest): Promise<AgentObservation>;
+  execute(request: ToolRequest): Promise<ToolObservation>;
 }
 
 export interface PromptPort {
@@ -72,7 +67,7 @@ export type HistoryItem =
     }
   | {
       type: "observation";
-      observation: PtyObservation | AgentObservation;
+      observation: ToolObservation;
       toolCallId?: string;
     }
   | { type: "environment_reminder"; content: string };
@@ -82,7 +77,6 @@ export interface RunPorts {
   validator: ValidatorPort;
   reviewer: ReviewerPort;
   terminal: TerminalPort;
-  stashFiles: StashFilePort;
   prompt: PromptPort;
   contextWindow: ContextWindowPort;
   session: RunSessionPort;
@@ -280,7 +274,7 @@ export class RunOrchestrator {
           timestamp: this.now(),
         });
 
-        let observation: PtyObservation | AgentObservation;
+        let observation: ToolObservation;
         try {
           observation = await this.executeToolRequest(effect.request);
         } catch (error) {
@@ -445,10 +439,7 @@ export class RunOrchestrator {
 
   private async executeToolRequest(
     request: ToolRequest,
-  ): Promise<PtyObservation | AgentObservation> {
-    if (request.kind === "stash_file") {
-      return this.ports.stashFiles.stash(request);
-    }
+  ): Promise<ToolObservation> {
     return this.ports.terminal.execute(request);
   }
 
@@ -631,43 +622,81 @@ function serializeErrorCause(cause: unknown): unknown {
 }
 
 function pendingImSendMessage(history: readonly HistoryItem[]): string | undefined {
-  const latestObservation = [...history].reverse().find(
-    (entry): entry is Extract<HistoryItem, { type: "observation" }> =>
-      entry.type === "observation",
+  const latestObservationIndex = findLastHistoryIndex(
+    history,
+    (entry) => entry.type === "observation",
   );
-  if (latestObservation === undefined) {
+  if (latestObservationIndex === -1) {
     return undefined;
   }
 
+  const latestObservation = history[latestObservationIndex] as Extract<
+    HistoryItem,
+    { type: "observation" }
+  >;
   const observation = latestObservation.observation;
-  if (!isPtyObservation(observation)) {
+  if (!isTerminalObservation(observation)) {
     return undefined;
   }
-  if (observation.result !== "ok" || observation.action.kind !== "write_text") {
-    return undefined;
-  }
-  if (!isImSendPreview(observation.action.preview)) {
+  if (observation.result !== "ok" || observation.request !== "terminal_write") {
     return undefined;
   }
   if (observation.returnedToPrompt) {
     return undefined;
   }
 
-  return "Cannot wait for user input yet: the latest IM send write_text has not returned to a shell prompt. Poll until the command finishes and the prompt returns, then call io_wait.";
+  const latestToolCall = history
+    .slice(0, latestObservationIndex)
+    .reverse()
+    .find((entry): entry is Extract<HistoryItem, { type: "tool_call" }> =>
+      entry.type === "tool_call",
+    );
+  if (
+    latestToolCall?.toolCall.name !== "terminal_write" ||
+    !isTerminalWriteArguments(latestToolCall.toolCall.arguments) ||
+    !isImSendText(latestToolCall.toolCall.arguments.text)
+  ) {
+    return undefined;
+  }
+
+  return "Cannot wait for user input yet: the latest IM send terminal_write has not returned to a shell prompt. Observe the session until the command finishes and the prompt returns, then call io_wait.";
 }
 
-function isPtyObservation(value: PtyObservation | AgentObservation): value is PtyObservation {
+function findLastHistoryIndex(
+  history: readonly HistoryItem[],
+  predicate: (entry: HistoryItem) => boolean,
+): number {
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    if (predicate(history[index]!)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function isTerminalObservation(value: unknown): value is TerminalObservation {
   return (
     typeof value === "object" &&
     value !== null &&
     "terminal" in value &&
-    "action" in value &&
+    "request" in value &&
     "result" in value &&
-    "eventCount" in value &&
-    "returnedToPrompt" in value
+    "returnedToPrompt" in value &&
+    "screen" in value
   );
 }
 
-function isImSendPreview(preview: string | undefined): boolean {
-  return preview !== undefined && /\bim\s+send\b/u.test(preview);
+function isTerminalWriteArguments(
+  value: unknown,
+): value is { expectedInputSeq: number; text: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "text" in value &&
+    typeof (value as { text?: unknown }).text === "string"
+  );
+}
+
+function isImSendText(text: string): boolean {
+  return /\bim\s+send\b/u.test(text);
 }

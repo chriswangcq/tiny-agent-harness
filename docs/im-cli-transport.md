@@ -17,7 +17,7 @@ User
   -> User
 ```
 
-这里的 IM 是 harness 的用户通信边界，不是 Agent 可调用的业务工具。Agent 通过 `bash` 中的 IM CLI 发送消息；需要暂存大段准备内容时，可先用 `stash_file`，但最终发送仍要经过 PTY 可见的 CLI。
+这里的 IM 是 harness 的用户通信边界，不是 Agent 可调用的业务工具。Agent 通过 PTY 中的 IM CLI 发送消息；大段准备内容也应先通过普通 shell 文件、heredoc 或 stdin redirection 处理，最终发送仍要经过 PTY 可见的 CLI。
 
 ## Responsibilities
 
@@ -39,7 +39,7 @@ The split:
 
 ```text
 User communication is an orchestrator port.
-Bash remains the PTY-visible delivery path; `stash_file` may stage prepared file/message payloads before a bash CLI materializes or sends them.
+Terminal/session tools remain the PTY-visible delivery path; prepared file/message payloads are handled through shell-native files, heredocs, stdin redirection, and IM CLI commands.
 ```
 
 ## CLI Shape
@@ -54,7 +54,7 @@ im send --channel default --kind status --text-stdin
 im ack --channel default --message-id <id>
 ```
 
-In the PTY agent flow, `--text-stdin` is the required stdin path for all agent-authored replies. A quoted heredoc is valid for normal text replies, including Markdown, Chinese/emoji-heavy content, tables, generated reports, and multiline summaries, e.g. `im send --kind status --text-stdin <<'IM' ... IM`. Input redirection (`im send --kind status --text-stdin < reply.md`) and process substitution with `file cat` remain valid when they make the command simpler. `--text` remains a CLI convenience for humans and scripts, but the agent should not use it.
+In the terminal/session agent flow, `--text-stdin` is the required stdin path for all agent-authored replies. A quoted heredoc is valid for normal text replies, including Markdown, Chinese/emoji-heavy content, tables, generated reports, and multiline summaries, e.g. `im send --kind status --text-stdin <<'IM' ... IM`. Input redirection (`im send --kind status --text-stdin < reply.md`) remains valid when it makes the command simpler. `--text` remains a CLI convenience for humans and scripts, but the agent should not use it.
 
 For interactive local demos:
 
@@ -189,7 +189,7 @@ after each observation
 
 ## IO Wait
 
-`io_wait` is an internal AgentRunState decision, not a bash tool. IM is one event source for Environment.
+`io_wait` is an internal AgentRunState decision, not a terminal/session tool. IM is one event source for Environment.
 
 First version supports only this condition:
 

@@ -1,7 +1,8 @@
 // ─── Environment Event Model ────────────────────────────────────────
 //
 // Unified external event model. Environment collects user and skill events.
-// Terminal facts are returned as PtyObservation through the tool result path.
+// Terminal facts are returned as terminal/session observations through the tool
+// result path.
 
 // ─── User / Agent Messages (IM) ────────────────────────────────────
 

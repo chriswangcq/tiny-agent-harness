@@ -17,23 +17,31 @@ describe("terminal application ports", () => {
       parserState: { pending: "", totalBytes: 0 },
     };
     const saved: TerminalRuntimeSnapshot[] = [];
+    let currentSession = "default";
 
     const ports: TerminalServicePorts = {
-      clock: {
-        nowIso: () => "2026-05-27T00:00:00.000Z",
-        monotonicMs: () => 123,
-      },
-      ids: {
-        newId: (prefix) => `${prefix}-1`,
-        newNonce: () => "nonce",
-      },
       pty: {
         write: async () => {},
-        read: async () => ({ chunk: "hello\n" }),
+        read: async () => ({
+          chunk: "hello\n",
+          screen: {
+            text: "hello\n",
+            rows: 24,
+            cols: 80,
+            truncated: false,
+            logRef: { path: "test-log://default" },
+          },
+        }),
         interrupt: async () => {},
         terminate: async () => {},
+        restart: async () => snapshot,
       },
       sessions: {
+        getCurrent: async () => currentSession,
+        setCurrent: async (session) => {
+          currentSession = session;
+        },
+        list: async () => [snapshot],
         load: async () => snapshot,
         save: async (next) => {
           saved.push(next);
@@ -45,8 +53,14 @@ describe("terminal application ports", () => {
     };
 
     expect(await ports.sessions.load("default")).toBe(snapshot);
+    await ports.sessions.setCurrent("build");
+    expect(await ports.sessions.getCurrent()).toBe("build");
+    await expect(ports.sessions.list()).resolves.toEqual([snapshot]);
     await ports.sessions.save(snapshot);
     expect(saved).toEqual([snapshot]);
-    await expect(ports.pty.read("default")).resolves.toEqual({ chunk: "hello\n" });
+    await expect(ports.pty.read("default")).resolves.toMatchObject({
+      chunk: "hello\n",
+      screen: { text: "hello\n" },
+    });
   });
 });

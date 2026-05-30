@@ -3,9 +3,8 @@
 // FIM decision grammar is the harness's own protocol, not provider-native
 // tool calling. The model adapter normalizes FIM decisions into ModelTurn.
 
-import type { BashToolInput } from "./bash.js";
 import type { IoWaitRequest } from "./environment.js";
-import type { StashFileInput, ToolName } from "./tools.js";
+import type { TerminalToolInput, ToolName } from "./tools.js";
 
 /**
  * Raw model output placeholder. Will be refined as the FIM adapter
@@ -28,14 +27,14 @@ export type AgentThinking = {
 export type InternalToolCall = {
   id: string;
   name: ToolName;
-  arguments: BashToolInput | StashFileInput;
+  arguments: TerminalToolInput;
   raw?: unknown;
 };
 
 /**
  * The normalized result of a single FIM decision pass.
  *
- * - `tool_call`: the agent wants to execute a bash command or control.
+ * - `tool_call`: the agent wants to execute a terminal/session tool.
  * - `io_wait`: the agent is waiting for external input.
  * - `invalid_output`: the FIM output could not be parsed.
  *

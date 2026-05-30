@@ -4,19 +4,19 @@ import * as path from "node:path";
 
 import type {
   AgentThinking,
-  BashToolInput,
   FimStepOutput,
   InternalToolCall,
   ModelProgressEvent,
   ModelStepContext,
   ModelTurn,
-  StashFileInput,
+  TerminalToolInput,
   ToolDefinition,
   ToolName,
   V4ChatMessage,
   V4Tool,
 } from "../types/index.js";
 import type { IoWaitRequest } from "../types/environment.js";
+import { MODEL_VISIBLE_TOOL_NAMES } from "../types/tools.js";
 
 const ENCODE_PROMPT_MAX_BUFFER_BYTES = 2 * 1024 * 1024;
 
@@ -102,12 +102,8 @@ type FimStreamChunk = FimResponse;
 
 type Decision =
   | {
-      name: "bash";
-      arguments: BashToolInput;
-    }
-  | {
-      name: "stash_file";
-      arguments: StashFileInput;
+      name: ToolName;
+      arguments: TerminalToolInput;
     }
   | {
       name: "io_wait";
@@ -130,7 +126,19 @@ const DSML_INVOKE_CLOSE = `</${DSML}invoke>`;
 const DSML_PARAM_CLOSE = `</${DSML}parameter>`;
 const END_OF_SENTENCE = "<｜end▁of▁sentence｜>";
 
-const THINKING_STOP_SEQUENCES = [DSML_TOOL_CALLS_OPEN];
+const THINKING_HARD_BOUNDARY_SEQUENCES = [
+  "</think>",
+  DSML_TOOL_CALLS_OPEN,
+  DSML_INVOKE_OPEN_PREFIX,
+  "<tool_call",
+  "</tool_call>",
+  "｜tool",
+];
+
+const MODEL_VISIBLE_TOOL_NAME_SET: ReadonlySet<string> = new Set(
+  MODEL_VISIBLE_TOOL_NAMES,
+);
+const THINKING_STOP_SEQUENCES = THINKING_HARD_BOUNDARY_SEQUENCES;
 const DECISION_STOP_SEQUENCES = [DSML_INVOKE_CLOSE];
 const DECISION_TRAILER = `\n${DSML_INVOKE_CLOSE}\n${DSML_TOOL_CALLS_CLOSE}${END_OF_SENTENCE}`;
 
@@ -586,7 +594,7 @@ export class DeepSeekFimAdapter {
 
     const toolCall: InternalToolCall = {
       id: `fim-call-${context.runId}-${context.stepIndex}`,
-      name: decision.name as ToolName,
+      name: decision.name,
       arguments: decision.arguments,
       raw: decision,
     };
@@ -605,14 +613,7 @@ export class DeepSeekFimAdapter {
 // Thinking sanitization
 // ---------------------------------------------------------------------------
 
-const THINKING_BOUNDARY_MARKERS = [
-  "</think>",
-  DSML_TOOL_CALLS_OPEN,
-  DSML_INVOKE_OPEN_PREFIX,
-  "<tool_call",
-  "</tool_call>",
-  "｜tool",
-];
+const THINKING_BOUNDARY_MARKERS = THINKING_HARD_BOUNDARY_SEQUENCES;
 
 const THINKING_BOUNDARY_LOOKBEHIND =
   Math.max(...THINKING_BOUNDARY_MARKERS.map((marker) => marker.length)) - 1;
@@ -1003,20 +1004,10 @@ function buildDecision(
   name: string,
   args: Record<string, unknown>,
 ): ParseDecisionResult {
-  if (name === "bash") {
+  if (isModelVisibleToolName(name)) {
     return {
       status: "valid",
-      decision: { name: "bash", arguments: args as BashToolInput },
-    };
-  }
-
-  if (name === "stash_file") {
-    return {
-      status: "valid",
-      decision: {
-        name: "stash_file",
-        arguments: args as StashFileInput,
-      },
+      decision: { name, arguments: args as TerminalToolInput },
     };
   }
 
@@ -1037,6 +1028,10 @@ function buildDecision(
     status: "invalid",
     message: `Unsupported function: ${name}`,
   };
+}
+
+function isModelVisibleToolName(name: string): name is ToolName {
+  return MODEL_VISIBLE_TOOL_NAME_SET.has(name);
 }
 
 function escapeForRegex(str: string): string {

@@ -6,7 +6,11 @@
 
 import type { RunEvent, AgentRunStateData } from "../types/run.js";
 import type { ModelTurn } from "../types/model.js";
-import type { PtyObservation } from "../terminal/types.js";
+import type {
+  SessionListObservation,
+  TerminalObservation,
+  TerminalSessionSnapshot,
+} from "../terminal/types.js";
 import type {
   UserMessage,
   AgentMessage,
@@ -255,40 +259,31 @@ export class ViewModelBuilder {
           let summary: string;
           let logPath: string | undefined;
 
-          if (isPtyObservation(observation)) {
-            status =
-              observation.result === "ok"
-                ? "ok"
-                : observation.result === "rejected"
-                  ? "warn"
-                  : observation.result === "timeout"
-                    ? "waiting"
-                    : "warn";
+          if (isTerminalObservation(observation)) {
+            status = terminalResultStatus(observation.result);
             title = observation.errorCode
-              ? `pty rejected ${observation.errorCode}`
-              : `pty ${observation.result} ${observation.action.kind}`;
-            summary = formatPtyObservationSummary(observation);
-            logPath = observation.logRef;
+              ? `${observation.request} rejected ${observation.errorCode}`
+              : `${observation.request} ${observation.result}`;
+            summary = formatTerminalObservationSummary(observation);
+            logPath = observation.screen.logRef.path;
 
-            this.sessions.set(observation.session ?? "default", {
-              session: observation.session ?? "default",
-              state: observation.terminal.alive
-                ? observation.terminal.foregroundProcess
-                  ? "running"
-                  : "idle"
-                : "terminated",
+            this.sessions.set(observation.observedSession, {
+              session: observation.observedSession,
+              state: terminalSessionState(observation.terminal),
               currentCommand: observation.terminal.foregroundProcess ?? undefined,
               returnCode:
                 observation.terminal.lastShellPrompt?.lastReturnCode ?? null,
-              logPath: observation.logRef ?? "",
-              tail:
-                observation.outputTail ??
-                observation.outputPreview ??
-                observation.message ??
-                "",
-              tailOffset: observation.outputTailBytes,
+              logPath: observation.screen.logRef.path,
+              tail: observation.screen.text || observation.message || "",
               updatedAt: event.timestamp,
             });
+          } else if (isSessionListObservation(observation)) {
+            status = "ok";
+            title = `${event.request.toolName} finished`;
+            summary = `currentSession=${observation.currentSession} sessions=${observation.sessions.length}`;
+            for (const session of observation.sessions) {
+              this.sessions.set(session.session, sessionSnapshotToView(session, event.timestamp));
+            }
           } else {
             const observationRecord: Record<string, unknown> = isRecord(observation)
               ? observation
@@ -300,7 +295,9 @@ export class ViewModelBuilder {
             status = result === "rejected" ? "warn" : "ok";
             title = `${event.request.toolName} finished`;
             summary =
-              observation.message ??
+              (typeof observationRecord.message === "string"
+                ? observationRecord.message
+                : undefined) ??
               (typeof observationRecord.result === "string"
                 ? `result=${observationRecord.result}`
                 : "");
@@ -587,31 +584,79 @@ function truncateForSummary(text: string, maxLength = 80): string {
 function formatToolCallSummary(toolCall: { name?: string; arguments: unknown }): string {
   const args = toolCall.arguments;
   if (isRecord(args)) {
-    if (toolCall.name === "stash_file") {
-      const parts = ["tool=stash_file"];
-      if (typeof args.name === "string") {
-        parts.push(`name=${args.name}`);
-      }
-      if (typeof args.content === "string") {
-        parts.push(`bytes=${Buffer.byteLength(args.content, "utf8")}`);
-      }
-      return parts.join(" ");
-    }
-    const actionKind = typeof args.kind === "string" ? args.kind : undefined;
-    if (actionKind) {
-      const session = typeof args.session === "string" ? args.session : "default";
-      const parts = [`action=${actionKind}`, `session=${session}`];
+    return formatTerminalToolInputSummary(toolCall.name, args);
+  }
+  return "";
+}
+
+function formatTerminalToolInputSummary(
+  toolName: string | undefined,
+  args: Record<string, unknown>,
+): string {
+  const parts = [`tool=${toolName ?? "unknown"}`];
+  switch (toolName) {
+    case "terminal_write":
       if (typeof args.expectedInputSeq === "number") {
         parts.push(`inputSeq=${args.expectedInputSeq}`);
       }
-      if (typeof args.seq === "number") {
-        parts.push(`seq=${args.seq}`);
+      if (typeof args.text === "string") {
+        parts.push(`bytes=${Buffer.byteLength(args.text, "utf8")}`);
       }
-      return parts.join(" ");
-    }
-    return "";
+      if (typeof args.waitForReturnMs === "number") {
+        parts.push(`waitMs=${args.waitForReturnMs}`);
+      }
+      break;
+    case "terminal_key":
+      if (typeof args.key === "string") {
+        parts.push(`key=${args.key}`);
+      }
+      if (typeof args.expectedInputSeq === "number") {
+        parts.push(`inputSeq=${args.expectedInputSeq}`);
+      }
+      if (typeof args.waitForReturnMs === "number") {
+        parts.push(`waitMs=${args.waitForReturnMs}`);
+      }
+      break;
+    case "session_interrupt":
+      if (typeof args.expectedInputSeq === "number") {
+        parts.push(`inputSeq=${args.expectedInputSeq}`);
+      }
+      if (typeof args.waitForReturnMs === "number") {
+        parts.push(`waitMs=${args.waitForReturnMs}`);
+      }
+      break;
+    case "session_observe":
+    case "session_restart":
+    case "session_terminate":
+      parts.push(`session=${typeof args.session === "string" ? args.session : "current"}`);
+      if (typeof args.cwd === "string") {
+        parts.push(`cwd=${args.cwd}`);
+      }
+      if (typeof args.reason === "string") {
+        parts.push(`reason=${truncateForSummary(args.reason, 40)}`);
+      }
+      break;
+    case "session_focus":
+      if (typeof args.session === "string") {
+        parts.push(`session=${args.session}`);
+      }
+      if (typeof args.create === "boolean") {
+        parts.push(`create=${args.create}`);
+      }
+      if (typeof args.cwd === "string") {
+        parts.push(`cwd=${args.cwd}`);
+      }
+      break;
+    case "session_list":
+      break;
+    default:
+      for (const [key, value] of Object.entries(args).slice(0, 4)) {
+        if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+          parts.push(`${key}=${truncateForSummary(String(value), 40)}`);
+        }
+      }
   }
-  return "";
+  return parts.join(" ");
 }
 
 function formatModelOutputSummary(turn: ModelTurn): string {
@@ -661,37 +706,75 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isPtyObservation(value: unknown): value is PtyObservation {
+function isTerminalObservation(value: unknown): value is TerminalObservation {
   return (
     isRecord(value) &&
+    typeof value.currentSession === "string" &&
+    typeof value.observedSession === "string" &&
     "terminal" in value &&
-    "action" in value &&
-    "result" in value &&
-    "eventCount" in value &&
-    "returnedToPrompt" in value
+    typeof value.request === "string" &&
+    typeof value.result === "string" &&
+    typeof value.returnedToPrompt === "boolean" &&
+    isRecord(value.screen) &&
+    typeof value.screen.text === "string" &&
+    isRecord(value.screen.logRef) &&
+    typeof value.screen.logRef.path === "string"
   );
 }
 
-function formatPtyObservationSummary(observation: PtyObservation): string {
+function isSessionListObservation(value: unknown): value is SessionListObservation {
+  return (
+    isRecord(value) &&
+    typeof value.currentSession === "string" &&
+    Array.isArray(value.sessions)
+  );
+}
+
+function terminalResultStatus(result: TerminalObservation["result"]): LoopFrame["status"] {
+  if (result === "ok") return "ok";
+  if (result === "timeout") return "waiting";
+  return "warn";
+}
+
+function terminalSessionState(
+  terminal: TerminalObservation["terminal"],
+): SessionView["state"] {
+  if (!terminal.alive) return "terminated";
+  if (terminal.foregroundProcess) return "running";
+  if (terminal.lastContinuationPrompt) return "blocked";
+  return "idle";
+}
+
+function sessionSnapshotToView(
+  snapshot: TerminalSessionSnapshot,
+  updatedAt: string,
+): SessionView {
+  return {
+    session: snapshot.session,
+    state: terminalSessionState(snapshot.terminal),
+    currentCommand: snapshot.terminal.foregroundProcess ?? undefined,
+    returnCode: snapshot.terminal.lastShellPrompt?.lastReturnCode ?? null,
+    logPath: snapshot.outputLog?.ref ?? "",
+    tail: "",
+    updatedAt,
+  };
+}
+
+function formatTerminalObservationSummary(observation: TerminalObservation): string {
   const parts = [
-    `action=${observation.action.kind}`,
+    `request=${observation.request}`,
+    `session=${observation.observedSession}`,
     `inputSeq=${observation.terminal.inputSeq}`,
     `alive=${observation.terminal.alive}`,
   ];
   if (observation.terminal.syncStatus.kind === "unsynced") {
     parts.push(`sync=unsynced:${observation.terminal.syncStatus.reason}`);
   }
-  if (observation.eventCount > 0) {
-    parts.push(`events=${observation.eventCount}`);
-  }
   if (observation.returnedToPrompt) {
     parts.push("returnedToPrompt=true");
   }
-  if (observation.action.bytes !== undefined) {
-    parts.push(`bytes=${observation.action.bytes}`);
-  }
-  if (observation.action.redacted) {
-    parts.push("redacted=true");
+  if (observation.screen.truncated) {
+    parts.push("screen=truncated");
   }
   if (observation.message) {
     parts.push(observation.message);
@@ -710,25 +793,26 @@ function redactLargePayloads(value: unknown): unknown {
   const next: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
     if (
+      key === "arguments" &&
+      isRecord(child) &&
+      value.name === "terminal_write"
+    ) {
+      const redactedArgs = redactLargePayloads(child) as Record<string, unknown>;
+      if (
+        typeof child.text === "string" &&
+        shouldRedactTextPayload(child.text)
+      ) {
+        redactedArgs.text = `[redacted terminal_write payload ${Buffer.byteLength(child.text, "utf8")} bytes]`;
+      }
+      next[key] = redactedArgs;
+      continue;
+    }
+    if (
       key === "text" &&
       typeof child === "string" &&
-      value.kind === "write_text" &&
-      shouldRedactWriteTextDetail(child)
+      shouldRedactTerminalWriteDetail(value, child)
     ) {
-      next[key] = `[redacted write_text payload ${Buffer.byteLength(child, "utf8")} bytes]`;
-    } else if (
-      key === "content" &&
-      typeof child === "string" &&
-      shouldRedactWriteTextDetail(child)
-    ) {
-      next[key] = `[redacted stash_file content ${Buffer.byteLength(child, "utf8")} bytes]`;
-    } else if (
-      key === "preview" &&
-      typeof child === "string" &&
-      value.kind === "write_text" &&
-      value.redacted === true
-    ) {
-      next[key] = "[redacted write_text preview]";
+      next[key] = `[redacted terminal_write payload ${Buffer.byteLength(child, "utf8")} bytes]`;
     } else {
       next[key] = redactLargePayloads(child);
     }
@@ -736,7 +820,17 @@ function redactLargePayloads(value: unknown): unknown {
   return next;
 }
 
-function shouldRedactWriteTextDetail(text: string): boolean {
+function shouldRedactTerminalWriteDetail(
+  parent: Record<string, unknown>,
+  text: string,
+): boolean {
+  if (parent.name !== "terminal_write" && parent.kind !== "terminal_write") {
+    return false;
+  }
+  return shouldRedactTextPayload(text);
+}
+
+function shouldRedactTextPayload(text: string): boolean {
   if (text.length > 512) {
     return true;
   }

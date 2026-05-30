@@ -45,7 +45,7 @@ function frame(id: string): LoopFrame {
     timestamp: "2026-01-01T00:00:00Z",
     phase: "tool",
     status: "ok",
-    title: "pty ok write_text",
+    title: "terminal_write ok",
     summary: "short",
     detail: "detail line",
   };
@@ -72,7 +72,7 @@ function view(): TuiViewModel {
     sessions: [
       {
         ...session("default", "2026-01-01T00:00:01Z", "pty tail"),
-        currentCommand: "bash",
+        currentCommand: "npm test",
         returnCode: 0,
         tailOffset: 9,
       },

@@ -26,25 +26,23 @@ describe("ManagedTerminalRuntime real PTY pacing", () => {
       defaultSessionId: "default",
       cwd,
       promptNonce: `nonce-${Date.now()}`,
-      actionLimits: {},
-      observationLimits: {
-        maxPreviewChars: 200,
-      },
+      screenRows: 24,
+      screenCols: 80,
       postWriteReadDelayMs: 150,
       startupReadDelayMs: 500,
     });
     const port = runtime.createRunPort();
 
     try {
-      const initial = await port.execute({ action: { kind: "status" } });
+      const initial = await port.execute({ request: { kind: "session_observe" } });
       const command =
         `cat > ${JSON.stringify(target)} <<'EOF_PAYLOAD'\n` +
         payload +
         "EOF_PAYLOAD\n" +
         "printf '__HEREDOC_DONE__\\n'\n";
       let observation = await port.execute({
-        action: {
-          kind: "write_text",
+        request: {
+          kind: "terminal_write",
           expectedInputSeq: initial.terminal.inputSeq,
           text: command,
         },
@@ -58,7 +56,7 @@ describe("ManagedTerminalRuntime real PTY pacing", () => {
           }
         }
         await delay(100);
-        observation = await port.execute({ action: { kind: "poll" } });
+        observation = await port.execute({ request: { kind: "session_observe" } });
       }
 
       const actual = await readFile(target, "utf8");
@@ -68,7 +66,7 @@ describe("ManagedTerminalRuntime real PTY pacing", () => {
       expect(actual).not.toContain("\uFFFD");
       expect(observation.result).toBe("ok");
     } finally {
-      await port.execute({ action: { kind: "terminate" } });
+      await port.execute({ request: { kind: "session_terminate" } });
     }
   }, 15_000);
 });

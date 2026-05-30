@@ -1,14 +1,14 @@
 import { compactTerminalHistoryEntry } from "../terminal/history.js";
 import type { TerminalHistoryLimits } from "../terminal/history.js";
-import type { PtyObservation } from "../terminal/types.js";
+import type { TerminalObservation } from "../terminal/types.js";
 
 export type CompactObservationHistoryEntry = {
   type: "observation";
-  observation: PtyObservation | Record<string, unknown>;
+  observation: TerminalObservation | Record<string, unknown>;
 };
 
 export function toCompactTerminalHistoryEntry(
-  observation: PtyObservation | Record<string, unknown>,
+  observation: TerminalObservation | Record<string, unknown>,
   limits: Partial<TerminalHistoryLimits> = {},
 ): CompactObservationHistoryEntry {
   const compact = compactTerminalHistoryEntry(

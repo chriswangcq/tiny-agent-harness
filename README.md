@@ -78,23 +78,23 @@ tiny-agent ui --channel default
 
 ## 核心设计理念
 
-- **小内核、统一动作面**：模型可见的交互动作收敛到 `bash` PTY；文本生成内容可以直接通过 paced heredoc/命令写入，`stash_file` 只作为显式 staging 的可选通道。MCP、memory、skills、sub-agent、测试、git 和项目脚本都先作为 CLI 存在，再通过 bash 进入 harness。这样外部能力不会把内核变成一组不断膨胀的业务工具。
+- **小内核、统一动作面**：模型可见的交互动作收敛到 terminal/session 工具；文本生成内容直接通过 paced heredoc/命令写入。MCP、memory、skills、sub-agent、测试、git 和项目脚本都先作为 CLI 存在，再通过 PTY 进入 harness。这样外部能力不会把内核变成一组不断膨胀的业务工具。
 - **显式状态优先**：`AgentRunState` 是互斥生命周期状态机。模型输出、待校验 tool call、待审核 request、待执行 tool、`io_wait` 都进入 state，而不是散落在 orchestrator 局部变量里。
-- **决策和副作用分离**：`AgentRunState.nextEffect()` 只决定下一步应该发生什么；`RunOrchestrator` 负责调用模型、校验工具、审核工具、执行 bash、等待 IO、写 transcript。
+- **决策和副作用分离**：`AgentRunState.nextEffect()` 只决定下一步应该发生什么；`RunOrchestrator` 负责调用模型、校验工具、审核工具、执行 terminal/session 工具、等待 IO、写 transcript。
 - **FIM 是受约束的 step generator**：DeepSeek V4 FIM 被拆成 thinking pass 和 decision pass。Decision pass 只允许生成一个 native tool-call frame，并被归一化为 `ModelTurn`。
-- **外部世界事件化**：IM 消息、bash session 状态、命令完成/超时、skill run 状态统一进入 `Environment`。模型每轮看到的是被消费过的 factual reminder，而不是隐藏的可变状态。
-- **日志是主要调试接口**：Observation 只返回当前 session 的尾部 `outputTail`、terminal facts、offset 和 log path；完整输出写入 session log，run 事件写入 transcript JSONL。FIM prompt 这类大调试 payload 写入 run debug artifacts，并在 transcript/history 里保留 `promptRef`。大上下文靠路径回看，不靠一次性塞进 prompt。
+- **外部世界事件化**：IM 消息、terminal session 状态、命令完成/超时、skill run 状态统一进入 `Environment`。模型每轮看到的是被消费过的 factual reminder，而不是隐藏的可变状态。
+- **日志是主要调试接口**：Observation 只返回当前 terminal 的一屏 `screen.text`、terminal facts 和 log path；完整输出写入 session log，run 事件写入 transcript JSONL。FIM prompt 这类大调试 payload 写入 run debug artifacts，并在 transcript/history 里保留 `promptRef`。大上下文靠路径回看，不靠一次性塞进 prompt。
 - **失败也进入回路**：无效模型输出、tool validation 失败、review 拒绝都会转成 recoverable observation，让 agent 下一轮自我修正，而不是立刻把 run 打死。
 - **复盘由 agent 判断触发**：skill 执行结束后不是固定进入复盘流程，而是由 agent 根据输出、失败模式、风险和任务结果决定是否 `close --review required`。Harness 只提供状态机和记录位置。
-- **审阅先于执行**：所有 PTY action 和 `stash_file` request 在执行前经过 `ToolReviewer`。当前 demo 可以默认 approve，但边界已经为人工审核、策略审核、权限分级和安全审计留好入口。
+- **审阅先于执行**：所有 terminal/session tool request 在执行前经过 `ToolReviewer`。当前 demo 可以默认 approve，但边界已经为人工审核、策略审核、权限分级和安全审计留好入口。
 - **观察面不拥有事实**：TUI 是 transcript player / control surface，只读取 durable artifacts 并渲染 view model，不成为第二个 run orchestrator。
 - **面向 AI 时代的可维护性**：减少隐藏状态、重复路径和“看起来合理但已经过时”的上下文，让未来的人和 agent 都不容易误读当前架构。
 
 ## 设计亮点
 
 - **DeepSeek V4 native tool-call FIM**：decision pass 使用 DeepSeek V4 native tool-call special token 边界，但仍由 harness 手工解析和归一化，不依赖 provider-native tool calling。
-- **PTY action tool catalog**：模型通过 `bash` 操作 PTY；所有 PTY 输入都走 `write_text` 或 `key`，所有 `write_text` 都由 runtime 用保护性 pacing 写入 PTY。普通文本 heredoc 不需要额外 payload 协议；`stash_file` 保留给明确需要 staged bytes 的场景。
-- **Managed PTY runtime**：基于 `node-pty` 管理长期 session，支持 `status`、`poll`、`write_text`、`key`、`interrupt`、`terminate`、`restart`，并用 prompt markers 维护 terminal facts、`inputSeq` 和 best-effort `foregroundProcess`。
+- **Terminal/session tool catalog**：模型通过 `terminal_write`、`terminal_key` 操作 current session，通过 `session_observe`、`session_focus`、`session_interrupt`、`session_restart`、`session_terminate` 管理 PTY。普通文本 heredoc 不需要额外 payload 协议。
+- **Managed PTY runtime**：基于 `node-pty` 管理长期 session，维护 current session、terminal facts、`inputSeq`、best-effort `foregroundProcess` 和一屏 observation。
 - **长任务不会被误杀**：timeout 只释放 agent focus，不 kill 进程。Agent 后续可以 poll 新输出、发送交互输入、中断或重启 session。
 - **可恢复 run artifacts**：每个 run 产出 `state.json`、`transcript.jsonl`、`session.json` 和 `debug/prompts/`；每个 PTY session 有独立 log。`tiny-agent resume <runId|latest>` 会恢复 agent-loop history 并创建新的 PTY process tree。
 - **agent-loop context compaction**：上下文窗口只压缩 agent-loop history，system prompt/tool contract 不参与压缩。默认在 history prompt 约 700k token 时写入 `history_compacted` 事件并保留最近尾部。
@@ -109,7 +109,7 @@ tiny-agent ui --channel default
 ## 潜力与演进方向
 
 - **可恢复 agent runtime**：`state.json`、`transcript.jsonl`、`session.json` 和 session log 已经构成 run 级恢复基础；resume 会恢复 run state 与 agent-loop context，但不会假装旧 PTY 进程仍然存在。
-- **可审计的自动化执行层**：PTY 动作和受限文件暂存都进入 request + review + observation 链路，实际 workspace 写入仍通过 bash 内 CLI 完成，天然适合接人工审批、权限策略、危险命令拦截和企业审计。
+- **可审计的自动化执行层**：terminal/session tool request 都进入 request + review + observation 链路，实际 workspace 写入仍通过 shell 内 CLI 或 heredoc 完成，天然适合接人工审批、权限策略、危险命令拦截和企业审计。
 - **CLI 生态的 agent OS 雏形**：只要能力能做成 CLI，就能被 agent 使用，同时仍共享同一套 session、日志、审核和 TUI 观察机制。
 - **技能系统可自我进化**：skill run 的 active/review/lessons 流程为经验沉淀留了位置。agent 可以根据 skill 执行结果判断是否复盘，把成功/失败模式沉淀进 skill 附件，未来再汇总为 skill 级别的改进。
 - **更自然的人机协作**：IM transport 和 `io_wait` 可以扩展出多轮协作、用户确认、取消指令、外部 webhook 唤醒等能力。
@@ -121,7 +121,7 @@ tiny-agent ui --channel default
 
 ## Code Intelligence CLI
 
-`codeq` 是仓库内置的代码智能 CLI，用来把 LSP / language server 的语义能力暴露给 coding agent。它不是模型可见的新 tool，也不改变 “能力以 CLI 进入 bash PTY 边界” 的核心约束；agent 使用它时，本质上仍然是在 bash session 里运行普通命令。
+`codeq` 是仓库内置的代码智能 CLI，用来把 LSP / language server 的语义能力暴露给 coding agent。它不是模型可见的新 tool，也不改变 “能力以 CLI 进入 terminal/session 边界” 的核心约束；agent 使用它时，本质上仍然是在 managed terminal session 里运行普通命令。
 
 当前实现提供只读的 TypeScript / JavaScript 查询能力：
 
@@ -142,11 +142,11 @@ codeq hover src/run/orchestrator.ts:37:18 --json
 ## 当前核心方向
 
 - Agent ReAct loop 独立实现。
-- Agent 的交互动作收敛为 `bash` tool call，session control 也走同一个工具；普通文本生成直接走 paced heredoc/命令，`stash_file` 只作为显式 staged bytes 的可选通道。
+- Agent 的交互动作收敛为 terminal/session tool call；普通文本生成直接走 paced heredoc/命令，不再保留额外的文件暂存旁路。
 - 主模型层使用 DeepSeek V4 FIM two-pass：先生成 thinking，再生成 native tool-call decision。
 - 用户消息收发通过 IM CLI 处理，不把 stdin/stdout 作为核心通信边界。
-- MCP、memory、skills、sub-agent 等能力都通过 CLI 暴露，再由 bash 调用。Skills 通过 `skill` CLI 发现和执行。
-- Harness 内部提供 bash session manager，用来管理长期会话、输出截断、日志持久化和中断恢复。
+- MCP、memory、skills、sub-agent 等能力都通过 CLI 暴露，再由 terminal session 调用。Skills 通过 `skill` CLI 发现和执行。
+- Harness 内部提供 PTY session manager，用来管理长期会话、一屏观察、日志持久化和中断恢复。
 - Environment 统一建模外部事件，每轮 Agent loop 消费为 system reminder，`io_wait` 等待 environment 事件。
 - Tool review 模块预留为执行前审核入口，demo 阶段默认 approve。
 - TUI 读取 transcript/state/logs，把 agent loop 作为可观察、可回放的执行过程展示出来。
@@ -156,7 +156,7 @@ codeq hover src/run/orchestrator.ts:37:18 --json
 - [Docs Index](docs/README.md)
 - [Tool Call And Observation](docs/tool-call-observation.md)
 - [Run Orchestrator And Agent Run State](docs/run-orchestrator-state.md)
-- [Static Bash Tool Definition](docs/static-bash-tool-definition.md)
+- [Model Visible Tool Catalog](docs/model-visible-tool-catalog.md)
 - [Code Intelligence CLI](docs/code-intelligence-cli.md)
 - [DeepSeek V4 Native Tool-Call FIM Adapter](docs/deepseek-fim-adapter.md)
 - [IM CLI Transport](docs/im-cli-transport.md)

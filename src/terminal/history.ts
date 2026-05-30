@@ -1,4 +1,4 @@
-import type { PtyObservation } from "./types.js";
+import type { TerminalObservation } from "./types.js";
 
 export type TerminalHistoryLimits = {
   maxStringChars: number;
@@ -19,7 +19,9 @@ const PAYLOAD_KEYS = new Set([
 
 const STABLE_STRING_KEYS = new Set([
   "kind",
-  "session",
+  "currentSession",
+  "observedSession",
+  "request",
   "sha256",
   "code",
   "errorCode",
@@ -27,7 +29,7 @@ const STABLE_STRING_KEYS = new Set([
 
 export type TerminalHistoryEntry = {
   type: "terminal_observation";
-  observation: PtyObservation | Record<string, unknown>;
+  observation: TerminalObservation | Record<string, unknown>;
 };
 
 export function compactTerminalHistoryEntry(
@@ -38,7 +40,7 @@ export function compactTerminalHistoryEntry(
   return {
     type: entry.type,
     observation: redactPayloadFields(entry.observation, resolved) as
-      | PtyObservation
+      | TerminalObservation
       | Record<string, unknown>,
   };
 }
@@ -70,10 +72,10 @@ function redactPayloadFieldsInner(value: unknown, limits: TerminalHistoryLimits)
     if (
       key === "text" &&
       typeof nested === "string" &&
-      record.kind === "write_text" &&
-      shouldRedactWriteText(nested)
+      record.kind === "terminal_write" &&
+      shouldRedactTerminalWrite(nested)
     ) {
-      result[key] = `[redacted write_text payload ${utf8Bytes(nested)} bytes]`;
+      result[key] = `[redacted terminal_write payload ${utf8Bytes(nested)} bytes]`;
       continue;
     }
     if (PAYLOAD_KEYS.has(key)) {
@@ -98,7 +100,7 @@ function compactString(value: string, maxChars: number): string {
   return `${value.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
-function shouldRedactWriteText(text: string): boolean {
+function shouldRedactTerminalWrite(text: string): boolean {
   if (text.length > 512) {
     return true;
   }
