@@ -1364,15 +1364,24 @@ export function wrapDisplayText(text: string, width: number): string[] {
 export function renderConversationBodyLinesForDisplay(
   text: string,
   width: number,
-  maxBodyChars = 4000,
-  maxBodyLines = 80,
+  maxBodyChars?: number,
+  maxBodyLines?: number,
 ): string[] {
-  const truncated =
-    text.length > maxBodyChars
-      ? `${text.slice(0, maxBodyChars)}\n[truncated ${text.length - maxBodyChars} chars]`
-      : text;
-  const lines = renderMarkdownForDisplay(truncated, width);
-  if (lines.length > maxBodyLines) {
+  const cappedByChars =
+    typeof maxBodyChars === "number" &&
+    Number.isFinite(maxBodyChars) &&
+    maxBodyChars >= 0 &&
+    text.length > maxBodyChars;
+  const renderedText = cappedByChars
+    ? `${text.slice(0, maxBodyChars)}\n[truncated ${text.length - maxBodyChars} chars]`
+    : text;
+  const lines = renderMarkdownForDisplay(renderedText, width);
+  if (
+    typeof maxBodyLines === "number" &&
+    Number.isFinite(maxBodyLines) &&
+    maxBodyLines >= 0 &&
+    lines.length > maxBodyLines
+  ) {
     return [...lines.slice(0, maxBodyLines), "[truncated additional lines]"];
   }
   return lines;

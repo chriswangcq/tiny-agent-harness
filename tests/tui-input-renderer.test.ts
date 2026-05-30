@@ -327,6 +327,31 @@ describe("TUI input rendering", () => {
     expect(truncateDisplayText("| ab中文c | done |", 8)).toBe("| ab...");
   });
 
+  it("does not truncate conversation bodies unless a caller opts in", () => {
+    const text = Array.from(
+      { length: 100 },
+      (_, index) => `line-${String(index).padStart(3, "0")}`,
+    ).join("\n");
+
+    const lines = renderConversationBodyLinesForDisplay(text, 80);
+
+    expect(lines).toContain("line-000");
+    expect(lines).toContain("line-099");
+    expect(lines.join("\n")).not.toContain("[truncated");
+  });
+
+  it("supports explicit conversation body caps for constrained previews", () => {
+    expect(renderConversationBodyLinesForDisplay("0123456789", 20, 4)).toEqual([
+      "0123",
+      "[truncated 6 chars]",
+    ]);
+    expect(renderConversationBodyLinesForDisplay("a\nb\nc", 20, undefined, 2)).toEqual([
+      "a",
+      "b",
+      "[truncated additional lines]",
+    ]);
+  });
+
   it("does not undercount or split emoji clusters while truncating", () => {
     expect(truncateDisplayText("A👨‍💻B", 4)).toBe("A👨‍💻B");
     expect(truncateDisplayText("✅✅", 3)).toBe("✅");

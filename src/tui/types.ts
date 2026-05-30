@@ -128,7 +128,7 @@ export type TuiLimits = {
 };
 
 export const DEFAULT_TUI_LIMITS: TuiLimits = {
-  maxConversationItems: 200,
+  maxConversationItems: Number.MAX_SAFE_INTEGER,
   maxLoopFrames: 500,
   maxFrameDetailChars: 2000,
   maxLogTailLines: 200,

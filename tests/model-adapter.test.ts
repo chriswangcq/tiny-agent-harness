@@ -10,6 +10,7 @@ const REMOVED_SHELL_TOOL = ["ba", "sh"].join("");
 const REMOVED_ACTION_KIND = ["write", "_text"].join("");
 const EXPECTED_THINKING_STOP_SEQUENCES = [
   "</think>",
+  "<｜DSML",
   `<${DSML}tool_calls>`,
   `<${DSML}invoke name="`,
   "<tool_call",
@@ -370,6 +371,32 @@ describe("DeepSeekFimAdapter", () => {
     expectProgressContent(progress, "Need inspect");
     expect(output.thinking.content).toBe("Need inspect");
     expect(requestBody(fetchMock, 1).prompt).toContain("Need inspect");
+    expect(output.turn.kind).toBe("tool_call");
+  });
+
+  it("filters incomplete DSML frame prefixes from final thinking content", async () => {
+    const rawDecision = dsmlTerminalWrite(writeText("pwd"));
+    const fetchMock = stubFimStreamResponses(
+      [
+        { text: "Need reply", finishReason: null },
+        { text: "\n\n<｜DSML", finishReason: "stop" },
+      ],
+      [{ text: rawDecision, finishReason: "stop" }],
+    );
+    const progress: Array<{ content: string; sequence: number }> = [];
+
+    const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
+      tools: [...STATIC_TOOL_CATALOG],
+      onProgress(event) {
+        progress.push({ content: event.content, sequence: event.sequence });
+      },
+    });
+
+    expect(requestBody(fetchMock, 0).stop).toEqual(
+      EXPECTED_THINKING_STOP_SEQUENCES,
+    );
+    expectProgressContent(progress, "Need reply");
+    expect(output.thinking.content).toBe("Need reply");
     expect(output.turn.kind).toBe("tool_call");
   });
 

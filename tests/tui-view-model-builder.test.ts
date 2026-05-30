@@ -783,6 +783,19 @@ describe("ViewModelBuilder", () => {
     expect(view.loop.map((frame) => frame.stepIndex)).toEqual([2, 3, 4]);
   });
 
+  it("does not truncate conversation items by default", () => {
+    const builder = builderWithRunStarted();
+    for (let i = 0; i < 205; i++) {
+      builder.addImUserMessage(userMessage(`msg-${i}`, NOW, `m${i}`));
+    }
+
+    const view = builder.getViewModel();
+
+    expect(view.conversation).toHaveLength(205);
+    expect(view.conversation[0]?.id).toBe("user:msg-0");
+    expect(view.conversation.at(-1)?.id).toBe("user:msg-204");
+  });
+
   it("projects history compaction and final run state", () => {
     const builder = builderWithRunStarted();
     builder.applyEvent({

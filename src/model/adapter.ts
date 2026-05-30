@@ -118,6 +118,7 @@ type Decision =
 // ---------------------------------------------------------------------------
 
 const DSML = "｜DSML｜";
+const DSML_FRAME_START_PREFIX = "<｜DSML";
 const DSML_TOOL_CALLS_OPEN = `<${DSML}tool_calls>`;
 const DSML_TOOL_CALLS_CLOSE = `</${DSML}tool_calls>`;
 const DSML_INVOKE_OPEN_PREFIX = `<${DSML}invoke name="`;
@@ -128,6 +129,7 @@ const END_OF_SENTENCE = "<｜end▁of▁sentence｜>";
 
 const THINKING_HARD_BOUNDARY_SEQUENCES = [
   "</think>",
+  DSML_FRAME_START_PREFIX,
   DSML_TOOL_CALLS_OPEN,
   DSML_INVOKE_OPEN_PREFIX,
   "<tool_call",
