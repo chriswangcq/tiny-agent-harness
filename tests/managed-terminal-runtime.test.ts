@@ -266,6 +266,8 @@ describe("ManagedTerminalRuntime", () => {
     });
     if ("screen" in observation) {
       expect(observation.screen.text).toContain("id=agent-1");
+      expect(observation.screen.text).not.toContain("line-0");
+      expect(observation.screen.text.split("\n")).toHaveLength(24);
       expect(observation.screen.text).not.toContain("__TAH_PROMPT__");
       expect(["output", "Tail"].join("") in observation).toBe(false);
     }

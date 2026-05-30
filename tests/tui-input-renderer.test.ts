@@ -442,6 +442,33 @@ describe("TUI input rendering", () => {
     expect(frame[49]).toContain("screen-39");
   });
 
+  it("renders the same final PTY viewport rows that the agent observes", () => {
+    const state = new TuiInteractionState();
+    const tail = Array.from(
+      { length: 10 },
+      (_, index) => `pty-line-${String(index).padStart(2, "0")}`,
+    ).join("\n");
+    const vm = {
+      ...view(),
+      sessions: [
+        session("default", "2026-01-01T00:00:01Z", tail, {
+          screenCols: 80,
+          screenRows: 4,
+        }),
+      ],
+    };
+    state.syncWithView(vm.conversation, vm.loop);
+
+    const output = renderTuiFrame(vm, state, new Set(), {
+      width: 96,
+      height: 16,
+    }).join("\n");
+
+    expect(output).not.toContain("pty-line-05");
+    expect(output).toContain("pty-line-06");
+    expect(output).toContain("pty-line-09");
+  });
+
   it("plans enough TUI space around the canonical PTY viewport first", () => {
     const plan = planTuiLayout({
       width: 150,

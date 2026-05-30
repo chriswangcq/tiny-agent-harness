@@ -5,6 +5,7 @@ import type {
   TerminalServicePorts,
 } from "../application/terminal-ports.js";
 import type { TerminalPort } from "../run/orchestrator.js";
+import { normalizeTerminalScreenText } from "../terminal/screen.js";
 import { ManagedPtySession, type ForegroundInspector } from "./managed-session.js";
 import {
   chunkTextByUtf8Bytes,
@@ -79,7 +80,10 @@ export class ManagedTerminalRuntime {
             output.endOffset,
             screenReadBytes(this.screenRows(), this.screenCols()),
           );
-          const screenText = stripManagedShellNoise(screenTail.chunk);
+          const screenText = normalizeTerminalScreenText(
+            stripManagedShellNoise(screenTail.chunk),
+            { rows: this.screenRows(), cols: this.screenCols() },
+          );
           return {
             chunk: output.chunk,
             logRef: {
