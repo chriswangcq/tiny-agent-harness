@@ -26,19 +26,11 @@ const INPUT_INNER_ROWS = INPUT_BAR_HEIGHT - 2;
 export class BlessedRenderer implements TuiRenderer {
   private screen: blessed.Widgets.Screen;
   private frameBox: blessed.Widgets.BoxElement;
-  private headerBox: blessed.Widgets.BoxElement;
-  private conversationList: blessed.Widgets.BoxElement;
-  private loopList: blessed.Widgets.ListElement;
-  private loopDetailBox: blessed.Widgets.BoxElement;
-  private ptyBox: blessed.Widgets.BoxElement;
   private helpBox: blessed.Widgets.BoxElement;
   private inputBar: blessed.Widgets.BoxElement;
   private ui = new TuiInteractionState();
   private lastView: TuiViewModel | undefined;
-  private conversationLineIndexes = new Map<string, number>();
-  private loopFrameLineIndexes = new Map<string, number>();
   private expandedFrames = new Set<string>();
-  private lastLoopDetailFrameId: string | undefined;
   private keyHandler?: (key: TuiKey) => void;
   private messageHandler?: (text: string) => void;
   private inputBuffer = "";
@@ -56,15 +48,6 @@ export class BlessedRenderer implements TuiRenderer {
 
     this.enableModifiedKeyReporting();
 
-    this.headerBox = blessed.box({
-      top: 0,
-      left: 0,
-      width: "100%",
-      height: 1,
-      tags: true,
-      style: { fg: "white", bg: "black" },
-    });
-
     this.frameBox = blessed.box({
       top: 0,
       left: 0,
@@ -73,76 +56,6 @@ export class BlessedRenderer implements TuiRenderer {
       tags: true,
       wrap: false,
       style: { fg: "white", bg: "black" },
-    });
-
-    this.conversationList = blessed.box({
-      top: 1,
-      left: 0,
-      width: "45%",
-      height: `100%-${INPUT_BAR_HEIGHT + 1}`,
-      border: { type: "line" },
-      label: " Messages ",
-      scrollable: true,
-      alwaysScroll: true,
-      scrollbar: { ch: "│", style: { fg: "cyan" } },
-      tags: true,
-      wrap: false,
-      style: {
-        border: { fg: "gray" },
-      },
-      keys: false,
-      mouse: false,
-    });
-
-    this.loopList = blessed.list({
-      top: 1,
-      left: "45%",
-      width: "28%",
-      height: "50%-1",
-      border: { type: "line" },
-      label: " Agent Loop ",
-      scrollable: true,
-      alwaysScroll: true,
-      scrollbar: { ch: "│", style: { fg: "cyan" } },
-      tags: true,
-      style: {
-        border: { fg: "gray" },
-        selected: { bg: "blue" },
-      },
-      keys: false,
-      mouse: false,
-    });
-
-    this.loopDetailBox = blessed.box({
-      top: 1,
-      left: "73%",
-      width: "27%",
-      height: "50%-1",
-      border: { type: "line" },
-      label: " Loop Detail ",
-      scrollable: true,
-      alwaysScroll: true,
-      scrollbar: { ch: "│", style: { fg: "cyan" } },
-      tags: true,
-      style: {
-        border: { fg: "gray" },
-      },
-    });
-
-    this.ptyBox = blessed.box({
-      top: "50%",
-      left: "45%",
-      width: "55%",
-      height: `50%-${INPUT_BAR_HEIGHT}`,
-      border: { type: "line" },
-      label: " PTY (read only) ",
-      scrollable: true,
-      alwaysScroll: true,
-      scrollbar: { ch: "│", style: { fg: "cyan" } },
-      tags: false,
-      style: {
-        border: { fg: "gray" },
-      },
     });
 
     this.helpBox = blessed.box({
@@ -516,22 +429,23 @@ export class BlessedRenderer implements TuiRenderer {
   private activeFrameViewportHeight(): number {
     const frameHeight = Math.max(1, this.screen.rows - INPUT_BAR_HEIGHT);
     const bodyHeight = Math.max(0, frameHeight - 1);
+    const layout = this.currentLayoutPlan(bodyHeight);
     if (this.ui.pane === "conversation") {
       return Math.max(0, bodyHeight - 2);
     }
-    const topHeight = Math.max(1, Math.floor(bodyHeight / 2));
-    return Math.max(0, topHeight - 2);
+    return Math.max(0, layout.topHeight - 2);
   }
 
   private activeFrameLineCount(): number {
     if (!this.lastView) return 0;
-    const width = Math.max(1, this.screen.cols);
+    const frameHeight = Math.max(1, this.screen.rows - INPUT_BAR_HEIGHT);
+    const bodyHeight = Math.max(0, frameHeight - 1);
+    const layout = this.currentLayoutPlan(bodyHeight);
     if (this.ui.pane === "conversation") {
-      const leftWidth = chooseLeftWidth(width);
       return buildConversationFrameLines(
         this.lastView.conversation,
         this.ui,
-        Math.max(1, leftWidth - 2),
+        Math.max(1, layout.conversationPaneWidth - 2),
       ).length;
     }
 
@@ -542,142 +456,14 @@ export class BlessedRenderer implements TuiRenderer {
     ).length;
   }
 
-  // ─── Rendering Helpers ────────────────────────────────────────────
-
-  private renderHeader(run: RunHeaderView): string {
-    const statusColor = this.statusColor(run.status);
-    return (
-      `run=${run.runId} ` +
-      `{${statusColor}-fg}status=${run.status}{/${statusColor}-fg} ` +
-      `step=${run.stepIndex} ` +
-      `cwd=${run.cwd}` +
-      (run.model ? ` model=${run.model}` : "")
-    );
-  }
-
-  private statusColor(status: string): string {
-    switch (status) {
-      case "running":
-      case "waiting_for_model":
-      case "waiting_for_tool":
-      case "waiting_for_review":
-      case "waiting_for_io":
-        return "yellow";
-      case "failed":
-        return "red";
-      case "cancelled":
-        return "gray";
-      default:
-        return "white";
-    }
-  }
-
-  private renderConversationHeader(item: ConversationItem): string {
-    const time = this.formatClockTime(item.timestamp);
-    switch (item.kind) {
-      case "user":
-        return `{cyan-fg}[${this.escapeMarkup(item.channel)}] user{/cyan-fg} {gray-fg}${time}{/gray-fg}`;
-      case "agent":
-        return `{green-fg}agent [${item.messageKind}]{/green-fg} {gray-fg}${time}{/gray-fg}`;
-      case "system":
-        return `{gray-fg}system ${time}{/gray-fg}`;
-    }
-  }
-
-  private renderConversationItems(items: ConversationItem[]): string[] {
-    this.conversationLineIndexes.clear();
-    const lines: string[] = [];
-    const contentWidth = this.conversationContentWidth();
-    for (const item of items) {
-      this.conversationLineIndexes.set(item.id, lines.length);
-      const selected = item.id === this.ui.selectedConversationItemId;
-      const marker = selected ? "{blue-bg}{white-fg}>{/white-fg}{/blue-bg}" : " ";
-      lines.push(
-        padBlessedLineForDisplay(
-          `${marker} ${this.renderConversationHeader(item)}`,
-          contentWidth,
-        ),
-      );
-      for (const bodyLine of this.conversationBodyLines(item.text)) {
-        lines.push(padBlessedLineForDisplay(`  ${bodyLine}`, contentWidth));
-      }
-      lines.push(" ".repeat(contentWidth));
-    }
-    while (lines.length < this.conversationContentRows()) {
-      lines.push(" ".repeat(contentWidth));
-    }
-    return lines;
-  }
-
-  private conversationBodyLines(text: string): string[] {
-    return renderConversationBodyLinesForDisplay(
-      text,
-      Math.max(1, this.conversationContentWidth() - 2),
-    ).map((line) => this.escapeMarkup(line));
-  }
-
-  private formatClockTime(timestamp: string): string {
-    const date = new Date(timestamp);
-    if (Number.isNaN(date.getTime())) return this.escapeMarkup(timestamp);
-    return date.toISOString().slice(11, 19);
-  }
-
-  private conversationContentWidth(): number {
-    return Math.max(20, Math.floor(this.screen.cols * 0.45) - 2);
-  }
-
-  private conversationContentRows(): number {
-    return Math.max(1, this.screen.rows - INPUT_BAR_HEIGHT - 3);
-  }
-
-  private loopDetailContentWidth(): number {
-    return Math.max(20, Math.floor(this.screen.cols * 0.27) - 4);
-  }
-
-  private ptyContentWidth(): number {
-    return Math.max(20, Math.floor(this.screen.cols * 0.55) - 4);
-  }
-
-  private renderLoopFrames(frames: LoopFrame[]): string[] {
-    const lines: string[] = [];
-    let currentStep = -1;
-    this.loopFrameLineIndexes.clear();
-
-    for (const frame of frames) {
-      if (frame.stepIndex !== currentStep) {
-        currentStep = frame.stepIndex;
-        lines.push(
-          `{bold}step ${String(currentStep).padStart(3, "0")}{/bold}`,
-        );
-      }
-
-      const statusTag = this.frameStatusColor(frame.status);
-      const phase = frame.phase.padEnd(12);
-      const status = frame.status.padEnd(8);
-      const selected = frame.id === this.ui.selectedLoopFrameId;
-      const marker = selected ? "{blue-bg}{white-fg}>{/white-fg}{/blue-bg}" : " ";
-      let line = `${marker} ${phase} {${statusTag}-fg}${status}{/${statusTag}-fg} ${frame.title}`;
-
-      if (frame.summary) {
-        line += ` {gray-fg}${this.escapeMarkup(displayPreview(frame.summary, 80))}{/gray-fg}`;
-      }
-
-      this.loopFrameLineIndexes.set(frame.id, lines.length);
-      lines.push(line);
-
-      if (this.expandedFrames.has(frame.id) && frame.detail) {
-        const detailLines = frame.detail.slice(0, 2000).split("\n");
-        for (const dl of detailLines) {
-          lines.push(`    {gray-fg}${this.escapeMarkup(dl)}{/gray-fg}`);
-        }
-      }
-
-      if (this.expandedFrames.has(frame.id) && frame.logPath) {
-        lines.push(`    {cyan-fg}log: ${frame.logPath}{/cyan-fg}`);
-      }
-    }
-
-    return lines;
+  private currentLayoutPlan(bodyHeight: number): TuiLayoutPlan {
+    return planTuiLayout({
+      width: Math.max(1, this.screen.cols),
+      bodyHeight,
+      ptyViewport: ptyViewportFromSession(
+        selectPtySession(this.lastView?.sessions ?? []),
+      ),
+    });
   }
 
   private rerenderLastView(): void {
@@ -688,111 +474,15 @@ export class BlessedRenderer implements TuiRenderer {
     }
   }
 
-  private renderLoopDetail(frame: LoopFrame | undefined): string {
-    if (!frame) return "";
-    const lines = [
-      `{bold}${this.escapeMarkup(frame.title)}{/bold}`,
-      "",
-      `step: ${frame.stepIndex}`,
-      `phase: ${frame.phase}`,
-      `status: ${frame.status}`,
-      `time: ${frame.timestamp}`,
-    ];
-    if (frame.summary) {
-      lines.push(
-        "",
-        "{bold}Summary{/bold}",
-        ...wrapDisplayText(frame.summary, this.loopDetailContentWidth()).map((line) =>
-          this.escapeMarkup(line),
-        ),
-      );
-    }
-    if (frame.detail) {
-      lines.push(
-        "",
-        "{bold}Detail{/bold}",
-        ...wrapDisplayText(
-          frame.detail.slice(0, 4000),
-          this.loopDetailContentWidth(),
-        ).map((line) => this.escapeMarkup(line)),
-      );
-    }
-    if (frame.logPath) {
-      lines.push("", "{bold}Log{/bold}", this.escapeMarkup(frame.logPath));
-    }
-    return lines.join("\n");
-  }
-
-  private selectConversationListRow(itemId: string | undefined): void {
-    if (!itemId) return;
-    const row = this.conversationLineIndexes.get(itemId);
-    if (row === undefined) return;
-    const list = this.conversationList as blessed.Widgets.BoxElement & {
-      scrollTo?: (offset: number) => void;
-    };
-    if (!this.ui.followBottom.conversation) {
-      list.scrollTo?.(Math.max(0, row - 2));
-    }
-  }
-
-  private selectLoopListRow(frameId: string | undefined): void {
-    if (!frameId) return;
-    const row = this.loopFrameLineIndexes.get(frameId);
-    if (row === undefined) return;
-    const list = this.loopList as blessed.Widgets.ListElement & {
-      select?: (index: number) => void;
-      scrollTo?: (offset: number) => void;
-    };
-    list.select?.(row);
-    if (!this.ui.followBottom.loop) {
-      list.scrollTo?.(Math.max(0, row - 2));
-    }
-  }
-
-  private frameStatusColor(status: string): string {
-    switch (status) {
-      case "ok":
-        return "green";
-      case "running":
-        return "yellow";
-      case "waiting":
-        return "yellow";
-      case "warn":
-        return "yellow";
-      case "error":
-        return "red";
-      case "pending":
-        return "gray";
-      default:
-        return "white";
-    }
-  }
-
-  private escapeMarkup(text: string): string {
-    return escapeBlessedMarkup(text);
-  }
-
   private updateStyles(): void {
-    const convBorder = this.conversationList.style.border as Record<string, string>;
-    const loopBorder = this.loopList.style.border as Record<string, string>;
-    const detailBorder = this.loopDetailBox.style.border as Record<string, string>;
-    const ptyBorder = this.ptyBox.style.border as Record<string, string>;
     const inputBorder = this.inputBar.style.border as Record<string, string>;
 
     if (this.ui.mode === "input") {
-      convBorder.fg = "gray";
-      loopBorder.fg = "gray";
-      detailBorder.fg = "gray";
-      ptyBorder.fg = "gray";
       inputBorder.fg = "cyan";
       this.inputBar.setLabel(
         " [INPUT] message> (Enter=send, Shift+Enter=newline, Esc=browse) ",
       );
     } else {
-      convBorder.fg = this.ui.pane === "conversation" ? "white" : "gray";
-      loopBorder.fg = this.ui.pane === "loop" ? "white" : "gray";
-      detailBorder.fg = "gray";
-      ptyBorder.fg = "gray";
       inputBorder.fg = "gray";
       this.inputBar.setLabel(" message> (i=input, Tab=switch, ?=help) ");
     }
@@ -850,6 +540,28 @@ export type TuiFrameScroll = {
   loop?: number;
 };
 
+export type TuiPtyViewport = {
+  rows: number;
+  cols: number;
+};
+
+export type TuiLayoutPlan = {
+  bodyHeight: number;
+  conversationPaneWidth: number;
+  rightWidth: number;
+  topHeight: number;
+  bottomHeight: number;
+  loopPaneWidth: number;
+  detailPaneWidth: number;
+  ptyFitsViewport: boolean;
+};
+
+export type TuiLayoutInput = {
+  width: number;
+  bodyHeight: number;
+  ptyViewport?: TuiPtyViewport;
+};
+
 export function renderTuiFrame(
   view: TuiViewModel,
   state: TuiInteractionState,
@@ -863,10 +575,13 @@ export function renderTuiFrame(
   if (height === 1) return [header];
 
   const bodyHeight = height - 1;
-  const leftWidth = chooseLeftWidth(width);
-  const rightWidth = width - leftWidth;
-  const conversationPaneWidth = Math.min(width, leftWidth + 1);
-  const conversationContentWidth = Math.max(1, conversationPaneWidth - 2);
+  const ptySession = selectPtySession(view.sessions);
+  const layout = planTuiLayout({
+    width,
+    bodyHeight,
+    ptyViewport: ptyViewportFromSession(ptySession),
+  });
+  const conversationContentWidth = Math.max(1, layout.conversationPaneWidth - 2);
   const conversationLines = buildConversationFrameLines(
     view.conversation,
     state,
@@ -874,7 +589,7 @@ export function renderTuiFrame(
   );
   const conversationPane = renderPane(
     state.pane === "conversation" ? "* Messages *" : "Messages",
-    conversationPaneWidth,
+    layout.conversationPaneWidth,
     bodyHeight,
     visibleWindow(
       conversationLines,
@@ -886,22 +601,18 @@ export function renderTuiFrame(
   );
 
   const bodyRows: string[] = [];
-  if (rightWidth <= 0) {
+  if (layout.rightWidth <= 0) {
     bodyRows.push(...conversationPane);
   } else {
-    const topHeight = Math.max(1, Math.floor(bodyHeight / 2));
-    const bottomHeight = Math.max(0, bodyHeight - topHeight);
-    const loopWidth = Math.max(1, Math.floor(rightWidth * 0.51));
-    const detailWidth = Math.max(1, rightWidth - loopWidth);
     const selectedLoopFrame = state.selectedLoopFrame(view.loop);
     const loopLines = buildLoopFrameLines(view.loop, state, expandedFrames);
     const loopPane = renderPane(
       state.pane === "loop" ? "* Agent Loop *" : "Agent Loop",
-      loopWidth + 1,
-      topHeight,
+      layout.loopPaneWidth,
+      layout.topHeight,
       visibleWindow(
         loopLines,
-        Math.max(0, topHeight - 2),
+        Math.max(0, layout.topHeight - 2),
         loopSelectedLine(view.loop, state, expandedFrames),
         state.followBottom.loop,
         scroll.loop,
@@ -909,32 +620,33 @@ export function renderTuiFrame(
     );
     const detailPane = renderPane(
       "Loop Detail",
-      detailWidth,
-      topHeight,
-      buildLoopDetailLines(selectedLoopFrame, Math.max(1, detailWidth - 2)),
+      layout.detailPaneWidth,
+      layout.topHeight,
+      buildLoopDetailLines(selectedLoopFrame, Math.max(1, layout.detailPaneWidth - 2)),
     );
-    const ptySession = selectPtySession(view.sessions);
     const ptyLines = ptySession
-      ? renderPtySessionForDisplay(ptySession, 4000, Math.max(1, rightWidth - 2)).split(
+      ? renderPtyScreenForDisplay(ptySession, 4000, Math.max(1, layout.rightWidth - 2)).split(
           "\n",
         )
       : ["No PTY session yet"];
-    const ptyPane =
-      bottomHeight > 0
-        ? renderPane("PTY (read only)", rightWidth, bottomHeight, ptyLines)
-        : [];
+    const ptyPane = renderPane(
+      ptyPaneTitle(ptySession, layout),
+      layout.rightWidth,
+      layout.bottomHeight,
+      ptyLines,
+    );
 
     for (let row = 0; row < bodyHeight; row++) {
       const rightRow =
-        row < topHeight
+        row < layout.topHeight
           ? mergeAdjacentPanes(
-              loopPane[row] ?? " ".repeat(loopWidth + 1),
-              detailPane[row] ?? " ".repeat(detailWidth),
+              loopPane[row] ?? " ".repeat(layout.loopPaneWidth),
+              detailPane[row] ?? " ".repeat(layout.detailPaneWidth),
             )
-          : ptyPane[row - topHeight] ?? " ".repeat(rightWidth);
+          : ptyPane[row - layout.topHeight] ?? " ".repeat(layout.rightWidth);
       bodyRows.push(
         mergeAdjacentPanes(
-          conversationPane[row] ?? " ".repeat(conversationPaneWidth),
+          conversationPane[row] ?? " ".repeat(layout.conversationPaneWidth),
           rightRow,
         ),
       );
@@ -1026,6 +738,73 @@ function chooseLeftWidth(width: number): number {
   if (width < 40) return width;
   const preferred = Math.floor(width * 0.45);
   return clampNumber(preferred, 24, width - 16);
+}
+
+export function planTuiLayout(input: TuiLayoutInput): TuiLayoutPlan {
+  const width = Math.max(1, Math.floor(input.width));
+  const bodyHeight = Math.max(0, Math.floor(input.bodyHeight));
+  const ptyRows = positiveInteger(input.ptyViewport?.rows);
+  const ptyCols = positiveInteger(input.ptyViewport?.cols);
+
+  const preferredLeftWidth = chooseLeftWidth(width);
+  const preferredRightWidth = Math.max(0, width - preferredLeftWidth);
+  const requiredPtyWidth = ptyCols === undefined ? undefined : ptyCols + 2;
+
+  const rightWidth =
+    requiredPtyWidth === undefined
+      ? preferredRightWidth
+      : clampNumber(Math.max(preferredRightWidth, requiredPtyWidth), 0, width);
+  const leftWidth = Math.max(0, width - rightWidth);
+  const conversationPaneWidth = rightWidth > 0 ? leftWidth + 1 : width;
+
+  const requiredPtyHeight = ptyRows === undefined ? undefined : ptyRows + 2;
+  const bottomHeight =
+    requiredPtyHeight === undefined
+      ? Math.max(0, bodyHeight - Math.max(1, Math.floor(bodyHeight / 2)))
+      : clampNumber(requiredPtyHeight, 0, bodyHeight);
+  const topHeight = Math.max(0, bodyHeight - bottomHeight);
+
+  const { loopPaneWidth, detailPaneWidth } = planTopRightSplit(rightWidth);
+  return {
+    bodyHeight,
+    conversationPaneWidth,
+    rightWidth,
+    topHeight,
+    bottomHeight,
+    loopPaneWidth,
+    detailPaneWidth,
+    ptyFitsViewport:
+      requiredPtyWidth !== undefined &&
+      requiredPtyHeight !== undefined &&
+      rightWidth >= requiredPtyWidth &&
+      bottomHeight >= requiredPtyHeight,
+  };
+}
+
+function planTopRightSplit(rightWidth: number): {
+  loopPaneWidth: number;
+  detailPaneWidth: number;
+} {
+  if (rightWidth <= 0) return { loopPaneWidth: 0, detailPaneWidth: 0 };
+  if (rightWidth < 24) {
+    return { loopPaneWidth: rightWidth, detailPaneWidth: 0 };
+  }
+
+  const loopCoreWidth = clampNumber(
+    Math.floor(rightWidth * 0.51),
+    12,
+    rightWidth - 12,
+  );
+  return {
+    loopPaneWidth: loopCoreWidth + 1,
+    detailPaneWidth: rightWidth - loopCoreWidth,
+  };
+}
+
+function positiveInteger(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const integer = Math.floor(value);
+  return integer > 0 ? integer : undefined;
 }
 
 function renderHeaderLine(run: RunHeaderView): string {
@@ -1302,15 +1081,48 @@ export function renderPtySessionForDisplay(
   maxTailChars = 4000,
   maxLineWidth = 120,
 ): string {
+  const body = renderPtyScreenForDisplay(session, maxTailChars, maxLineWidth);
+  return body ? `${ptyStatusLine(session)}\n\n${body}` : ptyStatusLine(session);
+}
+
+export function renderPtyScreenForDisplay(
+  session: SessionView,
+  maxTailChars = 4000,
+  maxLineWidth = 120,
+): string {
   const tail = session.tail ?? "";
   const visibleTail =
     tail.length > maxTailChars ? tail.slice(-maxTailChars) : tail;
-  const header =
+  return wrapDisplayText(visibleTail, maxLineWidth).join("\n");
+}
+
+function ptyStatusLine(session: SessionView): string {
+  return (
     `${session.session}: ${session.state} ` +
     `(cmd=${session.currentCommand ?? "?"}, ` +
     `rc=${session.returnCode ?? "?"}, ` +
-    `offset=${session.tailOffset ?? "?"})`;
-  return `${header}\n\n${wrapDisplayText(visibleTail, maxLineWidth).join("\n")}`;
+    `offset=${session.tailOffset ?? "?"})`
+  );
+}
+
+function ptyPaneTitle(
+  session: SessionView | undefined,
+  layout: TuiLayoutPlan,
+): string {
+  if (!session) return "PTY (read only)";
+  const viewport = ptyViewportFromSession(session);
+  if (!viewport) return "PTY (read only)";
+  const fit = layout.ptyFitsViewport ? "fit" : "cropped";
+  return `PTY ${session.session} agent ${viewport.cols}x${viewport.rows} ${fit} (read only)`;
+}
+
+function ptyViewportFromSession(
+  session: SessionView | undefined,
+): TuiPtyViewport | undefined {
+  const rows = positiveInteger(session?.screenRows);
+  const cols = positiveInteger(session?.screenCols);
+  if (rows === undefined || cols === undefined) return undefined;
+  return { rows, cols };
 }
 
 function escapeBlessedMarkup(text: string): string {

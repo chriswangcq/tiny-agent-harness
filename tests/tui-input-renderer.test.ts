@@ -6,6 +6,7 @@ import {
   isRawShiftEnterSequence,
   isShiftEnterKey,
   padBlessedLineForDisplay,
+  planTuiLayout,
   rawShiftEnterEchoCandidates,
   renderConversationBodyLinesForDisplay,
   renderInputBufferForBox,
@@ -24,6 +25,7 @@ function session(
   name: string,
   updatedAt: string,
   tail = "",
+  overrides: Partial<SessionView> = {},
 ): SessionView {
   return {
     session: name,
@@ -31,6 +33,7 @@ function session(
     state: "idle",
     logPath: `pty://${name}`,
     tail,
+    ...overrides,
   };
 }
 
@@ -408,6 +411,85 @@ describe("TUI input rendering", () => {
 
     expect(output).not.toMatch(/\{\/?(?:green|cyan|gray|yellow|red|bold)/);
     expect(output).not.toContain("\x1b[");
+  });
+
+  it("renders a selected session PTY pane that can fit the canonical viewport", () => {
+    const state = new TuiInteractionState();
+    const tail = Array.from(
+      { length: 40 },
+      (_, index) => `screen-${String(index).padStart(2, "0")}`,
+    ).join("\n");
+    const vm = {
+      ...view(),
+      sessions: [
+        session("default", "2026-01-01T00:00:01Z", tail, {
+          screenCols: 120,
+          screenRows: 40,
+        }),
+      ],
+    };
+    state.syncWithView(vm.conversation, vm.loop);
+
+    const frame = renderTuiFrame(vm, state, new Set(), {
+      width: 150,
+      height: 51,
+    });
+
+    expect(frame).toHaveLength(51);
+    expect(frame.every((line) => displayWidth(line) === 150)).toBe(true);
+    expect(frame[9]).toContain("PTY default agent 120x40 fit");
+    expect(frame[10]).toContain("screen-00");
+    expect(frame[49]).toContain("screen-39");
+  });
+
+  it("plans enough TUI space around the canonical PTY viewport first", () => {
+    const plan = planTuiLayout({
+      width: 150,
+      bodyHeight: 50,
+      ptyViewport: { cols: 120, rows: 40 },
+    });
+
+    expect(plan.rightWidth).toBe(122);
+    expect(plan.bottomHeight).toBe(42);
+    expect(plan.conversationPaneWidth).toBe(29);
+    expect(plan.topHeight).toBe(8);
+    expect(plan.ptyFitsViewport).toBe(true);
+  });
+
+  it("keeps PTY-first layout deterministic when terminal width is constrained", () => {
+    const plan = planTuiLayout({
+      width: 100,
+      bodyHeight: 50,
+      ptyViewport: { cols: 120, rows: 40 },
+    });
+
+    expect(plan.rightWidth).toBe(100);
+    expect(plan.conversationPaneWidth).toBe(1);
+    expect(plan.bottomHeight).toBe(42);
+    expect(plan.ptyFitsViewport).toBe(false);
+  });
+
+  it("clips PTY viewer height before changing the canonical viewport", () => {
+    const plan = planTuiLayout({
+      width: 150,
+      bodyHeight: 30,
+      ptyViewport: { cols: 120, rows: 40 },
+    });
+
+    expect(plan.rightWidth).toBe(122);
+    expect(plan.bottomHeight).toBe(30);
+    expect(plan.topHeight).toBe(0);
+    expect(plan.ptyFitsViewport).toBe(false);
+  });
+
+  it("falls back to the existing proportional layout without a PTY viewport", () => {
+    const plan = planTuiLayout({ width: 96, bodyHeight: 17 });
+
+    expect(plan.conversationPaneWidth).toBe(44);
+    expect(plan.rightWidth).toBe(53);
+    expect(plan.topHeight).toBe(8);
+    expect(plan.bottomHeight).toBe(9);
+    expect(plan.ptyFitsViewport).toBe(false);
   });
 
   it("adds trusted blessed color tags while escaping message braces", () => {
