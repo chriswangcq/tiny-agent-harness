@@ -28,7 +28,7 @@ export class XtermTerminalScreenBuffer implements TerminalScreenBuffer {
   private disposed = false;
   private pendingFilterText = "";
 
-  constructor(private readonly size: TerminalScreenBufferSize) {
+  constructor(size: TerminalScreenBufferSize) {
     this.terminal = new Terminal({
       cols: positiveInteger(size.cols) ?? 80,
       rows: positiveInteger(size.rows) ?? 24,

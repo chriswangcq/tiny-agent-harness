@@ -33,15 +33,16 @@ export class DeterministicHistoryCompactor implements ContextWindowPort {
   private readonly maxSummaryItems: number;
   private readonly maxSummaryChars: number;
   private readonly groupSimilarToolCalls: boolean;
-  private readonly llmSummarize?: (items: HistoryItem[]) => Promise<string>;
+  private readonly now: () => string;
 
   constructor(options?: {
     maxHistoryTokens?: number;
-    retainedItemCount?: number; recentItemCount?: number;
+    retainedItemCount?: number;
+    recentItemCount?: number;
     maxSummaryItems?: number;
     maxSummaryChars?: number;
     groupSimilarToolCalls?: boolean;
-    llmSummarize?: (items: HistoryItem[]) => Promise<string>;
+    now?: () => string;
   }) {
     this.maxHistoryTokens =
       options?.maxHistoryTokens ?? DEFAULT_CONTEXT_WINDOW_MAX_HISTORY_TOKENS;
@@ -50,7 +51,7 @@ export class DeterministicHistoryCompactor implements ContextWindowPort {
     this.maxSummaryItems = options?.maxSummaryItems ?? 500;
     this.maxSummaryChars = options?.maxSummaryChars ?? 12_000;
     this.groupSimilarToolCalls = options?.groupSimilarToolCalls ?? true;
-    this.llmSummarize = options?.llmSummarize;
+    this.now = options?.now ?? (() => new Date().toISOString());
   }
 
   countHistoryTokens(_history: HistoryItem[]): number {
@@ -112,7 +113,7 @@ export class DeterministicHistoryCompactor implements ContextWindowPort {
     maxTokens: number;
     stepIndex: number;
   }): string {
-    const now = new Date().toISOString();
+    const now = this.now();
 
     // Phase 1: Coalesce similar tool calls
     const coalesced = this.groupSimilarToolCalls
@@ -336,11 +337,6 @@ function preview(value: string, maxChars: number): string {
     return value;
   }
   return `${value.slice(0, Math.max(0, maxChars - 1))}…`;
-}
-
-// Keep original function for backward compatibility
-function describeHistoryItem(item: HistoryItem): string {
-  return describeHistoryItemExtended(item);
 }
 
 // ─── Phase 2: LLM Semantic Summary ────────────────────────────────

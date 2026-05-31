@@ -68,6 +68,8 @@ describe("PromptBuilder", () => {
       `${["write", "_text"].join("")}, key, poll`,
     );
     expect(prompt.messages[0]!.content).not.toContain(["stash", "_file"].join(""));
+    expect(prompt.messages[0]!.content).not.toContain("tiny-agent file");
+    expect(prompt.messages[0]!.content).not.toContain("subcommands: im, file, skill");
     expect(prompt.messages[0]!.content).not.toContain("file materialize");
     expect(prompt.messages[0]!.content).not.toContain(["output", "Tail"].join(""));
     expect(prompt.messages[0]!.content).not.toContain("last 2K characters");

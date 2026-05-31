@@ -85,9 +85,9 @@ export class ManagedPtySession {
     ];
     this.cols = positiveInteger(options.cols) ?? 80;
     this.rows = positiveInteger(options.rows) ?? 24;
+    const baseEnv = options.env ?? processEnv();
     this.env = normalizePtyEnv({
-      ...processEnv(),
-      ...(options.env ?? {}),
+      ...baseEnv,
       TERM: "dumb",
     });
     this.foregroundInspector = options.foregroundInspector ?? defaultForegroundInspector;

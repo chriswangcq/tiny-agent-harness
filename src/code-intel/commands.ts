@@ -6,7 +6,6 @@ import type {
   CodeIntelDiagnostic,
   CodeIntelEnvelope,
   CodeIntelErrorCode,
-  CodeIntelLimits,
   CodeIntelQuery,
 } from "./types.js";
 import { loadCodeIntelConfig } from "./config.js";

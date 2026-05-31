@@ -51,7 +51,7 @@ const SYSTEM_MESSAGE =
   "To reply, use IM send with --text-stdin through terminal_write. Quoted heredoc is the normal form; input redirection is also fine when simpler.\n" +
   "After replying or completing work: io_wait tool -> wait for the next user message.\n\n" +
   "Workflow: read [user@channel] intent -> inspect terminal facts and screen.text -> terminal/session tools -> IM send reply -> io_wait.\n" +
-  "The tiny-agent CLI is available via `node dist/cli/main.js` (subcommands: im, file, skill).";
+  "The tiny-agent CLI is available via `node dist/cli/main.js` (subcommands: im, skill; top-level commands include run, resume, ui, tui).";
 
 // ---------------------------------------------------------------------------
 // PromptBuilder

@@ -3,7 +3,6 @@ import type {
   InternalToolCall,
   ToolCallValidation,
   ToolName,
-  ToolRequest,
 } from "../types/index.js";
 import { MODEL_VISIBLE_TOOL_NAMES } from "../types/tools.js";
 import type {

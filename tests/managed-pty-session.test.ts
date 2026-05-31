@@ -76,6 +76,36 @@ describe("ManagedPtySession", () => {
     expect(ptyMock.spawned[0]?.writes[0]).not.toContain("__TAH_COMMAND_DONE__");
   });
 
+  it("uses a supplied env snapshot without leaking ambient process env", () => {
+    const previous = process.env.TAH_AMBIENT_ONLY;
+    process.env.TAH_AMBIENT_ONLY = "should-not-leak";
+    try {
+      const session = new ManagedPtySession({
+        id: "managed",
+        promptNonce: "nonce",
+        cwd: "/repo",
+        env: { PATH: "/bin" },
+      });
+
+      session.spawn();
+
+      const options = ptyMock.spawn.mock.calls[0]?.[2] as
+        | { env?: Record<string, string> }
+        | undefined;
+      expect(options?.env).toMatchObject({
+        PATH: "/bin",
+        TERM: "dumb",
+      });
+      expect(options?.env?.TAH_AMBIENT_ONLY).toBeUndefined();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.TAH_AMBIENT_ONLY;
+      } else {
+        process.env.TAH_AMBIENT_ONLY = previous;
+      }
+    }
+  });
+
   it("updates terminal facts from prompt output", () => {
     const session = new ManagedPtySession({
       id: "managed",

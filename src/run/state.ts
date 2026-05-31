@@ -3,11 +3,8 @@ import type {
   AgentRunStatus,
   NextEffect,
   RunEvent,
-  RunError,
 } from "../types/run.js";
-import type { ModelTurn, InternalToolCall } from "../types/model.js";
-import type { ToolRequest, ToolReviewDecision, AgentObservation } from "../types/tools.js";
-import type { IoWaitRequest } from "../types/environment.js";
+import type { AgentObservation } from "../types/tools.js";
 
 const TERMINAL_STATUSES: Set<AgentRunStatus> = new Set([
   "failed",
@@ -26,14 +23,16 @@ export class AgentRunState {
     task: string;
     cwd: string;
     transcriptPath: string;
+    now?: string;
   }): AgentRunState {
+    const now = params.now ?? new Date().toISOString();
     return new AgentRunState({
       runId: params.runId,
       status: "created",
       task: params.task,
       cwd: params.cwd,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
       stepIndex: 0,
       transcriptPath: params.transcriptPath,
     });

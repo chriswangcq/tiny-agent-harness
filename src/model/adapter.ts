@@ -14,7 +14,6 @@ import type {
   V4Tool,
 } from "../types/index.js";
 import {
-  DSML,
   DSML_INVOKE_CLOSE,
   DSML_INVOKE_OPEN_PREFIX,
   DSML_TOOL_CALLS_CLOSE,

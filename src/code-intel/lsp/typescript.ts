@@ -40,7 +40,6 @@ const TYPESCRIPT_CAPABILITIES = [
 
 export class TypeScriptLspBackend implements CodeIntelBackend {
   private client?: LspClient;
-  private serverCapabilities: unknown;
 
   constructor(
     private readonly options: {
@@ -191,7 +190,7 @@ export class TypeScriptLspBackend implements CodeIntelBackend {
       timeoutMs: this.options.limits.timeoutMs,
     });
 
-    const initializeResult = await this.client.initialize({
+    await this.client.initialize({
       processId: process.pid,
       rootUri: toFileUri(this.options.workspaceRoot),
       capabilities: {},
@@ -203,9 +202,6 @@ export class TypeScriptLspBackend implements CodeIntelBackend {
         },
       ],
     });
-    this.serverCapabilities = isObject(initializeResult)
-      ? initializeResult.capabilities
-      : undefined;
   }
 
   private openTextDocument(absolutePath: string): void {

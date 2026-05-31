@@ -167,6 +167,19 @@ describe("AgentRunState transitions", () => {
     initial = createState();
   });
 
+  it("create accepts an explicit timestamp for deterministic initial state", () => {
+    const state = AgentRunState.create({
+      runId: "test-run",
+      task: "test task",
+      cwd: "/tmp",
+      transcriptPath: "/tmp/transcript.jsonl",
+      now: NOW,
+    });
+
+    expect(state.data.createdAt).toBe(NOW);
+    expect(state.data.updatedAt).toBe(NOW);
+  });
+
   it("created + run_started -> running", () => {
     const running = toRunning(initial);
     expect(running.status).toBe("running");

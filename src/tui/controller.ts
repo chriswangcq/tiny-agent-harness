@@ -13,7 +13,6 @@ import { TranscriptReader } from "./transcript-reader.js";
 import { ViewModelBuilder } from "./view-model-builder.js";
 import { BlessedRenderer } from "./renderer.js";
 import { ImCliTransport } from "../im/transport.js";
-import type { UserMessage, AgentMessage } from "../types/environment.js";
 
 export class TuiController {
   private readonly reader: TranscriptReader;

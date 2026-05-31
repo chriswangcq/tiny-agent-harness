@@ -7,7 +7,6 @@ import type {
   V4ChatMessage,
 } from "../types/model.js";
 import type {
-  AgentObservation,
   ToolCallValidation,
   ToolDefinition,
   ToolObservation,
