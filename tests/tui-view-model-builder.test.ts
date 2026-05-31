@@ -108,6 +108,12 @@ function invalidOutput(): FimStepOutput {
     turn: {
       kind: "invalid_output",
       message: "bad output",
+      diagnostic: {
+        code: "expected_v4_dsml",
+        severity: "error",
+        message: "bad output",
+        recoverable: true,
+      },
       thinking: thinking(),
       rawDecision: "not a valid tool decision",
       raw: "<raw>",
@@ -412,6 +418,7 @@ describe("ViewModelBuilder", () => {
     });
     expect(decisionFrame.detail).toContain("not a valid tool decision");
     expect(decisionFrame.detail).toContain("bad output");
+    expect(decisionFrame.detail).toContain("expected_v4_dsml");
   });
 
   it("projects validation and review events with detail", () => {

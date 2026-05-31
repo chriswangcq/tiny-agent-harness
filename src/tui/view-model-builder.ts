@@ -25,6 +25,7 @@ import type {
   TuiLimits,
 } from "./types.js";
 import { DEFAULT_TUI_LIMITS } from "./types.js";
+import { redactTerminalWriteText } from "../tools/redaction.js";
 
 type ConversationProjectionItem = ConversationItem & {
   order: number;
@@ -179,6 +180,7 @@ export class ViewModelBuilder {
               summary: turn.message,
               detail: formatDetail([
                 ["message", turn.message],
+                ["diagnostic", turn.diagnostic],
                 ["thinking", compactLongText(turn.thinking?.content)],
                 ["raw decision", compactLongText(turn.rawDecision)],
                 ["raw", turn.raw],
@@ -501,6 +503,7 @@ export class ViewModelBuilder {
     if (event.turn.kind === "invalid_output") {
       frame.detail = formatDetail([
         ["message", event.turn.message],
+        ["diagnostic", event.turn.diagnostic],
         ["thinking", compactLongText(event.output.thinking.content)],
         ["raw decision", compactLongText(event.output.rawDecision)],
         [
@@ -508,6 +511,7 @@ export class ViewModelBuilder {
           {
             kind: event.turn.kind,
             message: event.turn.message,
+            diagnostic: event.turn.diagnostic,
           },
         ],
         ["usage", event.output.usage],
@@ -800,11 +804,8 @@ function redactLargePayloads(value: unknown): unknown {
       value.name === "terminal_write"
     ) {
       const redactedArgs = redactLargePayloads(child) as Record<string, unknown>;
-      if (
-        typeof child.text === "string" &&
-        shouldRedactTextPayload(child.text)
-      ) {
-        redactedArgs.text = `[redacted terminal_write payload ${Buffer.byteLength(child.text, "utf8")} bytes]`;
+      if (typeof child.text === "string") {
+        redactedArgs.text = redactTerminalWriteText(child.text);
       }
       next[key] = redactedArgs;
       continue;
@@ -814,7 +815,7 @@ function redactLargePayloads(value: unknown): unknown {
       typeof child === "string" &&
       shouldRedactTerminalWriteDetail(value, child)
     ) {
-      next[key] = `[redacted terminal_write payload ${Buffer.byteLength(child, "utf8")} bytes]`;
+      next[key] = redactTerminalWriteText(child);
     } else {
       next[key] = redactLargePayloads(child);
     }
@@ -829,14 +830,5 @@ function shouldRedactTerminalWriteDetail(
   if (parent.name !== "terminal_write" && parent.kind !== "terminal_write") {
     return false;
   }
-  return shouldRedactTextPayload(text);
-}
-
-function shouldRedactTextPayload(text: string): boolean {
-  if (text.length > 512) {
-    return true;
-  }
-
-  const line = text.trim();
-  return line.length >= 128 && line.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/u.test(line);
+  return redactTerminalWriteText(text) !== text;
 }

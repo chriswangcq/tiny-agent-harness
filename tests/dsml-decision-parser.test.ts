@@ -190,6 +190,11 @@ describe("parseDsmlDecision", () => {
     expect(result).toMatchObject({
       status: "invalid",
       message: expect.stringContaining("expected DSML parameter tags"),
+      diagnostic: {
+        code: "raw_json_parameters",
+        severity: "error",
+        recoverable: true,
+      },
     });
   });
 
@@ -285,6 +290,10 @@ describe("parseDsmlDecision", () => {
     expect(result).toMatchObject({
       status: "invalid",
       message: expect.stringContaining('declared string="false"'),
+      diagnostic: {
+        code: "invalid_parameter_json",
+        details: { paramName: "expectedInputSeq" },
+      },
     });
   });
 
@@ -341,6 +350,10 @@ describe("parseDsmlDecision", () => {
     expect(result).toMatchObject({
       status: "invalid",
       message: expect.stringContaining("Unsupported function: not_a_tool"),
+      diagnostic: {
+        code: "unsupported_function",
+        details: { name: "not_a_tool" },
+      },
     });
   });
 
@@ -350,6 +363,9 @@ describe("parseDsmlDecision", () => {
     expect(result).toMatchObject({
       status: "invalid",
       message: expect.stringContaining("Expected a V4 DSML tool call"),
+      diagnostic: {
+        code: "expected_v4_dsml",
+      },
     });
   });
 

@@ -5,6 +5,7 @@
 
 import type { IoWaitRequest } from "./environment.js";
 import type { TerminalToolInput, ToolName } from "./tools.js";
+import type { ModelProtocolDiagnostic } from "../model/dsml-decision-parser.js";
 
 /**
  * Raw model output placeholder. Will be refined as the FIM adapter
@@ -61,6 +62,7 @@ export type ModelTurn =
   | {
       kind: "invalid_output";
       message: string;
+      diagnostic?: ModelProtocolDiagnostic;
       thinking?: AgentThinking;
       rawDecision?: string;
       raw?: unknown;

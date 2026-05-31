@@ -677,6 +677,9 @@ describe("DeepSeekFimAdapter", () => {
     expect(output.turn).toMatchObject({
       kind: "invalid_output",
       message: expect.stringContaining("Unsupported"),
+      diagnostic: {
+        code: "unsupported_function",
+      },
     });
   });
 
@@ -693,6 +696,9 @@ describe("DeepSeekFimAdapter", () => {
     expect(output.turn).toMatchObject({
       kind: "invalid_output",
       message: expect.stringContaining("Expected a V4 DSML tool call"),
+      diagnostic: {
+        code: "expected_v4_dsml",
+      },
     });
   });
 

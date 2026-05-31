@@ -142,6 +142,8 @@ type ModelTurn =
 
 `invalid_output` 不一定让 run 失败。第一版可以把 invalid output 转成 observation，让 Agent 下一轮自我修正。
 
+Invalid output should carry protocol diagnostics when the adapter can identify a stable cause. Current diagnostic codes cover V3/V4 boundary mismatch, raw JSON arguments, invalid JSON parameter frames, unsupported function names, missing parameter frames, and malformed `io_wait` arguments. TUI and replay/eval summaries should show these diagnostic codes instead of reducing them to a generic warning string.
+
 `io_wait` 是 Agent 向自己的 run state machine 提交等待请求。它不是 terminal/session tool，也不执行外部业务动作；orchestrator 会等待 Environment 中出现满足条件的事件，满足后才允许下一轮 model step。
 
 First version supports only new user message wait:
@@ -796,7 +798,7 @@ Resume does:
 3. Append a resume reminder explaining that the PTY process tree is fresh.
 4. Record `run_resumed` and continue from `nextEffect()`.
 
-Resume restores run state and agent-loop context, not the previous PTY process tree. Prior ssh, vim, cat, REPL, or other foreground processes do not survive. The next model step must inspect the fresh PTY with `status`/`poll` before assuming terminal state.
+Resume restores run state and agent-loop context, not the previous PTY process tree. Prior ssh, vim, cat, REPL, or other foreground processes do not survive. The next model step must inspect the fresh PTY with `session_observe` before assuming terminal state.
 
 Recovery rules:
 
@@ -804,6 +806,8 @@ Recovery rules:
 - `waiting_for_review`: re-run review for the pending tool request.
 - `waiting_for_io`: wait for the persisted IO condition.
 - `waiting_for_tool`: do not replay the tool. Convert the in-flight execution into a recoverable observation so the model must inspect filesystem/transcript/terminal state and retry deliberately if needed.
+
+`src/run/recovery.ts` keeps the recovery checks as pure diagnostics over explicit snapshots. `src/run/replay.ts` builds replay/eval cases from explicit transcript events and state/session snapshots. These helpers are for debugger/eval/resume safety; they do not execute tools and they do not infer hidden filesystem state.
 
 ## Minimal First Implementation
 

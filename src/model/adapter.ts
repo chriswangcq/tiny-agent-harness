@@ -540,6 +540,7 @@ export class DeepSeekFimAdapter {
       return {
         kind: "invalid_output",
         message: parsed.message,
+        diagnostic: parsed.diagnostic,
         thinking,
         rawDecision,
       };

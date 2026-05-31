@@ -1,4 +1,8 @@
 import type { TerminalObservation } from "./types.js";
+import {
+  redactSensitiveText,
+  redactTerminalWriteText,
+} from "../tools/redaction.js";
 
 export type TerminalHistoryLimits = {
   maxStringChars: number;
@@ -55,7 +59,7 @@ export function redactPayloadFields(
 
 function redactPayloadFieldsInner(value: unknown, limits: TerminalHistoryLimits): unknown {
   if (typeof value === "string") {
-    return compactString(value, limits.maxStringChars);
+    return compactString(redactSensitiveText(value), limits.maxStringChars);
   }
 
   if (Array.isArray(value)) {
@@ -73,9 +77,9 @@ function redactPayloadFieldsInner(value: unknown, limits: TerminalHistoryLimits)
       key === "text" &&
       typeof nested === "string" &&
       record.kind === "terminal_write" &&
-      shouldRedactTerminalWrite(nested)
+      redactTerminalWriteText(nested) !== nested
     ) {
-      result[key] = `[redacted terminal_write payload ${utf8Bytes(nested)} bytes]`;
+      result[key] = redactTerminalWriteText(nested);
       continue;
     }
     if (PAYLOAD_KEYS.has(key)) {
@@ -98,17 +102,4 @@ function compactString(value: string, maxChars: number): string {
   }
 
   return `${value.slice(0, Math.max(0, maxChars - 1))}…`;
-}
-
-function shouldRedactTerminalWrite(text: string): boolean {
-  if (text.length > 512) {
-    return true;
-  }
-
-  const line = text.trim();
-  return line.length >= 128 && line.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/u.test(line);
-}
-
-function utf8Bytes(value: string): number {
-  return Buffer.byteLength(value, "utf8");
 }
