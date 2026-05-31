@@ -77,7 +77,12 @@ export class ManagedPtySession {
     this.promptNonce = options.promptNonce;
     this.cwd = options.cwd;
     this.shell = options.shell ?? "/bin/bash";
-    this.shellArgs = options.shellArgs ?? ["--noprofile", "--norc", "-i"];
+    this.shellArgs = options.shellArgs ?? [
+      "--noprofile",
+      "--norc",
+      "--noediting",
+      "-i",
+    ];
     this.cols = positiveInteger(options.cols) ?? 80;
     this.rows = positiveInteger(options.rows) ?? 24;
     this.env = normalizePtyEnv({

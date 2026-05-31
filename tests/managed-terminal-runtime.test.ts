@@ -156,7 +156,7 @@ describe("ManagedTerminalRuntime", () => {
     expect(ptyMock.spawn).toHaveBeenCalledTimes(2);
     expect(ptyMock.spawn).toHaveBeenLastCalledWith(
       "/bin/bash",
-      ["--noprofile", "--norc", "-i"],
+      ["--noprofile", "--norc", "--noediting", "-i"],
       expect.objectContaining({ cwd: "/repo/build" }),
     );
     expect(list).toMatchObject({ currentSession: "build" });
@@ -348,7 +348,7 @@ describe("ManagedTerminalRuntime", () => {
     expect(ptyMock.spawn).toHaveBeenCalledTimes(2);
     expect(ptyMock.spawn).toHaveBeenLastCalledWith(
       "/bin/bash",
-      ["--noprofile", "--norc", "-i"],
+      ["--noprofile", "--norc", "--noediting", "-i"],
       expect.objectContaining({ cwd: "/tmp" }),
     );
     expect(observation).toMatchObject({

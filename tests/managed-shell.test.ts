@@ -61,5 +61,6 @@ describe("managed shell marker formatting", () => {
     expect(snippet).toContain("__TAH_CONT__");
     expect(snippet).toContain("PS1=");
     expect(snippet).toContain("PS2=");
+    expect(snippet).toContain("[\\u@\\h:\\w]\\$ ");
   });
 });

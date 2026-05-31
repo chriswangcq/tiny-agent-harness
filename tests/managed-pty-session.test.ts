@@ -61,7 +61,7 @@ describe("ManagedPtySession", () => {
 
     expect(ptyMock.spawn).toHaveBeenCalledWith(
       "/bin/bash",
-      ["--noprofile", "--norc", "-i"],
+      ["--noprofile", "--norc", "--noediting", "-i"],
       expect.objectContaining({
         cwd: "/repo",
         env: expect.objectContaining({
