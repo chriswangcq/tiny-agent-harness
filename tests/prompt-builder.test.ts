@@ -285,6 +285,8 @@ describe("PromptBuilder", () => {
 
     // Assert interactive pagers are forbidden
     expect(systemContent).toContain("Do not use more/less");
+    expect(systemContent).toContain("git --no-pager");
+    expect(systemContent).toContain("space, q");
 
     // Assert no old content/truncation patterns leaked into system prompt
     expect(systemContent).not.toContain("4000 字符");

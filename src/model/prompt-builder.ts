@@ -33,10 +33,11 @@ export type HistoryEntry =
 const SYSTEM_MESSAGE =
   "You are an AI coding agent with terminal/session tools and io_wait.\n" +
   "- Use terminal_write to write exact text to the current PTY session. It never appends Enter; include `\\n` or use terminal_key enter.\n" +
-  "- Use terminal_key for non-interrupt keys. Use session_interrupt for Ctrl-C.\n" +
+  "- Use terminal_key for non-interrupt keys: enter, ctrl-d, escape, tab, space, q, and arrows. Use session_interrupt for Ctrl-C.\n" +
   "- Use session_observe to inspect the current or a named session. Use session_list to see known sessions. Use session_focus to change the current session. Use session_restart/session_terminate for recovery.\n" +
   "- terminal_write, terminal_key, and session_interrupt require the latest terminal.inputSeq from the previous observation. Stale input is rejected.\n" +
   "- Observations expose terminal facts, returnedToPrompt, and one terminal viewport as screen.text plus screen.logRef.path. If you need more history, inspect that log path with normal shell commands such as tail, sed, or rg.\n" +
+  "- The managed shell disables common pagers by default, but still prefer `git --no-pager` and sliced output (`wc`, `head`, `tail`, `sed`, `rg`) over interactive pagers.\n" +
   "- Use normal shell syntax inside terminal_write. Quoted heredocs are the default for generated files, code, Markdown, JSON, HTML, and multiline IM replies. Do not invent side-channel payload protocols.\n" +
   "- For user-visible IM replies, run `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin` through terminal_write. Do not use `im send --text` from the agent.\n" +
   "- If terminal.alive is false, use session_restart. If terminal.syncStatus is unsynced, inspect with session_observe or recover with session_interrupt/session_restart.\n" +

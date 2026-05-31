@@ -86,10 +86,7 @@ export class ManagedPtySession {
     this.cols = positiveInteger(options.cols) ?? 80;
     this.rows = positiveInteger(options.rows) ?? 24;
     const baseEnv = options.env ?? processEnv();
-    this.env = normalizePtyEnv({
-      ...baseEnv,
-      TERM: "dumb",
-    });
+    this.env = buildManagedPtyEnv(baseEnv);
     this.foregroundInspector = options.foregroundInspector ?? defaultForegroundInspector;
     this.screenBuffer =
       options.screenBuffer ??
@@ -206,6 +203,19 @@ function processEnv(): Record<string, string> {
     }
   }
   return env;
+}
+
+export function buildManagedPtyEnv(
+  baseEnv: Record<string, string>,
+): Record<string, string> {
+  return normalizePtyEnv({
+    ...baseEnv,
+    TERM: "dumb",
+    PAGER: "cat",
+    GIT_PAGER: "cat",
+    MANPAGER: "cat",
+    LESS: "FRX",
+  });
 }
 
 function normalizePtyEnv(env: Record<string, string>): Record<string, string> {

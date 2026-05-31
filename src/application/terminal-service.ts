@@ -366,6 +366,10 @@ function renderKey(key: TerminalKey): string {
       return "\u001b";
     case "tab":
       return "\t";
+    case "space":
+      return " ";
+    case "q":
+      return "q";
     case "up":
       return "\u001b[A";
     case "down":

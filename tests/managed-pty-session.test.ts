@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ManagedPtySession } from "../src/bash/managed-session.js";
+import {
+  buildManagedPtyEnv,
+  ManagedPtySession,
+} from "../src/bash/managed-session.js";
 import {
   formatContinuationMarker,
   formatPromptMarker,
@@ -67,6 +70,10 @@ describe("ManagedPtySession", () => {
         env: expect.objectContaining({
           PATH: "/bin",
           TERM: "dumb",
+          PAGER: "cat",
+          GIT_PAGER: "cat",
+          MANPAGER: "cat",
+          LESS: "FRX",
           LANG: expect.stringMatching(/utf-?8/iu),
         }),
       }),
@@ -95,6 +102,10 @@ describe("ManagedPtySession", () => {
       expect(options?.env).toMatchObject({
         PATH: "/bin",
         TERM: "dumb",
+        PAGER: "cat",
+        GIT_PAGER: "cat",
+        MANPAGER: "cat",
+        LESS: "FRX",
       });
       expect(options?.env?.TAH_AMBIENT_ONLY).toBeUndefined();
     } finally {
@@ -104,6 +115,27 @@ describe("ManagedPtySession", () => {
         process.env.TAH_AMBIENT_ONLY = previous;
       }
     }
+  });
+
+  it("builds a deterministic managed PTY env over caller input", () => {
+    expect(
+      buildManagedPtyEnv({
+        PATH: "/bin",
+        TERM: "xterm-256color",
+        PAGER: "less",
+        GIT_PAGER: "less",
+        MANPAGER: "less",
+        LESS: "R",
+      }),
+    ).toMatchObject({
+      PATH: "/bin",
+      TERM: "dumb",
+      PAGER: "cat",
+      GIT_PAGER: "cat",
+      MANPAGER: "cat",
+      LESS: "FRX",
+      LANG: expect.stringMatching(/utf-?8/iu),
+    });
   });
 
   it("updates terminal facts from prompt output", () => {

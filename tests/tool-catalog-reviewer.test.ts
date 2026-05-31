@@ -15,7 +15,7 @@ import type { ToolRequest } from "../src/types/tools.js";
 
 type ObjectSchema = {
   required?: string[];
-  properties?: Record<string, unknown>;
+  properties?: Record<string, { enum?: string[] } & Record<string, unknown>>;
   additionalProperties?: unknown;
 };
 
@@ -56,6 +56,18 @@ describe("static tool catalog", () => {
     expect(keySchema.required).toEqual(["expectedInputSeq", "key"]);
     expect(keySchema.properties).not.toHaveProperty("session");
     expect(JSON.stringify(keySchema)).not.toContain("ctrl-c");
+    expect(keySchema.properties?.key?.enum).toEqual([
+      "enter",
+      "ctrl-d",
+      "escape",
+      "tab",
+      "space",
+      "q",
+      "up",
+      "down",
+      "left",
+      "right",
+    ]);
     expect(keySchema.additionalProperties).toBe(false);
 
     expect(interruptSchema.required).toEqual(["expectedInputSeq"]);

@@ -40,15 +40,20 @@ export type TerminalState = {
   foregroundProcess: string | null;
 };
 
-export type TerminalKey =
-  | "enter"
-  | "ctrl-d"
-  | "escape"
-  | "tab"
-  | "up"
-  | "down"
-  | "left"
-  | "right";
+export const TERMINAL_KEYS = [
+  "enter",
+  "ctrl-d",
+  "escape",
+  "tab",
+  "space",
+  "q",
+  "up",
+  "down",
+  "left",
+  "right",
+] as const;
+
+export type TerminalKey = (typeof TERMINAL_KEYS)[number];
 
 export type TerminalEvent =
   | {

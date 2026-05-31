@@ -1,4 +1,5 @@
 import type { JsonSchema, ToolDefinition } from "../types/index.js";
+import { TERMINAL_KEYS } from "../terminal/types.js";
 
 const ExpectedInputSeqProperty: JsonSchema = {
   type: "integer",
@@ -53,9 +54,9 @@ const terminalKeySchema: JsonSchema = {
   properties: {
     expectedInputSeq: ExpectedInputSeqProperty,
     key: {
-      enum: ["enter", "ctrl-d", "escape", "tab", "up", "down", "left", "right"],
+      enum: [...TERMINAL_KEYS],
       description:
-        "A terminal key sent to the current session. Use session_interrupt for Ctrl-C.",
+        "A terminal key sent to the current session. Includes pager keys space and q. Use session_interrupt for Ctrl-C.",
     },
     waitForReturnMs: WaitForReturnMsProperty,
   },
@@ -141,7 +142,7 @@ export const TERMINAL_WRITE_TOOL_DEFINITION: ToolDefinition = {
 export const TERMINAL_KEY_TOOL_DEFINITION: ToolDefinition = {
   name: "terminal_key",
   description:
-    "Send a non-interrupt terminal key to the current PTY session. Use session_interrupt for Ctrl-C. The observation returns one terminal screen and the latest terminal.inputSeq.",
+    "Send a non-interrupt terminal key to the current PTY session, including pager keys space and q. Use session_interrupt for Ctrl-C. The observation returns one terminal screen and the latest terminal.inputSeq.",
   inputSchema: terminalKeySchema,
 };
 

@@ -56,6 +56,7 @@ describe("managed shell marker formatting", () => {
   it("builds a shell init snippet with quoted encoded nonce and marker prompts", () => {
     const snippet = buildManagedShellInitSnippet({ nonce: "nonce ' space" });
 
+    expect(snippet.split("\n")[0]).toBe("set +H");
     expect(snippet).toContain("export TAH_PROMPT_NONCE='nonce%20%27%20space'");
     expect(snippet).toContain("__TAH_PROMPT__");
     expect(snippet).toContain("__TAH_CONT__");

@@ -231,6 +231,30 @@ describe("TerminalService", () => {
     expect(interrupts).toEqual(["shell"]);
   });
 
+  it("renders pager terminal_key values as literal key bytes", async () => {
+    const { ports, writes } = makePorts({
+      currentSession: "shell",
+      snapshots: [makeSnapshot("shell", terminal(1))],
+    });
+    const service = new TerminalService(ports, makeConfig());
+
+    await service.handleAction({
+      kind: "terminal_key",
+      expectedInputSeq: 1,
+      key: "space",
+    });
+    await service.handleAction({
+      kind: "terminal_key",
+      expectedInputSeq: 2,
+      key: "q",
+    });
+
+    expect(writes).toEqual([
+      { session: "shell", data: " " },
+      { session: "shell", data: "q" },
+    ]);
+  });
+
   it("observes a named session without changing focus", async () => {
     const { ports, current } = makePorts({
       currentSession: "default",

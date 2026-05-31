@@ -10,6 +10,7 @@ import type {
   TerminalState,
   TerminalToolRequest,
 } from "../terminal/types.js";
+import { TERMINAL_KEYS } from "../terminal/types.js";
 
 function invalid(message: string): ToolCallValidation {
   const observation: AgentObservation = {
@@ -153,7 +154,7 @@ export class ToolCallValidator {
     if (seqValidation) return seqValidation;
 
     if (!isTerminalKey(args.key)) {
-      return "Invalid terminal_key arguments: key must be one of enter, ctrl-d, escape, tab, up, down, left, or right. Use session_interrupt for Ctrl-C.";
+      return `Invalid terminal_key arguments: key must be one of ${TERMINAL_KEYS.join(", ")}. Use session_interrupt for Ctrl-C.`;
     }
 
     const waitForReturnMs = parseOptionalNonNegativeInteger(
@@ -414,13 +415,7 @@ function formatToolNames(): string {
 
 function isTerminalKey(value: unknown): value is TerminalKey {
   return (
-    value === "enter" ||
-    value === "ctrl-d" ||
-    value === "escape" ||
-    value === "tab" ||
-    value === "up" ||
-    value === "down" ||
-    value === "left" ||
-    value === "right"
+    typeof value === "string" &&
+    (TERMINAL_KEYS as readonly string[]).includes(value)
   );
 }

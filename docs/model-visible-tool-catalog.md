@@ -27,7 +27,7 @@ Removed visible side channels
 2. `session_focus` 是改变 current session 的唯一常规入口。
 3. `session_observe` 可以观察 current session 或指定 session，但不会改变 current session。
 4. 所有 PTY observation 都返回最多一屏 terminal viewport，不返回任意长度 tail，不做日志分页 API。
-5. 完整 PTY 输出仍持久化在 session log；如果 agent 需要更多历史，使用 shell 原生命令读取日志，例如 `tail`、`sed`、`rg`、`less`。
+5. 完整 PTY 输出仍持久化在 session log；如果 agent 需要更多历史，使用 shell 原生命令读取日志，例如 `wc`、`head`、`tail`、`sed`、`rg`，避免 `less`/`more` 等交互式 pager。
 6. `io_wait` 仍是等待 environment event 的 run-state decision，不是 shell 命令。
 
 ## Shared Observation
@@ -124,7 +124,7 @@ Description:
 
 ```text
 Send a terminal key to the current PTY session. This tool never accepts a session id.
-Use it for Enter, EOF-style input, escape/navigation, tab completion, and arrow navigation.
+Use it for Enter, EOF-style input, escape/navigation, tab completion, pager keys (space/q), and arrow navigation.
 Use session_interrupt, not terminal_key, for Ctrl-C.
 expectedInputSeq must match the current session's latest terminal.inputSeq.
 The observation is a one-screen terminal glance after the key input.
@@ -142,7 +142,7 @@ Schema:
       "description": "The current session terminal.inputSeq observed before choosing this key input."
     },
     "key": {
-      "enum": ["enter", "ctrl-d", "escape", "tab", "up", "down", "left", "right"]
+      "enum": ["enter", "ctrl-d", "escape", "tab", "space", "q", "up", "down", "left", "right"]
     },
     "waitForReturnMs": {
       "type": "number",

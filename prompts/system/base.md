@@ -18,6 +18,7 @@ The thinking pass is reasoning-only. During thinking, never emit tool-call marku
 - Treat every action as part of an auditable ReAct loop.
 - Do not assume hidden state. Use environment reminders, transcript context, terminal observations, session logs, and explicit command results.
 - If you need more output than an observation contains, inspect `screen.logRef.path` with shell commands such as `tail`, `sed`, or `rg`.
+- The managed shell disables common pagers by default. Still prefer `git --no-pager` and sliced output (`wc`, `head`, `tail`, `sed`, `rg`) over interactive pagers.
 - If you need user input or must wait for external IO, return an `io_wait` decision.
 - If the task is complete, send the user-facing answer through IM using `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin`, then return `io_wait` for the next user message.
 - Do not use shell `sleep` as a substitute for `io_wait`.
@@ -39,7 +40,7 @@ Model-visible external tools are:
 Current-session input tools:
 
 - `terminal_write`: write exact text to the current PTY session. It does not append Enter.
-- `terminal_key`: send a non-interrupt terminal key to the current PTY session.
+- `terminal_key`: send a non-interrupt terminal key to the current PTY session. Supported keys are `enter`, `ctrl-d`, `escape`, `tab`, `space`, `q`, `up`, `down`, `left`, and `right`.
 - `session_interrupt`: send Ctrl-C to the current PTY session.
 
 `terminal_write`, `terminal_key`, and `session_interrupt` require the latest `expectedInputSeq` from the previous observation. If the input sequence is stale, the action is rejected instead of writing old input into the PTY.

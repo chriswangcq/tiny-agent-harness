@@ -130,7 +130,7 @@ Decision pass 允许的 function name 是：
 | function | 含义 |
 | --- | --- |
 | `terminal_write` | 向 current session 写入精确文本，用于 CLI 命令、heredoc、REPL 输入和交互回答。 |
-| `terminal_key` | 向 current session 发送 enter、tab、方向键、escape、ctrl-d 等按键。 |
+| `terminal_key` | 向 current session 发送 enter、tab、space、q、方向键、escape、ctrl-d 等非中断按键。 |
 | `session_observe` / `session_list` / `session_focus` | 观察、列出或切换 PTY session。 |
 | `session_interrupt` / `session_restart` / `session_terminate` | 中断、重启或终止 PTY session。 |
 | `io_wait` | 内部等待请求，不是外部工具。 |

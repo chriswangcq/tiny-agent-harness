@@ -108,7 +108,7 @@ describe("ToolCallValidator terminal input tools", () => {
     }
   });
 
-  it("validates terminal_key and rejects ctrl-c as a key", () => {
+  it("validates terminal_key pager keys and rejects ctrl-c as a key", () => {
     const valid = new ToolCallValidator({ terminal: terminal(3) }).validate(
       makeCall("terminal_key", {
         expectedInputSeq: 3,
@@ -126,6 +126,22 @@ describe("ToolCallValidator terminal input tools", () => {
       });
     }
 
+    for (const key of ["space", "q"] as const) {
+      const pagerKey = new ToolCallValidator({ terminal: terminal(3) }).validate(
+        makeCall("terminal_key", {
+          expectedInputSeq: 3,
+          key,
+        }),
+      );
+      expect(pagerKey.status).toBe("valid");
+      if (pagerKey.status === "valid") {
+        expect(pagerKey.request.request).toMatchObject({
+          kind: "terminal_key",
+          key,
+        });
+      }
+    }
+
     const invalid = new ToolCallValidator().validate(
       makeCall("terminal_key", {
         expectedInputSeq: 1,
@@ -135,6 +151,8 @@ describe("ToolCallValidator terminal input tools", () => {
     expect(invalid.status).toBe("invalid");
     if (invalid.status === "invalid") {
       expect(invalid.observation.message).toContain("session_interrupt");
+      expect(invalid.observation.message).toContain("space");
+      expect(invalid.observation.message).toContain("q");
     }
   });
 
