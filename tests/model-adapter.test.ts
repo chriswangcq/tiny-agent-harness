@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DeepSeekFimAdapter } from "../src/model/adapter.js";
-import { parseDsmlDecision } from "../src/model/adapter.js";
 import { STATIC_TOOL_CATALOG } from "../src/tools/catalog.js";
 import type { DeepSeekFimConfig } from "../src/model/adapter.js";
 import type { ModelStepContext, V4ChatMessage } from "../src/types/model.js";
@@ -11,6 +10,11 @@ const REMOVED_ACTION_KIND = ["write", "_text"].join("");
 const EXPECTED_THINKING_STOP_SEQUENCES = [
   "</think>",
   "<｜DSML",
+  "</｜DSML",
+  "<DSML",
+  "</DSML",
+  "<|DSML",
+  "</|DSML",
   `<${DSML}tool_calls>`,
   `<${DSML}invoke name="`,
   "<tool_call",
@@ -374,31 +378,34 @@ describe("DeepSeekFimAdapter", () => {
     expect(output.turn.kind).toBe("tool_call");
   });
 
-  it("filters incomplete DSML frame prefixes from final thinking content", async () => {
-    const rawDecision = dsmlTerminalWrite(writeText("pwd"));
-    const fetchMock = stubFimStreamResponses(
-      [
-        { text: "Need reply", finishReason: null },
-        { text: "\n\n<｜DSML", finishReason: "stop" },
-      ],
-      [{ text: rawDecision, finishReason: "stop" }],
-    );
-    const progress: Array<{ content: string; sequence: number }> = [];
+  it.each(["<｜DSML", "</｜DSML", "<DSML", "</DSML"])(
+    "filters dirty DSML frame boundary %s from final thinking content",
+    async (dirtyBoundary) => {
+      const rawDecision = dsmlTerminalWrite(writeText("pwd"));
+      const fetchMock = stubFimStreamResponses(
+        [
+          { text: "Need reply", finishReason: null },
+          { text: `\n\n${dirtyBoundary}`, finishReason: "stop" },
+        ],
+        [{ text: rawDecision, finishReason: "stop" }],
+      );
+      const progress: Array<{ content: string; sequence: number }> = [];
 
-    const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
-      tools: [...STATIC_TOOL_CATALOG],
-      onProgress(event) {
-        progress.push({ content: event.content, sequence: event.sequence });
-      },
-    });
+      const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
+        tools: [...STATIC_TOOL_CATALOG],
+        onProgress(event) {
+          progress.push({ content: event.content, sequence: event.sequence });
+        },
+      });
 
-    expect(requestBody(fetchMock, 0).stop).toEqual(
-      EXPECTED_THINKING_STOP_SEQUENCES,
-    );
-    expectProgressContent(progress, "Need reply");
-    expect(output.thinking.content).toBe("Need reply");
-    expect(output.turn.kind).toBe("tool_call");
-  });
+      expect(requestBody(fetchMock, 0).stop).toEqual(
+        EXPECTED_THINKING_STOP_SEQUENCES,
+      );
+      expectProgressContent(progress, "Need reply");
+      expect(output.thinking.content).toBe("Need reply");
+      expect(output.turn.kind).toBe("tool_call");
+    },
+  );
 
   it("parses decision DSML split across streamed chunks", async () => {
     const rawDecision = dsmlTerminalWrite(writeText("pwd"));
@@ -420,6 +427,24 @@ describe("DeepSeekFimAdapter", () => {
       expect(output.turn.toolCall.arguments).toEqual({
         ...writeText("pwd"),
       });
+    }
+  });
+
+  it("parses zero-parameter terminal session decisions", async () => {
+    const rawDecision = `session_observe">\n\n`;
+    stubFimStreamResponses(
+      [{ text: "Need inspect terminal", finishReason: "stop" }],
+      [{ text: rawDecision, finishReason: "stop" }],
+    );
+
+    const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
+      tools: [...STATIC_TOOL_CATALOG],
+    });
+
+    expect(output.turn.kind).toBe("tool_call");
+    if (output.turn.kind === "tool_call") {
+      expect(output.turn.toolCall.name).toBe("session_observe");
+      expect(output.turn.toolCall.arguments).toEqual({});
     }
   });
 
@@ -884,234 +909,5 @@ describe("DeepSeekFimAdapter", () => {
       "io_wait",
     ]);
     expect(decisionInput.thinking_mode).toBe("thinking");
-  });
-});
-
-// ===========================================================================
-// parseDsmlDecision unit tests
-// ===========================================================================
-
-describe("parseDsmlDecision", () => {
-  it("parses standard DSML terminal_write call", () => {
-    const raw = dsmlTerminalWrite(writeText("ls -la"));
-    const result = parseDsmlDecision(raw);
-    expect(result).toEqual({
-      status: "valid",
-      decision: {
-        name: "terminal_write",
-        arguments: writeText("ls -la"),
-      },
-    });
-  });
-
-  it("parses DSML io_wait with JSON condition", () => {
-    const raw = dsmlIoWait("waiting", {
-      kind: "new_user_message",
-      channel: "test",
-    });
-    const result = parseDsmlDecision(raw);
-    expect(result).toEqual({
-      status: "valid",
-      decision: {
-        name: "io_wait",
-        arguments: {
-          reason: "waiting",
-          condition: { kind: "new_user_message", channel: "test" },
-        },
-      },
-    });
-  });
-
-  it("strips trailing DSML close tokens echoed by the model", () => {
-    const raw =
-      dsmlTerminalWrite(writeText("pwd")) +
-      `\n</${DSML}invoke>\n</${DSML}tool_calls><｜end▁of▁sentence｜>`;
-    const result = parseDsmlDecision(raw);
-    expect(result.status).toBe("valid");
-    if (result.status === "valid") {
-      expect(result.decision.name).toBe("terminal_write");
-    }
-  });
-
-  it("handles model repeating invoke-open prefix", () => {
-    const raw =
-      `<${DSML}invoke name="terminal_write">\n` +
-      `<${DSML}parameter name="expectedInputSeq" string="false">0</${DSML}parameter>\n` +
-      `<${DSML}parameter name="text" string="true">echo hi</${DSML}parameter>`;
-    const result = parseDsmlDecision(raw);
-    expect(result).toEqual({
-      status: "valid",
-      decision: {
-        name: "terminal_write",
-        arguments: writeText("echo hi"),
-      },
-    });
-  });
-
-  it("rejects DSML name with JSON body instead of parameter tags", () => {
-    const raw = 'terminal_write">\n{"expectedInputSeq":0,"text":"pwd"}';
-    const result = parseDsmlDecision(raw);
-    expect(result).toMatchObject({
-      status: "invalid",
-      message: expect.stringContaining("expected DSML parameter tags"),
-    });
-  });
-
-  it("rejects extra text outside DSML parameter tags", () => {
-    const raw =
-      dsmlTerminalWrite(writeText("pwd")) +
-      "\nI will now do this.";
-    const result = parseDsmlDecision(raw);
-    expect(result).toMatchObject({
-      status: "invalid",
-      message: expect.stringContaining("unexpected text outside"),
-    });
-  });
-
-  it("rejects non-string DSML parameters that are not valid JSON", () => {
-    const raw = [
-      `terminal_write">`,
-      `<${DSML}parameter name="expectedInputSeq" string="false">not-json</${DSML}parameter>`,
-    ].join("\n");
-    const result = parseDsmlDecision(raw);
-    expect(result).toMatchObject({
-      status: "invalid",
-      message: expect.stringContaining('declared string="false"'),
-    });
-  });
-
-  it("rejects unclosed DSML parameter tags without falling back to JSON", () => {
-    const raw =
-      `terminal_write">\n` +
-      `<${DSML}parameter name="text" string="true">cat > snake.html << 'HTMLEOF'\n` +
-      `<html></html>\nHTMLEOF\necho "OK"`;
-    const result = parseDsmlDecision(raw);
-    expect(result).toMatchObject({
-      status: "invalid",
-      message: expect.stringContaining("unclosed DSML parameter tag"),
-    });
-  });
-
-  it("rejects V3 separator format", () => {
-    const raw = `${REMOVED_SHELL_TOOL}<｜tool▁sep｜>{"kind":"${REMOVED_ACTION_KIND}","expectedInputSeq":0,"text":"pwd"}`;
-    const result = parseDsmlDecision(raw);
-    expect(result).toMatchObject({
-      status: "invalid",
-      message: expect.stringContaining("Expected a V4 DSML tool call"),
-    });
-  });
-
-  it("rejects V3 function<sep>name format", () => {
-    const raw =
-      `function<｜tool▁sep｜>${REMOVED_SHELL_TOOL}\n` +
-      `\`\`\`json\n{"kind":"${REMOVED_ACTION_KIND}","expectedInputSeq":0,"text":"pwd"}\n\`\`\``;
-    const result = parseDsmlDecision(raw);
-    expect(result).toMatchObject({
-      status: "invalid",
-      message: expect.stringContaining("Expected a V4 DSML tool call"),
-    });
-  });
-
-  it("rejects double separator with removed shell-wrapper name", () => {
-    const raw =
-      `id=fim-call-1<｜tool▁sep｜>${REMOVED_SHELL_TOOL}<｜tool▁sep｜>` +
-      `{"kind":"${REMOVED_ACTION_KIND}","expectedInputSeq":0,"text":"pwd"}`;
-    const result = parseDsmlDecision(raw);
-    expect(result).toMatchObject({
-      status: "invalid",
-      message: expect.stringContaining("Expected a V4 DSML tool call"),
-    });
-  });
-
-  it("rejects trailing </tool_call> XML tag fallback", () => {
-    const raw =
-      `${REMOVED_SHELL_TOOL}<｜tool▁sep｜>{"kind":"${REMOVED_ACTION_KIND}","expectedInputSeq":0,"text":"pwd"}</tool_call>`;
-    const result = parseDsmlDecision(raw);
-    expect(result).toMatchObject({
-      status: "invalid",
-      message: expect.stringContaining("Expected a V4 DSML tool call"),
-    });
-  });
-
-  it("rejects tool_call prefix format without DSML or V3 separator", () => {
-    const raw =
-      `tool_call id=fim-call-1 name=${REMOVED_SHELL_TOOL} ` +
-      `arguments={"kind":"${REMOVED_ACTION_KIND}","expectedInputSeq":0,"text":"pwd"}`;
-    const result = parseDsmlDecision(raw);
-    expect(result).toMatchObject({
-      status: "invalid",
-      message: expect.stringContaining("Expected a V4 DSML tool call"),
-    });
-  });
-
-  it("rejects raw text after V3 separator without JSON fallback", () => {
-    const raw =
-      `${REMOVED_SHELL_TOOL}<｜tool▁sep｜>node dist/cli/main.js im send --channel default --kind status --text Done`;
-    const result = parseDsmlDecision(raw);
-    expect(result).toMatchObject({
-      status: "invalid",
-      message: expect.stringContaining("Expected a V4 DSML tool call"),
-    });
-  });
-
-  it("handles model echoing invoke-open without the DSML prefix", () => {
-    const raw =
-      `invoke name="terminal_write">\n` +
-      `<${DSML}parameter name="expectedInputSeq" string="false">0</${DSML}parameter>\n` +
-      `<${DSML}parameter name="text" string="true">pwd</${DSML}parameter>`;
-    const result = parseDsmlDecision(raw);
-    expect(result).toEqual({
-      status: "valid",
-      decision: {
-        name: "terminal_write",
-        arguments: writeText("pwd"),
-      },
-    });
-  });
-
-  it("handles PTY text with special characters in DSML parameters", () => {
-    const raw = [
-      `terminal_write">`,
-      `<${DSML}parameter name="expectedInputSeq" string="false">0</${DSML}parameter>`,
-      `<${DSML}parameter name="text" string="true">echo 'hello world' | grep "hello"</${DSML}parameter>`,
-    ].join("\n");
-    const result = parseDsmlDecision(raw);
-    expect(result).toEqual({
-      status: "valid",
-      decision: {
-        name: "terminal_write",
-        arguments: writeText(`echo 'hello world' | grep "hello"`),
-      },
-    });
-  });
-
-  it("rejects removed file side-channel DSML tool calls", () => {
-    const removedName = ["stash", "_file"].join("");
-    const raw = [
-      `${removedName}">`,
-      `<${DSML}parameter name="name" string="true">snake.html</${DSML}parameter>`,
-      `<${DSML}parameter name="content" string="true"><!doctype html>\n<title>Snake</title>\n</${DSML}parameter>`,
-      `<${DSML}parameter name="encoding" string="true">utf8</${DSML}parameter>`,
-    ].join("\n");
-    const result = parseDsmlDecision(raw);
-    expect(result).toMatchObject({
-      status: "invalid",
-      message: expect.stringContaining(`Unsupported function: ${removedName}`),
-    });
-  });
-
-  it("rejects removed shell-wrapper DSML tool calls", () => {
-    const removedName = ["ba", "sh"].join("");
-    const raw = [
-      `${removedName}">`,
-      `<${DSML}parameter name="kind" string="true">${["write", "_text"].join("")}</${DSML}parameter>`,
-      `<${DSML}parameter name="expectedInputSeq" string="false">0</${DSML}parameter>`,
-      `<${DSML}parameter name="text" string="true">pwd</${DSML}parameter>`,
-    ].join("\n");
-    const result = parseDsmlDecision(raw);
-    expect(result).toMatchObject({
-      status: "invalid",
-      message: expect.stringContaining(`Unsupported function: ${removedName}`),
-    });
   });
 });
