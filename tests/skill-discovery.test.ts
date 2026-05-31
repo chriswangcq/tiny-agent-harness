@@ -84,7 +84,7 @@ describe("SkillDiscovery", () => {
     expect(skills[0].tags).toEqual(["fancy", "test"]);
   });
 
-  it("show() returns skill info with content", () => {
+  it("show() returns skill info with contentLineCount", () => {
     const tmpDir = makeTmpDir();
     const { discovery, skillsDir } = makeDiscovery(tmpDir);
 
@@ -94,7 +94,7 @@ describe("SkillDiscovery", () => {
     const detail = discovery.show("test-skill");
     expect(detail).toBeDefined();
     expect(detail!.name).toBe("test-skill");
-    expect(detail!.content).toBe(mdContent);
+    expect(detail!.contentLineCount).toBeGreaterThan(0);
     expect(detail!.readmePath).toContain("SKILL.md");
   });
 

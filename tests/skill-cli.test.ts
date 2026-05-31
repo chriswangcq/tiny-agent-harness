@@ -116,7 +116,7 @@ describe("SkillCli", () => {
     expect(cli.handleShow("review")).toMatchObject({
       name: "review",
       manifest: expect.objectContaining({ entry: "bin/run" }),
-      content: expect.stringContaining("# review"),
+      contentLineCount: expect.any(Number),
     });
   });
 

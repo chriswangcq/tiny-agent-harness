@@ -196,7 +196,7 @@ skill search review --json
 
 ### show
 
-展示单个 skill 的完整说明。
+展示单个 skill 的元数据（不返回正文内容）。
 
 ```bash
 skill show coding-review --json
@@ -213,11 +213,21 @@ skill show coding-review --json
     "entry": "bin/run"
   },
   "readmePath": ".tiny-agent/skills/coding-review/SKILL.md",
-  "content": "..."
+  "contentLineCount": 120
 }
 ```
 
-`content` 需要截断，完整内容可以通过 `readmePath` 再用 bash 原生命令读取。
+`skill show` 不返回正文内容。读取正文需通过 terminal 对 `readmePath` 执行分页命令：
+
+```bash
+# 先看行数（配合 contentLineCount 判断是否需要分页）
+wc -l <readmePath>
+# 逐页读取（每页 30 行）
+sed -n '1,30p' <readmePath>
+sed -n '31,60p' <readmePath>
+```
+
+不要使用 `more`/`less` 等交互式 pager。
 
 ### run
 

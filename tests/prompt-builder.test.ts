@@ -272,4 +272,25 @@ describe("PromptBuilder", () => {
       }),
     });
   });
+  it("system prompt includes skill show metadata-only contract", () => {
+    const prompt = new PromptBuilder().buildInitialPrompt("test");
+    const systemContent = prompt.messages[0]!.content;
+
+    // Assert new contract is present
+    expect(systemContent).toContain("skill show");
+    expect(systemContent).toContain("readmePath");
+    expect(systemContent).toContain("contentLineCount");
+    expect(systemContent).toContain("sed -n '1,30p'");
+    expect(systemContent).toContain("does NOT return the SKILL.md body");
+
+    // Assert interactive pagers are forbidden
+    expect(systemContent).toContain("Do not use more/less");
+
+    // Assert no old content/truncation patterns leaked into system prompt
+    expect(systemContent).not.toContain("4000 字符");
+    expect(systemContent).not.toContain("完整内容");
+    expect(systemContent).not.toContain("content: result.content");
+    expect(systemContent).not.toContain("slice(0, 4000)");
+  });
+
 });

@@ -85,9 +85,9 @@ describe("runSkill CLI", () => {
     await runSkill(["show", "demo", "--state-dir", stateDir, "--json"]);
     restoreStdout();
 
-    const result = getCapturedJson() as { name: string; content: string };
+    const result = getCapturedJson() as { name: string; contentLineCount: number };
     expect(result.name).toBe("demo");
-    expect(result.content).toContain("# demo");
+    expect(result.contentLineCount).toBeGreaterThan(0);
   });
 
   it("show returns error for missing skill", async () => {

@@ -108,6 +108,17 @@ skill search <query> --json
 skill show <name> --json
 ```
 
+`skill show` returns only metadata: `{ name, manifest?, readmePath, contentLineCount }`.
+It does NOT return the SKILL.md body.
+To read a skill's full documentation, use the terminal:
+
+```sh
+# 1. Get path and line count from skill show
+# 2. Read in pages (avoid interactive pagers like more/less)
+sed -n '1,30p' <readmePath>
+sed -n '31,60p' <readmePath>
+```
+
 Run and manage skills:
 
 ```sh

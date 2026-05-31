@@ -174,6 +174,8 @@ skill close <skillRunId> --review required --json '<summary>'
 skill review-complete <skillRunId> --json '<review>'
 ```
 
+`skill show` 只返回元数据（`name`, `manifest?`, `readmePath`, `contentLineCount`），不返回 SKILL.md 正文。读取正文需由 agent 在终端对 `readmePath` 执行 `sed -n` 等 shell 命令分段获取。
+
 一个关键设计点是：skill 执行完成后是否复盘由 agent 判断。harness 提供 `running`、`review_pending`、`closed` 状态和 lessons 写入位置，但不把复盘作为固定后置流程强加给所有 skill run。
 
 这为未来 skill 自我进化预留了路径：agent 可以根据执行结果、失败模式、任务风险判断是否沉淀经验，复盘后把 lessons 写入 skill 附件，未来再汇总为 skill 级别改进。

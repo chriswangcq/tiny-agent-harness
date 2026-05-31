@@ -20,7 +20,7 @@ export class SkillCli {
   handleShow(
     name: string,
   ):
-    | { name: string; manifest?: unknown; readmePath: string; content: string }
+    | { name: string; manifest?: unknown; readmePath: string; contentLineCount: number }
     | { ok: false; error: string } {
     const result = this.discovery.show(name);
     if (!result) {
@@ -30,7 +30,7 @@ export class SkillCli {
       name: result.name,
       manifest: result.manifest,
       readmePath: result.readmePath,
-      content: result.content,
+      contentLineCount: result.contentLineCount,
     };
   }
 

@@ -12,7 +12,7 @@ export type SkillShowResult = {
   name: string;
   manifest?: SkillManifest;
   readmePath: string;
-  content: string;
+  contentLineCount: number;
 };
 
 export type SkillValidation = {
@@ -20,6 +20,25 @@ export type SkillValidation = {
   errors: string[];
   warnings: string[];
 };
+
+/**
+ * Count logical content lines.
+ * - Empty string → 0
+ * - Single trailing newline is not counted as an extra line
+ * - Middle blank lines and extra trailing blank lines are preserved
+ */
+export function countLogicalLines(raw: string): number {
+  const segments = raw.split("\n");
+  // Remove trailing empty segment from POSIX trailing newline
+  if (segments.length > 0 && segments[segments.length - 1] === "") {
+    return segments.length - 1;
+  }
+  // Empty file ("") → segments = [""] → segments[0] === "" → return 0
+  if (segments.length === 1 && segments[0] === "") {
+    return 0;
+  }
+  return segments.length;
+}
 
 export class SkillDiscovery {
   private readonly skillsDir: string;
@@ -80,10 +99,10 @@ export class SkillDiscovery {
       }
     }
 
-    const fullContent = fs.readFileSync(skillMdPath, "utf-8");
-    const content = fullContent.length > 4000 ? fullContent.slice(0, 4000) : fullContent;
+    const raw = fs.readFileSync(skillMdPath, "utf-8");
+    const contentLineCount = countLogicalLines(raw);
 
-    return { name, manifest, readmePath: skillMdPath, content };
+    return { name, manifest, readmePath: skillMdPath, contentLineCount };
   }
 
   validate(name: string): SkillValidation {

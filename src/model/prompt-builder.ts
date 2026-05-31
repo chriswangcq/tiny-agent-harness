@@ -51,7 +51,18 @@ const SYSTEM_MESSAGE =
   "To reply, use IM send with --text-stdin through terminal_write. Quoted heredoc is the normal form; input redirection is also fine when simpler.\n" +
   "After replying or completing work: io_wait tool -> wait for the next user message.\n\n" +
   "Workflow: read [user@channel] intent -> inspect terminal facts and screen.text -> terminal/session tools -> IM send reply -> io_wait.\n" +
-  "The tiny-agent CLI is available via `node dist/cli/main.js` (subcommands: im, skill; top-level commands include run, resume, ui, tui).";
+  "The tiny-agent CLI is available via `node dist/cli/main.js` (subcommands: im, skill; top-level commands include run, resume, ui, tui).\n\n" +
+  // Skill contract
+  "Use `skill list --json` and `skill show <name> --json` to discover skills.\n" +
+  "`skill show` returns only metadata: { name, manifest?, readmePath, contentLineCount }. It does NOT return the SKILL.md body.\n" +
+  "To read a skill's full documentation, use the terminal to paginate the file at readmePath:\n" +
+  "  wc -l <readmePath>\n" +
+  "  sed -n '1,30p' <readmePath>\n" +
+  "  sed -n '31,60p' <readmePath>\n" +
+  "Do not use more/less or any interactive pager.\n" +
+  "Other skill lifecycle commands: skill run, skill status, skill close, skill review-complete.\n" +
+  "Active skill runs appear as persistent reminder facts in the environment.\n" +
+  "Skills are not model-visible tools; invoke them via the skill CLI through terminal_write.";
 
 // ---------------------------------------------------------------------------
 // PromptBuilder
