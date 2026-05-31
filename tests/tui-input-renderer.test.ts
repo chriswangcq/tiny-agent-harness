@@ -442,11 +442,11 @@ describe("TUI input rendering", () => {
     expect(frame[49]).toContain("screen-39");
   });
 
-  it("renders the same final PTY viewport rows that the agent observes", () => {
+  it("renders the exact PTY viewport text supplied by the agent observation", () => {
     const state = new TuiInteractionState();
     const tail = Array.from(
-      { length: 10 },
-      (_, index) => `pty-line-${String(index).padStart(2, "0")}`,
+      { length: 4 },
+      (_, index) => `pty-line-${String(index + 6).padStart(2, "0")}`,
     ).join("\n");
     const vm = {
       ...view(),
@@ -464,7 +464,6 @@ describe("TUI input rendering", () => {
       height: 16,
     }).join("\n");
 
-    expect(output).not.toContain("pty-line-05");
     expect(output).toContain("pty-line-06");
     expect(output).toContain("pty-line-09");
   });

@@ -18,7 +18,6 @@ import type {
   SessionView,
 } from "./types.js";
 import { TuiInteractionState } from "./interaction-state.js";
-import { normalizeTerminalScreenText } from "../terminal/screen.js";
 import wcwidth from "wcwidth";
 
 const INPUT_BAR_HEIGHT = 5;
@@ -1089,16 +1088,10 @@ export function renderPtySessionForDisplay(
 export function renderPtyScreenForDisplay(
   session: SessionView,
   maxTailChars = 4000,
-  maxLineWidth = 120,
+  _maxLineWidth = 120,
 ): string {
   const tail = session.tail ?? "";
-  const visibleTail =
-    tail.length > maxTailChars ? tail.slice(-maxTailChars) : tail;
-  const viewport = ptyViewportFromSession(session);
-  const screenText = viewport
-    ? normalizeTerminalScreenText(visibleTail, viewport)
-    : visibleTail;
-  return wrapDisplayText(screenText, maxLineWidth).join("\n");
+  return tail.length > maxTailChars ? tail.slice(-maxTailChars) : tail;
 }
 
 function ptyStatusLine(session: SessionView): string {

@@ -1,0 +1,77 @@
+import { describe, expect, it } from "vitest";
+import {
+  stripManagedShellScreenNoise,
+  XtermTerminalScreenBuffer,
+} from "../src/terminal/index.js";
+
+describe("XtermTerminalScreenBuffer", () => {
+  it("renders the current viewport, not an append-only log tail", async () => {
+    const buffer = new XtermTerminalScreenBuffer({ rows: 4, cols: 40 });
+
+    buffer.write("hello world\rreplacement\r\nline-2");
+
+    const screen = await buffer.snapshot();
+
+    expect(screen).toMatchObject({ rows: 4, cols: 40, hasScrollback: false });
+    expect(screen.text).toContain("replacement");
+    expect(screen.text).not.toContain("hello world");
+    expect(screen.text).toContain("line-2");
+    expect(screen.text.split("\n")).toHaveLength(4);
+    buffer.dispose();
+  });
+
+  it("handles ANSI clear-screen and cursor positioning", async () => {
+    const buffer = new XtermTerminalScreenBuffer({ rows: 3, cols: 20 });
+
+    buffer.write("old\r\ncontent\r\n\x1b[2J\x1b[Hnew");
+
+    const screen = await buffer.snapshot();
+
+    expect(screen.text.split("\n")[0]).toBe("new");
+    expect(screen.text).not.toContain("old");
+    buffer.dispose();
+  });
+
+  it("keeps only the final carriage-return redraw state", async () => {
+    const buffer = new XtermTerminalScreenBuffer({ rows: 6, cols: 80 });
+
+    buffer.write(
+      "<经验沉淀 system lessons 写回 skil\r" +
+        "<经验沉淀 system lessons 写回 skill\r" +
+        "<经验沉淀 system lessons 写回 skill 定义。\r\n" +
+        "> EOF\r\nok=true\r\n$ ",
+    );
+
+    const screen = await buffer.snapshot();
+
+    expect(screen.text).toContain("<经验沉淀 system lessons 写回 skill 定义。");
+    expect(screen.text).not.toContain("写回 skil\n");
+    expect(screen.text).toContain("ok=true");
+    buffer.dispose();
+  });
+
+  it("removes managed shell marker lines from the visible screen", async () => {
+    const buffer = new XtermTerminalScreenBuffer({ rows: 4, cols: 40 });
+
+    buffer.write("__TAH_PROMPT__ nonce=n rc=0 cwd=/repo seq=1\r\n$ ");
+
+    const screen = await buffer.snapshot();
+
+    expect(screen.text).toContain("$");
+    expect(screen.text).not.toContain("__TAH_PROMPT__");
+    buffer.dispose();
+  });
+});
+
+describe("stripManagedShellScreenNoise", () => {
+  it("holds split marker prefixes until the line can be classified", () => {
+    const first = stripManagedShellScreenNoise("__TAH_PRO");
+    expect(first).toEqual({ output: "", pending: "__TAH_PRO" });
+
+    const second = stripManagedShellScreenNoise(
+      `${first.pending}MPT__ nonce=n rc=0 cwd=/ seq=1\r\n$ `,
+    );
+    expect(second.output).toBe("$ ");
+    expect(second.pending).toBe("");
+  });
+});

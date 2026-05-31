@@ -273,6 +273,44 @@ describe("ManagedTerminalRuntime", () => {
     }
   });
 
+  it("observes the terminal viewport after carriage-return redraws", async () => {
+    const port = makeRuntime({ postWriteReadDelayMs: 20 }).createRunPort();
+    await port.execute({ request: { kind: "session_observe" } });
+
+    const pending = port.execute({
+      request: {
+        kind: "terminal_write",
+        expectedInputSeq: 0,
+        text: "node dist/cli/main.js im send --channel default --text-stdin\n",
+      },
+    });
+    setTimeout(() => {
+      ptyMock.spawned[0]?.emit(
+        [
+          "<经验沉淀：lessons 写回 skil\r",
+          "<经验沉淀：lessons 写回 skill\r",
+          "<经验沉淀：lessons 写回 skill 定义。\r\n",
+          "ok=true\r\n",
+          "id=agent-1\r\n",
+          `${formatPromptMarker({
+            nonce: "nonce",
+            returnCode: 0,
+            cwd: "/repo",
+            promptSeq: 2,
+          })}\r\n`,
+          "$ ",
+        ].join(""),
+      );
+    }, 5);
+
+    const observation = await pending;
+
+    expect(observation.screen.text).toContain("<经验沉淀：lessons 写回 skill 定义。");
+    expect(observation.screen.text).not.toContain("写回 skil\n");
+    expect(observation.screen.text).not.toContain("__TAH_PROMPT__");
+    expect(observation.screen.text).toContain("id=agent-1");
+  });
+
   it("paces large terminal_write input into PTY chunks without dropping bytes", async () => {
     const port = makeRuntime().createRunPort();
     await port.execute({ request: { kind: "session_observe" } });

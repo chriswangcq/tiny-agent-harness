@@ -4,6 +4,11 @@ import { buildManagedShellInitSnippet } from "../application/managed-shell.js";
 import { applyPtyChunkToSnapshot } from "../application/terminal-state-adapter.js";
 import type { TerminalRuntimeSnapshot } from "../application/terminal-ports.js";
 import { createTerminalState, markTerminalTerminated } from "../terminal/index.js";
+import {
+  XtermTerminalScreenBuffer,
+  type TerminalScreenBuffer,
+  type TerminalScreenBufferSnapshot,
+} from "../terminal/screen-buffer.js";
 
 export type ForegroundInspector = (shellPid: number) => string | null;
 
@@ -44,6 +49,7 @@ export type ManagedPtySessionOptions = {
   cols?: number;
   rows?: number;
   foregroundInspector?: ForegroundInspector;
+  screenBuffer?: TerminalScreenBuffer;
 };
 
 /**
@@ -62,6 +68,9 @@ export class ManagedPtySession {
   private readonly outputChunks: Buffer[] = [];
   private outputBytes = 0;
   private readonly foregroundInspector: ForegroundInspector;
+  private readonly screenBuffer: TerminalScreenBuffer;
+  private readonly cols: number;
+  private readonly rows: number;
 
   constructor(options: ManagedPtySessionOptions) {
     this.id = options.id;
@@ -69,12 +78,17 @@ export class ManagedPtySession {
     this.cwd = options.cwd;
     this.shell = options.shell ?? "/bin/bash";
     this.shellArgs = options.shellArgs ?? ["--noprofile", "--norc", "-i"];
+    this.cols = positiveInteger(options.cols) ?? 80;
+    this.rows = positiveInteger(options.rows) ?? 24;
     this.env = normalizePtyEnv({
       ...processEnv(),
       ...(options.env ?? {}),
       TERM: "dumb",
     });
     this.foregroundInspector = options.foregroundInspector ?? defaultForegroundInspector;
+    this.screenBuffer =
+      options.screenBuffer ??
+      new XtermTerminalScreenBuffer({ cols: this.cols, rows: this.rows });
     this.currentSnapshot = {
       session: this.id,
       terminal: createTerminalState({
@@ -93,8 +107,8 @@ export class ManagedPtySession {
 
     this.pty = nodePty.spawn(this.shell, this.shellArgs, {
       name: "dumb",
-      cols: 200,
-      rows: 50,
+      cols: this.cols,
+      rows: this.rows,
       cwd: this.cwd,
       env: this.env,
     });
@@ -128,6 +142,7 @@ export class ManagedPtySession {
         reason: "terminated",
       }),
     };
+    this.screenBuffer.dispose();
   }
 
   detectForegroundProcess(): string | null {
@@ -153,25 +168,15 @@ export class ManagedPtySession {
     };
   }
 
-  readOutputTailAt(endOffset: number, maxBytes: number): {
-    chunk: string;
-    startOffset: number;
-    endOffset: number;
-  } {
-    const safeEndOffset = Math.max(0, Math.min(endOffset, this.outputBytes));
-    const startOffset = Math.max(0, safeEndOffset - Math.max(0, maxBytes));
-    const output = Buffer.concat(this.outputChunks, this.outputBytes);
-    return {
-      chunk: output.subarray(startOffset, safeEndOffset).toString("utf-8"),
-      startOffset,
-      endOffset: safeEndOffset,
-    };
+  async readScreen(): Promise<TerminalScreenBufferSnapshot> {
+    return this.screenBuffer.snapshot();
   }
 
   private applyChunk(chunk: string): void {
     const bytes = Buffer.from(chunk, "utf-8");
     this.outputChunks.push(bytes);
     this.outputBytes += bytes.byteLength;
+    this.screenBuffer.write(chunk);
 
     const result = applyPtyChunkToSnapshot({
       snapshot: this.currentSnapshot,
@@ -180,6 +185,12 @@ export class ManagedPtySession {
     });
     this.currentSnapshot = result.snapshot;
   }
+}
+
+function positiveInteger(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value)) return undefined;
+  const integer = Math.floor(value);
+  return integer > 0 ? integer : undefined;
 }
 
 function processEnv(): Record<string, string> {

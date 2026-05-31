@@ -5,7 +5,6 @@ import type {
   TerminalServicePorts,
 } from "../application/terminal-ports.js";
 import type { TerminalPort } from "../run/orchestrator.js";
-import { normalizeTerminalScreenText } from "../terminal/screen.js";
 import { ManagedPtySession, type ForegroundInspector } from "./managed-session.js";
 import {
   chunkTextByUtf8Bytes,
@@ -76,14 +75,7 @@ export class ManagedTerminalRuntime {
           await this.drainStartup(entry);
           const start = parseCursor(cursor);
           const output = entry.pty.readOutputSince(start);
-          const screenTail = entry.pty.readOutputTailAt(
-            output.endOffset,
-            screenReadBytes(this.screenRows(), this.screenCols()),
-          );
-          const screenText = normalizeTerminalScreenText(
-            stripManagedShellNoise(screenTail.chunk),
-            { rows: this.screenRows(), cols: this.screenCols() },
-          );
+          const screen = await entry.pty.readScreen();
           return {
             chunk: output.chunk,
             logRef: {
@@ -93,10 +85,10 @@ export class ManagedTerminalRuntime {
               endOffset: output.endOffset,
             },
             screen: {
-              text: screenText,
-              rows: this.screenRows(),
-              cols: this.screenCols(),
-              truncated: screenTail.startOffset > 0,
+              text: screen.text,
+              rows: screen.rows,
+              cols: screen.cols,
+              truncated: screen.hasScrollback,
               logRef: { path: `managed-pty://${session}` },
             },
           };
@@ -172,6 +164,8 @@ export class ManagedTerminalRuntime {
       shell: this.options.shell,
       shellArgs: this.options.shellArgs,
       env: this.options.env,
+      cols: this.screenCols(),
+      rows: this.screenRows(),
       foregroundInspector: this.options.foregroundInspector,
     });
     pty.spawn();
@@ -221,24 +215,6 @@ function delay(ms: number): Promise<void> {
     return Promise.resolve();
   }
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function screenReadBytes(rows: number, cols: number): number {
-  return Math.max(4096, rows * cols * 4);
-}
-
-function stripManagedShellNoise(value: string): string {
-  return value
-    .split("\n")
-    .filter((line) =>
-      !line.includes("__TAH_PROMPT__") &&
-      !line.includes("__TAH_CONT__") &&
-      !line.includes("export TAH_PROMPT_NONCE=") &&
-      !line.includes("export TAH_PROMPT_SEQ=") &&
-      !line.includes("export PS1=") &&
-      !line.includes("export PS2=")
-    )
-    .join("\n");
 }
 
 async function waitUntil(condition: () => boolean, timeoutMs: number): Promise<void> {
