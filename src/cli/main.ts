@@ -3,13 +3,22 @@ import * as path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 
 import { RunOrchestrator } from "../run/orchestrator.js";
-import type { RunPorts, HistoryItem } from "../run/orchestrator.js";
+import type { RunPorts } from "../run/orchestrator.js";
 import { AgentRunState } from "../run/state.js";
-import { RunSessionStore, reconstructHistoryFromTranscript } from "../run/session-store.js";
+import {
+  RunSessionStore,
+  reconstructModelContextItemsFromTranscript,
+} from "../run/session-store.js";
 import { TranscriptStore } from "../transcript/store.js";
 import { DeepSeekFimAdapter } from "../model/adapter.js";
 import { PromptBuilder } from "../model/prompt-builder.js";
-import type { HistoryEntry } from "../model/prompt-builder.js";
+import {
+  ModelContextSession,
+  PromptBuilderContextRenderer,
+  modelContextItemsToHistoryEntries,
+  type ModelContextItem,
+  type ModelContextSessionSnapshot,
+} from "../model/context-session.js";
 import { DeepSeekV4PromptTokenCounter } from "../model/prompt-token-counter.js";
 import { ManagedTerminalRuntime } from "../bash/managed-terminal-runtime.js";
 import { ToolCallValidator } from "../tools/validator.js";
@@ -19,13 +28,12 @@ import { Environment } from "../environment/environment.js";
 import { ImCliTransport } from "../im/transport.js";
 import { SkillRunStore } from "../skill/store.js";
 import { buildCliTerminalEnv } from "./terminal-env.js";
-import type { V4ChatMessage } from "../types/model.js";
 import type { AgentRunStateData, RunEvent } from "../types/run.js";
 import {
-  DEFAULT_CONTEXT_WINDOW_MAX_HISTORY_TOKENS,
-  DeterministicHistoryCompactor,
-  type ContextWindowPort,
-} from "../run/context-window.js";
+  DEFAULT_CONTEXT_WINDOW_MAX_TOKENS,
+  DeterministicModelContextCompactor,
+  type ModelContextWindowPort,
+} from "../model/context-window.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -85,41 +93,6 @@ function parseCliOptions(args: string[]): {
   return { channel, task, stateDir, resumeRunId };
 }
 
-function convertHistoryItems(items: HistoryItem[]): HistoryEntry[] {
-  const entries: HistoryEntry[] = [];
-  for (const item of items) {
-    if (item.type === "tool_call") {
-      entries.push({
-        role: "assistant_tool_call",
-        toolCallId: item.toolCall.id,
-        name: item.toolCall.name,
-        arguments: item.toolCall.arguments,
-        thinking: item.thinking?.content,
-      });
-    } else if (item.type === "io_wait_call") {
-      entries.push({
-        role: "assistant_tool_call",
-        toolCallId: item.toolCallId,
-        name: "io_wait",
-        arguments: item.wait,
-        thinking: item.thinking?.content,
-      });
-    } else if (item.type === "observation") {
-      entries.push({
-        role: "tool_result",
-        toolCallId: item.toolCallId ?? "",
-        observation: item.observation,
-      });
-    } else if (item.type === "environment_reminder") {
-      entries.push({
-        role: "environment_reminder",
-        content: item.content,
-      });
-    }
-  }
-  return entries;
-}
-
 function createCliTerminalPort(channel: string) {
   const runtime = new ManagedTerminalRuntime({
     defaultSessionId: "default",
@@ -135,11 +108,14 @@ function createCliTerminalPort(channel: string) {
 
 function createCliRunSessionPort(store: RunSessionStore) {
   return {
-    saveHistory(runId: string, history: readonly HistoryItem[]): void {
+    saveModelContext(
+      runId: string,
+      snapshot: ModelContextSessionSnapshot,
+    ): void {
       store.save({
         runId,
         updatedAt: new Date().toISOString(),
-        history: [...history],
+        modelContext: snapshot,
       });
     },
   };
@@ -147,17 +123,19 @@ function createCliRunSessionPort(store: RunSessionStore) {
 
 function createCliContextWindowPort(
   promptBuilder: PromptBuilder,
-): ContextWindowPort {
+): ModelContextWindowPort {
   const tokenCounter = new DeepSeekV4PromptTokenCounter();
-  const compactor = new DeterministicHistoryCompactor();
+  const compactor = new DeterministicModelContextCompactor({
+    now: () => new Date().toISOString(),
+  });
   return {
-    maxHistoryTokens: DEFAULT_CONTEXT_WINDOW_MAX_HISTORY_TOKENS,
-    countHistoryTokens(history: readonly HistoryItem[]): number {
-      const entries = convertHistoryItems([...history]);
+    maxTokens: DEFAULT_CONTEXT_WINDOW_MAX_TOKENS,
+    countTokens(items: readonly ModelContextItem[]): number {
+      const entries = modelContextItemsToHistoryEntries(items);
       const messages = promptBuilder.buildHistoryMessages(entries);
       return tokenCounter.countMessages(messages);
     },
-    compactHistory(input) {
+    compact(input) {
       return compactor.compact(input);
     },
   };
@@ -237,20 +215,20 @@ function readTranscriptEvents(transcriptPath: string): RunEvent[] {
     .map((line) => JSON.parse(line) as RunEvent);
 }
 
-function loadHistoryForRun(runDir: string): HistoryItem[] {
+function loadHistoryForRun(runDir: string): ModelContextItem[] {
   const sessionStore = new RunSessionStore(runDir);
   const snapshot = sessionStore.load();
   if (snapshot !== null) {
-    return [...snapshot.history];
+    return [...snapshot.modelContext.items];
   }
-  return reconstructHistoryFromTranscript(
+  return reconstructModelContextItemsFromTranscript(
     readTranscriptEvents(path.join(runDir, "transcript.jsonl")),
   );
 }
 
-function appendResumeReminder(history: HistoryItem[]): HistoryItem[] {
+function appendResumeReminder(items: ModelContextItem[]): ModelContextItem[] {
   return [
-    ...history,
+    ...items,
     {
       type: "environment_reminder",
       content:
@@ -601,7 +579,7 @@ async function main(): Promise<void> {
   let transcriptPath: string;
   let transcript: TranscriptStore;
   let initialState: AgentRunState;
-  let initialHistory: HistoryItem[] = [];
+  let initialHistory: ModelContextItem[] = [];
   let task: string;
   let imCursor: string | undefined;
 
@@ -707,37 +685,26 @@ async function main(): Promise<void> {
   }, 500);
 
   // --- Build RunPorts ---
+  const modelContext = ModelContextSession.create({
+    task,
+    renderer: new PromptBuilderContextRenderer(promptBuilder),
+    contextWindow: createCliContextWindowPort(promptBuilder),
+    initialItems: initialHistory,
+  });
   const ports: RunPorts = {
     model,
     validator,
     reviewer,
     terminal: createCliTerminalPort(channel),
-    contextWindow: createCliContextWindowPort(promptBuilder),
+    modelContext,
     session: createCliRunSessionPort(new RunSessionStore(runDir)),
-    prompt: {
-      buildMessages(task: string, history: HistoryItem[]): V4ChatMessage[] {
-        const entries = convertHistoryItems(history);
-        const hasToolHistory = entries.some(
-          (e) => e.role === "assistant_tool_call" || e.role === "tool_result",
-        );
-        if (!hasToolHistory && entries.length === 0) {
-          return promptBuilder.buildInitialPrompt(task).messages;
-        }
-        return promptBuilder.buildNextPrompt(task, entries).messages;
-      },
-    },
     tools: [...STATIC_TOOL_CATALOG],
     environment,
     listActiveSkillRuns: () => skillRunStore.listActive(),
   };
 
   // --- Create transcript store and orchestrator ---
-  const orchestrator = new RunOrchestrator(
-    initialState,
-    transcript,
-    ports,
-    initialHistory,
-  );
+  const orchestrator = new RunOrchestrator(initialState, transcript, ports);
 
   // --- Run ---
   console.log(`[tiny-agent] Run ${runId} ${resumeRunId ? "resumed" : "started"}`);

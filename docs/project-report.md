@@ -58,6 +58,7 @@ TUI
 | --- | --- | --- |
 | 模型适配层 | `src/model` | DeepSeek V4 FIM two-pass、native tool-call frame 解析、`ModelTurn` 归一化、prompt 构造。 |
 | 运行编排层 | `src/run` | agent run 状态机、effect 选择、事件驱动状态转移、run lifecycle。 |
+| 模型上下文层 | `src/model/context-session.ts`、`src/model/context-window.ts`、`src/model/prompt-builder.ts` | 本地有状态 FIM context wrapper：接收 incremental context item，负责 prompt message 渲染、context compaction、snapshot/restore。 |
 | 工具执行层 | `src/tools`、`src/bash` | 静态 terminal/session tool catalog、tool validation、review boundary、PTY-backed terminal session 和 observation。 |
 | 外部事件层 | `src/environment`、`src/im` | IM 消息、terminal/skill/environment events、`io_wait`、事件消费游标和 factual reminder。 |
 | 能力 CLI 层 | `src/skill`、`src/code-intel`、`src/cli` | skill discovery/run/review，`codeq` LSP 查询，`im` mock transport，用户命令入口。 |
@@ -72,6 +73,7 @@ TUI
 
 ```text
 task / environment reminder
+  -> ModelContextSession
   -> PromptBuilder
   -> DeepSeekFimAdapter thinking pass
   -> DeepSeekFimAdapter decision pass
@@ -244,7 +246,7 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 `src/tui/redaction.ts` 只服务 TUI/display，不属于 agent runtime 历史压缩路径。它覆盖 API key / token / password / secret assignment、Bearer token、私钥块、`sk-`/`ds-` style key、长 terminal_write payload 和 base64-like payload，目的是避免 TUI detail 被敏感文本或长展示字符串污染。
 
-模型可见 agent-loop history 不走这层 display redaction。terminal observation 和 tool-call history 应保持事实完整；真正需要压缩上下文时，应走显式 context compaction，并向模型说明压缩发生了，而不是静默把历史字段替换成 redacted placeholder。
+模型可见 `ModelContextSession` items 不走这层 display redaction。terminal observation 和 tool-call context item 应保持事实完整；真正需要压缩上下文时，应走显式 context compaction，并向模型说明压缩发生了，而不是静默把字段替换成 redacted placeholder。
 
 ### 4.12 Sub-agent Team Domain
 

@@ -1,34 +1,37 @@
-import type { HistoryItem } from "./orchestrator.js";
+import type { ModelContextItem } from "./context-session.js";
 
-export const DEFAULT_CONTEXT_WINDOW_MAX_HISTORY_TOKENS = 700_000;
+export const DEFAULT_CONTEXT_WINDOW_MAX_TOKENS = 700_000;
 export const DEFAULT_CONTEXT_WINDOW_RECENT_ITEMS = 40;
 
-export type HistoryCompactionResult = {
+export type ModelContextCompactionResult = {
   tokenCount: number;
   maxTokens: number;
-  history: HistoryItem[];
+  items: ModelContextItem[];
   summary: string;
   originalItemCount: number;
   retainedItemCount: number;
   droppedItemCount: number;
 };
 
-export type HistoryCompactionInput = {
-  history: HistoryItem[];
+export type ModelContextCompactionInput = {
+  items: ModelContextItem[];
   tokenCount: number;
   maxTokens: number;
   stepIndex: number;
 };
 
-export interface ContextWindowPort {
-  countHistoryTokens(history: HistoryItem[]): number;
-  maxHistoryTokens: number;
-  compactHistory(input: HistoryCompactionInput): HistoryCompactionResult | undefined;
-  llmEnrichSummary?: (summary: string, droppedItems: HistoryItem[]) => Promise<string>;
+export interface ModelContextWindowPort {
+  countTokens(items: readonly ModelContextItem[]): number;
+  maxTokens: number;
+  compact(input: ModelContextCompactionInput): ModelContextCompactionResult | undefined;
+  llmEnrichSummary?: (
+    summary: string,
+    droppedItems: readonly ModelContextItem[],
+  ) => Promise<string>;
 }
 
-export class DeterministicHistoryCompactor implements ContextWindowPort {
-  readonly maxHistoryTokens: number;
+export class DeterministicModelContextCompactor implements ModelContextWindowPort {
+  readonly maxTokens: number;
   private readonly retainedItemCount: number;
   private readonly maxSummaryItems: number;
   private readonly maxSummaryChars: number;
@@ -36,7 +39,7 @@ export class DeterministicHistoryCompactor implements ContextWindowPort {
   private readonly now: () => string;
 
   constructor(options?: {
-    maxHistoryTokens?: number;
+    maxTokens?: number;
     retainedItemCount?: number;
     recentItemCount?: number;
     maxSummaryItems?: number;
@@ -44,40 +47,36 @@ export class DeterministicHistoryCompactor implements ContextWindowPort {
     groupSimilarToolCalls?: boolean;
     now?: () => string;
   }) {
-    this.maxHistoryTokens =
-      options?.maxHistoryTokens ?? DEFAULT_CONTEXT_WINDOW_MAX_HISTORY_TOKENS;
+    this.maxTokens =
+      options?.maxTokens ?? DEFAULT_CONTEXT_WINDOW_MAX_TOKENS;
     this.retainedItemCount =
       options?.recentItemCount ?? options?.retainedItemCount ?? DEFAULT_CONTEXT_WINDOW_RECENT_ITEMS;
     this.maxSummaryItems = options?.maxSummaryItems ?? 500;
     this.maxSummaryChars = options?.maxSummaryChars ?? 12_000;
     this.groupSimilarToolCalls = options?.groupSimilarToolCalls ?? true;
-    this.now = options?.now ?? (() => new Date().toISOString());
+    this.now = options?.now ?? (() => "not-provided");
   }
 
-  countHistoryTokens(_history: HistoryItem[]): number {
+  countTokens(items: readonly ModelContextItem[]): number {
     let total = 0;
-    for (const item of _history) {
+    for (const item of items) {
       const s = describeHistoryItemBrief(item);
       total += Math.ceil(s.length / 2.5);
     }
     return total;
   }
 
-  compactHistory(
-    input: HistoryCompactionInput,
-  ): HistoryCompactionResult | undefined {
-    return this.compact(input);
-  }
-
-  compact(input: HistoryCompactionInput): HistoryCompactionResult | undefined {
-    if (input.history.length <= this.retainedItemCount) {
+  compact(
+    input: ModelContextCompactionInput,
+  ): ModelContextCompactionResult | undefined {
+    if (input.items.length <= this.retainedItemCount) {
       return undefined;
     }
 
     const keepCount = Math.max(1, this.retainedItemCount);
-    const dropCount = input.history.length - keepCount;
-    const retained = input.history.slice(-keepCount);
-    const dropped = input.history.slice(0, dropCount);
+    const dropCount = input.items.length - keepCount;
+    const retained = input.items.slice(-keepCount);
+    const dropped = input.items.slice(0, dropCount);
 
     const summary = this.buildSummary({
       dropped,
@@ -87,7 +86,7 @@ export class DeterministicHistoryCompactor implements ContextWindowPort {
       stepIndex: input.stepIndex,
     });
 
-    const compactedHistory: HistoryItem[] = [
+    const compactedItems: ModelContextItem[] = [
       {
         type: "environment_reminder",
         content: summary,
@@ -98,16 +97,16 @@ export class DeterministicHistoryCompactor implements ContextWindowPort {
     return {
       tokenCount: input.tokenCount,
       maxTokens: input.maxTokens,
-      history: compactedHistory,
+      items: compactedItems,
       summary,
-      originalItemCount: input.history.length,
+      originalItemCount: input.items.length,
       retainedItemCount: retained.length,
       droppedItemCount: dropped.length,
     };
   }
 
   private buildSummary(input: {
-    dropped: HistoryItem[];
+    dropped: ModelContextItem[];
     retainedItemCount: number;
     tokenCount: number;
     maxTokens: number;
@@ -121,7 +120,7 @@ export class DeterministicHistoryCompactor implements ContextWindowPort {
       : input.dropped;
 
     const lines = [
-      "Compressed agent-loop history.",
+      "Compressed model-context history.",
       `Compression step: ${input.stepIndex}`,
       `Compression timestamp: ${now}`,
       `History tokens before compression: ${input.tokenCount}/${input.maxTokens}`,
@@ -163,7 +162,7 @@ export class DeterministicHistoryCompactor implements ContextWindowPort {
 
 // ─── Phase 1: Enhanced Description ──────────────────────────────────
 
-function describeHistoryItemBrief(item: HistoryItem): string {
+function describeHistoryItemBrief(item: ModelContextItem): string {
   switch (item.type) {
     case "tool_call":
       return `tool_call:${(item as { toolCall: { name: string } }).toolCall.name}`;
@@ -176,7 +175,7 @@ function describeHistoryItemBrief(item: HistoryItem): string {
   }
 }
 
-function describeHistoryItemExtended(item: HistoryItem): string {
+function describeHistoryItemExtended(item: ModelContextItem): string {
   switch (item.type) {
     case "tool_call": {
       const args = summarizeArgs((item as { toolCall: { arguments: Record<string, unknown> } }).toolCall.arguments);
@@ -232,8 +231,8 @@ function summarizeArgs(args: Record<string, unknown>): string {
 
 type Category = "User Messages" | "Assistant Actions" | "Tool Observations";
 
-function groupByCategory(items: HistoryItem[]): Record<Category, HistoryItem[]> {
-  const result: Record<Category, HistoryItem[]> = {
+function groupByCategory(items: ModelContextItem[]): Record<Category, ModelContextItem[]> {
+  const result: Record<Category, ModelContextItem[]> = {
     "User Messages": [],
     "Assistant Actions": [],
     "Tool Observations": [],
@@ -260,8 +259,8 @@ function groupByCategory(items: HistoryItem[]): Record<Category, HistoryItem[]> 
 
 // ─── Phase 1: Coalescing ────────────────────────────────────────────
 
-function coalesceItems(items: HistoryItem[]): HistoryItem[] {
-  const result: HistoryItem[] = [];
+function coalesceItems(items: ModelContextItem[]): ModelContextItem[] {
+  const result: ModelContextItem[] = [];
   let i = 0;
 
   while (i < items.length) {
@@ -291,7 +290,7 @@ function coalesceItems(items: HistoryItem[]): HistoryItem[] {
 
 // ─── Phase 1: Progress Detection ────────────────────────────────────
 
-function detectProgress(items: HistoryItem[]): string {
+function detectProgress(items: ModelContextItem[]): string {
   const tools = new Map<string, number>();
   const userMsgs: string[] = [];
 
@@ -337,82 +336,4 @@ function preview(value: string, maxChars: number): string {
     return value;
   }
   return `${value.slice(0, Math.max(0, maxChars - 1))}…`;
-}
-
-// ─── Phase 2: LLM Semantic Summary ────────────────────────────────
-
-export interface LlmSummaryConfig {
-  apiKey: string;
-  baseUrl?: string;
-  model?: string;
-}
-
-/**
- * Generate a semantic summary of dropped history items by calling DeepSeek API.
- * Used externally and the result is injected into the summary.
- */
-export async function generateLlmHistorySummary(
-  items: HistoryItem[],
-  config: LlmSummaryConfig,
-): Promise<string> {
-  const baseUrl = config.baseUrl ?? "https://api.deepseek.com";
-  const model = config.model ?? "deepseek-chat";
-
-  const itemsText = items
-    .map((item, i) => {
-      const desc = describeHistoryItemBrief(item);
-      return `[${i}] ${item.type}: ${desc}`;
-    })
-    .join("\n");
-
-  const prompt = `You are summarizing agent conversation history for context compression.
-Below are items that are being removed from the context window.
-Generate a concise but informative summary (max 500 words) that preserves:
-
-1. What the user asked for (task goals)
-2. What was accomplished (completed steps, key decisions)
-3. What's in progress (ongoing work)
-4. Any errors or issues encountered
-5. Key tool/command patterns used
-
-Summarize in Chinese if the conversation was in Chinese.
-Keep the summary structured and factual.
-
-Items being dropped:
-${itemsText.slice(0, 8000)}
-
-Summary:`;
-
-  try {
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "user", content: prompt },
-        ],
-        max_tokens: 800,
-        temperature: 0.3,
-      }),
-    });
-
-    if (!response.ok) {
-      return `[LLM summary failed: HTTP ${response.status}]`;
-    }
-
-    const data = (await response.json()) as {
-      choices: Array<{ message: { content: string } }>;
-    };
-    const summary = data.choices?.[0]?.message?.content?.trim();
-    if (summary) {
-      return `\n[LLM Semantic Summary]\n${summary}\n`;
-    }
-    return `[LLM summary empty]`;
-  } catch (err) {
-    return `[LLM summary error: ${err instanceof Error ? err.message : String(err)}]`;
-  }
 }

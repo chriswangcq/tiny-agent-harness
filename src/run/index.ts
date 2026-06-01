@@ -24,7 +24,5 @@ export type {
   ValidatorPort,
   ReviewerPort,
   TerminalPort,
-  PromptPort,
   RunPorts,
-  HistoryItem,
 } from "./orchestrator.js";

@@ -27,10 +27,14 @@ function state(overrides: Partial<AgentRunStateData> = {}): AgentRunStateData {
 
 function session(overrides: Partial<RunSessionSnapshot> = {}): RunSessionSnapshot {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     runId: "run-1",
     updatedAt: "2026-05-31T00:00:01.000Z",
-    history: [],
+    modelContext: {
+      version: 1,
+      task: "task",
+      items: [],
+    },
     ...overrides,
   };
 }

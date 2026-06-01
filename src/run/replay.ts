@@ -1,6 +1,6 @@
-import type { HistoryItem } from "./orchestrator.js";
+import type { ModelContextItem } from "../model/context-session.js";
 import type { RunSessionSnapshot } from "./session-store.js";
-import { reconstructHistoryFromTranscript } from "./session-store.js";
+import { reconstructModelContextItemsFromTranscript } from "./session-store.js";
 import {
   diagnoseRunRecovery,
   type RecoveryDiagnostics,
@@ -28,7 +28,7 @@ export type ReplayCase = {
   startedAt?: string;
   updatedAt?: string;
   stats: ReplayEventStats;
-  history: HistoryItem[];
+  modelContextItems: ModelContextItem[];
   recovery: RecoveryDiagnostics;
 };
 
@@ -76,7 +76,7 @@ export function buildReplayCase(input: {
     ...(start?.timestamp ? { startedAt: start.timestamp } : {}),
     ...(input.state?.updatedAt ? { updatedAt: input.state.updatedAt } : {}),
     stats,
-    history: reconstructHistoryFromTranscript(input.transcriptEvents),
+    modelContextItems: reconstructModelContextItemsFromTranscript(input.transcriptEvents),
     recovery,
   };
 }

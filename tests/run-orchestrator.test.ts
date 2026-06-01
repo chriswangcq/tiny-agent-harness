@@ -6,12 +6,15 @@ import { AgentRunState } from "../src/run/state.js";
 import { Environment } from "../src/environment/environment.js";
 import {
   RunOrchestrator,
-  type HistoryItem,
   type RunPorts,
 } from "../src/run/orchestrator.js";
 import { TranscriptStore } from "../src/transcript/store.js";
 import { STATIC_TOOL_CATALOG } from "../src/tools/catalog.js";
-import { DeterministicHistoryCompactor } from "../src/run/context-window.js";
+import { DeterministicModelContextCompactor } from "../src/model/context-window.js";
+import {
+  ModelContextSession,
+  type ModelContextItem,
+} from "../src/model/context-session.js";
 import type { TerminalObservation, TerminalState } from "../src/terminal/types.js";
 import type { EnvironmentEvent, IoWaitRequest } from "../src/types/environment.js";
 import type { FimStepOutput, InternalToolCall, ModelStepContext, ModelTurn } from "../src/types/model.js";
@@ -87,8 +90,8 @@ function makeRun(options?: {
   validateResult?: RunPorts["validator"]["validate"];
   reviewDecision?: ToolReviewDecision;
   terminalObservation?: TerminalObservation;
-  initialHistory?: HistoryItem[];
-  contextWindow?: RunPorts["contextWindow"];
+  initialHistory?: ModelContextItem[];
+  contextWindow?: Parameters<ModelContextSession["compactIfNeeded"]>[0]["contextWindow"];
   activeSkillRuns?: ReturnType<RunPorts["listActiveSkillRuns"]>;
   modelProgress?: string[];
   modelError?: unknown;
@@ -109,12 +112,39 @@ function makeRun(options?: {
   };
   const outputs = [...(options?.outputs ?? [ioWaitOutput(defaultWait)])];
   const contexts: ModelStepContext[] = [];
-  const histories: HistoryItem[][] = [];
+  const histories: ModelContextItem[][] = [];
   const consumedCalls: Array<{ runId: string; afterEventId?: string }> = [];
   const waitCalls: Array<{ runId: string; wait: IoWaitRequest }> = [];
   const reviewCalls: ToolRequest[] = [];
   const terminalCalls: ToolRequest[] = [];
-  const sessionSaves: HistoryItem[][] = [];
+  const sessionSaves: ModelContextItem[][] = [];
+
+  const modelContext = ModelContextSession.create({
+    task: state.data.task,
+    initialItems: options?.initialHistory ?? [],
+    contextWindow: options?.contextWindow ?? {
+      maxTokens: Number.POSITIVE_INFINITY,
+      countTokens: () => 0,
+      compact: () => undefined,
+    },
+    renderer: {
+      render(input) {
+        histories.push([...input.items]);
+        return [
+          { role: "system", content: "system" },
+          ...input.items.map((entry) =>
+            entry.type === "environment_reminder"
+              ? { role: "user" as const, content: entry.content }
+              : { role: "user" as const, content: JSON.stringify(entry) },
+          ),
+          ...(input.transientReminders ?? []).map((content) => ({
+            role: "user" as const,
+            content,
+          })),
+        ];
+      },
+    },
+  });
 
   const ports: RunPorts = {
     model: {
@@ -189,28 +219,10 @@ function makeRun(options?: {
         );
       },
     },
-    prompt: {
-      buildMessages(task, history) {
-        void task;
-        histories.push([...history]);
-        return [
-          { role: "system", content: "system" },
-          ...history.map((entry) =>
-            entry.type === "environment_reminder"
-              ? { role: "user" as const, content: entry.content }
-              : { role: "user" as const, content: JSON.stringify(entry) },
-          ),
-        ];
-      },
-    },
-    contextWindow: options?.contextWindow ?? {
-      maxHistoryTokens: Number.POSITIVE_INFINITY,
-      countHistoryTokens: () => 0,
-      compactHistory: () => undefined,
-    },
+    modelContext,
     session: {
-      saveHistory(_runId, history) {
-        sessionSaves.push([...history]);
+      saveModelContext(_runId, snapshot) {
+        sessionSaves.push([...snapshot.items]);
       },
     },
     tools: [...STATIC_TOOL_CATALOG],
@@ -233,12 +245,7 @@ function makeRun(options?: {
     listActiveSkillRuns: () => options?.activeSkillRuns ?? [],
   };
 
-  const orchestrator = new RunOrchestrator(
-    state,
-    transcript,
-    ports,
-    options?.initialHistory,
-  );
+  const orchestrator = new RunOrchestrator(state, transcript, ports);
 
   return {
     orchestrator,
@@ -321,7 +328,7 @@ describe("RunOrchestrator", () => {
     });
   });
 
-  it("resumes a persisted run with restored agent-loop history", async () => {
+  it("resumes a persisted run with restored model context", async () => {
     const wait: IoWaitRequest = {
       reason: "awaiting next instruction",
       condition: { kind: "new_user_message", channel: "default" },
@@ -358,7 +365,7 @@ describe("RunOrchestrator", () => {
         error: { message: "previous failure" },
         timestamp: "2026-05-25T11:59:01.000Z",
       });
-    const initialHistory: HistoryItem[] = [
+    const initialHistory: ModelContextItem[] = [
       { type: "environment_reminder", content: "persisted context" },
     ];
     const { orchestrator, transcript, contexts, sessionSaves } = makeRun({
@@ -579,7 +586,7 @@ describe("RunOrchestrator", () => {
     });
   });
 
-  it("compacts agent-loop history before model requests when the context threshold is reached", async () => {
+  it("compacts model context before model requests when the context threshold is reached", async () => {
     const wait: IoWaitRequest = {
       reason: "awaiting next instruction",
       condition: { kind: "new_user_message", channel: "default" },
@@ -597,11 +604,11 @@ describe("RunOrchestrator", () => {
         createdAt: "2026-05-25T12:00:00.000Z",
       },
     };
-    const compactor = new DeterministicHistoryCompactor({
+    const compactor = new DeterministicModelContextCompactor({
       recentItemCount: 1,
       maxSummaryItems: 8,
     });
-    const initialHistory: HistoryItem[] = [
+    const initialHistory: ModelContextItem[] = [
       { type: "environment_reminder", content: "old context that should compress" },
       { type: "environment_reminder", content: "recent context to keep" },
     ];
@@ -610,9 +617,9 @@ describe("RunOrchestrator", () => {
       waitEvent,
       initialHistory,
       contextWindow: {
-        maxHistoryTokens: 2,
-        countHistoryTokens: (history) => (history.length >= 2 ? 2 : 0),
-        compactHistory: (input) => compactor.compact(input),
+        maxTokens: 2,
+        countTokens: (history) => (history.length >= 2 ? 2 : 0),
+        compact: (input) => compactor.compact(input),
       },
     });
 
@@ -635,7 +642,7 @@ describe("RunOrchestrator", () => {
       events.findIndex((event) => event.type === "model_requested"),
     );
     const firstPrompt = contexts[0]!.messages.map((message) => message.content).join("\n");
-    expect(firstPrompt).toContain("Compressed agent-loop history.");
+    expect(firstPrompt).toContain("Compressed model-context history.");
     expect(firstPrompt).toContain("recent context to keep");
     expect(firstPrompt).toContain("Dropped history items:");
   });
@@ -665,9 +672,9 @@ describe("RunOrchestrator", () => {
         { type: "environment_reminder", content: "small context" },
       ],
       contextWindow: {
-        maxHistoryTokens: 10,
-        countHistoryTokens: () => 9,
-        compactHistory: () => {
+        maxTokens: 10,
+        countTokens: () => 9,
+        compact: () => {
           throw new Error("should not compact below threshold");
         },
       },

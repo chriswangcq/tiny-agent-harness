@@ -28,8 +28,12 @@ AgentRunState
 DeepSeekFimAdapter
   owns: two FIM completions per model step and conversion into ModelTurn
 
-FimPromptBuilder
-  owns: FIM prompt and boundary construction from task, config, transcript, session summaries
+ModelContextSession
+  owns: model-visible context items, FIM message rendering, context-window compaction, snapshot/restore
+  accepts: incremental environment reminders, tool calls, observations, io_wait calls
+
+PromptBuilder
+  owns: DeepSeek v4 chat-template compatible message serialization
 
 ImCliTransport
   owns: user message receive/send through im CLI
@@ -51,7 +55,7 @@ TranscriptStore
   owns: append-only run events on disk
 
 RunSessionStore
-  owns: persisted agent-loop history snapshot for resume
+  owns: persisted ModelContextSession snapshot for resume
 ```
 
 The important split:
@@ -405,7 +409,7 @@ type RunEvent =
     };
 ```
 
-Before recording `model_output_received`, the orchestrator moves large raw debug payloads out of model output when possible. Today this applies to `thinking.raw.prompt`: the prompt text is written under the run directory as a debug artifact, and transcript/history keep only a `promptRef` with `path`, `relativePath`, `bytes`, and `sha256`. This keeps `transcript.jsonl` and `session.json` useful for replay without repeatedly embedding full FIM prompts into the agent-loop context.
+Before recording `model_output_received`, the orchestrator moves large raw debug payloads out of model output when possible. Today this applies to `thinking.raw.prompt`: the prompt text is written under the run directory as a debug artifact, and transcript/model output keep only a `promptRef` with `path`, `relativePath`, `bytes`, and `sha256`. This keeps `transcript.jsonl` and `session.json` useful for replay without repeatedly embedding full FIM prompts into model context.
 
 ## Orchestrator Loop
 
@@ -740,20 +744,36 @@ Final answers do not increment `stepIndex`.
 
 Invalid model outputs, tool validation errors, review rejections, and satisfied IO waits do increment `stepIndex` after the synthetic observation is appended. There is no fixed step budget; long-running sessions are controlled by `io_wait`, cancellation, process lifetime, and context compaction.
 
+## Model Context Session
+
+DeepSeek FIM completion itself is stateless over HTTP. tiny-agent wraps it with a local stateful `ModelContextSession` so the run loop submits only incremental context items:
+
+```text
+environment_reminder | tool_call | observation | io_wait_call
+  -> ModelContextSession.append(...)
+  -> ModelContextSession.compactIfNeeded(...)
+  -> ModelContextSession.prepareModelTurn(...)
+  -> DeepSeekFimAdapter.generateTurn(...)
+```
+
+The important boundary is ownership: `RunOrchestrator` does not own prompt history arrays, does not call `PromptBuilder` directly, and does not decide the context-window rewrite. It executes effects and records events; `ModelContextSession` owns the model-visible timeline and returns the next model messages.
+
+Active skill reminders are transient render inputs. They appear in the next model turn but are not persisted into the durable model context unless an explicit environment event or observation records them.
+
 ## Context Window
 
-The prompt boundary compresses only agent-loop history. System prompt/tool contracts are not part of the compression budget.
+The prompt boundary compresses only model-visible context items. System prompt/tool contracts are not part of the compression budget.
 
 Current default:
 
 ```text
-max agent-loop history tokens = 700_000
-recent history items retained verbatim = 40
+max model-context tokens = 700_000
+recent context items retained verbatim = 40
 ```
 
-Before each `call_model`, the orchestrator asks the injected `ContextWindowPort` to count the history messages built from persisted loop items. If the count reaches the threshold, it replaces the older history prefix with a deterministic `environment_reminder` summary and keeps the recent tail verbatim. The event is recorded as `history_compacted`, and the compacted history is saved to `session.json`.
+Before each `call_model`, `ModelContextSession` asks its injected `ModelContextWindowPort` to count model-context items. If the count reaches the threshold, the session replaces the older prefix with a deterministic `environment_reminder` summary and keeps the recent tail verbatim. The orchestrator receives explicit compaction metadata, records `history_compacted` for audit, and saves the updated `modelContext` snapshot to `session.json`.
 
-Large debug strings should not participate in this budget. When the model adapter exposes raw prompt text for debugging, the orchestrator replaces it with a `promptRef` before the model output is appended to history. The prompt remains inspectable on disk, while compaction only accounts for the compact references and user/tool-facing loop items.
+Large debug strings should not participate in this budget. When the model adapter exposes raw prompt text for debugging, the orchestrator replaces it with a `promptRef` before the model output is persisted into state/transcript. The prompt remains inspectable on disk, while compaction only accounts for compact references and user/tool-facing model-context items.
 
 ## Persistence
 
@@ -778,9 +798,9 @@ Suggested run directory:
 
 `transcript.jsonl` is append-only and is the audit source.
 
-`session.json` is the persisted agent-loop history used by resume. If it is missing, resume can reconstruct a best-effort history from `transcript.jsonl`.
+`session.json` stores the persisted `ModelContextSessionSnapshot` used by resume. Its current schema stores `modelContext: { version, task, items }`. If it is missing, resume can reconstruct best-effort model-context items from `transcript.jsonl`.
 
-`debug/prompts/*.prompt.txt` stores large model prompt artifacts referenced from transcript/history by `promptRef`. The artifact metadata includes byte size and sha256 so later audits can verify which prompt was used without bloating replay state.
+`debug/prompts/*.prompt.txt` stores large model prompt artifacts referenced from transcript/model output by `promptRef`. The artifact metadata includes byte size and sha256 so later audits can verify which prompt was used without bloating replay state.
 
 ## Resume Semantics
 
@@ -794,11 +814,11 @@ tiny-agent run --resume <runId|latest>
 Resume does:
 
 1. Load `state.json`.
-2. Load agent-loop history from `session.json`, or reconstruct a best-effort history from `transcript.jsonl`.
+2. Load `ModelContextSessionSnapshot` from `session.json`, or reconstruct best-effort model-context items from `transcript.jsonl`.
 3. Append a resume reminder explaining that the PTY process tree is fresh.
 4. Record `run_resumed` and continue from `nextEffect()`.
 
-Resume restores run state and agent-loop context, not the previous PTY process tree. Prior ssh, vim, cat, REPL, or other foreground processes do not survive. The next model step must inspect the fresh PTY with `session_observe` before assuming terminal state.
+Resume restores run state and model-visible context, not the previous PTY process tree. Prior ssh, vim, cat, REPL, or other foreground processes do not survive. The next model step must inspect the fresh PTY with `session_observe` before assuming terminal state.
 
 Recovery rules:
 

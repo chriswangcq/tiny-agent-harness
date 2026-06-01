@@ -4,7 +4,6 @@ import type {
   FimStepOutput,
   ModelProgressEvent,
   ModelStepContext,
-  V4ChatMessage,
 } from "../types/model.js";
 import type {
   ToolCallValidation,
@@ -17,14 +16,17 @@ import type { TerminalObservation } from "../terminal/types.js";
 import type { InternalToolCall } from "../types/model.js";
 import type { EnvironmentPort, EnvironmentEvent, IoWaitRequest } from "../types/environment.js";
 import { Environment } from "../environment/environment.js";
-import { wrapReminderAsUserContent } from "../model/prompt-builder.js";
 import type { ActiveSkillRunSummary } from "../types/skill.js";
 import { AgentRunState } from "./state.js";
 import {
   TranscriptStore,
   type RunDebugArtifact,
 } from "../transcript/store.js";
-import type { ContextWindowPort } from "./context-window.js";
+import type {
+  ModelContextItem,
+  ModelContextSessionPort,
+  ModelContextSessionSnapshot,
+} from "../model/context-session.js";
 
 export interface ModelPort {
   generateTurn(
@@ -48,36 +50,16 @@ export interface TerminalPort {
   execute(request: ToolRequest): Promise<ToolObservation>;
 }
 
-export interface PromptPort {
-  buildMessages(task: string, history: HistoryItem[]): V4ChatMessage[];
-}
-
 export interface RunSessionPort {
-  saveHistory(runId: string, history: readonly HistoryItem[]): void;
+  saveModelContext(runId: string, snapshot: ModelContextSessionSnapshot): void;
 }
-
-export type HistoryItem =
-  | { type: "tool_call"; toolCall: InternalToolCall; thinking?: AgentThinking }
-  | {
-      type: "io_wait_call";
-      toolCallId: string;
-      wait: IoWaitRequest;
-      thinking?: AgentThinking;
-    }
-  | {
-      type: "observation";
-      observation: ToolObservation;
-      toolCallId?: string;
-    }
-  | { type: "environment_reminder"; content: string };
 
 export interface RunPorts {
   model: ModelPort;
   validator: ValidatorPort;
   reviewer: ReviewerPort;
   terminal: TerminalPort;
-  prompt: PromptPort;
-  contextWindow: ContextWindowPort;
+  modelContext: ModelContextSessionPort;
   session: RunSessionPort;
   tools: ToolDefinition[];
   environment: EnvironmentPort;
@@ -88,18 +70,15 @@ export class RunOrchestrator {
   private state: AgentRunState;
   private readonly transcript: TranscriptStore;
   private readonly ports: RunPorts;
-  private readonly history: HistoryItem[];
 
   constructor(
     initialState: AgentRunState,
     transcript: TranscriptStore,
     ports: RunPorts,
-    initialHistory: HistoryItem[] = [],
   ) {
     this.state = initialState;
     this.transcript = transcript;
     this.ports = ports;
-    this.history = [...initialHistory];
   }
 
   private now(): string {
@@ -130,7 +109,7 @@ export class RunOrchestrator {
         previousStatus: this.state.status,
         timestamp: this.now(),
       });
-      this.saveHistory();
+      this.saveModelContext();
     }
 
     while (true) {
@@ -151,30 +130,24 @@ export class RunOrchestrator {
 
           const envReminder = Environment.renderReminder(envEvents);
           if (envReminder) {
-            this.history.push({
+            this.ports.modelContext.append({
               type: "environment_reminder",
               content: envReminder,
             });
-            this.saveHistory();
+            this.saveModelContext();
           }
         }
 
-        await this.compactHistoryIfNeeded();
+        await this.compactModelContextIfNeeded();
 
-        const messages = this.ports.prompt.buildMessages(
-          this.state.data.task,
-          this.history,
-        );
-
-        // Render active skill runs as persistent reminder
         const activeSkillRuns = this.ports.listActiveSkillRuns();
-        if (activeSkillRuns.length > 0) {
-          const reminder = renderActiveSkillReminder(activeSkillRuns);
-          messages.push({
-            role: "user",
-            content: wrapReminderAsUserContent(reminder),
-          });
-        }
+        const transientReminders =
+          activeSkillRuns.length > 0
+            ? [renderActiveSkillReminder(activeSkillRuns)]
+            : [];
+        const { messages } = this.ports.modelContext.prepareModelTurn({
+          transientReminders,
+        });
 
         const context: ModelStepContext = {
           runId: this.state.data.runId,
@@ -287,14 +260,14 @@ export class RunOrchestrator {
             : undefined);
 
         if (toolCall) {
-          this.history.push({
+          this.ports.modelContext.append({
             type: "tool_call",
             toolCall,
             thinking: this.state.data.pendingModelOutput?.thinking,
           });
         }
-        this.history.push({ type: "observation", observation });
-        this.saveHistory();
+        this.ports.modelContext.append({ type: "observation", observation });
+        this.saveModelContext();
 
         await this.record({
           type: "tool_execution_finished",
@@ -307,8 +280,11 @@ export class RunOrchestrator {
       }
 
       if (effect.type === "append_observation") {
-        this.history.push({ type: "observation", observation: effect.observation });
-        this.saveHistory();
+        this.ports.modelContext.append({
+          type: "observation",
+          observation: effect.observation,
+        });
+        this.saveModelContext();
 
         await this.record({
           type: "observation_appended",
@@ -321,17 +297,19 @@ export class RunOrchestrator {
 
       if (effect.type === "wait_io") {
         const ioWaitToolCallId = this.pendingIoWaitToolCallId();
-        this.history.push({
+        this.ports.modelContext.append({
           type: "io_wait_call",
           toolCallId: ioWaitToolCallId,
           wait: effect.wait,
           thinking: this.state.data.pendingModelOutput?.thinking,
         });
-        this.saveHistory();
+        this.saveModelContext();
 
-        const unsettledMessage = pendingImSendMessage(this.history);
+        const unsettledMessage = pendingImSendMessage(
+          this.ports.modelContext.snapshot().items,
+        );
         if (unsettledMessage !== undefined) {
-          this.history.push({
+          this.ports.modelContext.append({
             type: "observation",
             toolCallId: ioWaitToolCallId,
             observation: {
@@ -340,7 +318,7 @@ export class RunOrchestrator {
               recoverable: true,
             },
           });
-          this.saveHistory();
+          this.saveModelContext();
           await this.record({
             type: "observation_appended",
             stepIndex: this.state.data.stepIndex,
@@ -372,7 +350,7 @@ export class RunOrchestrator {
           break;
         }
 
-        this.history.push({
+        this.ports.modelContext.append({
           type: "observation",
           toolCallId: ioWaitToolCallId,
           observation: {
@@ -382,7 +360,7 @@ export class RunOrchestrator {
             event,
           },
         });
-        this.saveHistory();
+        this.saveModelContext();
 
         await this.record({
           type: "io_wait_satisfied",
@@ -463,64 +441,16 @@ export class RunOrchestrator {
     };
   }
 
-  private async compactHistoryIfNeeded(): Promise<void> {
-    const tokenCount = this.ports.contextWindow.countHistoryTokens(this.history);
-    const maxTokens = this.ports.contextWindow.maxHistoryTokens;
-    if (tokenCount < maxTokens) {
-      return;
-    }
-
-    const compaction = this.ports.contextWindow.compactHistory({
-      history: this.history,
-      tokenCount,
-      maxTokens,
+  private async compactModelContextIfNeeded(): Promise<void> {
+    const compaction = await this.ports.modelContext.compactIfNeeded({
       stepIndex: this.state.data.stepIndex,
     });
     if (compaction === undefined || compaction.droppedItemCount === 0) {
       return;
     }
 
-
-    // Phase 2: Enrich summary via port-based LLM semantic summary
-    if (this.ports.contextWindow.llmEnrichSummary) {
-      try {
-        const enriched = await this.ports.contextWindow.llmEnrichSummary(
-          compaction.summary,
-          this.history.slice(0, compaction.droppedItemCount),
-        );
-        if (enriched && !enriched.startsWith("[LLM")) {
-          const firstItem = compaction.history[0];
-          if (firstItem && firstItem.type === "environment_reminder") {
-            firstItem.content += enriched;
-            compaction.summary += enriched;
-          }
-        }
-      } catch {
-        /* LLM enrichment is best-effort */
-      }
-    }
-
-    // Phase 3: Safe re-injection of project guidance files only
-    try {
-      const fs = await import("node:fs");
-      const { join } = await import("node:path");
-      for (const rel of ["AGENTS.md", "CLAUDE.md"]) {
-        const full = join(process.cwd(), rel);
-        try {
-          if (fs.existsSync(full) && fs.statSync(full).isFile()) {
-            const c = fs.readFileSync(full, "utf-8").slice(0, 1000);
-            compaction.history.push({
-              type: "environment_reminder",
-              content: `[Re-inject: ${rel}]\n${c}`,
-            });
-          }
-        } catch { /* skip */ }
-      }
-    } catch { /* best-effort */ }
-
-    this.history.splice(0, this.history.length, ...compaction.history);
-    this.saveHistory();
-    const { history: _history, ...eventCompaction } = compaction;
+    this.saveModelContext();
+    const { items: _items, ...eventCompaction } = compaction;
     await this.record({
       type: "history_compacted",
       stepIndex: this.state.data.stepIndex,
@@ -529,8 +459,11 @@ export class RunOrchestrator {
     });
   }
 
-  private saveHistory(): void {
-    this.ports.session.saveHistory(this.state.data.runId, this.history);
+  private saveModelContext(): void {
+    this.ports.session.saveModelContext(
+      this.state.data.runId,
+      this.ports.modelContext.snapshot(),
+    );
   }
 }
 
@@ -620,17 +553,19 @@ function serializeErrorCause(cause: unknown): unknown {
   return cause;
 }
 
-function pendingImSendMessage(history: readonly HistoryItem[]): string | undefined {
+function pendingImSendMessage(
+  items: readonly ModelContextItem[],
+): string | undefined {
   const latestObservationIndex = findLastHistoryIndex(
-    history,
+    items,
     (entry) => entry.type === "observation",
   );
   if (latestObservationIndex === -1) {
     return undefined;
   }
 
-  const latestObservation = history[latestObservationIndex] as Extract<
-    HistoryItem,
+  const latestObservation = items[latestObservationIndex] as Extract<
+    ModelContextItem,
     { type: "observation" }
   >;
   const observation = latestObservation.observation;
@@ -644,10 +579,10 @@ function pendingImSendMessage(history: readonly HistoryItem[]): string | undefin
     return undefined;
   }
 
-  const latestToolCall = history
+  const latestToolCall = items
     .slice(0, latestObservationIndex)
     .reverse()
-    .find((entry): entry is Extract<HistoryItem, { type: "tool_call" }> =>
+    .find((entry): entry is Extract<ModelContextItem, { type: "tool_call" }> =>
       entry.type === "tool_call",
     );
   if (
@@ -662,11 +597,11 @@ function pendingImSendMessage(history: readonly HistoryItem[]): string | undefin
 }
 
 function findLastHistoryIndex(
-  history: readonly HistoryItem[],
-  predicate: (entry: HistoryItem) => boolean,
+  items: readonly ModelContextItem[],
+  predicate: (entry: ModelContextItem) => boolean,
 ): number {
-  for (let index = history.length - 1; index >= 0; index -= 1) {
-    if (predicate(history[index]!)) {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index]!)) {
       return index;
     }
   }

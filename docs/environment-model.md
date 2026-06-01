@@ -35,12 +35,13 @@ type EnvironmentEvent =
 IM transport / skill lifecycle
   -> EnvironmentEvent
   -> Environment reminder
+  -> ModelContextSession
   -> PromptBuilder
 
 terminal/session tool execution
   -> ManagedTerminalRuntime
   -> TerminalObservation | SessionListObservation
-  -> tool result history
+  -> model-context observation item
 ```
 
 This keeps terminal state in one place: the terminal/session observation stream.

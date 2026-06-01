@@ -83,14 +83,14 @@ export function diagnoseRunRecovery(
     findings.push({
       code: "missing_session_snapshot",
       severity: "warn",
-      message: "Agent session history snapshot is missing.",
+      message: "Agent model-context session snapshot is missing.",
       action: "rebuild_session_from_transcript",
     });
   } else if (stateRunId && input.session.runId !== stateRunId) {
     findings.push({
       code: "session_run_id_mismatch",
       severity: "error",
-      message: "Agent session history belongs to a different run.",
+      message: "Agent model-context session belongs to a different run.",
       action: "rebuild_session_from_transcript",
       details: {
         stateRunId,

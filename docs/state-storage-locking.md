@@ -161,8 +161,8 @@ memory/sub-agent        # 第一版不是核心路径
 
 - `runs/<runId>/state.json` 是 run snapshot。
 - `runs/<runId>/transcript.jsonl` 是 run event ledger。
-- `runs/<runId>/session.json` 是 agent-loop history snapshot，用于 resume。
-- `runs/<runId>/debug/prompts/` 保存由 transcript/history 通过 `promptRef` 引用的大 prompt artifact。
+- `runs/<runId>/session.json` 是 `ModelContextSession` snapshot，用于 resume。
+- `runs/<runId>/debug/prompts/` 保存由 transcript/model-context 通过 `promptRef` 引用的大 prompt artifact。
 - `environment/events.jsonl` 是跨 run 的外部环境事件 ledger。
 - `sessions/<sessionId>/output.log` 是完整 PTY 输出，observation 只返回一屏 terminal viewport。
 - `skill-runs/<id>/execution.txt` 和 `review-task.txt` 只给 agent 通过 bash 原生命令读取，不直接塞进 prompt。

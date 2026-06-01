@@ -128,10 +128,14 @@ describe("run replay/eval case builders", () => {
       state: state(),
       transcriptEvents: events,
       session: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         runId: "run-1",
         updatedAt: "2026-05-31T00:00:05.000Z",
-        history: [],
+        modelContext: {
+          version: 1,
+          task: "write tests",
+          items: [],
+        },
       },
     });
 
@@ -150,7 +154,7 @@ describe("run replay/eval case builders", () => {
         status: "healthy",
       },
     });
-    expect(replayCase.history).toEqual([
+    expect(replayCase.modelContextItems).toEqual([
       expect.objectContaining({ type: "tool_call", toolCall }),
       expect.objectContaining({ type: "observation" }),
     ]);
