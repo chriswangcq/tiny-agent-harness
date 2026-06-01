@@ -61,6 +61,18 @@ describe("XtermTerminalScreenBuffer", () => {
     expect(screen.text).not.toContain("__TAH_PROMPT__");
     buffer.dispose();
   });
+
+  it("removes managed shell marker lines after a visible shell prompt prefix", async () => {
+    const buffer = new XtermTerminalScreenBuffer({ rows: 4, cols: 80 });
+
+    buffer.write("> __TAH_CONT__ nonce=n reason=unknown seq=1\r\n> ");
+
+    const screen = await buffer.snapshot();
+
+    expect(screen.text).toContain(">");
+    expect(screen.text).not.toContain("__TAH_CONT__");
+    buffer.dispose();
+  });
 });
 
 describe("stripManagedShellScreenNoise", () => {
@@ -73,5 +85,27 @@ describe("stripManagedShellScreenNoise", () => {
     );
     expect(second.output).toBe("$ ");
     expect(second.pending).toBe("");
+  });
+
+  it("holds split marker prefixes after a visible shell prompt prefix", () => {
+    const first = stripManagedShellScreenNoise("> __TAH_CO");
+    expect(first).toEqual({ output: "", pending: "> __TAH_CO" });
+
+    const second = stripManagedShellScreenNoise(
+      `${first.pending}NT__ nonce=n reason=unknown seq=1\r\n> `,
+    );
+    expect(second.output).toBe("> ");
+    expect(second.pending).toBe("");
+  });
+
+  it("does not remove user output that merely mentions a marker", () => {
+    const result = stripManagedShellScreenNoise(
+      "literal text __TAH_CONT__ nonce=n reason=unknown seq=1\r\n",
+    );
+
+    expect(result.output).toBe(
+      "literal text __TAH_CONT__ nonce=n reason=unknown seq=1\r\n",
+    );
+    expect(result.pending).toBe("");
   });
 });
