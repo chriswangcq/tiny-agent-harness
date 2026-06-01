@@ -18,6 +18,10 @@ import type {
   SessionView,
 } from "./types.js";
 import { TuiInteractionState } from "./interaction-state.js";
+import {
+  buildLoopFrameDetail,
+  summarizeLoopFrames,
+} from "./debugger.js";
 import wcwidth from "wcwidth";
 
 const INPUT_BAR_HEIGHT = 5;
@@ -607,7 +611,7 @@ export function renderTuiFrame(
     const selectedLoopFrame = state.selectedLoopFrame(view.loop);
     const loopLines = buildLoopFrameLines(view.loop, state, expandedFrames);
     const loopPane = renderPane(
-      state.pane === "loop" ? "* Agent Loop *" : "Agent Loop",
+      loopPaneTitle(view.loop, state.pane === "loop"),
       layout.loopPaneWidth,
       layout.topHeight,
       visibleWindow(
@@ -671,7 +675,7 @@ export function renderStyledTuiFrame(
 function styleTuiFrameLine(line: string): string {
   let styled = escapeBlessedMarkup(line);
   styled = styled.replace(
-    /(\* Messages \*|\* Agent Loop \*)/gu,
+    /(\* Messages \*|\* Agent Loop[^*]*\*)/gu,
     (_match, label: string) => tagged("cyan-fg", label),
   );
   styled = styled.replace(
@@ -921,24 +925,42 @@ function loopSelectedLine(
 
 function buildLoopDetailLines(frame: LoopFrame | undefined, width: number): string[] {
   if (!frame) return [];
+  const detail = buildLoopFrameDetail(frame);
   const lines = [
-    sanitizeDisplayText(frame.title),
+    sanitizeDisplayText(detail.title),
     "",
-    `step: ${frame.stepIndex}`,
-    `phase: ${frame.phase}`,
-    `status: ${frame.status}`,
-    `time: ${frame.timestamp}`,
+    `id: ${detail.id}`,
+    `step: ${detail.stepIndex}`,
+    `phase: ${detail.phase}`,
+    `status: ${detail.status}`,
+    `time: ${detail.timestamp}`,
   ];
-  if (frame.summary) {
-    lines.push("", "Summary", ...wrapDisplayText(frame.summary, width));
+  if (detail.summary) {
+    lines.push("", "Summary", ...wrapDisplayText(detail.summary, width));
   }
-  if (frame.detail) {
-    lines.push("", "Detail", ...wrapDisplayText(frame.detail.slice(0, 4000), width));
+  if (detail.sections.length > 0) {
+    lines.push("", "Sections");
+    for (const section of detail.sections) {
+      lines.push(`## ${sanitizeDisplayText(section.title)}`);
+      lines.push(...wrapDisplayText(section.content.slice(0, 1200), width));
+    }
+  } else if (detail.rawDetail) {
+    lines.push("", "Detail", ...wrapDisplayText(detail.rawDetail.slice(0, 4000), width));
   }
-  if (frame.logPath) {
-    lines.push("", "Log", frame.logPath);
+  if (detail.logPath) {
+    lines.push("", "Log", detail.logPath);
   }
   return lines;
+}
+
+function loopPaneTitle(frames: LoopFrame[], focused: boolean): string {
+  const summary = summarizeLoopFrames(frames);
+  const parts = [`${summary.total}f`];
+  if (summary.problemCount > 0) {
+    parts.push(`${summary.problemCount}!`);
+  }
+  const label = `Agent Loop ${parts.join(" ")}`;
+  return focused ? `* ${label} *` : label;
 }
 
 function visibleWindow(
