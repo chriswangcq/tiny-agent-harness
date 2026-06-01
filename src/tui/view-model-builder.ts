@@ -25,7 +25,7 @@ import type {
   TuiLimits,
 } from "./types.js";
 import { DEFAULT_TUI_LIMITS } from "./types.js";
-import { redactTerminalWriteText } from "../tools/redaction.js";
+import { redactTerminalWriteDisplayText } from "./redaction.js";
 
 type ConversationProjectionItem = ConversationItem & {
   order: number;
@@ -805,7 +805,7 @@ function redactLargePayloads(value: unknown): unknown {
     ) {
       const redactedArgs = redactLargePayloads(child) as Record<string, unknown>;
       if (typeof child.text === "string") {
-        redactedArgs.text = redactTerminalWriteText(child.text);
+        redactedArgs.text = redactTerminalWriteDisplayText(child.text);
       }
       next[key] = redactedArgs;
       continue;
@@ -815,7 +815,7 @@ function redactLargePayloads(value: unknown): unknown {
       typeof child === "string" &&
       shouldRedactTerminalWriteDetail(value, child)
     ) {
-      next[key] = redactTerminalWriteText(child);
+      next[key] = redactTerminalWriteDisplayText(child);
     } else {
       next[key] = redactLargePayloads(child);
     }
@@ -830,5 +830,5 @@ function shouldRedactTerminalWriteDetail(
   if (parent.name !== "terminal_write" && parent.kind !== "terminal_write") {
     return false;
   }
-  return redactTerminalWriteText(text) !== text;
+  return redactTerminalWriteDisplayText(text) !== text;
 }

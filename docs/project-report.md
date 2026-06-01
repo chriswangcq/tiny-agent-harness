@@ -62,7 +62,7 @@ TUI
 | 外部事件层 | `src/environment`、`src/im` | IM 消息、terminal/skill/environment events、`io_wait`、事件消费游标和 factual reminder。 |
 | 能力 CLI 层 | `src/skill`、`src/code-intel`、`src/cli` | skill discovery/run/review，`codeq` LSP 查询，`im` mock transport，用户命令入口。 |
 | 可观察层 | `src/transcript`、`src/tui`、`src/state` | transcript/state 持久化、文件锁、JSONL ledger、TUI transcript player、debugger domain 和 view model。 |
-| 评估与治理层 | `src/run/recovery.ts`、`src/run/replay.ts`、`src/tools/policy.ts`、`src/tools/redaction.ts`、`src/subagent` | resume/replay/eval case、模型协议诊断、tool policy reviewer、共享脱敏规则和 sub-agent team FSM 基础域。 |
+| 评估与治理层 | `src/run/recovery.ts`、`src/run/replay.ts`、`src/tools/policy.ts`、`src/subagent` | resume/replay/eval case、模型协议诊断、tool policy reviewer 和 sub-agent team FSM 基础域。 |
 
 这套架构的关键特点是：harness 内核不理解每个外部能力的业务语义。它只关心 bash 请求是否合规、是否被审核、是否执行完成、输出在哪里、事件如何进入下一轮模型上下文。
 
@@ -242,7 +242,9 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 默认 CLI runtime 仍使用 `AlwaysApproveReviewer`，这保持 demo 行为不变。但 `src/tools/policy.ts` 已经提供纯 `evaluateToolPolicy(request, options)`，可识别危险 terminal writes、警告网络/全局安装/git push 等高风险动作，并通过 `ToolPolicyReviewer` 适配现有 reviewer port。
 
-`src/tools/redaction.ts` 是共享脱敏核心，覆盖 API key / token / password / secret assignment、Bearer token、私钥块、`sk-`/`ds-` style key、长 terminal_write payload 和 base64-like payload。terminal history 和 TUI detail 已复用这层，避免重复 helper 漂移。
+`src/tui/redaction.ts` 只服务 TUI/display，不属于 agent runtime 历史压缩路径。它覆盖 API key / token / password / secret assignment、Bearer token、私钥块、`sk-`/`ds-` style key、长 terminal_write payload 和 base64-like payload，目的是避免 TUI detail 被敏感文本或长展示字符串污染。
+
+模型可见 agent-loop history 不走这层 display redaction。terminal observation 和 tool-call history 应保持事实完整；真正需要压缩上下文时，应走显式 context compaction，并向模型说明压缩发生了，而不是静默把历史字段替换成 redacted placeholder。
 
 ### 4.12 Sub-agent Team Domain
 

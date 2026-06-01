@@ -1,8 +1,8 @@
-export type RedactionOptions = {
+export type DisplayRedactionOptions = {
   terminalWritePayloadBytes?: number;
 };
 
-export const DEFAULT_REDACTION_OPTIONS: Required<RedactionOptions> = {
+export const DEFAULT_DISPLAY_REDACTION_OPTIONS: Required<DisplayRedactionOptions> = {
   terminalWritePayloadBytes: 512,
 };
 
@@ -18,7 +18,7 @@ const JSON_SECRET_PROPERTY_PATTERN =
 const BEARER_TOKEN_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/gu;
 const SECRET_KEY_PATTERN = /\b(?:sk|ds)-[A-Za-z0-9_-]{16,}\b/gu;
 
-export function redactSensitiveText(text: string): string {
+export function redactSensitiveDisplayText(text: string): string {
   return text
     .replace(PRIVATE_KEY_PATTERN, "[redacted private key]")
     .replace(ENV_SECRET_ASSIGNMENT_PATTERN, (_match, name: string) => {
@@ -34,11 +34,11 @@ export function redactSensitiveText(text: string): string {
     .replace(SECRET_KEY_PATTERN, "[redacted secret]");
 }
 
-export function shouldRedactTerminalWritePayload(
+export function shouldRedactTerminalWriteDisplayPayload(
   text: string,
-  options: RedactionOptions = {},
+  options: DisplayRedactionOptions = {},
 ): boolean {
-  const resolved = { ...DEFAULT_REDACTION_OPTIONS, ...options };
+  const resolved = { ...DEFAULT_DISPLAY_REDACTION_OPTIONS, ...options };
   if (Buffer.byteLength(text, "utf8") > resolved.terminalWritePayloadBytes) {
     return true;
   }
@@ -47,16 +47,16 @@ export function shouldRedactTerminalWritePayload(
   return line.length >= 128 && line.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/u.test(line);
 }
 
-export function terminalWritePayloadPlaceholder(text: string): string {
+export function terminalWriteDisplayPlaceholder(text: string): string {
   return `[redacted terminal_write payload ${Buffer.byteLength(text, "utf8")} bytes]`;
 }
 
-export function redactTerminalWriteText(
+export function redactTerminalWriteDisplayText(
   text: string,
-  options: RedactionOptions = {},
+  options: DisplayRedactionOptions = {},
 ): string {
-  if (shouldRedactTerminalWritePayload(text, options)) {
-    return terminalWritePayloadPlaceholder(text);
+  if (shouldRedactTerminalWriteDisplayPayload(text, options)) {
+    return terminalWriteDisplayPlaceholder(text);
   }
-  return redactSensitiveText(text);
+  return redactSensitiveDisplayText(text);
 }

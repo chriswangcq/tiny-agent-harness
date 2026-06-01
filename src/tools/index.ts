@@ -18,13 +18,5 @@ export {
   type ToolPolicySeverity,
   type ToolPolicyStatus,
 } from "./policy.js";
-export {
-  DEFAULT_REDACTION_OPTIONS,
-  redactSensitiveText,
-  redactTerminalWriteText,
-  shouldRedactTerminalWritePayload,
-  terminalWritePayloadPlaceholder,
-  type RedactionOptions,
-} from "./redaction.js";
 export { AlwaysApproveReviewer, ToolPolicyReviewer } from "./reviewer.js";
 export { ToolCallValidator } from "./validator.js";
