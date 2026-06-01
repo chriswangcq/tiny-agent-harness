@@ -90,7 +90,9 @@ Write exact text bytes to the current PTY session. This tool never accepts a ses
 Use it for shell commands, heredocs, REPL input, interactive answers, and stdin text.
 It does not append Enter unless text contains "\n".
 expectedInputSeq must match the current session's latest terminal.inputSeq.
-By default, wait until a shell/continuation prompt returns or 30s elapses. Timeout does not kill the process.
+By default, the write returns after an immediate one-screen glance.
+Use io_wait to wait for environment events such as session_input_ready or session_returned_to_prompt.
+Timeout does not kill the process.
 The observation is a one-screen terminal glance after the write.
 ```
 
@@ -111,7 +113,7 @@ Schema:
     },
     "waitForReturnMs": {
       "type": "number",
-      "description": "How long to wait for a shell or continuation prompt before returning a timeout observation. Defaults to 30000."
+      "description": "Optional low-level escape hatch: how long to wait for a shell or continuation prompt before returning a timeout observation. Defaults to 0."
     }
   },
   "additionalProperties": false
@@ -127,6 +129,8 @@ Send a terminal key to the current PTY session. This tool never accepts a sessio
 Use it for Enter, EOF-style input, escape/navigation, tab completion, pager keys (space/q), and arrow navigation.
 Use session_interrupt, not terminal_key, for Ctrl-C.
 expectedInputSeq must match the current session's latest terminal.inputSeq.
+By default, the key input returns after an immediate one-screen glance.
+Use io_wait to wait for environment events when the key starts or advances a command.
 The observation is a one-screen terminal glance after the key input.
 ```
 
@@ -146,7 +150,7 @@ Schema:
     },
     "waitForReturnMs": {
       "type": "number",
-      "description": "How long to wait for a shell or continuation prompt before returning a timeout observation. Defaults to 30000."
+      "description": "Optional low-level escape hatch: how long to wait for a shell or continuation prompt before returning a timeout observation. Defaults to 0."
     }
   },
   "additionalProperties": false
@@ -262,6 +266,7 @@ Interrupt the current PTY session, equivalent to Ctrl-C/SIGINT semantics.
 This tool never accepts a session id; foreground-impacting actions only affect current session.
 Use it when a command is stuck, a REPL is waiting, or a long-running process should be stopped.
 Timeout does not terminate the session; it only reports that no prompt returned in time.
+By default, interrupt returns after an immediate one-screen glance; use io_wait for follow-up terminal events.
 The observation is a one-screen terminal glance after the interrupt.
 ```
 
@@ -278,7 +283,7 @@ Schema:
     },
     "waitForReturnMs": {
       "type": "number",
-      "description": "How long to wait for a shell or continuation prompt before returning a timeout observation. Defaults to 30000."
+      "description": "Optional low-level escape hatch: how long to wait for a shell or continuation prompt before returning a timeout observation. Defaults to 0."
     }
   },
   "additionalProperties": false
@@ -357,6 +362,8 @@ Description:
 Pause the agent loop until an external environment event arrives.
 This is a tool call, not a shell command. Never run it inside the terminal.
 Use after sending a user-visible reply, when waiting for user input, approval, webhook, sub-agent result, or another environment event.
+Omit condition, or use condition.kind=event with no filters, to wake on any new environment event.
+Use optional source, eventKind, session, channel, or minLevel filters only when a narrower wait is intentional.
 ```
 
 Schema:
@@ -375,7 +382,37 @@ Schema:
           "type": "object",
           "required": ["kind"],
           "properties": {
-            "kind": { "const": "new_environment_event" }
+            "kind": { "const": "event" },
+            "eventKind": {
+              "enum": [
+                "user_message_received",
+                "skill_run_started",
+                "skill_run_closed",
+                "skill_review_pending",
+                "skill_review_completed",
+                "session_output_available",
+                "session_input_ready",
+                "session_focused",
+                "session_restarted",
+                "session_continuation_prompt",
+                "session_returned_to_prompt",
+                "session_terminated",
+                "session_unsynced"
+              ]
+            },
+            "source": {
+              "enum": ["im", "skill", "session"]
+            },
+            "session": {
+              "type": "string"
+            },
+            "channel": {
+              "type": "string"
+            },
+            "minLevel": {
+              "type": "number",
+              "description": "Match events where event.level >= minLevel. Missing event level defaults to 1."
+            }
           },
           "additionalProperties": false
         },

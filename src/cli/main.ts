@@ -93,12 +93,56 @@ function parseCliOptions(args: string[]): {
   return { channel, task, stateDir, resumeRunId };
 }
 
-function createCliTerminalPort(channel: string) {
+type RunScopedPaths = {
+  imDir: string;
+  skillRunsDir: string;
+  sessionsDir: string;
+  environmentDir: string;
+  environmentEventsPath: string;
+};
+
+function ensureRunScopedPaths(runDir: string): RunScopedPaths {
+  const paths: RunScopedPaths = {
+    imDir: path.join(runDir, "im"),
+    skillRunsDir: path.join(runDir, "skill-runs"),
+    sessionsDir: path.join(runDir, "sessions"),
+    environmentDir: path.join(runDir, "environment"),
+    environmentEventsPath: path.join(runDir, "environment", "events.jsonl"),
+  };
+  for (const dir of [
+    paths.imDir,
+    paths.skillRunsDir,
+    paths.sessionsDir,
+    paths.environmentDir,
+  ]) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return paths;
+}
+
+function createCliTerminalPort(options: {
+  channel: string;
+  runId: string;
+  runDir: string;
+  paths: RunScopedPaths;
+  skillsDir: string;
+  transcriptPath: string;
+}) {
   const runtime = new ManagedTerminalRuntime({
     defaultSessionId: "default",
     cwd: process.cwd(),
     promptNonce: `cli-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    env: buildCliTerminalEnv(process.env, channel),
+    env: buildCliTerminalEnv(process.env, options.channel, {
+      runId: options.runId,
+      runDir: options.runDir,
+      stateDir: options.runDir,
+      imDir: options.paths.imDir,
+      skillRunsDir: options.paths.skillRunsDir,
+      sessionsDir: options.paths.sessionsDir,
+      skillsDir: options.skillsDir,
+      transcriptPath: options.transcriptPath,
+      environmentEventsPath: options.paths.environmentEventsPath,
+    }),
     screenRows: 24,
     screenCols: 80,
     postWriteReadDelayMs: 100,
@@ -485,7 +529,6 @@ async function main(): Promise<void> {
     return;
   }
 
-
   // --- Parse run arguments ---
   // Supported forms:
   //   tiny-agent "fix the tests"                     (legacy positional)
@@ -549,9 +592,7 @@ async function main(): Promise<void> {
   const baseDir = path.resolve(stateDirArg ?? ".tiny-agent");
   const runsDir = path.join(baseDir, "runs");
   const skillsDir = path.join(baseDir, "skills");
-  const skillRunsDir = path.join(baseDir, "skill-runs");
-  const imDir = path.join(baseDir, "im");
-  for (const dir of [runsDir, skillsDir, skillRunsDir, imDir]) {
+  for (const dir of [runsDir, skillsDir]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 
@@ -570,8 +611,9 @@ async function main(): Promise<void> {
 
   const environment = new Environment();
   environment.setBoundChannel(channel);
-  const imTransport = new ImCliTransport({ baseDir: imDir });
-  const skillRunStore = new SkillRunStore({ skillRunsDir, skillsDir });
+
+  let imTransport: ImCliTransport;
+  let skillRunStore: SkillRunStore;
 
   // --- Create or load run/session state ---
   let runId: string;
@@ -582,9 +624,18 @@ async function main(): Promise<void> {
   let initialHistory: ModelContextItem[] = [];
   let task: string;
   let imCursor: string | undefined;
+  let runPaths: RunScopedPaths;
 
   if (resumeRunId) {
     runDir = resolveRunDir(runsDir, resumeRunId);
+    runPaths = ensureRunScopedPaths(runDir);
+    imTransport = new ImCliTransport({ baseDir: runPaths.imDir });
+    skillRunStore = new SkillRunStore({
+      skillRunsDir: runPaths.skillRunsDir,
+      skillsDir,
+    });
+    environment.setEventsPath(runPaths.environmentEventsPath);
+
     transcript = new TranscriptStore(runDir);
     const loadedState = transcript.loadState<AgentRunStateData>();
     if (loadedState === null) {
@@ -602,6 +653,14 @@ async function main(): Promise<void> {
   } else {
     runId = `run-${Date.now()}`;
     runDir = path.join(runsDir, runId);
+    runPaths = ensureRunScopedPaths(runDir);
+    imTransport = new ImCliTransport({ baseDir: runPaths.imDir });
+    skillRunStore = new SkillRunStore({
+      skillRunsDir: runPaths.skillRunsDir,
+      skillsDir,
+    });
+    environment.setEventsPath(runPaths.environmentEventsPath);
+
     transcriptPath = path.join(runDir, "transcript.jsonl");
     transcript = new TranscriptStore(runDir);
     const initialDisplayTask =
@@ -695,7 +754,14 @@ async function main(): Promise<void> {
     model,
     validator,
     reviewer,
-    terminal: createCliTerminalPort(channel),
+    terminal: createCliTerminalPort({
+      channel,
+      runId,
+      runDir,
+      paths: runPaths,
+      skillsDir,
+      transcriptPath,
+    }),
     modelContext,
     session: createCliRunSessionPort(new RunSessionStore(runDir)),
     tools: [...STATIC_TOOL_CATALOG],

@@ -305,24 +305,30 @@ type ModelTurn =
     };
 ```
 
-First version supports only one wait condition:
+`io_wait` is normalized as a first-class model turn. It can wait for any new environment event or add optional filters:
 
 ```ts
 type IoWaitRequest = {
   reason?: string;
-  condition:
+  condition?:
     | {
         kind: "event";
-        eventKind: EnvironmentEvent["kind"];
+        eventKind?: EnvironmentEvent["kind"];
         source?: EnvironmentEvent["source"];
+        session?: string;
+        channel?: string;
+        minLevel?: number;
       }
     | {
         kind: "new_user_message";
-        channel: string;
+        channel?: string;
         cursor?: string;
+        minLevel?: number;
       };
 };
 ```
+
+Omitting `condition`, or emitting `{ kind: "event" }`, wakes on any new environment event after the wait starts.
 
 Because FIM does not provide provider-generated tool call ids, the harness creates them:
 

@@ -6,6 +6,7 @@ import type {
   TerminalRuntimeSnapshot,
   TerminalServiceConfig,
   TerminalServicePorts,
+  PtyReadOptions,
 } from "../src/application/terminal-ports.js";
 import { createTerminalState } from "../src/terminal/state.js";
 import type { TerminalScreen, TerminalState } from "../src/terminal/index.js";
@@ -65,6 +66,7 @@ function makePorts(options: {
   ports: TerminalServicePorts;
   current: () => string;
   writes: Array<{ session: string; data: string }>;
+  readCalls: Array<{ session: string; cursor?: string; options?: PtyReadOptions }>;
   saves: TerminalRuntimeSnapshot[];
   restarts: Array<{ session: string; cwd?: string }>;
   interrupts: string[];
@@ -81,6 +83,7 @@ function makePorts(options: {
   }
 
   const writes: Array<{ session: string; data: string }> = [];
+  const readCalls: Array<{ session: string; cursor?: string; options?: PtyReadOptions }> = [];
   const saves: TerminalRuntimeSnapshot[] = [];
   const restarts: Array<{ session: string; cwd?: string }> = [];
   const interrupts: string[] = [];
@@ -88,7 +91,8 @@ function makePorts(options: {
 
   return {
     current: () => currentSession,
-    writes,
+	    writes,
+	    readCalls,
     saves,
     restarts,
     interrupts,
@@ -98,10 +102,11 @@ function makePorts(options: {
         write: async (session, data) => {
           writes.push({ session, data });
         },
-        read: async (session) => {
-          const chunk = reads.get(session)?.shift() ?? "";
-          return makeRead(session, chunk);
-        },
+	        read: async (session, cursor, readOptions) => {
+	          readCalls.push({ session, cursor, options: readOptions });
+	          const chunk = reads.get(session)?.shift() ?? "";
+	          return makeRead(session, chunk);
+	        },
         interrupt: async (session) => {
           interrupts.push(session);
         },
@@ -177,6 +182,89 @@ describe("TerminalService", () => {
     });
     expect(["output", "Tail"].join("") in observation).toBe(false);
     expect(["output", "Preview"].join("") in observation).toBe(false);
+  });
+
+  it("does not wait by default for command-like input", async () => {
+    const { ports, readCalls } = makePorts({
+      currentSession: "work",
+      snapshots: [makeSnapshot("work", terminal(1))],
+    });
+    ports.pty.read = async (session, cursor, readOptions) => {
+      readCalls.push({ session, cursor, options: readOptions });
+      return makeRead(session, "still running\n");
+    };
+    const service = new TerminalService(ports, makeConfig());
+
+    const observation = await service.handleAction({
+      kind: "terminal_write",
+      expectedInputSeq: 1,
+      text: "npm test\n",
+    });
+
+    expect(readCalls[0]).toMatchObject({
+      session: "work",
+      cursor: "0",
+      options: {
+        waitForPromptMs: 0,
+        afterPromptSeq: 1,
+      },
+    });
+    expect(observation).toMatchObject({
+      result: "ok",
+      returnedToPrompt: false,
+    });
+  });
+
+  it("honors explicit waitForReturnMs and can report timeout", async () => {
+    const { ports, readCalls } = makePorts({
+      currentSession: "work",
+      snapshots: [makeSnapshot("work", terminal(1))],
+    });
+    ports.pty.read = async (session, cursor, readOptions) => {
+      readCalls.push({ session, cursor, options: readOptions });
+      return {
+        ...makeRead(session, "still running\n"),
+        timedOut: true,
+      };
+    };
+    const service = new TerminalService(ports, makeConfig());
+
+    const observation = await service.handleAction({
+      kind: "terminal_write",
+      expectedInputSeq: 1,
+      text: "npm test\n",
+      waitForReturnMs: 30_000,
+    });
+
+    expect(readCalls[0]).toMatchObject({
+      session: "work",
+      cursor: "0",
+      options: {
+        waitForPromptMs: 30_000,
+        afterPromptSeq: 1,
+      },
+    });
+    expect(observation).toMatchObject({
+      result: "timeout",
+      returnedToPrompt: false,
+      message: expect.stringContaining("Timed out waiting 30000ms"),
+    });
+  });
+
+  it("does not wait by default for partial terminal text", async () => {
+    const { ports, readCalls } = makePorts({
+      currentSession: "work",
+      snapshots: [makeSnapshot("work", terminal(1))],
+    });
+    const service = new TerminalService(ports, makeConfig());
+
+    await service.handleAction({
+      kind: "terminal_write",
+      expectedInputSeq: 1,
+      text: "echo",
+    });
+
+    expect(readCalls[0]?.options?.waitForPromptMs).toBe(0);
   });
 
   it("rejects stale input sequences and refreshes the snapshot before reporting", async () => {

@@ -37,19 +37,25 @@ function resolveStateDir(argv: string[]): string {
       return argv[i + 1]!;
     }
   }
+  if (process.env.TAH_STATE_DIR) {
+    return process.env.TAH_STATE_DIR;
+  }
   return path.resolve(".tiny-agent");
 }
 
 function buildSkillCli(stateDir: string): SkillCli {
-  const skillsDir = path.join(stateDir, "skills");
-  const skillRunsDir = path.join(stateDir, "skill-runs");
+  const skillsDir = process.env.TAH_SKILLS_DIR ?? path.join(stateDir, "skills");
+  const skillRunsDir =
+    process.env.TAH_SKILL_RUNS_DIR ?? path.join(stateDir, "skill-runs");
   fs.mkdirSync(skillsDir, { recursive: true });
   fs.mkdirSync(skillRunsDir, { recursive: true });
 
   const store = new SkillRunStore({ skillRunsDir, skillsDir });
   const discovery = new SkillDiscovery({ skillsDir });
 
-  const envEventsPath = path.join(stateDir, "environment", "events.jsonl");
+  const envEventsPath =
+    process.env.TAH_ENVIRONMENT_EVENTS_PATH ??
+    path.join(stateDir, "environment", "events.jsonl");
   const environment: EnvironmentPort = {
     appendEvent(event: EnvironmentEvent): void {
       const dir = path.dirname(envEventsPath);

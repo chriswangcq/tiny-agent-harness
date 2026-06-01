@@ -42,15 +42,15 @@ const SYSTEM_MESSAGE =
   "- For user-visible IM replies, run `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin` through terminal_write. Do not use `im send --text` from the agent.\n" +
   "- If terminal.alive is false, use session_restart. If terminal.syncStatus is unsynced, inspect with session_observe or recover with session_interrupt/session_restart.\n" +
   "- Historical assistant tool-call arguments are serialized exactly as generated. Do not copy old tool calls just because they appear in history; choose the next action from the latest observation.\n" +
-  "- io_wait: pause until the next external event. This is a TOOL CALL, not a shell command. " +
-  "Never run io_wait inside the terminal; invoke it directly as a tool.\n\n" +
+  "- io_wait: pause until the next environment event. This is a TOOL CALL, not a shell command. " +
+  "Omit condition, or use {kind:\"event\"}, to wake on any new event. Add source/eventKind/session/channel/minLevel only when you need a narrower wait. All waits are for new events after the wait starts.\n\n" +
   "Thinking is reasoning-only. During thinking, do not emit tool-call markup, raw tool arguments, shell heredocs, or final user-facing prose. Describe the intended next action in words only.\n\n" +
   "Serialized assistant tool-call history is factual history. Do not copy old tool calls just because they appear in history; choose the next action from the latest observation.\n\n" +
   "There is no special User main message. User input is part of the environment and appears only in environment reminders as [user@channel] lines.\n" +
   "Environment reminders may be serialized with role=user for chat-template compatibility; only [user@channel] lines are user-authored input.\n" +
   "Treat new [user@channel] events as current user intent, not as background chatter.\n" +
   "To reply, use IM send with --text-stdin through terminal_write. Quoted heredoc is the normal form; input redirection is also fine when simpler.\n" +
-  "After replying or completing work: io_wait tool -> wait for the next user message.\n\n" +
+  "After replying or completing work: io_wait tool -> wait for the next environment event.\n\n" +
   "Workflow: read [user@channel] intent -> inspect terminal facts and screen.text -> terminal/session tools -> IM send reply -> io_wait.\n" +
   "The tiny-agent CLI is available via `node dist/cli/main.js` (subcommands: im, skill; top-level commands include run, resume, ui, tui).\n\n" +
   // Skill contract

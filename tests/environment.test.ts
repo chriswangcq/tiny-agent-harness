@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { Environment } from "../src/environment/environment.js";
 import type { EnvironmentEvent } from "../src/types/environment.js";
 
@@ -146,14 +149,13 @@ describe("Environment", () => {
     await expect(promise).resolves.toEqual(matching);
   });
 
-  it("waitFor resolves immediately if matching event exists", async () => {
+  it("waitFor ignores matching events that existed before registration", async () => {
     const env = new Environment();
 
-    // Append a matching event before calling waitFor
-    const event = makeUserMessageEvent("e1", "already here");
-    env.appendEvent(event);
+    const historical = makeUserMessageEvent("e1", "already here");
+    env.appendEvent(historical);
 
-    const resolved = await env.waitFor({
+    const promise = env.waitFor({
       runId: "run-1",
       wait: {
         reason: "waiting for user",
@@ -161,15 +163,18 @@ describe("Environment", () => {
       },
     });
 
-    expect(resolved).toEqual(event);
+    const future = makeUserMessageEvent("e2", "new event");
+    env.appendEvent(future);
+
+    await expect(promise).resolves.toEqual(future);
   });
 
-  it("waitFor immediate satisfaction does not consume the matched existing event", async () => {
+  it("waitFor satisfaction does not consume historical or matched future events", async () => {
     const env = new Environment();
-    const event = makeUserMessageEvent("e1", "already here");
-    env.appendEvent(event);
+    const historical = makeUserMessageEvent("e1", "already here");
+    env.appendEvent(historical);
 
-    const resolved = await env.waitFor({
+    const promise = env.waitFor({
       runId: "run-1",
       wait: {
         reason: "waiting for user",
@@ -177,8 +182,63 @@ describe("Environment", () => {
       },
     });
 
-    expect(resolved).toEqual(event);
-    expect(env.consumeSince({ runId: "run-1" })).toEqual([event]);
+    const future = makeUserMessageEvent("e2", "future");
+    env.appendEvent(future);
+
+    await expect(promise).resolves.toEqual(future);
+    expect(env.consumeSince({ runId: "run-1" })).toEqual([historical, future]);
+  });
+
+  it("waitFor with no condition wakes on any future environment event", async () => {
+    const env = new Environment();
+
+    const promise = env.waitFor({
+      runId: "run-1",
+      wait: { reason: "any event" },
+    });
+
+    const event = makeUserMessageEvent("e-any", "wake");
+    env.appendEvent(event);
+
+    await expect(promise).resolves.toEqual(event);
+  });
+
+  it("waitFor supports source and minLevel filters", async () => {
+    const env = new Environment();
+
+    const promise = env.waitFor({
+      runId: "run-1",
+      wait: {
+        reason: "important session event",
+        condition: { kind: "event", source: "session", minLevel: 10 },
+      },
+    });
+
+    env.appendEvent({
+      id: "session-low",
+      kind: "session_output_available",
+      source: "session",
+      timestamp: "2026-05-25T12:00:00Z",
+      session: "default",
+      currentSession: "default",
+      request: "session_observe",
+      inputSeq: 1,
+      level: 0,
+    });
+    const matching: EnvironmentEvent = {
+      id: "session-ready",
+      kind: "session_input_ready",
+      source: "session",
+      timestamp: "2026-05-25T12:00:01Z",
+      session: "default",
+      currentSession: "default",
+      request: "session_observe",
+      inputSeq: 2,
+      level: 10,
+    };
+    env.appendEvent(matching);
+
+    await expect(promise).resolves.toEqual(matching);
   });
 
   it("renderReminder formats events", () => {
@@ -266,5 +326,43 @@ describe("Environment", () => {
   it("renderReminder returns empty string for no events", () => {
     const reminder = Environment.renderReminder([]);
     expect(reminder).toBe("");
+  });
+
+  it("waitFor observes events appended by another environment instance through JSONL", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "environment-jsonl-"));
+    try {
+      const eventsPath = path.join(dir, "events.jsonl");
+      const writer = new Environment();
+      writer.setEventsPath(eventsPath);
+      const reader = new Environment();
+      reader.setEventsPath(eventsPath);
+
+      const promise = reader.waitFor({
+        runId: "run-reader",
+        wait: {
+          reason: "wait for skill",
+          condition: {
+            kind: "event",
+            eventKind: "skill_run_started",
+            source: "skill",
+          },
+        },
+      });
+
+      const event: EnvironmentEvent = {
+        id: "skill-jsonl-001",
+        kind: "skill_run_started",
+        source: "skill",
+        timestamp: "2026-05-25T12:00:00Z",
+        skillRunId: "skillrun-001",
+        skill: "coding-review",
+        statePath: ".tiny-agent/runs/run-1/skill-runs/skillrun-001/state.json",
+      };
+      writer.appendEvent(event);
+
+      await expect(promise).resolves.toEqual(event);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -145,6 +145,7 @@ describe("ManagedTerminalRuntime", () => {
         kind: "terminal_write",
         expectedInputSeq: 0,
         text: "pwd\n",
+        waitForReturnMs: 0,
       },
     });
 
@@ -207,6 +208,7 @@ describe("ManagedTerminalRuntime", () => {
         kind: "terminal_write",
         expectedInputSeq: 0,
         text: "pwd\n",
+        waitForReturnMs: 0,
       },
     });
     setTimeout(() => {
@@ -321,6 +323,7 @@ describe("ManagedTerminalRuntime", () => {
         kind: "terminal_write",
         expectedInputSeq: 0,
         text: largeText,
+        waitForReturnMs: 0,
       },
     });
 

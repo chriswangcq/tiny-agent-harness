@@ -70,10 +70,11 @@ export class ManagedTerminalRuntime {
           }
           await delay(this.options.postWriteReadDelayMs ?? DEFAULT_POST_WRITE_READ_DELAY_MS);
         },
-        read: async (session, cursor) => {
+        read: async (session, cursor, options) => {
           const entry = this.ensureSession(session);
           await this.drainStartup(entry);
           const start = parseCursor(cursor);
+          const timedOut = await this.waitForPromptIfRequested(entry, options);
           const output = entry.pty.readOutputSince(start);
           const screen = await entry.pty.readScreen();
           return {
@@ -91,6 +92,7 @@ export class ManagedTerminalRuntime {
               truncated: screen.hasScrollback,
               logRef: { path: `managed-pty://${session}` },
             },
+            ...(timedOut ? { timedOut } : {}),
           };
         },
         interrupt: async (session) => {
@@ -201,6 +203,34 @@ export class ManagedTerminalRuntime {
   private screenCols(): number {
     return this.options.screenCols ?? 80;
   }
+
+  private async waitForPromptIfRequested(
+    entry: RuntimeSession,
+    options:
+      | {
+          waitForPromptMs?: number;
+          afterPromptSeq?: number;
+        }
+      | undefined,
+  ): Promise<boolean> {
+    const timeoutMs = options?.waitForPromptMs ?? 0;
+    if (timeoutMs <= 0) {
+      return false;
+    }
+    const afterPromptSeq =
+      options?.afterPromptSeq ??
+      entry.snapshot.terminal.lastShellPrompt?.promptSeq ??
+      -1;
+    const returned = await waitUntil(
+      () => {
+        const terminal = entry.pty.snapshot.terminal;
+        const promptSeq = terminal.lastShellPrompt?.promptSeq ?? -1;
+        return !terminal.alive || promptSeq > afterPromptSeq;
+      },
+      timeoutMs,
+    );
+    return !returned;
+  }
 }
 
 function waitBetweenPtyWrites(delayMs: number): Promise<void> {
@@ -217,18 +247,22 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitUntil(condition: () => boolean, timeoutMs: number): Promise<void> {
+async function waitUntil(
+  condition: () => boolean,
+  timeoutMs: number,
+): Promise<boolean> {
   if (condition() || timeoutMs <= 0) {
-    return;
+    return condition();
   }
 
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     await delay(Math.min(5, deadline - Date.now()));
     if (condition()) {
-      return;
+      return true;
     }
   }
+  return condition();
 }
 
 function hasObservedStartupPrompt(snapshot: TerminalRuntimeSnapshot): boolean {

@@ -190,6 +190,7 @@ export type TerminalObservation = {
   result: "ok" | "rejected" | "timeout" | "interrupted";
   returnedToPrompt: boolean;
   screen: TerminalScreen;
+  terminalEvents?: TerminalEvent[];
   errorCode?: TerminalErrorCode;
   message?: string;
 };

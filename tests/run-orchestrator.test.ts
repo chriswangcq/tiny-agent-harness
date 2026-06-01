@@ -115,6 +115,7 @@ function makeRun(options?: {
   const histories: ModelContextItem[][] = [];
   const consumedCalls: Array<{ runId: string; afterEventId?: string }> = [];
   const waitCalls: Array<{ runId: string; wait: IoWaitRequest }> = [];
+  const appendedEvents: EnvironmentEvent[] = [];
   const reviewCalls: ToolRequest[] = [];
   const terminalCalls: ToolRequest[] = [];
   const sessionSaves: ModelContextItem[][] = [];
@@ -227,7 +228,9 @@ function makeRun(options?: {
     },
     tools: [...STATIC_TOOL_CATALOG],
     environment: options?.environment ?? {
-      appendEvent() {},
+      appendEvent(event) {
+        appendedEvents.push(event);
+      },
       consumeSince(call) {
         consumedCalls.push(call);
         const events = options?.envEvents ?? [];
@@ -254,6 +257,7 @@ function makeRun(options?: {
     histories,
     consumedCalls,
     waitCalls,
+    appendedEvents,
     reviewCalls,
     terminalCalls,
     sessionSaves,
@@ -1214,6 +1218,191 @@ describe("RunOrchestrator", () => {
           type: "io_wait_satisfied",
           wait,
           event,
+        }),
+      ]),
+    );
+  });
+
+  it("allows bare event io_wait conditions as any-event waits", async () => {
+    const wait: IoWaitRequest = {
+      reason: "waiting for any environment event",
+      condition: { kind: "event" },
+    };
+    const event: EnvironmentEvent = {
+      id: "env-any",
+      kind: "user_message_received",
+      source: "im",
+      timestamp: "2026-05-25T12:00:00.000Z",
+      message: {
+        id: "msg-any",
+        channel: "default",
+        role: "user",
+        text: "anything changed",
+        createdAt: "2026-05-25T12:00:00.000Z",
+      },
+    };
+    const { orchestrator, transcript, waitCalls } = makeRun({
+      outputs: [ioWaitOutput(wait)],
+      waitEvent: event,
+    });
+
+    const endState = await orchestrator.run();
+
+    expect(endState.status).toBe("failed");
+    expect(waitCalls).toHaveLength(1);
+    expect(waitCalls[0]?.wait).toEqual(wait);
+    expect(readTranscript(transcript)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "io_wait_started",
+          wait,
+        }),
+        expect.objectContaining({
+          type: "io_wait_satisfied",
+          wait,
+          event,
+        }),
+      ]),
+    );
+  });
+
+  it("records terminal prompt returns as session environment events", async () => {
+    const toolCall: InternalToolCall = {
+      id: "tool-returned",
+      name: "terminal_write",
+      arguments: { expectedInputSeq: 1, text: "pwd\n" },
+    };
+    const { orchestrator, appendedEvents } = makeRun({
+      outputs: [toolOutput(toolCall)],
+      terminalObservation: {
+        currentSession: "default",
+        observedSession: "default",
+        terminal: terminal(2),
+        request: "terminal_write",
+        result: "ok",
+        returnedToPrompt: true,
+        terminalEvents: [
+          {
+            kind: "prompt",
+            returnCode: 0,
+            cwd: "/repo",
+            promptSeq: 3,
+            promptNonce: "nonce",
+          },
+        ],
+        screen: {
+          text: "/repo\n",
+          rows: 24,
+          cols: 80,
+          truncated: false,
+          logRef: { path: "managed-pty://default" },
+        },
+      },
+    });
+
+    await orchestrator.run();
+
+    expect(appendedEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "session_returned_to_prompt",
+          source: "session",
+          session: "default",
+          request: "terminal_write",
+          inputSeq: 2,
+          promptSeq: 3,
+          level: 10,
+        }),
+        expect.objectContaining({
+          kind: "session_input_ready",
+          source: "session",
+          session: "default",
+          request: "terminal_write",
+          inputSeq: 2,
+          promptSeq: 3,
+          level: 10,
+        }),
+      ]),
+    );
+  });
+
+  it("session environment events can wake a pending io_wait", async () => {
+    const wait: IoWaitRequest = {
+      reason: "wait for terminal readiness",
+      condition: { kind: "event", source: "session", minLevel: 10 },
+    };
+    const environment = new Environment();
+    const appendedEvents: EnvironmentEvent[] = [];
+    const environmentPort: RunPorts["environment"] = {
+      appendEvent(event) {
+        appendedEvents.push(event);
+        environment.appendEvent(event);
+      },
+      consumeSince(options) {
+        return environment.consumeSince(options);
+      },
+      waitFor(options) {
+        return environment.waitFor(options);
+      },
+    };
+    const { orchestrator, terminalCalls, transcript } = makeRun({
+      outputs: [ioWaitOutput(wait)],
+      environment: environmentPort,
+      terminalObservation: {
+        currentSession: "default",
+        observedSession: "default",
+        terminal: terminal(2),
+        request: "session_observe",
+        result: "ok",
+        returnedToPrompt: true,
+        terminalEvents: [
+          {
+            kind: "prompt",
+            returnCode: 0,
+            cwd: "/repo",
+            promptSeq: 4,
+            promptNonce: "nonce",
+          },
+        ],
+        screen: {
+          text: "[repo]$ ",
+          rows: 24,
+          cols: 80,
+          truncated: false,
+          logRef: { path: "managed-pty://default" },
+        },
+      },
+    });
+
+    const endState = await orchestrator.run();
+
+    expect(endState.status).toBe("failed");
+    expect(terminalCalls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolName: "session_observe",
+          toolCallId: expect.stringContaining("session-watch-"),
+        }),
+      ]),
+    );
+    expect(appendedEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "session_input_ready",
+          source: "session",
+          level: 10,
+          promptSeq: 4,
+        }),
+      ]),
+    );
+    expect(readTranscript(transcript)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "io_wait_satisfied",
+          event: expect.objectContaining({
+            source: "session",
+            level: 10,
+          }),
         }),
       ]),
     );

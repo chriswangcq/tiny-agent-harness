@@ -45,6 +45,7 @@ describe("ManagedTerminalRuntime real PTY pacing", () => {
           kind: "terminal_write",
           expectedInputSeq: initial.terminal.inputSeq,
           text: command,
+          waitForReturnMs: 0,
         },
       });
 

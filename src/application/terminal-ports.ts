@@ -27,6 +27,12 @@ export type PtyReadResult = {
   cursor?: string;
   logRef?: LogRef;
   screen: TerminalScreen;
+  timedOut?: boolean;
+};
+
+export type PtyReadOptions = {
+  waitForPromptMs?: number;
+  afterPromptSeq?: number;
 };
 
 export type StructuredLogEvent = {
@@ -39,7 +45,11 @@ export type StructuredLogEvent = {
 
 export interface PtyPort {
   write(session: string, data: string): Promise<void>;
-  read(session: string, cursor?: string): Promise<PtyReadResult>;
+  read(
+    session: string,
+    cursor?: string,
+    options?: PtyReadOptions,
+  ): Promise<PtyReadResult>;
   interrupt(session: string): Promise<void>;
   terminate(session: string): Promise<void>;
   restart(

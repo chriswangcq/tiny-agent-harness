@@ -12,7 +12,7 @@ const WaitForReturnMsProperty: JsonSchema = {
   type: "integer",
   minimum: 0,
   description:
-    "Optional maximum time to stay focused waiting for the terminal to return to a prompt.",
+    "Optional low-level wait for a shell/continuation prompt. Defaults to 0; prefer io_wait for normal event waiting.",
 };
 
 const SessionProperty: JsonSchema = {

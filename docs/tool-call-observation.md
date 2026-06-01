@@ -171,7 +171,11 @@ If inspecting a log would disturb a live foreground process, the agent should `s
 
 ## Return Timing
 
-`terminal_write`, `terminal_key`, and `session_interrupt` wait up to `waitForReturnMs` for a shell or continuation prompt. Default is 30 seconds.
+`terminal_write`, `terminal_key`, and `session_interrupt` return after an immediate one-screen glance by default. They can still wait up to an explicit `waitForReturnMs` for a shell or continuation prompt as a low-level escape hatch, but normal orchestration should use `io_wait` for environment events.
+
+- Default wait budget is `0`.
+- To wait for command completion, use `io_wait` with `source: "session"` and optionally `eventKind: "session_returned_to_prompt"`.
+- To wait until the terminal can accept more input, use `eventKind: "session_input_ready"`.
 
 Timeout means:
 

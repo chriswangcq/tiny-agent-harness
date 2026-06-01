@@ -580,6 +580,15 @@ function formatEnvironmentEventSummary(event: EnvironmentEvent): string {
     case "skill_review_pending":
     case "skill_review_completed":
       return `event=${event.id} ${event.kind} skill=${event.skill}`;
+    case "session_focused":
+    case "session_restarted":
+    case "session_output_available":
+    case "session_input_ready":
+    case "session_continuation_prompt":
+    case "session_returned_to_prompt":
+    case "session_terminated":
+    case "session_unsynced":
+      return `event=${event.id} ${event.kind} session=${event.session}`;
   }
 }
 

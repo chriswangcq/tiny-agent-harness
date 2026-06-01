@@ -77,6 +77,7 @@ export class TerminalService {
 
     return this.readParseSaveObserve(session, snapshot, request, {
       inputAccepted: true,
+      waitForPromptMs: waitForPromptMsForRequest(request),
     });
   }
 
@@ -147,6 +148,7 @@ export class TerminalService {
       session,
       restarted.terminal,
       request,
+      "ok",
       emptyScreen(session),
     );
   }
@@ -173,6 +175,7 @@ export class TerminalService {
       session,
       terminal,
       request,
+      "ok",
       emptyScreen(session),
     );
   }
@@ -240,12 +243,16 @@ export class TerminalService {
     session: string,
     snapshot: TerminalRuntimeSnapshot,
     request: TerminalToolRequest,
-    options: { inputAccepted: boolean },
+    options: { inputAccepted: boolean; waitForPromptMs?: number },
     currentSession = session,
   ): Promise<TerminalObservation> {
     const read = await this.ports.pty.read(
       session,
       snapshot.parserState.totalBytes.toString(),
+      {
+        waitForPromptMs: options.waitForPromptMs,
+        afterPromptSeq: snapshot.terminal.lastShellPrompt?.promptSeq,
+      },
     );
     const applied = this.applyRead(snapshot, read, options);
     const nextSnapshot = applied.snapshot;
@@ -255,8 +262,12 @@ export class TerminalService {
       currentSession,
       nextSnapshot.terminal,
       request,
+      read.timedOut ? "timeout" : "ok",
       read.screen,
       applied.events,
+      read.timedOut
+        ? `Timed out waiting ${options.waitForPromptMs ?? 0}ms for shell prompt. The process may still be running; use session_observe to continue watching.`
+        : undefined,
     );
   }
 
@@ -293,17 +304,20 @@ export class TerminalService {
     currentSession: string,
     terminal: TerminalState,
     request: TerminalToolRequest,
+    result: TerminalObservation["result"],
     screen: TerminalScreen,
     events: readonly TerminalEvent[] = [],
+    message?: string,
   ): TerminalObservation {
     const observation = buildTerminalObservation({
       currentSession,
       observedSession: session,
       terminal,
       request,
-      result: "ok",
+      result,
       screen,
       events,
+      message,
     });
     this.ports.logger.event({
       kind: "terminal.action",
@@ -356,6 +370,18 @@ function renderTerminalInput(
   return renderKey(request.key);
 }
 
+function waitForPromptMsForRequest(
+  request: Extract<
+    TerminalToolRequest,
+    { kind: "terminal_write" | "terminal_key" | "session_interrupt" }
+  >,
+): number | undefined {
+  if (request.waitForReturnMs !== undefined) {
+    return request.waitForReturnMs;
+  }
+  return 0;
+}
+
 function renderKey(key: TerminalKey): string {
   switch (key) {
     case "enter":
@@ -400,6 +426,7 @@ function buildTerminalObservation(input: {
     result: input.result,
     returnedToPrompt: input.events.some((event) => event.kind === "prompt"),
     screen: input.screen,
+    ...(input.events.length === 0 ? {} : { terminalEvents: [...input.events] }),
     ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
     ...(input.message === undefined ? {} : { message: input.message }),
   };

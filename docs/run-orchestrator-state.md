@@ -150,24 +150,32 @@ Invalid output should carry protocol diagnostics when the adapter can identify a
 
 `io_wait` 是 Agent 向自己的 run state machine 提交等待请求。它不是 terminal/session tool，也不执行外部业务动作；orchestrator 会等待 Environment 中出现满足条件的事件，满足后才允许下一轮 model step。
 
-First version supports only new user message wait:
+Current wait conditions support any-event waits plus optional filters:
 
 ```ts
 type IoWaitRequest = {
   reason?: string;
-  condition:
+  condition?:
     | {
         kind: "new_user_message";
-        channel: string;
+        channel?: string;
         cursor?: string;
+        minLevel?: number;
       }
     | {
         kind: "event";
-        eventKind: EnvironmentEvent["kind"];
+        eventKind?: EnvironmentEvent["kind"];
         source?: EnvironmentEvent["source"];
+        session?: string;
+        channel?: string;
+        minLevel?: number;
       };
 };
 ```
+
+Omitting `condition`, or using `{ kind: "event" }`, means "wake on any new environment event". The orchestrator/environment captures the current event cursor when the wait starts, so historical events do not self-wake the run. `minLevel` is an optional importance filter and matches events where `event.level >= minLevel`.
+
+While `waiting_for_io`, the orchestrator also runs a best-effort `session_observe` pump. It does not append hidden tool observations to model history; it only converts new terminal facts into `EnvironmentEvent`s such as `session_output_available`, `session_input_ready`, `session_continuation_prompt`, and `session_returned_to_prompt`.
 
 ## Active Skill Run State
 

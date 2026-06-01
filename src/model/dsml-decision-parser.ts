@@ -1,4 +1,5 @@
 import type { IoWaitRequest } from "../types/environment.js";
+import { validateIoWaitRequest } from "../types/environment.js";
 import type { TerminalToolInput, ToolName } from "../types/index.js";
 import { MODEL_VISIBLE_TOOL_NAMES } from "../types/tools.js";
 
@@ -61,7 +62,7 @@ type Decision =
       name: "io_wait";
       arguments: {
         reason?: string;
-        condition: IoWaitRequest["condition"];
+        condition?: IoWaitRequest["condition"];
       };
     };
 
@@ -287,6 +288,10 @@ function buildDecision(
         "io_wait arguments did not match the expected schema.",
       );
     }
+    const invalidWait = validateIoWaitRequest(args);
+    if (invalidWait !== undefined) {
+      return invalid("invalid_io_wait_arguments", invalidWait);
+    }
     return {
       status: "valid",
       decision: { name: "io_wait", arguments: args },
@@ -355,11 +360,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isIoWaitArguments(
   value: unknown,
-): value is { reason?: string; condition: IoWaitRequest["condition"] } {
-  if (!isRecord(value) || !isRecord(value.condition)) {
+): value is { reason?: string; condition?: IoWaitRequest["condition"] } {
+  if (!isRecord(value)) {
     return false;
   }
   if (value.reason !== undefined && typeof value.reason !== "string") {
+    return false;
+  }
+  if (value.condition === undefined) {
+    return true;
+  }
+  if (!isRecord(value.condition)) {
+    return false;
+  }
+  const kind = value.condition.kind;
+  if (kind !== "new_user_message" && kind !== "event") {
     return false;
   }
   return true;

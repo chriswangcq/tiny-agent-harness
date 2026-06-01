@@ -14,6 +14,10 @@ import type {
   V4Tool,
 } from "../types/index.js";
 import {
+  ENVIRONMENT_EVENT_KINDS,
+  ENVIRONMENT_EVENT_SOURCES,
+} from "../types/environment.js";
+import {
   DSML_INVOKE_CLOSE,
   DSML_INVOKE_OPEN_PREFIX,
   DSML_TOOL_CALLS_CLOSE,
@@ -119,8 +123,8 @@ const IO_WAIT_V4_TOOL: V4Tool = {
   function: {
     name: "io_wait",
     description:
-      "Pause and wait for an external event before continuing. " +
-      "Use this after replying to the user or when you need to wait for user input.",
+      "Pause and wait for any new environment event before continuing. " +
+      "Use optional filters when you need a specific event source, kind, session, channel, or minimum level.",
     parameters: {
       type: "object",
       properties: {
@@ -130,22 +134,40 @@ const IO_WAIT_V4_TOOL: V4Tool = {
         },
         condition: {
           type: "object",
-          description: "The condition to wait for.",
+          description:
+            "Optional event filter. Omit condition, or use {kind:\"event\"}, to wake on any new environment event.",
           properties: {
             kind: {
               type: "string",
               enum: ["new_user_message", "event"],
-              description: "Type of event to wait for.",
+              description: "Type of event to wait for. event means any environment event unless filtered.",
             },
             channel: {
               type: "string",
-              description: "Channel to wait on (for new_user_message).",
+              description: "Optional IM channel filter.",
+            },
+            eventKind: {
+              type: "string",
+              enum: [...ENVIRONMENT_EVENT_KINDS],
+              description: "Optional environment event kind filter.",
+            },
+            source: {
+              type: "string",
+              enum: [...ENVIRONMENT_EVENT_SOURCES],
+              description: "Optional event source filter.",
+            },
+            session: {
+              type: "string",
+              description: "Optional terminal session filter for session events.",
+            },
+            minLevel: {
+              type: "number",
+              description: "Optional minimum event level; matches events where level >= minLevel.",
             },
           },
           required: ["kind"],
         },
       },
-      required: ["condition"],
     },
   },
 };

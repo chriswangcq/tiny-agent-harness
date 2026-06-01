@@ -71,7 +71,7 @@ export class StateRootResolver {
     fs.writeFileSync(projectJsonPath, JSON.stringify(config, null, 2), "utf-8");
 
     // Create standard subdirectories
-    for (const sub of ["locks", "runs", "sessions", "environment", "im", "skills", "skill-runs", "tmp"]) {
+    for (const sub of ["locks", "runs", "skills", "tmp"]) {
       fs.mkdirSync(path.join(resolvedStateDir, sub), { recursive: true });
     }
 

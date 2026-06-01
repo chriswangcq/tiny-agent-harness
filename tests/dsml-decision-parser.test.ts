@@ -87,6 +87,46 @@ describe("parseDsmlDecision", () => {
     });
   });
 
+  it("parses DSML io_wait without a condition as any-event wait", () => {
+    const raw = [
+      `io_wait">`,
+      `<${DSML}parameter name="reason" string="true">waiting</${DSML}parameter>`,
+    ].join("\n");
+
+    const result = parseDsmlDecision(raw);
+
+    expect(result).toEqual({
+      status: "valid",
+      decision: {
+        name: "io_wait",
+        arguments: {
+          reason: "waiting",
+        },
+      },
+    });
+  });
+
+  it("parses DSML io_wait with event level filter", () => {
+    const raw = dsmlIoWait("waiting for important session event", {
+      kind: "event",
+      source: "session",
+      minLevel: 10,
+    });
+
+    const result = parseDsmlDecision(raw);
+
+    expect(result).toEqual({
+      status: "valid",
+      decision: {
+        name: "io_wait",
+        arguments: {
+          reason: "waiting for important session event",
+          condition: { kind: "event", source: "session", minLevel: 10 },
+        },
+      },
+    });
+  });
+
   it.each([
     ["missing opening full-width bar", "</DSML｜parameter>"],
     ["ascii closing bar", "</DSML|parameter>"],

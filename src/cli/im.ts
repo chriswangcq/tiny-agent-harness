@@ -1,4 +1,5 @@
 import * as crypto from "node:crypto";
+import * as path from "node:path";
 import { ImCliTransport } from "../im/transport.js";
 
 type StdinSource = AsyncIterable<string | Buffer | Uint8Array>;
@@ -64,10 +65,13 @@ export async function runIm(
   const textStdin = hasFlag(rest, "text-stdin");
   const { flags } = parseArgs(rest.filter((a) => a !== "--json" && a !== "--text-stdin"));
 
-  const stateDir = flags["state-dir"];
-  const baseDir = stateDir
-    ? `${stateDir}/im`
-    : ".tiny-agent/im";
+  const explicitStateDir = flags["state-dir"];
+  const baseDir = explicitStateDir
+    ? path.join(explicitStateDir, "im")
+    : process.env.TAH_IM_DIR ??
+      (process.env.TAH_STATE_DIR
+        ? path.join(process.env.TAH_STATE_DIR, "im")
+        : ".tiny-agent/im");
 
   const transport = new ImCliTransport({ baseDir });
 

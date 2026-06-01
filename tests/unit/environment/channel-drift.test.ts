@@ -39,9 +39,9 @@ describe("Environment channel drift auto-correct (Option B)", () => {
     env.setBoundChannel("default");
     const waitReq = makeIoWait("cli");
     const origChannel = waitReq.condition.channel;
-    const event = makeUserMsg("default", "hello from default");
-    env.appendEvent(event);
-    const result = await env.waitFor({ runId: "run-1", wait: waitReq });
+    const promise = env.waitFor({ runId: "run-1", wait: waitReq });
+    env.appendEvent(makeUserMsg("default", "hello from default"));
+    const result = await promise;
     expect(result.message.channel).toBe("default");
     // Original wait object NOT mutated
     expect(waitReq.condition.channel).toBe("cli");
@@ -51,18 +51,18 @@ describe("Environment channel drift auto-correct (Option B)", () => {
   it("normal default->default path still works", async () => {
     env.setBoundChannel("default");
     const waitReq = makeIoWait("default");
-    const event = makeUserMsg("default", "hello");
-    env.appendEvent(event);
-    const result = await env.waitFor({ runId: "run-2", wait: waitReq });
+    const promise = env.waitFor({ runId: "run-2", wait: waitReq });
+    env.appendEvent(makeUserMsg("default", "hello"));
+    const result = await promise;
     expect(result.message.channel).toBe("default");
     expect(result.message.text).toBe("hello");
   });
 
   it("without boundChannel, waits use exact condition.channel", async () => {
     const waitReq = makeIoWait("cli");
-    const event = makeUserMsg("cli", "msg");
-    env.appendEvent(event);
-    const result = await env.waitFor({ runId: "run-3", wait: waitReq });
+    const promise = env.waitFor({ runId: "run-3", wait: waitReq });
+    env.appendEvent(makeUserMsg("cli", "msg"));
+    const result = await promise;
     expect(result.message.channel).toBe("cli");
   });
 
