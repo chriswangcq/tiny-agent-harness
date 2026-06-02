@@ -1,7 +1,31 @@
 import { describe, expect, it } from "vitest";
+
+import {
+  conservativePromptTokenCount,
+  DeepSeekV4PromptTokenCounter,
+  type EncodeRunner,
+} from "../src/model/prompt-token-counter.js";
 import { PromptBuilder } from "../src/model/prompt-builder.js";
-import { conservativePromptTokenCount } from "../src/model/prompt-token-counter.js";
 import type { HistoryEntry } from "../src/model/prompt-builder.js";
+import type { V4ChatMessage } from "../src/types/model.js";
+
+function mockRunner(
+  runEncode: (input: string) => string,
+): EncodeRunner {
+  return { runEncode };
+}
+
+function makeMessages(count: number): V4ChatMessage[] {
+  const msgs: V4ChatMessage[] = [];
+  for (let i = 0; i < count; i++) {
+    msgs.push({ role: "user", content: `Hello ${i}` });
+  }
+  return msgs;
+}
+
+function fallbackInput(messages: readonly V4ChatMessage[]): string {
+  return JSON.stringify({ messages, thinking_mode: "thinking" });
+}
 
 describe("prompt token counting helpers", () => {
   it("counts mixed English, Chinese, emoji, whitespace, and punctuation", () => {
@@ -35,5 +59,63 @@ describe("prompt token counting helpers", () => {
     expect(historyOnly.some((message) => message.role === "system")).toBe(false);
     expect(full[0]?.role).toBe("system");
     expect(full.slice(1)).toEqual(historyOnly);
+  });
+});
+
+describe("DeepSeekV4PromptTokenCounter", () => {
+  it("returns real token count when encoder succeeds", () => {
+    const runner = mockRunner((_input) => "hello world");
+    const counter = new DeepSeekV4PromptTokenCounter({
+      encodeRunner: runner,
+    });
+    const count = counter.countMessages(makeMessages(1));
+    expect(count).toBe(5);
+  });
+
+  it("falls back to exact conservative count when encoder throws", () => {
+    const runner = mockRunner((_input) => {
+      throw new Error("ETIMEDOUT");
+    });
+    const counter = new DeepSeekV4PromptTokenCounter({
+      encodeRunner: runner,
+    });
+    const msgs: V4ChatMessage[] = [
+      { role: "user", content: "hi" },
+    ];
+    const count = counter.countMessages(msgs);
+    const expected = conservativePromptTokenCount(fallbackInput(msgs));
+    expect(count).toBe(expected);
+    expect(count).toBeGreaterThan(0);
+  });
+
+  it("returns 0 for empty messages", () => {
+    let called = false;
+    const runner = mockRunner((_input) => {
+      called = true;
+      return "should not be called";
+    });
+    const counter = new DeepSeekV4PromptTokenCounter({
+      encodeRunner: runner,
+    });
+    expect(counter.countMessages([])).toBe(0);
+    expect(called).toBe(false);
+  });
+
+  it("falls back to exact conservative count when encoder returns empty string", () => {
+    const runner = mockRunner((_input) => "");
+    const counter = new DeepSeekV4PromptTokenCounter({
+      encodeRunner: runner,
+    });
+    const msgs = makeMessages(1);
+    const count = counter.countMessages(msgs);
+    const expected = conservativePromptTokenCount(fallbackInput(msgs));
+    expect(count).toBe(expected);
+    expect(count).toBeGreaterThan(0);
+  });
+
+  it("fallback never throws", () => {
+    expect(() => conservativePromptTokenCount("")).not.toThrow();
+    expect(() => conservativePromptTokenCount("hello")).not.toThrow();
+    expect(conservativePromptTokenCount("")).toBe(0);
   });
 });
