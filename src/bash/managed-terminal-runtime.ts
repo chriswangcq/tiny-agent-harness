@@ -1,5 +1,7 @@
 import { TerminalService } from "../application/terminal-service.js";
 import { createTerminalRunPort } from "../application/terminal-run-port.js";
+import { createHash } from "node:crypto";
+import * as path from "node:path";
 import type {
   TerminalRuntimeSnapshot,
   TerminalServicePorts,
@@ -21,6 +23,7 @@ export type ManagedTerminalRuntimeOptions = {
   shell?: string;
   shellArgs?: string[];
   env?: Record<string, string>;
+  sessionsDir?: string;
   screenRows?: number;
   screenCols?: number;
   postWriteReadDelayMs?: number;
@@ -77,11 +80,12 @@ export class ManagedTerminalRuntime {
           const timedOut = await this.waitForPromptIfRequested(entry, options);
           const output = entry.pty.readOutputSince(start);
           const screen = await entry.pty.readScreen();
+          const logRef = entry.pty.snapshot.outputLog?.ref ?? `managed-pty://${session}`;
           return {
             chunk: output.chunk,
             logRef: {
               kind: "log",
-              ref: `managed-pty://${session}`,
+              ref: logRef,
               startOffset: output.startOffset,
               endOffset: output.endOffset,
             },
@@ -90,7 +94,7 @@ export class ManagedTerminalRuntime {
               rows: screen.rows,
               cols: screen.cols,
               truncated: screen.hasScrollback,
-              logRef: { path: `managed-pty://${session}` },
+              logRef: { path: logRef },
             },
             ...(timedOut ? { timedOut } : {}),
           };
@@ -157,7 +161,7 @@ export class ManagedTerminalRuntime {
   }
 
   private restartSession(session: string, cwd?: string): RuntimeSession {
-    this.sessions.get(session)?.pty.terminate();
+    this.sessions.get(session)?.pty.dispose();
 
     const pty = new ManagedPtySession({
       id: session,
@@ -168,6 +172,7 @@ export class ManagedTerminalRuntime {
       env: this.options.env,
       cols: this.screenCols(),
       rows: this.screenRows(),
+      outputLogPath: this.sessionLogPath(session),
       foregroundInspector: this.options.foregroundInspector,
     });
     pty.spawn();
@@ -179,6 +184,13 @@ export class ManagedTerminalRuntime {
     };
     this.sessions.set(session, entry);
     return entry;
+  }
+
+  private sessionLogPath(session: string): string | undefined {
+    if (this.options.sessionsDir === undefined) {
+      return undefined;
+    }
+    return path.join(this.options.sessionsDir, sessionLogFileName(session));
   }
 
   private async drainStartup(entry: RuntimeSession): Promise<void> {
@@ -277,6 +289,12 @@ function parseCursor(cursor: string | undefined): number {
     return 0;
   }
   return Number.parseInt(cursor, 10);
+}
+
+function sessionLogFileName(session: string): string {
+  const slug = session.replace(/[^A-Za-z0-9_.-]+/gu, "_").slice(0, 80) || "session";
+  const hash = createHash("sha256").update(session).digest("hex").slice(0, 10);
+  return `${slug}-${hash}.log`;
 }
 
 function cloneSnapshot(snapshot: TerminalRuntimeSnapshot): TerminalRuntimeSnapshot {

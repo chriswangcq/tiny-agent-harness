@@ -69,19 +69,45 @@ describe("XtermTerminalScreenBuffer", () => {
 
     const screen = await buffer.snapshot();
 
-    expect(screen.text).toContain(">");
+    expect(screen.text).not.toContain("> __TAH_CONT__");
+    expect(screen.text).not.toContain("> ");
     expect(screen.text).not.toContain("__TAH_CONT__");
     buffer.dispose();
   });
+
+  it("removes continuation prompt chrome while preserving heredoc content", async () => {
+    const buffer = new XtermTerminalScreenBuffer({ rows: 6, cols: 80 });
+
+    buffer.write(
+      "__TAH_CONT__ nonce=n reason=unknown seq=1\r\n" +
+        "> 这 9 个失败在我们改动 `state/root.ts` **之前**就已存在\r\n" +
+        "__TAH_CONT__ nonce=n reason=unknown seq=1\r\n" +
+        "> | Terminal | `terminal-*.test.ts` | ✓ |\r\n",
+    );
+
+    const screen = await buffer.snapshot();
+
+    expect(screen.text).toContain(
+      "这 9 个失败在我们改动 `state/root.ts` **之前**就已存在",
+    );
+    expect(screen.text).toContain("| Terminal | `terminal-*.test.ts` | ✓ |");
+    expect(screen.text).not.toContain("**之> 前**");
+    expect(screen.text).not.toContain("> | Terminal");
+    expect(screen.text).not.toContain("__TAH_CONT__");
+    buffer.dispose();
+  });
+
 });
 
 describe("stripManagedShellScreenNoise", () => {
   it("holds split marker prefixes until the line can be classified", () => {
     const first = stripManagedShellScreenNoise("__TAH_PRO");
-    expect(first).toEqual({ output: "", pending: "__TAH_PRO" });
+    expect(first.output).toBe("");
+    expect(first.pending).toBe("__TAH_PRO");
 
     const second = stripManagedShellScreenNoise(
-      `${first.pending}MPT__ nonce=n rc=0 cwd=/ seq=1\r\n$ `,
+      "MPT__ nonce=n rc=0 cwd=/ seq=1\r\n$ ",
+      first.state,
     );
     expect(second.output).toBe("$ ");
     expect(second.pending).toBe("");
@@ -89,12 +115,14 @@ describe("stripManagedShellScreenNoise", () => {
 
   it("holds split marker prefixes after a visible shell prompt prefix", () => {
     const first = stripManagedShellScreenNoise("> __TAH_CO");
-    expect(first).toEqual({ output: "", pending: "> __TAH_CO" });
+    expect(first.output).toBe("");
+    expect(first.pending).toBe("> __TAH_CO");
 
     const second = stripManagedShellScreenNoise(
-      `${first.pending}NT__ nonce=n reason=unknown seq=1\r\n> `,
+      "NT__ nonce=n reason=unknown seq=1\r\n> ",
+      first.state,
     );
-    expect(second.output).toBe("> ");
+    expect(second.output).toBe("");
     expect(second.pending).toBe("");
   });
 

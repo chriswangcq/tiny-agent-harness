@@ -8,7 +8,7 @@
 2. PTY 是字节和按键流，不是 shell line API；Enter 是 `\n` 或 `terminal_key({ key: "enter" })`。
 3. `terminal_write` / `terminal_key` 没有 `session` 参数，只能写 current session。
 4. `session_focus` 是改变 current session 的唯一常规入口。
-5. `session_observe` 返回 current 或指定 session 的一屏 terminal viewport，不改变 current session。
+5. `session_observe` 返回 current 或指定 session 的一屏 semantic terminal viewport，不改变 current session。
 6. Observation 不是日志分页 API。完整输出写入 session log；需要更多历史时，agent 使用 bash 原生命令读取日志。
 7. Tool review 仍位于执行前；demo 模式可以默认 approve。
 8. `io_wait` 是 run state decision，不是 shell 命令，也不是 PTY control。
@@ -155,19 +155,25 @@ type TerminalFacts = {
 };
 ```
 
-`screen.text` is a terminal viewport snapshot, not a log tail. It should fit at most one configured terminal screen, such as `rows=30`, `cols=120`. The implementation may keep an internal scrollback buffer, but the model-facing observation should not expose arbitrary offsets, `sinceOutputOffset`, `newOutputBytes`, or page-sized history.
+`screen.text` is a semantic terminal viewport snapshot, not a log tail. It should fit at most one configured terminal screen, such as `rows=30`, `cols=120`. Managed shell markers and continuation prompt chrome are stripped from this model-facing viewport; the main prompt remains visible to preserve cwd/user orientation. Raw PTY bytes remain auditable through `screen.logRef.path`. In the CLI runtime this path is a run-scoped file such as `.tiny-agent/runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log`; unconfigured tests may use a virtual fallback. The implementation may keep an internal scrollback buffer, but the model-facing observation should not expose arbitrary offsets, `sinceOutputOffset`, `newOutputBytes`, or page-sized history.
 
 `returnedToPrompt` is the compact success signal for normal command sequencing: it means the latest observation saw a shell or continuation prompt. The agent should still inspect `screen.text` and `terminal.lastShellPrompt` when deciding the next input.
 
 `screen.truncated` means the screen is not the full output history. The agent should read `screen.logRef.path` with bash-native commands when it needs more context:
 
 ```bash
-tail -n 200 .tiny-agent/sessions/default/output.log
-rg "error|failed" .tiny-agent/sessions/default/output.log
-sed -n '120,180p' .tiny-agent/sessions/default/output.log
+tail -n 200 <screen.logRef.path>
+rg "error|failed" <screen.logRef.path>
+sed -n '120,180p' <screen.logRef.path>
 ```
 
 If inspecting a log would disturb a live foreground process, the agent should `session_focus` a scratch/default shell first, then run the log-inspection command there.
+
+## Terminated Sessions
+
+`session_terminate` kills the PTY process and records `terminal.alive=false` plus `terminal.termination`. The session remains inspectable: `session_observe` returns the retained semantic screen/log path and `session_list` includes the dead session snapshot.
+
+Dead sessions do not accept foreground input. `terminal_write`, `terminal_key`, and `session_interrupt` reject with `TERMINAL_TERMINATED` before bytes reach the PTY adapter. Recovery is explicit: use `session_restart` for the same session id, or `session_focus` a different live session.
 
 ## Return Timing
 

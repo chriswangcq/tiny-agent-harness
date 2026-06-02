@@ -27,8 +27,8 @@
 │       │   ├── <channel>.inbox.jsonl
 │       │   └── <channel>.outbox.jsonl
 │       │
-│       ├── sessions/               # 本 run 的终端 session log
-│       │   └── <sessionId>.log
+│       ├── sessions/               # 本 run 的终端 session raw PTY log
+│       │   └── <safe-session-id>-<sha256-10>.log
 │       │
 │       ├── environment/            # 本 run 的环境事件持久化
 │       │   └── events.jsonl
@@ -79,7 +79,7 @@
 | `state.json` | AgentRunState 快照 | JSON |
 | `transcript.jsonl` | 完整执行事件流 | JSONL |
 | `im/` | 本 run 的 IM 收发记录 | JSONL |
-| `sessions/` | 终端 PTY session log | 纯文本 |
+| `sessions/` | 终端 PTY raw log；文件名为 sanitize 后的 session id 加短 hash，避免路径穿越和重名 | 纯文本 |
 | `environment/` | 环境事件（one-shot events + persistent facts） | JSONL |
 | `skill-runs/` | 技能执行实例的状态和日志 | JSON |
 | `debug/` | 调试产物（prompt 快照等） | 纯文本 |
@@ -102,6 +102,14 @@ Managed PTY 启动时会把当前 run 信息注入 shell 环境，供 agent 在 
 | `TAH_ENVIRONMENT_EVENTS_PATH` | 当前 run environment events JSONL |
 
 因此 agent 在 PTY 中执行 `node dist/cli/main.js im send ...` 或 `node dist/cli/main.js skill ...` 时，不需要额外传 `--state-dir`；显式传入 `--state-dir` 仍然用于人工调试或跨 run 操作。
+
+### PTY session 生命周期
+
+每个 run 的 PTY raw output 追加写入 `runs/run-<ts>/sessions/<safe-session-id>-<sha256-10>.log`。`TerminalObservation.screen.text` 不是这个日志的 tail，而是固定 rows/cols 的 semantic terminal viewport：managed shell marker 和 continuation prompt chrome 会被剥离，主 prompt 保留以提供 cwd/user 定位。
+
+`session_terminate` 会杀掉 PTY 进程并把 session 保持为可观察的 dead state：`session_observe` 和 `session_list` 仍可读取最后的 terminal facts/screen/log path；`terminal_write`、`terminal_key` 和 `session_interrupt` 会以 `TERMINAL_TERMINATED` 结构化拒绝，直到 `session_restart` 显式启动同一个 session id 的新 shell。
+
+Resume 只恢复 run state、transcript 和 model context，不恢复旧 PTY 进程树。恢复后的 PTY 是 fresh shell；agent 必须先 `session_observe`/`session_list`，再用最新 `terminal.inputSeq` 输入。
 
 ### `launcher/` — 运维日志
 

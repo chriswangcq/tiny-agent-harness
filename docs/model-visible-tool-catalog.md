@@ -77,7 +77,7 @@ type TerminalScreen = {
 };
 ```
 
-`screen.text` 是当前 terminal viewport，不是旧的任意长度 tail 字段。`returnedToPrompt` 是普通命令编排的紧凑信号，表示这次观察看到了 shell 或 continuation prompt。`screen.truncated` 只表示屏幕之外可能还有历史；工具不会返回 offset 范围或日志页。更多内容必须通过 shell 原生命令查看 `screen.logRef.path`。
+`screen.text` 是当前 semantic terminal viewport，不是旧的任意长度 tail 字段。Managed shell 的 marker 和 continuation prompt chrome 会被剥离；主 prompt 保留，用来提供 cwd/user 的操作定位。raw PTY 历史仍保留在 `screen.logRef.path`。CLI runtime 中它是 run-scoped 文件，例如 `.tiny-agent/runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log`；未配置文件日志的测试/内存 runtime 才可能使用虚拟 fallback。`returnedToPrompt` 是普通命令编排的紧凑信号，表示这次观察看到了 shell 或 continuation prompt。`screen.truncated` 只表示屏幕之外可能还有历史；更多内容必须通过 shell 原生命令查看 `screen.logRef.path`。
 
 ## Tool Schemas
 
@@ -211,13 +211,14 @@ type SessionListObservation = {
   currentSession: string;
   sessions: Array<{
     session: string;
-    current: boolean;
-    alive: boolean;
-    inputSeq: number;
-    cwd?: string;
-    foregroundProcess?: string | null;
-    lastUpdatedAt?: string;
-    summary: string;
+    terminal: TerminalFacts;
+    parserCursor?: string;
+    outputLog?: {
+      kind: "log";
+      ref: string;
+      startOffset?: number;
+      endOffset?: number;
+    };
   }>;
 };
 ```
@@ -330,9 +331,9 @@ Description:
 
 ```text
 Terminate a managed PTY session. If session is omitted, terminate current session.
-If current session is terminated, currentSession remains that id but terminal_write and terminal_key will reject until the agent restarts or focuses a live session.
+If current session is terminated, currentSession remains that id but terminal_write, terminal_key, and session_interrupt will reject with TERMINAL_TERMINATED until the agent restarts or focuses a live session.
 Use session_list, session_focus, or session_restart after terminating current session.
-Returns structured termination facts and, when available, the final one-screen terminal glance.
+Returns structured termination facts and, when available, the final one-screen terminal glance. Terminated sessions remain visible to session_observe and session_list; old prompt output must not resurrect them.
 ```
 
 Schema:

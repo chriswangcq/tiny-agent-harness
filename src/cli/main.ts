@@ -143,6 +143,7 @@ function createCliTerminalPort(options: {
       transcriptPath: options.transcriptPath,
       environmentEventsPath: options.paths.environmentEventsPath,
     }),
+    sessionsDir: options.paths.sessionsDir,
     screenRows: 24,
     screenCols: 80,
     postWriteReadDelayMs: 100,

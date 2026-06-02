@@ -1,6 +1,9 @@
 import { createRequire } from "node:module";
 
-import { stripManagedShellScreenNoise } from "./screen-filter.js";
+import {
+  stripManagedShellScreenNoise,
+  type ScreenNoiseFilterState,
+} from "./screen-filter.js";
 
 const require = createRequire(import.meta.url);
 const { Terminal } = require("@xterm/headless") as typeof import("@xterm/headless");
@@ -26,7 +29,10 @@ export class XtermTerminalScreenBuffer implements TerminalScreenBuffer {
   private pendingWrite: Promise<void> = Promise.resolve();
   private pendingOutput = "";
   private disposed = false;
-  private pendingFilterText = "";
+  private filterState: ScreenNoiseFilterState = {
+    pending: "",
+    pendingPromptKind: null,
+  };
 
   constructor(size: TerminalScreenBufferSize) {
     this.terminal = new Terminal({
@@ -45,10 +51,8 @@ export class XtermTerminalScreenBuffer implements TerminalScreenBuffer {
       return;
     }
 
-    const filtered = stripManagedShellScreenNoise(
-      this.pendingFilterText + chunk,
-    );
-    this.pendingFilterText = filtered.pending;
+    const filtered = stripManagedShellScreenNoise(chunk, this.filterState);
+    this.filterState = filtered.state;
     this.pendingOutput += filtered.output;
   }
 

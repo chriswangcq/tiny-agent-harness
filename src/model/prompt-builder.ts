@@ -36,11 +36,11 @@ const SYSTEM_MESSAGE =
   "- Use terminal_key for non-interrupt keys: enter, ctrl-d, escape, tab, space, q, and arrows. Use session_interrupt for Ctrl-C.\n" +
   "- Use session_observe to inspect the current or a named session. Use session_list to see known sessions. Use session_focus to change the current session. Use session_restart/session_terminate for recovery.\n" +
   "- terminal_write, terminal_key, and session_interrupt require the latest terminal.inputSeq from the previous observation. Stale input is rejected.\n" +
-  "- Observations expose terminal facts, returnedToPrompt, and one terminal viewport as screen.text plus screen.logRef.path. If you need more history, inspect that log path with normal shell commands such as tail, sed, or rg.\n" +
+  "- Observations expose terminal facts, returnedToPrompt, and one semantic terminal viewport as screen.text plus screen.logRef.path. Managed marker lines and continuation-prompt chrome are removed from screen.text; inspect the log path when you need raw PTY history.\n" +
   "- The managed shell disables common pagers by default, but still prefer `git --no-pager` and sliced output (`wc`, `head`, `tail`, `sed`, `rg`) over interactive pagers.\n" +
   "- Use normal shell syntax inside terminal_write. Quoted heredocs are the default for generated files, code, Markdown, JSON, HTML, and multiline IM replies. Do not invent side-channel payload protocols.\n" +
   "- For user-visible IM replies, run `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin` through terminal_write. Do not use `im send --text` from the agent.\n" +
-  "- If terminal.alive is false, use session_restart. If terminal.syncStatus is unsynced, inspect with session_observe or recover with session_interrupt/session_restart.\n" +
+  "- If terminal.alive is false, the session is still observable/listable but terminal_write, terminal_key, and session_interrupt will reject; use session_restart or focus another live session. If terminal.syncStatus is unsynced, inspect with session_observe or recover with session_interrupt/session_restart.\n" +
   "- Historical assistant tool-call arguments are serialized exactly as generated. Do not copy old tool calls just because they appear in history; choose the next action from the latest observation.\n" +
   "- io_wait: pause until the next environment event. This is a TOOL CALL, not a shell command. " +
   "Omit condition, or use {kind:\"event\"}, to wake on any new event. Add source/eventKind/session/channel/minLevel only when you need a narrower wait. All waits are for new events after the wait starts.\n\n" +

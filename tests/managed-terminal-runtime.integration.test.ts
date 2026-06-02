@@ -17,6 +17,53 @@ afterEach(async () => {
 });
 
 describe("ManagedTerminalRuntime real PTY pacing", () => {
+  it("strips managed continuation prompt chrome from semantic screen text", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "tiny-agent-pty-"));
+    tempDirs.push(cwd);
+    const runtime = new ManagedTerminalRuntime({
+      defaultSessionId: "default",
+      cwd,
+      promptNonce: `nonce-${Date.now()}`,
+      screenRows: 16,
+      screenCols: 120,
+      postWriteReadDelayMs: 150,
+      startupReadDelayMs: 500,
+    });
+    const port = runtime.createRunPort();
+
+    try {
+      const initial = await port.execute({ request: { kind: "session_observe" } });
+      const text =
+        "这 9 个失败在我们改动 `state/root.ts` **之前**就已存在。\n";
+      const command =
+        "cat <<'EOF_PAYLOAD'\n" +
+        text +
+        "EOF_PAYLOAD\n" +
+        "printf '__PROMPT_CHROME_DONE__\\n'\n";
+      let observation = await port.execute({
+        request: {
+          kind: "terminal_write",
+          expectedInputSeq: initial.terminal.inputSeq,
+          text: command,
+          waitForReturnMs: 1000,
+        },
+      });
+
+      for (let attempt = 0; attempt < 10 && !observation.returnedToPrompt; attempt += 1) {
+        await delay(100);
+        observation = await port.execute({ request: { kind: "session_observe" } });
+      }
+
+      expect(observation.screen.text).toContain(text.trim());
+      expect(observation.screen.text).toContain("__PROMPT_CHROME_DONE__");
+      expect(observation.screen.text).not.toContain("**之> 前**");
+      expect(observation.screen.text).not.toContain("> 这 9 个失败");
+      expect(observation.screen.text).not.toContain("__TAH_CONT__");
+    } finally {
+      await port.execute({ request: { kind: "session_terminate" } });
+    }
+  }, 15_000);
+
   it("writes a long UTF-8 heredoc through interactive bash without corrupting bytes", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "tiny-agent-pty-"));
     tempDirs.push(cwd);

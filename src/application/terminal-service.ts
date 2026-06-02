@@ -61,6 +61,18 @@ export class TerminalService {
     const snapshot = await this.loadSnapshotOrReject(session, request);
     if ("observation" in snapshot) return snapshot.observation;
 
+    if (!snapshot.terminal.alive) {
+      const refreshed = await this.refreshScreenBestEffort(session, snapshot);
+      return this.rejectedObservation(
+        session,
+        refreshed.snapshot.terminal,
+        request,
+        "TERMINAL_TERMINATED",
+        `Terminal session "${session}" is terminated. Use session_restart or focus a live session before sending input.`,
+        refreshed.screen,
+      );
+    }
+
     const seqValidation = await this.validateInputSeq(
       session,
       snapshot,
@@ -149,7 +161,7 @@ export class TerminalService {
       restarted.terminal,
       request,
       "ok",
-      emptyScreen(session),
+      emptyScreen(session, restarted.outputLog?.ref),
     );
   }
 
@@ -176,7 +188,7 @@ export class TerminalService {
       terminal,
       request,
       "ok",
-      emptyScreen(session),
+      emptyScreen(session, nextSnapshot.outputLog?.ref),
     );
   }
 
@@ -213,7 +225,7 @@ export class TerminalService {
     }
 
     let refreshedSnapshot = snapshot;
-    let screen = emptyScreen(session);
+    let screen = emptyScreen(session, snapshot.outputLog?.ref);
     if (snapshot.terminal.alive) {
       try {
         const read = await this.ports.pty.read(
@@ -237,6 +249,23 @@ export class TerminalService {
       `expectedInputSeq ${expectedInputSeq} does not match terminal.inputSeq ${refreshedSnapshot.terminal.inputSeq}.`,
       screen,
     );
+  }
+
+  private async refreshScreenBestEffort(
+    session: string,
+    snapshot: TerminalRuntimeSnapshot,
+  ): Promise<{ snapshot: TerminalRuntimeSnapshot; screen: TerminalScreen }> {
+    try {
+      const read = await this.ports.pty.read(
+        session,
+        snapshot.parserState.totalBytes.toString(),
+      );
+      const applied = this.applyRead(snapshot, read, { inputAccepted: false });
+      await this.ports.sessions.save(applied.snapshot);
+      return { snapshot: applied.snapshot, screen: read.screen };
+    } catch {
+      return { snapshot, screen: emptyScreen(session, snapshot.outputLog?.ref) };
+    }
   }
 
   private async readParseSaveObserve(
@@ -291,7 +320,10 @@ export class TerminalService {
     return {
       snapshot: {
         ...snapshot,
-        terminal: transition.terminal,
+        terminal: preserveTerminatedLifecycle(
+          snapshot.terminal,
+          transition.terminal,
+        ),
         parserState: parsed.state,
         outputLog: read.logRef ?? snapshot.outputLog,
       },
@@ -356,6 +388,22 @@ export class TerminalService {
     });
     return observation;
   }
+}
+
+function preserveTerminatedLifecycle(
+  previous: TerminalState,
+  next: TerminalState,
+): TerminalState {
+  if (previous.alive) {
+    return next;
+  }
+
+  return {
+    ...next,
+    alive: false,
+    termination: previous.termination,
+    foregroundProcess: null,
+  };
 }
 
 function renderTerminalInput(
@@ -432,12 +480,12 @@ function buildTerminalObservation(input: {
   };
 }
 
-function emptyScreen(session: string): TerminalScreen {
+function emptyScreen(session: string, logPath?: string): TerminalScreen {
   return {
     text: "",
     rows: 0,
     cols: 0,
     truncated: false,
-    logRef: { path: `managed-pty://${session}` },
+    logRef: { path: logPath ?? `managed-pty://${session}` },
   };
 }

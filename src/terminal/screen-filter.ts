@@ -1,6 +1,12 @@
 export type ScreenNoiseFilterResult = {
   output: string;
   pending: string;
+  state: ScreenNoiseFilterState;
+};
+
+export type ScreenNoiseFilterState = {
+  pending: string;
+  pendingPromptKind: ManagedShellPromptKind | null;
 };
 
 const NOISE_MARKERS = [
@@ -12,13 +18,22 @@ const NOISE_MARKERS = [
   "export PS2=",
 ];
 
+type ManagedShellPromptKind = "continuation";
+
+const INITIAL_STATE: ScreenNoiseFilterState = {
+  pending: "",
+  pendingPromptKind: null,
+};
+
 export function stripManagedShellScreenNoise(
   value: string,
+  state: ScreenNoiseFilterState = INITIAL_STATE,
 ): ScreenNoiseFilterResult {
   const parts = value.split(/(\n)/u);
   let output = "";
   let pending = "";
-  let currentLine = "";
+  let currentLine = state.pending;
+  let pendingPromptKind = state.pendingPromptKind;
 
   for (const part of parts) {
     if (part === "") {
@@ -29,7 +44,16 @@ export function stripManagedShellScreenNoise(
       continue;
     }
 
-    if (!isManagedShellNoiseLine(currentLine)) {
+    const noise = classifyManagedShellNoiseLine(currentLine);
+    if (noise.kind === "noise") {
+      pendingPromptKind = noise.nextPromptKind ?? pendingPromptKind;
+    } else if (pendingPromptKind !== null) {
+      output += stripManagedShellPromptChrome(
+        currentLine,
+        pendingPromptKind,
+      );
+      pendingPromptKind = null;
+    } else {
       output += currentLine;
     }
     currentLine = "";
@@ -38,17 +62,39 @@ export function stripManagedShellScreenNoise(
   if (currentLine.length > 0) {
     if (isPotentialManagedShellNoisePrefix(currentLine)) {
       pending = currentLine;
+    } else if (pendingPromptKind !== null) {
+      const stripped = stripManagedShellPromptChrome(
+        currentLine,
+        pendingPromptKind,
+      );
+      output += stripped;
+      pendingPromptKind = null;
     } else {
       output += currentLine;
     }
   }
 
-  return { output, pending };
+  return {
+    output,
+    pending,
+    state: { pending, pendingPromptKind },
+  };
 }
 
-function isManagedShellNoiseLine(line: string): boolean {
+function classifyManagedShellNoiseLine(line: string):
+  | { kind: "noise"; nextPromptKind?: ManagedShellPromptKind }
+  | { kind: "content" } {
   const candidate = markerCandidate(line);
-  return NOISE_MARKERS.some((marker) => candidate.startsWith(marker));
+  if (candidate.startsWith("__TAH_PROMPT__")) {
+    return { kind: "noise" };
+  }
+  if (candidate.startsWith("__TAH_CONT__")) {
+    return { kind: "noise", nextPromptKind: "continuation" };
+  }
+  if (NOISE_MARKERS.some((marker) => candidate.startsWith(marker))) {
+    return { kind: "noise" };
+  }
+  return { kind: "content" };
 }
 
 function isPotentialManagedShellNoisePrefix(line: string): boolean {
@@ -87,4 +133,29 @@ function normalizeForMarkerCheck(line: string): string {
     .replace(/\x1B\[[0-?]*[ -/]*[@-~]/gu, "")
     .replace(/[\u0000-\u001F\u007F]/gu, "")
     .trimStart();
+}
+
+function stripManagedShellPromptChrome(
+  line: string,
+  promptKind: ManagedShellPromptKind,
+): string {
+  const { body, ending } = splitLineEnding(line);
+  const stripped = stripContinuationPromptPrefix(body);
+  return `${stripped}${ending}`;
+}
+
+function stripContinuationPromptPrefix(value: string): string {
+  return value.replace(/^> ?/u, "");
+}
+
+function splitLineEnding(line: string): { body: string; ending: string } {
+  if (!line.endsWith("\n")) {
+    return { body: line, ending: "" };
+  }
+
+  const withoutLf = line.slice(0, -1);
+  if (withoutLf.endsWith("\r")) {
+    return { body: withoutLf.slice(0, -1), ending: "\r\n" };
+  }
+  return { body: withoutLf, ending: "\n" };
 }

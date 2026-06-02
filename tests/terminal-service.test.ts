@@ -8,7 +8,10 @@ import type {
   TerminalServicePorts,
   PtyReadOptions,
 } from "../src/application/terminal-ports.js";
-import { createTerminalState } from "../src/terminal/state.js";
+import {
+  createTerminalState,
+  markTerminalTerminated,
+} from "../src/terminal/state.js";
 import type { TerminalScreen, TerminalState } from "../src/terminal/index.js";
 
 function terminal(inputSeq = 1): TerminalState {
@@ -294,6 +297,81 @@ describe("TerminalService", () => {
       result: "rejected",
       errorCode: "INPUT_SEQ_MISMATCH",
       terminal: { inputSeq: 3 },
+      screen: { text: promptChunk },
+    });
+  });
+
+  it("rejects input to a terminated current session before reaching the PTY", async () => {
+    const deadTerminal = markTerminalTerminated(terminal(5), {
+      exitCode: null,
+      reason: "done",
+    });
+    const { ports, writes, interrupts, saves } = makePorts({
+      snapshots: [makeSnapshot("default", deadTerminal)],
+    });
+    const service = new TerminalService(ports, makeConfig());
+
+    const write = await service.handleAction({
+      kind: "terminal_write",
+      expectedInputSeq: deadTerminal.inputSeq,
+      text: "pwd\n",
+    });
+    const key = await service.handleAction({
+      kind: "terminal_key",
+      expectedInputSeq: deadTerminal.inputSeq,
+      key: "enter",
+    });
+    const interrupt = await service.handleAction({
+      kind: "session_interrupt",
+      expectedInputSeq: deadTerminal.inputSeq,
+    });
+
+    expect(writes).toEqual([]);
+    expect(interrupts).toEqual([]);
+    expect(saves.every((snapshot) => snapshot.terminal.alive === false)).toBe(true);
+    for (const observation of [write, key, interrupt]) {
+      expect(observation).toMatchObject({
+        result: "rejected",
+        errorCode: "TERMINAL_TERMINATED",
+        terminal: {
+          alive: false,
+          termination: { reason: "done" },
+        },
+      });
+    }
+  });
+
+  it("keeps a terminated session dead when later observation parses old prompt output", async () => {
+    const promptChunk =
+      formatPromptMarker({
+        nonce: "nonce",
+        returnCode: 0,
+        cwd: "/repo/resurrect",
+        promptSeq: 7,
+      }) + "\n";
+    const deadTerminal = markTerminalTerminated(terminal(5), {
+      exitCode: null,
+      reason: "done",
+    });
+    const { ports, saves } = makePorts({
+      snapshots: [makeSnapshot("default", deadTerminal)],
+      reads: { default: [promptChunk] },
+    });
+    const service = new TerminalService(ports, makeConfig());
+
+    const observation = await service.handleAction({ kind: "session_observe" });
+
+    expect(saves.at(-1)?.terminal).toMatchObject({
+      alive: false,
+      termination: { reason: "done" },
+      lastShellPrompt: { cwd: "/repo/resurrect", promptSeq: 7 },
+    });
+    expect(observation).toMatchObject({
+      result: "ok",
+      terminal: {
+        alive: false,
+        termination: { reason: "done" },
+      },
       screen: { text: promptChunk },
     });
   });

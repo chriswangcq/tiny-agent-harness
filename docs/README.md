@@ -37,16 +37,14 @@
       state.json
       transcript.jsonl
       session.json
+      sessions/
+        default-37a8eec1ce.log
       debug/
         prompts/
           step-0000-thinking.prompt.txt
-  sessions/
-    <sessionId>/
-      state.json
-      output.log
 ```
 
-`state.json` 是最新 run snapshot；`transcript.jsonl` 是 append-only audit ledger；`session.json` 保存 `ModelContextSession` snapshot 以支持 resume；`debug/prompts/` 保存不适合直接进入 transcript/model-context 的大 prompt；session `output.log` 保存完整 PTY 输出。
+`state.json` 是最新 run snapshot；`transcript.jsonl` 是 append-only audit ledger；`session.json` 保存 `ModelContextSession` snapshot 以支持 resume；`debug/prompts/` 保存不适合直接进入 transcript/model-context 的大 prompt；`runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log` 保存完整 raw PTY 输出。模型看到的 `screen.text` 是一屏 semantic viewport，raw log 通过 `screen.logRef.path` 追溯。
 
 ## Keeping Docs Current
 
