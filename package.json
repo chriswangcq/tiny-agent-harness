@@ -8,7 +8,8 @@
     "tiny-agent": "dist/cli/main.js",
     "im": "dist/cli/im-entry.js",
     "skill": "dist/cli/skill-entry.js",
-    "codeq": "dist/code-intel/cli.js"
+    "codeq": "dist/code-intel/cli.js",
+    "mcp": "dist/cli/mcp-entry.js"
   },
   "scripts": {
     "build": "tsc",

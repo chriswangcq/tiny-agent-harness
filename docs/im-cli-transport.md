@@ -191,18 +191,16 @@ after each observation
 
 `io_wait` is an internal AgentRunState decision, not a terminal/session tool. IM is one event source for Environment.
 
-First version supports only this condition:
+The run-state wait is priority-based:
 
 ```ts
 type IoWaitRequest = {
   reason?: string;
-  condition: {
-    kind: "new_user_message";
-    channel: string;
-    cursor?: string;
-  };
+  minLevel?: number;
 };
 ```
+
+User messages are `EnvironmentEvent { kind: "user_message_received", source: "im" }` with effective level `100`, so they wake every normal `io_wait`.
 
 Suggested CLI behavior:
 

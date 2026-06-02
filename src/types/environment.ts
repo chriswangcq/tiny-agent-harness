@@ -108,13 +108,24 @@ export type EnvironmentState = {
   consumedByRun: Record<string, string | undefined>;
 };
 
+export const ENVIRONMENT_EVENT_LEVELS = {
+  ANY: 0,
+  DEFAULT: 1,
+  USER_MESSAGE: 100,
+} as const;
+
 // ─── IO Wait Request ───────────────────────────────────────────────
 
 export type IoWaitRequest = {
   reason?: string;
+  minLevel?: number;
+  /**
+   * Deprecated compatibility shape accepted for old transcripts/model outputs.
+   * Runtime wait matching is priority-only: only minLevel participates.
+   */
   condition?:
     | {
-        kind: "event";
+        kind?: "event";
         eventKind?: EnvironmentEvent["kind"];
         source?: EnvironmentEvent["source"];
         session?: string;
@@ -122,7 +133,7 @@ export type IoWaitRequest = {
         minLevel?: number;
       }
     | {
-        kind: "new_user_message";
+        kind?: "new_user_message";
         channel?: string;
         cursor?: string;
         minLevel?: number;
@@ -148,12 +159,33 @@ export function isEnvironmentEventSource(
 }
 
 export function environmentEventLevel(event: EnvironmentEvent): number {
-  return typeof event.level === "number" && Number.isFinite(event.level)
-    ? event.level
-    : 1;
+  const explicitLevel =
+    typeof event.level === "number" && Number.isFinite(event.level)
+      ? event.level
+      : undefined;
+
+  if (event.kind === "user_message_received") {
+    return Math.max(
+      explicitLevel ?? ENVIRONMENT_EVENT_LEVELS.USER_MESSAGE,
+      ENVIRONMENT_EVENT_LEVELS.USER_MESSAGE,
+    );
+  }
+
+  return explicitLevel ?? ENVIRONMENT_EVENT_LEVELS.DEFAULT;
+}
+
+export function ioWaitMinLevel(wait: IoWaitRequest): number {
+  return wait.minLevel ?? wait.condition?.minLevel ?? ENVIRONMENT_EVENT_LEVELS.ANY;
 }
 
 export function validateIoWaitRequest(wait: IoWaitRequest): string | undefined {
+  if (
+    wait.minLevel !== undefined &&
+    (typeof wait.minLevel !== "number" || !Number.isFinite(wait.minLevel))
+  ) {
+    return "Invalid io_wait: minLevel must be a finite number when provided.";
+  }
+
   const condition = wait.condition;
   if (condition === undefined) {
     return undefined;
@@ -169,6 +201,10 @@ export function validateIoWaitRequest(wait: IoWaitRequest): string | undefined {
     (typeof minLevel !== "number" || !Number.isFinite(minLevel))
   ) {
     return "Invalid io_wait: minLevel must be a finite number when provided.";
+  }
+
+  if (condition.kind === undefined) {
+    return undefined;
   }
 
   if (condition.kind === "new_user_message") {

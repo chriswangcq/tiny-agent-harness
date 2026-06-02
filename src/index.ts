@@ -10,3 +10,4 @@ export * from "./streaming/index.js";
 export * from "./tools/index.js";
 export * from "./transcript/index.js";
 export * from "./types/index.js";
+export * from "./mcp/index.js";

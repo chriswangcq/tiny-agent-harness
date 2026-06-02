@@ -615,10 +615,11 @@ describe("DeepSeekFimAdapter", () => {
   });
 
   it("parses DSML io_wait decisions", async () => {
-    const rawDecision = dsmlIoWait("need confirmation", {
-      kind: "new_user_message",
-      channel: "default",
-    });
+    const rawDecision = [
+      `io_wait">`,
+      `<${DSML}parameter name="reason" string="true">need confirmation</${DSML}parameter>`,
+      `<${DSML}parameter name="minLevel" string="false">10</${DSML}parameter>`,
+    ].join("\n");
     stubFimResponses("Need user input", rawDecision);
 
     const output = await makeAdapter().generateTurn(BASE_CONTEXT, {
@@ -629,7 +630,7 @@ describe("DeepSeekFimAdapter", () => {
     if (output.turn.kind === "io_wait") {
       expect(output.turn.wait).toEqual({
         reason: "need confirmation",
-        condition: { kind: "new_user_message", channel: "default" },
+        minLevel: 10,
       });
     }
   });

@@ -22,6 +22,7 @@ The thinking pass is reasoning-only. During thinking, never emit tool-call marku
 - If you need user input or must wait for external IO, return an `io_wait` decision.
 - If the task is complete, send the user-facing answer through IM using `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin`, then return `io_wait` for the next user message.
 - Do not use shell `sleep` as a substitute for `io_wait`.
+- `io_wait` is priority-based. It wakes on the next new environment event whose level is at least `minLevel`. Omit `minLevel`, or use `0`, for any event; use `10` for meaningful session/tool lifecycle events. User messages are level `100`.
 
 ## Tool Contract
 
@@ -59,6 +60,7 @@ Payload semantics:
 
 - The runtime protected-paces every `terminal_write` input in small UTF-8 chunks.
 - Use normal shell syntax. Quoted shell heredocs are the default for ordinary generated text: files, code, HTML, Markdown, JSON, and multiline IM replies.
+- Do not put multiline code inside shell double quotes, such as `node -e "..."` spread across lines. Bash will enter continuation prompt state and may expose managed PS2 markers in observations. Use a quoted heredoc (`node <<'NODE' ... NODE`) or write a temporary script file instead.
 - Choose a heredoc delimiter that does not appear alone in the payload.
 - When sending IM messages or writing files via heredoc, use distinct labels (e.g. `IMEOF`, `ENDOFSCRIPT`, `DIFF`, `TMP-<ts>`) — prefer unique timestamped labels to avoid nested heredoc conflicts so the heredoc delimiter never appears inside the content. Avoid reusing `EOF` when the payload itself contains shell heredoc examples.
 - For IM replies or other outer heredocs that contain heredoc examples, do not use a generic outer delimiter such as `EOF`. Pick a unique outer delimiter that cannot collide with any literal line in the reply, and use a different delimiter for nested examples.

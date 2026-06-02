@@ -95,6 +95,7 @@ function makeRun(options?: {
   activeSkillRuns?: ReturnType<RunPorts["listActiveSkillRuns"]>;
   modelProgress?: string[];
   modelError?: unknown;
+  onGenerateTurn?: (context: ModelStepContext) => void | Promise<void>;
   initialState?: AgentRunState;
 }) {
   const runDir = path.join(makeTmpDir(), "run-001");
@@ -161,6 +162,7 @@ function makeRun(options?: {
             sequence,
           });
         }
+        await options?.onGenerateTurn?.(context);
         const output = outputs.shift();
         if (!output) {
           throw new Error("No queued model output");
@@ -1522,6 +1524,50 @@ describe("RunOrchestrator", () => {
         expect.objectContaining({
           type: "environment_reminder",
           content: expect.stringContaining("[user@default] 请帮我看一下文件"),
+        }),
+      ]),
+    );
+  });
+
+  it("does not miss environment events that arrive during the model turn before io_wait", async () => {
+    const wait: IoWaitRequest = {
+      reason: "wait after thinking",
+    };
+    const duringModelMessage: EnvironmentEvent = {
+      id: "msg-env-during-model",
+      kind: "user_message_received",
+      source: "im",
+      timestamp: "2026-05-25T12:00:02.000Z",
+      message: {
+        id: "msg-during-model",
+        channel: "default",
+        role: "user",
+        text: "别等了，先看这个",
+        createdAt: "2026-05-25T12:00:02.000Z",
+      },
+    };
+    const environment = new Environment();
+    const { orchestrator, transcript } = makeRun({
+      outputs: [ioWaitOutput(wait)],
+      environment,
+      onGenerateTurn() {
+        environment.appendEvent(duringModelMessage);
+      },
+    });
+
+    const endState = await orchestrator.run();
+
+    expect(endState.status).toBe("failed");
+    expect(readTranscript(transcript)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "io_wait_satisfied",
+          wait,
+          event: duringModelMessage,
+        }),
+        expect.objectContaining({
+          type: "environment_events_consumed",
+          eventIds: ["msg-env-during-model"],
         }),
       ]),
     );

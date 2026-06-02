@@ -60,10 +60,7 @@ type Decision =
     }
   | {
       name: "io_wait";
-      arguments: {
-        reason?: string;
-        condition?: IoWaitRequest["condition"];
-      };
+      arguments: IoWaitRequest;
     };
 
 export type ParseDecisionResult =
@@ -360,11 +357,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isIoWaitArguments(
   value: unknown,
-): value is { reason?: string; condition?: IoWaitRequest["condition"] } {
+): value is {
+  reason?: string;
+  minLevel?: number;
+  condition?: IoWaitRequest["condition"];
+} {
   if (!isRecord(value)) {
     return false;
   }
   if (value.reason !== undefined && typeof value.reason !== "string") {
+    return false;
+  }
+  if (
+    value.minLevel !== undefined &&
+    (typeof value.minLevel !== "number" || !Number.isFinite(value.minLevel))
+  ) {
     return false;
   }
   if (value.condition === undefined) {
@@ -374,6 +381,9 @@ function isIoWaitArguments(
     return false;
   }
   const kind = value.condition.kind;
+  if (kind === undefined) {
+    return true;
+  }
   if (kind !== "new_user_message" && kind !== "event") {
     return false;
   }

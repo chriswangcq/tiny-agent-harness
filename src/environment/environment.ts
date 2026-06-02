@@ -8,6 +8,7 @@ import type {
 } from "../types/index.js";
 import {
   environmentEventLevel,
+  ioWaitMinLevel,
   isEnvironmentEventKind,
   isEnvironmentEventSource,
   validateIoWaitRequest,
@@ -120,10 +121,12 @@ export class Environment implements EnvironmentPort {
 
     const result = this._state.events.slice(startIndex);
 
-    // Update the consumed cursor to the last returned event
-    if (result.length > 0) {
-      this._state.consumedByRun[runId] = result[result.length - 1]!.id;
-    }
+    // Mark the turn-start cursor even when there are no events. An io_wait
+    // emitted after a model turn must see events that arrived during that turn.
+    this._state.consumedByRun[runId] =
+      result.length > 0
+        ? result[result.length - 1]!.id
+        : cursor ?? this._state.latestEventId;
 
     return result;
   }
@@ -144,7 +147,19 @@ export class Environment implements EnvironmentPort {
     }
 
     this.syncFromEventsPath();
-    const afterEventId = options.afterEventId ?? this._state.latestEventId;
+    const hasExplicitCursor = Object.prototype.hasOwnProperty.call(
+      options,
+      "afterEventId",
+    );
+    const hasRunCursor = Object.prototype.hasOwnProperty.call(
+      this._state.consumedByRun,
+      runId,
+    );
+    const afterEventId = hasExplicitCursor
+      ? options.afterEventId
+      : hasRunCursor
+        ? this._state.consumedByRun[runId]
+        : this._state.latestEventId;
 
     // First, check events newer than the captured cursor for a match.
     const existing = this.findMatchingEventAfter(afterEventId, wait);
@@ -236,50 +251,7 @@ export class Environment implements EnvironmentPort {
     event: EnvironmentEvent,
     wait: IoWaitRequest,
   ): boolean {
-    const condition = wait.condition ?? { kind: "event" as const };
-
-    if (!eventMatchesMinLevel(event, condition.minLevel)) {
-      return false;
-    }
-
-    if (condition.kind === "new_user_message") {
-      if (event.kind !== "user_message_received" || event.source !== "im") {
-        return false;
-      }
-      // Auto-correct: match against boundChannel if set, else use condition.channel
-      const targetChannel = this.boundChannel ?? condition.channel;
-      if (targetChannel === undefined) {
-        return true;
-      }
-      return event.message.channel === targetChannel;
-    }
-
-    if (condition.kind === "event") {
-      if (condition.eventKind !== undefined && event.kind !== condition.eventKind) {
-        return false;
-      }
-      if (
-        condition.source !== undefined &&
-        event.source !== condition.source
-      ) {
-        return false;
-      }
-      if (
-        condition.session !== undefined &&
-        eventSession(event) !== condition.session
-      ) {
-        return false;
-      }
-      if (
-        condition.channel !== undefined &&
-        eventChannel(event) !== condition.channel
-      ) {
-        return false;
-      }
-      return true;
-    }
-
-    return false;
+    return environmentEventLevel(event) >= ioWaitMinLevel(wait);
   }
 
   private syncFromEventsPath(): void {
@@ -388,23 +360,6 @@ export class Environment implements EnvironmentPort {
     }
     return eventIndex > afterIndex;
   }
-}
-
-function eventMatchesMinLevel(
-  event: EnvironmentEvent,
-  minLevel: number | undefined,
-): boolean {
-  return minLevel === undefined || environmentEventLevel(event) >= minLevel;
-}
-
-function eventSession(event: EnvironmentEvent): string | undefined {
-  return "session" in event ? event.session : undefined;
-}
-
-function eventChannel(event: EnvironmentEvent): string | undefined {
-  return event.kind === "user_message_received"
-    ? event.message.channel
-    : undefined;
 }
 
 function isPersistedEnvironmentEvent(value: unknown): value is EnvironmentEvent {

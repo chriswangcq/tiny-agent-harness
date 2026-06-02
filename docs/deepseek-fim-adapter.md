@@ -242,7 +242,7 @@ terminal_write">
 ```text
 io_wait">
 <｜DSML｜parameter name="reason" string="true">Waiting for the user's next message before continuing.</｜DSML｜parameter>
-<｜DSML｜parameter name="condition" string="false">{"kind":"new_user_message","channel":"default"}</｜DSML｜parameter>
+<｜DSML｜parameter name="minLevel" string="false">0</｜DSML｜parameter>
 ```
 
 This is still a harness decision grammar, but its surface form matches DeepSeek native tool-call training format.
@@ -305,30 +305,19 @@ type ModelTurn =
     };
 ```
 
-`io_wait` is normalized as a first-class model turn. It can wait for any new environment event or add optional filters:
+`io_wait` is normalized as a first-class model turn. It uses priority-only waiting:
 
 ```ts
 type IoWaitRequest = {
   reason?: string;
-  condition?:
-    | {
-        kind: "event";
-        eventKind?: EnvironmentEvent["kind"];
-        source?: EnvironmentEvent["source"];
-        session?: string;
-        channel?: string;
-        minLevel?: number;
-      }
-    | {
-        kind: "new_user_message";
-        channel?: string;
-        cursor?: string;
-        minLevel?: number;
-      };
+  minLevel?: number;
+  // Deprecated compatibility shape accepted for old transcripts/model outputs.
+  // Runtime matching still uses only minLevel.
+  condition?: { minLevel?: number; [legacy: string]: unknown };
 };
 ```
 
-Omitting `condition`, or emitting `{ kind: "event" }`, wakes on any new environment event after the wait starts.
+Omitting `minLevel`, or emitting `minLevel: 0`, wakes on any new environment event after the wait starts. `minLevel: 10` is the normal threshold for meaningful session/tool lifecycle events. User messages are level `100`.
 
 Because FIM does not provide provider-generated tool call ids, the harness creates them:
 

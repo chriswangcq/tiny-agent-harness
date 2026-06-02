@@ -106,7 +106,28 @@ describe("parseDsmlDecision", () => {
     });
   });
 
-  it("parses DSML io_wait with event level filter", () => {
+  it("parses DSML io_wait with top-level minLevel", () => {
+    const raw = [
+      `io_wait">`,
+      `<${DSML}parameter name="reason" string="true">waiting for important event</${DSML}parameter>`,
+      `<${DSML}parameter name="minLevel" string="false">10</${DSML}parameter>`,
+    ].join("\n");
+
+    const result = parseDsmlDecision(raw);
+
+    expect(result).toEqual({
+      status: "valid",
+      decision: {
+        name: "io_wait",
+        arguments: {
+          reason: "waiting for important event",
+          minLevel: 10,
+        },
+      },
+    });
+  });
+
+  it("parses legacy DSML io_wait with condition minLevel", () => {
     const raw = dsmlIoWait("waiting for important session event", {
       kind: "event",
       source: "session",
@@ -122,6 +143,23 @@ describe("parseDsmlDecision", () => {
         arguments: {
           reason: "waiting for important session event",
           condition: { kind: "event", source: "session", minLevel: 10 },
+        },
+      },
+    });
+  });
+
+  it("parses compatibility DSML io_wait with condition minLevel only", () => {
+    const raw = dsmlIoWait("waiting for important event", { minLevel: 10 });
+
+    const result = parseDsmlDecision(raw);
+
+    expect(result).toEqual({
+      status: "valid",
+      decision: {
+        name: "io_wait",
+        arguments: {
+          reason: "waiting for important event",
+          condition: { minLevel: 10 },
         },
       },
     });

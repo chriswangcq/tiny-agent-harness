@@ -14,10 +14,6 @@ import type {
   V4Tool,
 } from "../types/index.js";
 import {
-  ENVIRONMENT_EVENT_KINDS,
-  ENVIRONMENT_EVENT_SOURCES,
-} from "../types/environment.js";
-import {
   DSML_INVOKE_CLOSE,
   DSML_INVOKE_OPEN_PREFIX,
   DSML_TOOL_CALLS_CLOSE,
@@ -123,8 +119,7 @@ const IO_WAIT_V4_TOOL: V4Tool = {
   function: {
     name: "io_wait",
     description:
-      "Pause and wait for any new environment event before continuing. " +
-      "Use optional filters when you need a specific event source, kind, session, channel, or minimum level.",
+      "Pause and wait for the next environment event whose priority level is high enough.",
     parameters: {
       type: "object",
       properties: {
@@ -132,40 +127,10 @@ const IO_WAIT_V4_TOOL: V4Tool = {
           type: "string",
           description: "Why you are waiting.",
         },
-        condition: {
-          type: "object",
+        minLevel: {
+          type: "number",
           description:
-            "Optional event filter. Omit condition, or use {kind:\"event\"}, to wake on any new environment event.",
-          properties: {
-            kind: {
-              type: "string",
-              enum: ["new_user_message", "event"],
-              description: "Type of event to wait for. event means any environment event unless filtered.",
-            },
-            channel: {
-              type: "string",
-              description: "Optional IM channel filter.",
-            },
-            eventKind: {
-              type: "string",
-              enum: [...ENVIRONMENT_EVENT_KINDS],
-              description: "Optional environment event kind filter.",
-            },
-            source: {
-              type: "string",
-              enum: [...ENVIRONMENT_EVENT_SOURCES],
-              description: "Optional event source filter.",
-            },
-            session: {
-              type: "string",
-              description: "Optional terminal session filter for session events.",
-            },
-            minLevel: {
-              type: "number",
-              description: "Optional minimum event level; matches events where level >= minLevel.",
-            },
-          },
-          required: ["kind"],
+            "Optional minimum event level. Omit or use 0 for any event; use 10 for meaningful session/tool lifecycle events; user messages are level 100.",
         },
       },
     },
@@ -575,7 +540,12 @@ export class DeepSeekFimAdapter {
         kind: "io_wait",
         wait: {
           reason: decision.arguments.reason,
-          condition: decision.arguments.condition,
+          ...(decision.arguments.minLevel === undefined
+            ? {}
+            : { minLevel: decision.arguments.minLevel }),
+          ...(decision.arguments.condition === undefined
+            ? {}
+            : { condition: decision.arguments.condition }),
         },
         thinking,
         rawDecision,

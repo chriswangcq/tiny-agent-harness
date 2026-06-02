@@ -3,7 +3,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Environment } from "../src/environment/environment.js";
-import type { EnvironmentEvent } from "../src/types/environment.js";
+import {
+  ENVIRONMENT_EVENT_LEVELS,
+  environmentEventLevel,
+  type EnvironmentEvent,
+} from "../src/types/environment.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -121,32 +125,21 @@ describe("Environment", () => {
     expect(env.consumeSince({ runId: "run-1" })).toEqual([]);
   });
 
-  it("waitFor new_user_message waits for the requested channel", async () => {
+  it("waitFor uses priority only and ignores legacy user-message channel filters", async () => {
     const env = new Environment();
 
-    let resolved: EnvironmentEvent | undefined;
-    const promise = env
-      .waitFor({
-        runId: "run-1",
-        wait: {
-          reason: "waiting for user on default",
-          condition: { kind: "new_user_message", channel: "default" },
-        },
-      })
-      .then((event) => {
-        resolved = event;
-        return event;
-      });
+    const promise = env.waitFor({
+      runId: "run-1",
+      wait: {
+        reason: "waiting for user on default",
+        condition: { kind: "new_user_message", channel: "default" },
+      },
+    });
 
-    env.appendEvent(makeUserMessageEvent("e-other", "wrong channel", "other"));
-    await Promise.resolve();
+    const event = makeUserMessageEvent("e-other", "wake even from other", "other");
+    env.appendEvent(event);
 
-    expect(resolved).toBeUndefined();
-
-    const matching = makeUserMessageEvent("e-default", "right channel", "default");
-    env.appendEvent(matching);
-
-    await expect(promise).resolves.toEqual(matching);
+    await expect(promise).resolves.toEqual(event);
   });
 
   it("waitFor ignores matching events that existed before registration", async () => {
@@ -203,7 +196,39 @@ describe("Environment", () => {
     await expect(promise).resolves.toEqual(event);
   });
 
-  it("waitFor supports source and minLevel filters", async () => {
+  it("waitFor uses the run consume cursor so events arriving during a model turn are not lost", async () => {
+    const env = new Environment();
+    const initial = makeUserMessageEvent("e-initial", "initial");
+    env.appendEvent(initial);
+    expect(env.consumeSince({ runId: "run-1" })).toEqual([initial]);
+
+    const duringTurn = makeUserMessageEvent("e-during-turn", "interrupt");
+    env.appendEvent(duringTurn);
+
+    await expect(
+      env.waitFor({
+        runId: "run-1",
+        wait: { reason: "wait after model decision" },
+      }),
+    ).resolves.toEqual(duringTurn);
+  });
+
+  it("waitFor still sees model-turn events when the turn began with an empty environment", async () => {
+    const env = new Environment();
+    expect(env.consumeSince({ runId: "run-1" })).toEqual([]);
+
+    const duringTurn = makeUserMessageEvent("e-during-empty-turn", "interrupt");
+    env.appendEvent(duringTurn);
+
+    await expect(
+      env.waitFor({
+        runId: "run-1",
+        wait: { reason: "wait after empty model turn" },
+      }),
+    ).resolves.toEqual(duringTurn);
+  });
+
+  it("waitFor uses minLevel as the only event filter", async () => {
     const env = new Environment();
 
     const promise = env.waitFor({
@@ -239,6 +264,72 @@ describe("Environment", () => {
     env.appendEvent(matching);
 
     await expect(promise).resolves.toEqual(matching);
+  });
+
+  it("high-priority user messages wake legacy narrow session waits", async () => {
+    const env = new Environment();
+
+    const promise = env.waitFor({
+      runId: "run-1",
+      wait: {
+        reason: "legacy narrow session wait",
+        condition: {
+          kind: "event",
+          source: "session",
+          eventKind: "session_returned_to_prompt",
+          minLevel: 10,
+        },
+      },
+    });
+
+    const userEvent = makeUserMessageEvent("e-user", "operator interrupt");
+    env.appendEvent(userEvent);
+
+    await expect(promise).resolves.toEqual(userEvent);
+  });
+
+  it("treats user messages as highest-priority environment events", async () => {
+    const env = new Environment();
+
+    const promise = env.waitFor({
+      runId: "run-1",
+      wait: {
+        reason: "wake only for high-priority events",
+        condition: { kind: "event", minLevel: ENVIRONMENT_EVENT_LEVELS.USER_MESSAGE },
+      },
+    });
+
+    env.appendEvent({
+      id: "session-critical",
+      kind: "session_unsynced",
+      source: "session",
+      timestamp: "2026-05-25T12:00:00Z",
+      session: "default",
+      currentSession: "default",
+      request: "session_observe",
+      inputSeq: 1,
+      level: 50,
+      reason: "prompt_spoof_suspected",
+    });
+
+    const userEvent = makeUserMessageEvent("e-user", "operator says continue");
+    env.appendEvent(userEvent);
+
+    await expect(promise).resolves.toEqual(userEvent);
+  });
+
+  it("normalizes user message levels even when level is missing or too low", () => {
+    const userEvent = makeUserMessageEvent("e-user", "hello");
+    const lowUserEvent = { ...userEvent, level: 0 };
+    const highUserEvent = { ...userEvent, level: 200 };
+
+    expect(environmentEventLevel(userEvent)).toBe(
+      ENVIRONMENT_EVENT_LEVELS.USER_MESSAGE,
+    );
+    expect(environmentEventLevel(lowUserEvent)).toBe(
+      ENVIRONMENT_EVENT_LEVELS.USER_MESSAGE,
+    );
+    expect(environmentEventLevel(highUserEvent)).toBe(200);
   });
 
   it("renderReminder formats events", () => {

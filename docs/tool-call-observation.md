@@ -180,8 +180,8 @@ Dead sessions do not accept foreground input. `terminal_write`, `terminal_key`, 
 `terminal_write`, `terminal_key`, and `session_interrupt` return after an immediate one-screen glance by default. They can still wait up to an explicit `waitForReturnMs` for a shell or continuation prompt as a low-level escape hatch, but normal orchestration should use `io_wait` for environment events.
 
 - Default wait budget is `0`.
-- To wait for command completion, use `io_wait` with `source: "session"` and optionally `eventKind: "session_returned_to_prompt"`.
-- To wait until the terminal can accept more input, use `eventKind: "session_input_ready"`.
+- To wait for command completion or other meaningful terminal lifecycle events, use `io_wait` with `minLevel: 10`.
+- To wait for any event, omit `minLevel` or use `minLevel: 0`. User messages are level `100`, so they can always wake normal waits.
 
 Timeout means:
 

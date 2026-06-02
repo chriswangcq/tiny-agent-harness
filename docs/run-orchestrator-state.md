@@ -150,30 +150,19 @@ Invalid output should carry protocol diagnostics when the adapter can identify a
 
 `io_wait` 是 Agent 向自己的 run state machine 提交等待请求。它不是 terminal/session tool，也不执行外部业务动作；orchestrator 会等待 Environment 中出现满足条件的事件，满足后才允许下一轮 model step。
 
-Current wait conditions support any-event waits plus optional filters:
+Current wait conditions are priority-only:
 
 ```ts
 type IoWaitRequest = {
   reason?: string;
-  condition?:
-    | {
-        kind: "new_user_message";
-        channel?: string;
-        cursor?: string;
-        minLevel?: number;
-      }
-    | {
-        kind: "event";
-        eventKind?: EnvironmentEvent["kind"];
-        source?: EnvironmentEvent["source"];
-        session?: string;
-        channel?: string;
-        minLevel?: number;
-      };
+  minLevel?: number;
+  // Deprecated compatibility shape accepted for old transcripts/model outputs.
+  // Runtime matching still uses only minLevel.
+  condition?: { minLevel?: number; [legacy: string]: unknown };
 };
 ```
 
-Omitting `condition`, or using `{ kind: "event" }`, means "wake on any new environment event". The orchestrator/environment captures the current event cursor when the wait starts, so historical events do not self-wake the run. `minLevel` is an optional importance filter and matches events where `event.level >= minLevel`.
+Omitting `minLevel`, or using `minLevel: 0`, means "wake on any new environment event". Before each model turn, the orchestrator calls `consumeSince(runId)` and advances the run's environment cursor. If that same model turn later emits `io_wait`, the wait starts from that consumed cursor, not from the later wait-registration timestamp. This preserves user/environment events that arrive while the model is thinking and lets them satisfy `io_wait` immediately. `minLevel` matches events where `environmentEventLevel(event) >= minLevel`; user messages default to level `100` and should be treated as highest-priority operator input, while other missing levels default to `1`. Legacy `source`, `eventKind`, `session`, and `channel` condition fields are not runtime filters.
 
 While `waiting_for_io`, the orchestrator also runs a best-effort `session_observe` pump. It does not append hidden tool observations to model history; it only converts new terminal facts into `EnvironmentEvent`s such as `session_output_available`, `session_input_ready`, `session_continuation_prompt`, and `session_returned_to_prompt`.
 

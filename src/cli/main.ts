@@ -470,6 +470,7 @@ Usage:
   tiny-agent tui --run <runId|latest>                 Attach TUI to existing run
   tiny-agent im  <subcommand> [options]               IM message operations
   tiny-agent skill <subcommand> [options]             Skill management
+  tiny-agent mcp  <subcommand> [options]              MCP server interaction
   tiny-agent --help                                   Show this help
 
 IM subcommands:
@@ -527,6 +528,12 @@ async function main(): Promise<void> {
   if (firstArg === "skill") {
     const { runSkill } = await import("./skill.js");
     await runSkill(process.argv.slice(3));
+    return;
+  }
+
+  if (firstArg === "mcp") {
+    const { runMcpCli } = await import("../mcp/cli.js");
+    await runMcpCli(process.argv.slice(3));
     return;
   }
 

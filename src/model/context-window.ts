@@ -183,12 +183,8 @@ function describeHistoryItemExtended(item: ModelContextItem): string {
     }
     case "io_wait_call": {
       const reason = item.wait.reason ?? "wait";
-      const cond = item.wait.condition
-        ? typeof item.wait.condition === "object"
-          ? `kind=${(item.wait.condition as { kind?: string }).kind ?? ""}`
-          : ""
-        : "";
-      return `io_wait reason=${preview(reason, 60)} ${cond}`;
+      const minLevel = item.wait.minLevel ?? item.wait.condition?.minLevel ?? 0;
+      return `io_wait reason=${preview(reason, 60)} minLevel=${minLevel}`;
     }
     case "observation": {
       const obs = item.observation as Record<string, unknown> | undefined;

@@ -52,10 +52,10 @@ type EnvironmentEvent =
 ## Reminder Semantics
 
 - `consumeSince(runId)` returns unconsumed environment events and advances the run cursor.
-- `waitFor(new_user_message)` resolves without consuming the matched event, so the next model turn can still see the reminder.
-- `waitFor()` with no condition, or `waitFor({ kind: "event" })`, waits for any new environment event.
-- Wait registration captures the latest event cursor. Historical events do not wake a newly registered wait.
-- Event waits can filter by `source`, `eventKind`, `session`, `channel`, and `minLevel`; `minLevel` means `event.level >= minLevel`, and missing event level defaults to `1`.
+- `waitFor(...)` resolves without consuming the matched event, so the next model turn can still see the reminder.
+- `waitFor()` with no `minLevel`, or with `minLevel: 0`, waits for any new environment event.
+- `io_wait` uses the run's consumed-event cursor from the latest model turn start, not the later wait-registration moment. Events that arrive while the model is thinking can therefore satisfy the following `io_wait` immediately. If `waitFor` is used without a prior `consumeSince` for that run, it falls back to the latest event cursor at registration time so historical events do not self-wake standalone waits.
+- `io_wait` is priority-only. Its effective threshold is `wait.minLevel ?? wait.condition?.minLevel ?? 0`; legacy `source`, `eventKind`, `session`, and `channel` fields are accepted only for historical compatibility and do not filter wake events. Missing user-message events default to level `100` and are treated as highest-priority operator input; other missing event levels default to `1`.
 - `Environment.renderReminder` serializes user messages as `[user@channel] ...` and skill/session facts as factual reminder lines.
 - When `events.jsonl` is configured, `Environment` also watches the JSONL file while waiting so sibling CLI commands such as `skill close` can wake the run.
 - While `io_wait` is pending, the orchestrator starts a best-effort session observe pump so terminal prompt/output facts can become session environment events.

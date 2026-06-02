@@ -363,8 +363,8 @@ Description:
 Pause the agent loop until an external environment event arrives.
 This is a tool call, not a shell command. Never run it inside the terminal.
 Use after sending a user-visible reply, when waiting for user input, approval, webhook, sub-agent result, or another environment event.
-Omit condition, or use condition.kind=event with no filters, to wake on any new environment event.
-Use optional source, eventKind, session, channel, or minLevel filters only when a narrower wait is intentional.
+io_wait is priority-only: it wakes on the next event whose environmentEventLevel is >= minLevel.
+Omit minLevel, or use 0, to wake on any new environment event. Use 10 for meaningful session/tool lifecycle events. User messages are level 100.
 ```
 
 Schema:
@@ -377,56 +377,9 @@ Schema:
       "type": "string",
       "description": "Optional short reason shown in the run loop."
     },
-    "condition": {
-      "oneOf": [
-        {
-          "type": "object",
-          "required": ["kind"],
-          "properties": {
-            "kind": { "const": "event" },
-            "eventKind": {
-              "enum": [
-                "user_message_received",
-                "skill_run_started",
-                "skill_run_closed",
-                "skill_review_pending",
-                "skill_review_completed",
-                "session_output_available",
-                "session_input_ready",
-                "session_focused",
-                "session_restarted",
-                "session_continuation_prompt",
-                "session_returned_to_prompt",
-                "session_terminated",
-                "session_unsynced"
-              ]
-            },
-            "source": {
-              "enum": ["im", "skill", "session"]
-            },
-            "session": {
-              "type": "string"
-            },
-            "channel": {
-              "type": "string"
-            },
-            "minLevel": {
-              "type": "number",
-              "description": "Match events where event.level >= minLevel. Missing event level defaults to 1."
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": ["kind"],
-          "properties": {
-            "kind": { "const": "new_user_message" },
-            "channel": { "type": "string" }
-          },
-          "additionalProperties": false
-        }
-      ]
+    "minLevel": {
+      "type": "number",
+      "description": "Minimum event level. Omit or use 0 for any event; use 10 for meaningful session/tool lifecycle events. User messages are level 100."
     }
   },
   "additionalProperties": false
