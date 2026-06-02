@@ -1,4 +1,5 @@
 import * as crypto from "node:crypto";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { ImCliTransport } from "../im/transport.js";
 
@@ -10,6 +11,12 @@ function die(message: string, errorCode = "IM_ERROR"): never {
 }
 
 const RESERVED_POST_SENDERS = new Set(["agent", "assistant", "system", "tool"]);
+
+type ImTarget = {
+  baseDir: string;
+  runId?: string;
+  target: "explicit_state" | "env_im_dir" | "global_state" | "run";
+};
 
 function parseArgs(argv: string[]): { flags: Record<string, string>; positional: string[] } {
   const flags: Record<string, string> = {};
@@ -65,19 +72,16 @@ export async function runIm(
   const textStdin = hasFlag(rest, "text-stdin");
   const { flags } = parseArgs(rest.filter((a) => a !== "--json" && a !== "--text-stdin"));
 
-  const explicitStateDir = flags["state-dir"];
-  const baseDir = explicitStateDir
-    ? path.join(explicitStateDir, "im")
-    : process.env.TAH_IM_DIR ??
-      (process.env.TAH_STATE_DIR
-        ? path.join(process.env.TAH_STATE_DIR, "im")
-        : ".tiny-agent/im");
+  if (!isImSubcommand(subcommand)) {
+    die(imUsage());
+  }
 
-  const transport = new ImCliTransport({ baseDir });
+  const target = resolveImTarget(flags);
+  const transport = new ImCliTransport({ baseDir: target.baseDir });
 
   switch (subcommand) {
     case "post":
-      await cmdPost(transport, flags, jsonMode);
+      await cmdPost(transport, flags, jsonMode, target);
       break;
     case "recv":
       await cmdRecv(transport, flags, jsonMode);
@@ -98,14 +102,106 @@ export async function runIm(
       await cmdListen(transport, flags, jsonMode);
       break;
     default:
-      die(
-        "Usage: im <post|recv|send|ack|listen> [options]\n" +
-          "  im post --channel <ch> --text <text> [--from <user-label>] [--json]\n" +
-          "  im recv --channel <ch> [--cursor <cursor>] [--json]\n" +
-          "  im send --channel <ch> --kind <status|error> (--text <text>|--text-stdin) [--run-id <id>] [--json]\n" +
-          "  im ack --channel <ch> --message-id <id> [--json]\n" +
-          "  im listen --channel <ch> [--cursor <cursor>] [--json]",
-      );
+      subcommand satisfies never;
+  }
+}
+
+function isImSubcommand(value: string | undefined): value is
+  | "post"
+  | "recv"
+  | "send"
+  | "ack"
+  | "listen" {
+  return (
+    value === "post" ||
+    value === "recv" ||
+    value === "send" ||
+    value === "ack" ||
+    value === "listen"
+  );
+}
+
+function imUsage(): string {
+  return (
+    "Usage: im <post|recv|send|ack|listen> [options]\n" +
+    "  im post --channel <ch> --text <text> [--from <user-label>] [--run <runId|latest>] [--json]\n" +
+    "  im recv --channel <ch> [--cursor <cursor>] [--json]\n" +
+    "  im send --channel <ch> --kind <status|error> (--text <text>|--text-stdin) [--run-id <id>] [--json]\n" +
+    "  im ack --channel <ch> --message-id <id> [--json]\n" +
+    "  im listen --channel <ch> [--cursor <cursor>] [--json]"
+  );
+}
+
+function resolveImTarget(flags: Record<string, string>): ImTarget {
+  const explicitStateDir = flags["state-dir"];
+  const run = flags["run"];
+  const stateDir = path.resolve(
+    explicitStateDir ?? process.env.TAH_STATE_DIR ?? ".tiny-agent",
+  );
+
+  if (run) {
+    const runId = resolveRunId(stateDir, run);
+    return {
+      baseDir: path.join(stateDir, "runs", runId, "im"),
+      runId,
+      target: "run",
+    };
+  }
+
+  if (explicitStateDir) {
+    return {
+      baseDir: path.join(explicitStateDir, "im"),
+      target: "explicit_state",
+    };
+  }
+
+  if (process.env.TAH_IM_DIR) {
+    return {
+      baseDir: process.env.TAH_IM_DIR,
+      target: "env_im_dir",
+    };
+  }
+
+  const latestRunId = readLatestRunId(stateDir);
+  if (latestRunId) {
+    return {
+      baseDir: path.join(stateDir, "runs", latestRunId, "im"),
+      runId: latestRunId,
+      target: "run",
+    };
+  }
+
+  return {
+    baseDir: path.join(stateDir, "im"),
+    target: "global_state",
+  };
+}
+
+function resolveRunId(stateDir: string, run: string): string {
+  if (run !== "latest") {
+    return run;
+  }
+  const latestRunId = readLatestRunId(stateDir);
+  if (!latestRunId) {
+    die(`No latest run found under ${path.join(stateDir, "runs")}`);
+  }
+  return latestRunId;
+}
+
+function readLatestRunId(stateDir: string): string | undefined {
+  const latestPath = path.join(stateDir, "runs", "latest.json");
+  if (!fs.existsSync(latestPath)) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(latestPath, "utf-8")) as {
+      runId?: unknown;
+    };
+    return typeof parsed.runId === "string" && parsed.runId.length > 0
+      ? parsed.runId
+      : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -113,6 +209,7 @@ async function cmdPost(
   transport: ImCliTransport,
   flags: Record<string, string>,
   json: boolean,
+  target: ImTarget,
 ): Promise<void> {
   const channel = flags["channel"];
   const text = flags["text"];
@@ -137,7 +234,7 @@ async function cmdPost(
 
   await transport.post(message);
 
-  output({ ok: true, id, channel }, json);
+  output({ ok: true, id, channel, target: target.target, runId: target.runId }, json);
 }
 
 async function cmdRecv(

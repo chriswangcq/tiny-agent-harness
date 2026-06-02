@@ -474,7 +474,8 @@ Usage:
   tiny-agent --help                                   Show this help
 
 IM subcommands:
-  post   --channel <ch> --text <text>          Inject user message to inbox
+  post   --channel <ch> --text <text> [--run <runId|latest>]
+                                                 Inject user message to inbox
   recv   --channel <ch> [--cursor <id>]        Receive user messages from inbox
   send   --channel <ch> --text <t>|--text-stdin --kind <k>
                                                  Send agent message to outbox
