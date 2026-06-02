@@ -74,4 +74,12 @@ describe("McpRegistryStore", () => {
     expect(parsed.servers.s1.args).toEqual(["--flag"]);
     expect(fs.readdirSync(path.dirname(p)).filter(f => f.endsWith(".tmp"))).toHaveLength(0);
   });
+
+  it("lock directory is created under stateDir", async () => {
+    const p = path.join(tmpBase, "registry.json");
+    const store = new McpRegistryStore(p, stateDir);
+    await store.add({ name: "s1", command: "cmd", args: [] });
+    const locksDir = path.join(stateDir, "locks");
+    expect(fs.existsSync(locksDir)).toBe(true);
+  });
 });
