@@ -1,4 +1,3 @@
-import { spawn, type ChildProcess } from "node:child_process";
 import type { JsonRpcTransport } from "./transport.js";
 
 export type McpServerConfig = {
@@ -19,7 +18,7 @@ type JsonRpcMessage = {
   error?: { code: number; message: string; data?: unknown };
 };
 
-/** Pure JSON-RPC client — transport and timer are injected. */
+/** Pure JSON-RPC client — transport and timeout are injected. No fs/spawn/process. */
 export class McpJsonRpcClient {
   private nextId = 1;
   private pending = new Map<JsonRpcId, {
@@ -117,48 +116,5 @@ export class McpJsonRpcClient {
         }
       }
     }
-  }
-}
-
-/** Process-based transport implementing JsonRpcTransport. */
-export class ProcessMcpTransport implements JsonRpcTransport {
-  private process: ChildProcess;
-  private dataHandlers: Array<(chunk: Buffer) => void> = [];
-  private closeHandlers: Array<(code: number | null) => void> = [];
-  private errorHandlers: Array<(err: Error) => void> = [];
-
-  constructor(command: string, args: string[], env?: Record<string, string>) {
-    this.process = spawn(command, args, {
-      stdio: ["pipe", "pipe", "pipe"],
-      env: env ? { ...process.env, ...env } : process.env,
-    });
-    this.process.stdout?.on("data", (chunk: Buffer) => {
-      for (const h of this.dataHandlers) h(chunk);
-    });
-    this.process.on("close", (code) => {
-      for (const h of this.closeHandlers) h(code);
-    });
-    this.process.on("error", (err) => {
-      for (const h of this.errorHandlers) h(err);
-    });
-  }
-
-  write(data: string): void {
-    this.process.stdin?.write(data);
-  }
-  onData(handler: (chunk: Buffer) => void): void { this.dataHandlers.push(handler); }
-  onClose(handler: (code: number | null) => void): void { this.closeHandlers.push(handler); }
-  onError(handler: (err: Error) => void): void { this.errorHandlers.push(handler); }
-  destroy(): void {
-    try { this.process.stdin?.end(); } catch {}
-    try { this.process.kill(); } catch {}
-  }
-}
-
-/** Convenience wrapper — creates ProcessMcpTransport + McpJsonRpcClient. */
-export class McpClient extends McpJsonRpcClient {
-  constructor(config: McpServerConfig) {
-    const transport = new ProcessMcpTransport(config.command, config.args, config.env);
-    super(transport);
   }
 }

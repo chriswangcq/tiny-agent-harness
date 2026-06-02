@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { McpServerConfig } from "./client.js";
+import { DirectoryLock } from "../state/lock.js";
 
 export type McpRegistry = {
   servers: Record<string, Omit<McpServerConfig, "name">>;
@@ -10,9 +11,15 @@ const DEFAULT_REGISTRY_PATH = ".tiny-agent/mcp-servers.json";
 
 export class McpRegistryStore {
   private registryPath: string;
+  private lock: DirectoryLock;
 
-  constructor(registryPath?: string) {
+  constructor(registryPath?: string, stateDir?: string) {
     this.registryPath = registryPath ?? DEFAULT_REGISTRY_PATH;
+    const locksDir = stateDir
+      ? path.join(stateDir, "locks")
+      : path.join(path.dirname(this.registryPath), "locks");
+    if (!fs.existsSync(locksDir)) { fs.mkdirSync(locksDir, { recursive: true }); }
+    this.lock = new DirectoryLock(locksDir, "mcp-registry");
   }
 
   load(): McpRegistry {
@@ -23,7 +30,6 @@ export class McpRegistryStore {
       if (e instanceof Error && (e as NodeJS.ErrnoException).code === "ENOENT") {
         return { servers: {} };
       }
-      // JSON parse error or permission error — don't silently swallow
       throw e instanceof Error
         ? new Error(`Failed to load MCP registry: ${e.message}`)
         : new Error(`Failed to load MCP registry: ${String(e)}`);
@@ -35,8 +41,7 @@ export class McpRegistryStore {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    // Atomic write via temp file + rename
-    const tmpPath = this.registryPath + ".tmp";
+    const tmpPath = this.registryPath + ".tmp." + process.pid;
     fs.writeFileSync(tmpPath, JSON.stringify(registry, null, 2), "utf-8");
     fs.renameSync(tmpPath, this.registryPath);
   }
@@ -56,18 +61,22 @@ export class McpRegistryStore {
     return { name, ...entry };
   }
 
-  add(config: McpServerConfig): void {
-    const registry = this.load();
-    const { name, ...rest } = config;
-    registry.servers[name] = rest;
-    this.save(registry);
+  async add(config: McpServerConfig): Promise<void> {
+    await this.lock.withLock("add", () => {
+      const registry = this.load();
+      const { name, ...rest } = config;
+      registry.servers[name] = rest;
+      this.save(registry);
+    });
   }
 
-  remove(name: string): boolean {
-    const registry = this.load();
-    if (!registry.servers[name]) return false;
-    delete registry.servers[name];
-    this.save(registry);
-    return true;
+  async remove(name: string): Promise<boolean> {
+    return await this.lock.withLock("remove", () => {
+      const registry = this.load();
+      if (!registry.servers[name]) return false;
+      delete registry.servers[name];
+      this.save(registry);
+      return true;
+    });
   }
 }

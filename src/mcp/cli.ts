@@ -1,5 +1,6 @@
 import * as path from "node:path";
-import { McpClient, type McpServerConfig } from "./client.js";
+import { McpJsonRpcClient, type McpServerConfig } from "./client.js";
+import { ProcessMcpTransport } from "./process-transport.js";
 import { McpRegistryStore } from "./registry.js";
 
 function die(message: string): never {
@@ -87,7 +88,8 @@ export async function runMcpCli(argv: string[]): Promise<void> {
       const config = registry.get(serverName);
       if (!config) die(`MCP server not found: ${serverName}`);
 
-      const client = new McpClient(config);
+      const transport = new ProcessMcpTransport(config.command, config.args, config.env);
+      const client = new McpJsonRpcClient(transport);
       try {
         await client.initialize();
         const result = await client.listTools();
@@ -125,7 +127,8 @@ export async function runMcpCli(argv: string[]): Promise<void> {
         }
       }
 
-      const client = new McpClient(config);
+      const transport = new ProcessMcpTransport(config.command, config.args, config.env);
+      const client = new McpJsonRpcClient(transport);
       try {
         await client.initialize();
         const result = await client.callTool(toolName, toolArgs);
