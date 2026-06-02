@@ -46,7 +46,7 @@ export function stripManagedShellScreenNoise(
 
     const noise = classifyManagedShellNoiseLine(currentLine);
     if (noise.kind === "noise") {
-      pendingPromptKind = noise.nextPromptKind ?? pendingPromptKind;
+      pendingPromptKind = ("nextPromptKind" in noise ? (noise.nextPromptKind ?? pendingPromptKind) : pendingPromptKind);
     } else if (pendingPromptKind !== null) {
       output += stripManagedShellPromptChrome(
         currentLine,
@@ -82,11 +82,11 @@ export function stripManagedShellScreenNoise(
 }
 
 function classifyManagedShellNoiseLine(line: string):
-  | { kind: "noise"; nextPromptKind?: ManagedShellPromptKind }
+  | { kind: "noise"; nextPromptKind?: ManagedShellPromptKind | null }
   | { kind: "content" } {
   const candidate = markerCandidate(line);
   if (candidate.startsWith("__TAH_PROMPT__")) {
-    return { kind: "noise", nextPromptKind: "continuation" };
+    return { kind: "noise", nextPromptKind: null };
   }
   if (candidate.startsWith("__TAH_CONT__")) {
     return { kind: "noise", nextPromptKind: "continuation" };
