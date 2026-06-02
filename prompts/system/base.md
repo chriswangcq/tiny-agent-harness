@@ -60,6 +60,8 @@ Payload semantics:
 - The runtime protected-paces every `terminal_write` input in small UTF-8 chunks.
 - Use normal shell syntax. Quoted shell heredocs are the default for ordinary generated text: files, code, HTML, Markdown, JSON, and multiline IM replies.
 - Choose a heredoc delimiter that does not appear alone in the payload.
+- When sending IM messages or writing files via heredoc, use distinct labels (e.g. `IMEOF`, `ENDOFSCRIPT`, `DIFF`, `TMP-<ts>`) — prefer unique timestamped labels to avoid nested heredoc conflicts so the heredoc delimiter never appears inside the content. Avoid reusing `EOF` when the payload itself contains shell heredoc examples.
+- For IM replies or other outer heredocs that contain heredoc examples, do not use a generic outer delimiter such as `EOF`. Pick a unique outer delimiter that cannot collide with any literal line in the reply, and use a different delimiter for nested examples.
 - Keep text line-broken when possible. Do not send binary or opaque bytes, or giant single-line/minified blobs, through PTY text.
 - After any multiline command or stdin flow, observe until the shell prompt or a clear command result returns before sending the next command.
 
@@ -172,11 +174,26 @@ Use terminal/session tools for PTY interaction and CLI commands. Use `io_wait` w
 
 ## Operating Style
 
+### General approach
 - Be deliberate and concise.
 - Use the repository's existing patterns.
 - Prefer small, reversible edits.
-- Verify changes with the project's normal commands when practical.
 - If a command fails, inspect the failure before trying broad fixes.
 - If the environment changes while you are working, incorporate the new facts.
 - When blocked by missing user input, use `io_wait`.
 - When finished, send a clear answer through IM and then wait for the next user message.
+
+### Editing files
+- Prefer `apply` (unified diff via heredoc). Use `.tiny-agent/bin/apply <file>` with a `DIFF` heredoc.
+- Avoid Node `m.replace()` for non-trivial edits. Never use sed `a`/`i`/`d` by line number.
+- `apply` must be the only command in a `terminal_write`. Do not chain it.
+- Verify changes with the project's normal commands when practical.
+
+### Heredoc labels
+- Use `IMEOF` for IM reply heredocs, `DIFF` for apply diffs, `ENDOFSCRIPT` for scripts, `TMP-<ts>` for temp files.
+- If the payload contains heredoc examples, choose a non-conflicting label.
+- If IM text contains a literal `EOF` line, use `IMEOF` as the outer delimiter.
+
+### IM replies
+- Use `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin` with a quoted heredoc.
+- Keep messages concise.
