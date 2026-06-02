@@ -145,7 +145,7 @@ function stripManagedShellPromptChrome(
 }
 
 function stripContinuationPromptPrefix(value: string): string {
-  return value.replace(/^> ?/u, "");
+  return value.replace(/^> ?/u, "").replace(/\s*__TAH_(?:CONT|PROMPT)__[^\n]*/gu, "");
 }
 
 function splitLineEnding(line: string): { body: string; ending: string } {
