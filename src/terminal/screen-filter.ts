@@ -52,7 +52,7 @@ export function stripManagedShellScreenNoise(
         currentLine,
         pendingPromptKind,
       );
-      pendingPromptKind = null;
+      // keep pendingPromptKind
     } else {
       output += currentLine;
     }
@@ -68,7 +68,7 @@ export function stripManagedShellScreenNoise(
         pendingPromptKind,
       );
       output += stripped;
-      pendingPromptKind = null;
+      // keep pendingPromptKind
     } else {
       output += currentLine;
     }
@@ -86,7 +86,7 @@ function classifyManagedShellNoiseLine(line: string):
   | { kind: "content" } {
   const candidate = markerCandidate(line);
   if (candidate.startsWith("__TAH_PROMPT__")) {
-    return { kind: "noise" };
+    return { kind: "noise", nextPromptKind: "continuation" };
   }
   if (candidate.startsWith("__TAH_CONT__")) {
     return { kind: "noise", nextPromptKind: "continuation" };
