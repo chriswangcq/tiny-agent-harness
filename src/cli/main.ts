@@ -533,7 +533,7 @@ async function main(): Promise<void> {
 
   if (firstArg === "mcp") {
     const { runMcpCli } = await import("../mcp/cli.js");
-    await runMcpCli(process.argv.slice(3));
+    process.exitCode = await runMcpCli(process.argv.slice(3));
     return;
   }
 
