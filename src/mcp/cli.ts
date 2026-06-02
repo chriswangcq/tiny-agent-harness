@@ -13,77 +13,72 @@ function output(data: unknown, jsonMode: boolean): void {
     process.stdout.write(JSON.stringify(data) + "\n");
   } else {
     const obj = data as Record<string, unknown>;
-    if (Array.isArray(data)) {
-      for (const item of data) {
-        process.stdout.write(
-          JSON.stringify(item) + "\n",
-        );
-      }
-    } else if (typeof obj.ok === "boolean") {
-      process.stdout.write(
-        `${obj.ok ? "OK" : "FAIL"}: ${JSON.stringify(obj)}\n`,
-      );
-    } else {
-      process.stdout.write(JSON.stringify(data, null, 2) + "\n");
+    for (const [k, v] of Object.entries(obj)) {
+      process.stdout.write(`${k}: ${typeof v === "object" ? JSON.stringify(v) : String(v)}\n`);
     }
   }
 }
 
-// ---------------------------------------------------------------------------
-// runMcpCli entry point
-// ---------------------------------------------------------------------------
+function resolveStateDir(): string {
+  return process.env.TAH_STATE_DIR ?? path.resolve(".tiny-agent");
+}
 
-export async function runMcpCli(argv: string[]): Promise<void> {
-  const subcommand = argv[0];
-  const stateDir =
-    process.env.TAH_STATE_DIR ?? path.resolve(".tiny-agent");
-
-  const registryPath = path.join(stateDir, "mcp-servers.json");
-  const registry = new McpRegistryStore(registryPath);
-
+function parseJsonFlag(argv: string[]): { jsonMode: boolean; remaining: string[] } {
   const jsonMode = argv.includes("--json");
+  return { jsonMode, remaining: argv.filter(a => a !== "--json") };
+}
 
-  switch (subcommand) {
-    // -------------------------------------------------------------------
-    // list
-    // -------------------------------------------------------------------
-    case "list": {
-      const servers = registry.list();
-      output({ servers }, jsonMode);
-      break;
-    }
+export async function runMcpCli(argv: string[]): Promise<number> {
+  const { jsonMode, remaining } = parseJsonFlag(argv);
+  const cmd = remaining[0];
 
-    // -------------------------------------------------------------------
-    // add
-    // -------------------------------------------------------------------
+  if (!cmd || cmd === "--help") {
+    process.stdout.write(`Usage: mcp <command> [--json]
+
+Commands:
+  add <name> <command> [args...] [--json]    Register an MCP server
+  remove <name> [--json]                     Remove an MCP server
+  list [--json]                              List registered servers
+  tools <server> [--json]                    List tools from a server
+  call <server> <tool> [--json] [--json '<args>']  Call a tool
+`);
+    return 0;
+  }
+
+  const stateDir = resolveStateDir();
+  const registryPath = path.join(stateDir, "mcp-servers.json");
+  const registry = new McpRegistryStore(registryPath, stateDir);
+
+  switch (cmd) {
     case "add": {
-      const name = argv[1];
-      const command = argv[2];
+      const name = remaining[1];
+      const command = remaining[2];
       if (!name || !command) {
         die("Usage: mcp add <name> <command> [args...]");
       }
-      const args = argv.slice(3);
-      registry.add({ name, command, args });
+      // args after <name> <command>, excluding --json
+      const args = remaining.slice(3).filter(a => a !== "--json");
+      await registry.add({ name, command, args });
       output({ ok: true, name }, jsonMode);
       break;
     }
 
-    // -------------------------------------------------------------------
-    // remove
-    // -------------------------------------------------------------------
     case "remove": {
-      const name = argv[1];
+      const name = remaining[1];
       if (!name) die("Usage: mcp remove <name>");
-      const removed = registry.remove(name);
+      const removed = await registry.remove(name);
       output({ ok: removed, name }, jsonMode);
       break;
     }
 
-    // -------------------------------------------------------------------
-    // tools — list tools from a server
-    // -------------------------------------------------------------------
+    case "list": {
+      const servers = registry.list();
+      output({ ok: true, servers }, jsonMode);
+      break;
+    }
+
     case "tools": {
-      const serverName = argv[1];
+      const serverName = remaining[1];
       if (!serverName) die("Usage: mcp tools <server> [--json]");
       const config = registry.get(serverName);
       if (!config) die(`MCP server not found: ${serverName}`);
@@ -100,12 +95,9 @@ export async function runMcpCli(argv: string[]): Promise<void> {
       break;
     }
 
-    // -------------------------------------------------------------------
-    // call
-    // -------------------------------------------------------------------
     case "call": {
-      const serverName = argv[1];
-      const toolName = argv[2];
+      const serverName = remaining[1];
+      const toolName = remaining[2];
       if (!serverName || !toolName) {
         die("Usage: mcp call <server> <tool> [--json '<args>']");
       }
@@ -114,10 +106,9 @@ export async function runMcpCli(argv: string[]): Promise<void> {
       if (!config) die(`MCP server not found: ${serverName}`);
 
       let toolArgs: Record<string, unknown> = {};
-      const jsonFlagIdx = argv.indexOf("--json");
-      if (jsonFlagIdx !== -1 && jsonFlagIdx + 1 < argv.length) {
-        const nextArg = argv[jsonFlagIdx + 1]!;
-        // Only parse if it looks like JSON (starts with {)
+      const jsonFlagIdx = remaining.indexOf("--json", 3);
+      if (jsonFlagIdx !== -1 && jsonFlagIdx + 1 < remaining.length) {
+        const nextArg = remaining[jsonFlagIdx + 1];
         if (nextArg.startsWith("{")) {
           try {
             toolArgs = JSON.parse(nextArg) as Record<string, unknown>;
@@ -139,35 +130,9 @@ export async function runMcpCli(argv: string[]): Promise<void> {
       break;
     }
 
-    // -------------------------------------------------------------------
-    // help / default
-    // -------------------------------------------------------------------
-    case "--help":
-    case "-h":
-    case undefined:
-    default: {
-      process.stdout.write(
-        "Usage: mcp <list|add|remove|tools|call> [options]\n" +
-          "  mcp list [--json]\n" +
-          "  mcp add <name> <command> [args...]\n" +
-          "  mcp remove <name>\n" +
-          "  mcp tools <server> [--json]\n" +
-          "  mcp call <server> <tool> [--json '<args>']\n",
-      );
-      break;
-    }
+    default:
+      die(`Unknown command: ${cmd}`);
   }
-}
 
-// ---------------------------------------------------------------------------
-// Direct invocation
-// ---------------------------------------------------------------------------
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  runMcpCli(process.argv.slice(2)).catch((err: unknown) => {
-    process.stderr.write(
-      `[mcp] Fatal error: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
-    );
-    process.exit(1);
-  });
+  return 0;
 }
