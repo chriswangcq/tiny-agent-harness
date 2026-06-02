@@ -46,7 +46,7 @@ export function stripManagedShellScreenNoise(
 
     const noise = classifyManagedShellNoiseLine(currentLine);
     if (noise.kind === "noise") {
-      pendingPromptKind = ("nextPromptKind" in noise ? (noise.nextPromptKind ?? pendingPromptKind) : pendingPromptKind);
+      pendingPromptKind = noise.nextPromptKind !== undefined ? noise.nextPromptKind : pendingPromptKind;
     } else if (pendingPromptKind !== null) {
       output += stripManagedShellPromptChrome(
         currentLine,

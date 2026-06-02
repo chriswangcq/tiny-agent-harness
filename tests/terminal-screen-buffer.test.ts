@@ -136,4 +136,18 @@ describe("stripManagedShellScreenNoise", () => {
     );
     expect(result.pending).toBe("");
   });
+
+  it("resets continuation after PROMPT and preserves blockquote > prefix", () => {
+    const first = stripManagedShellScreenNoise(
+      "__TAH_CONT__ nonce=n reason=unknown seq=1\r\n> ",
+    );
+    expect(first.state.pendingPromptKind).toBe("continuation");
+
+    const second = stripManagedShellScreenNoise(
+      "__TAH_PROMPT__ nonce=n rc=0 cwd=/repo seq=2\r\n> user blockquote should stay\n",
+      first.state,
+    );
+    expect(second.output).toBe("> user blockquote should stay\n");
+    expect(second.state.pendingPromptKind).toBeNull();
+  });
 });
