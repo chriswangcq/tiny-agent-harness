@@ -69,9 +69,9 @@ export class Environment implements EnvironmentPort {
   // appendEvent
   // -----------------------------------------------------------------------
 
-  appendEvent(event: EnvironmentEvent): void {
+  appendEvent(event: EnvironmentEvent): boolean {
     if (!this.addEventToState(event)) {
-      return;
+      return false;
     }
 
     // Persist to JSONL file if path is set
@@ -84,6 +84,7 @@ export class Environment implements EnvironmentPort {
     }
 
     this.resolveMatchingWaiters(event);
+    return true;
   }
 
   // -----------------------------------------------------------------------

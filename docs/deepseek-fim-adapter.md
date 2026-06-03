@@ -160,10 +160,16 @@ type ModelProgressEvent = {
 };
 ```
 
-`RunOrchestrator` persists those callbacks as `model_thinking_delta`
-transcript events. These events are observability-only: they let the TUI update
-the running model frame, but they do not replace `model_output_received` or
-change the final `ModelTurn` contract.
+`RunOrchestrator` treats those callbacks as trace input, not primary run
+state. Current runs collect the chunks into
+`debug/thinking/step-XXXX-thinking.trace.txt` and attach the artifact metadata
+as `model_output_received.output.thinking.raw.traceRef`. The final
+`model_output_received` event remains the replay source for thinking content
+and `ModelTurn` data.
+
+Older transcripts may still contain `model_thinking_delta` events from the
+pre-trace-artifact path. Those events are historical/debug compatibility only
+and should not be reintroduced as the active persistence path.
 
 Thinking content is normalized before it is stored or injected into the
 decision prompt. If a streamed thinking response accidentally crosses into

@@ -43,10 +43,21 @@ describe("Environment", () => {
     const env = new Environment();
     const event = makeUserMessageEvent("e1", "hello");
 
-    env.appendEvent(event);
+    expect(env.appendEvent(event)).toBe(true);
 
     expect(env.state.events.length).toBe(1);
     expect(env.state.events[0]).toEqual(event);
+    expect(env.state.latestEventId).toBe("e1");
+  });
+
+  it("appendEvent returns false for duplicate event ids", () => {
+    const env = new Environment();
+    const event = makeUserMessageEvent("e1", "hello");
+
+    expect(env.appendEvent(event)).toBe(true);
+    expect(env.appendEvent(event)).toBe(false);
+
+    expect(env.state.events).toEqual([event]);
     expect(env.state.latestEventId).toBe("e1");
   });
 

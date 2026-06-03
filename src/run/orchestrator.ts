@@ -117,44 +117,50 @@ export class RunOrchestrator {
       const effect = this.state.nextEffect();
 
       if (effect.type === "call_model") {
-        // Consume environment events before calling the model
-        const envEvents = this.ports.environment.consumeSince({
-          runId: this.state.data.runId,
-        });
-        if (envEvents.length > 0) {
-          await this.record({
-            type: "environment_events_consumed",
+        let context: ModelStepContext;
+        try {
+          // Consume environment events before calling the model
+          const envEvents = this.ports.environment.consumeSince({
             runId: this.state.data.runId,
-            eventIds: envEvents.map((e) => e.id),
-            timestamp: this.now(),
+          });
+          if (envEvents.length > 0) {
+            await this.record({
+              type: "environment_events_consumed",
+              runId: this.state.data.runId,
+              eventIds: envEvents.map((e) => e.id),
+              timestamp: this.now(),
+            });
+
+            const envReminder = Environment.renderReminder(envEvents);
+            if (envReminder) {
+              this.ports.modelContext.append({
+                type: "environment_reminder",
+                content: envReminder,
+              });
+              this.saveModelContext();
+            }
+          }
+
+          await this.compactModelContextIfNeeded();
+
+          const activeSkillRuns = this.ports.listActiveSkillRuns();
+          const transientReminders =
+            activeSkillRuns.length > 0
+              ? [renderActiveSkillReminder(activeSkillRuns)]
+              : [];
+          const { messages } = this.ports.modelContext.prepareModelTurn({
+            transientReminders,
           });
 
-          const envReminder = Environment.renderReminder(envEvents);
-          if (envReminder) {
-            this.ports.modelContext.append({
-              type: "environment_reminder",
-              content: envReminder,
-            });
-            this.saveModelContext();
-          }
+          context = {
+            runId: this.state.data.runId,
+            stepIndex: this.state.data.stepIndex,
+            messages,
+          };
+        } catch (error) {
+          await this.failRun(error, "MODEL_CONTEXT_ERROR");
+          break;
         }
-
-        await this.compactModelContextIfNeeded();
-
-        const activeSkillRuns = this.ports.listActiveSkillRuns();
-        const transientReminders =
-          activeSkillRuns.length > 0
-            ? [renderActiveSkillReminder(activeSkillRuns)]
-            : [];
-        const { messages } = this.ports.modelContext.prepareModelTurn({
-          transientReminders,
-        });
-
-        const context: ModelStepContext = {
-          runId: this.state.data.runId,
-          stepIndex: this.state.data.stepIndex,
-          messages,
-        };
 
         await this.record({
           type: "model_requested",
@@ -162,19 +168,14 @@ export class RunOrchestrator {
           timestamp: this.now(),
         });
 
+        const thinkingTrace = createThinkingTraceSink();
         let output: FimStepOutput;
         try {
           output = await this.ports.model.generateTurn(context, {
             tools: this.ports.tools,
             onProgress: async (progress) => {
               if (progress.type === "thinking_delta") {
-                await this.record({
-                  type: "model_thinking_delta",
-                  stepIndex: context.stepIndex,
-                  delta: progress.content,
-                  sequence: progress.sequence,
-                  timestamp: this.now(),
-                });
+                thinkingTrace.append(progress);
               }
             },
           });
@@ -182,7 +183,11 @@ export class RunOrchestrator {
           await this.failRun(error, "MODEL_ERROR");
           break;
         }
-        output = this.persistModelDebugArtifacts(output, this.state.data.stepIndex);
+        output = this.persistModelDebugArtifacts(
+          output,
+          this.state.data.stepIndex,
+          thinkingTrace.content(),
+        );
 
         await this.record({
           type: "model_output_received",
@@ -473,7 +478,10 @@ export class RunOrchestrator {
     });
 
     for (const event of events) {
-      this.ports.environment.appendEvent(event);
+      const appended = this.ports.environment.appendEvent(event);
+      if (appended === false) {
+        continue;
+      }
       await this.record({
         type: "environment_event_recorded",
         event,
@@ -523,17 +531,29 @@ export class RunOrchestrator {
   private persistModelDebugArtifacts(
     output: FimStepOutput,
     stepIndex: number,
+    thinkingTrace: string = "",
   ): FimStepOutput {
-    const raw = output.thinking.raw;
-    if (!hasPrompt(raw)) {
+    let thinking = output.thinking;
+    if (!hasPrompt(thinking.raw) && thinkingTrace.length === 0) {
       return output;
     }
 
-    const promptRef = this.transcript.writeDebugArtifact(
-      `debug/prompts/step-${String(stepIndex).padStart(4, "0")}-thinking.prompt.txt`,
-      raw.prompt,
-    );
-    const thinking = withPromptRef(output.thinking, promptRef);
+    if (hasPrompt(thinking.raw)) {
+      const promptRef = this.transcript.writeDebugArtifact(
+        `debug/prompts/step-${String(stepIndex).padStart(4, "0")}-thinking.prompt.txt`,
+        thinking.raw.prompt,
+      );
+      thinking = withPromptRef(thinking, promptRef);
+    }
+
+    if (thinkingTrace.length > 0) {
+      const traceRef = this.transcript.writeDebugArtifact(
+        `debug/thinking/step-${String(stepIndex).padStart(4, "0")}-thinking.trace.txt`,
+        thinkingTrace,
+      );
+      thinking = withThinkingRawPatch(thinking, { traceRef });
+    }
+
     return {
       ...output,
       thinking,
@@ -627,6 +647,29 @@ function withPromptRef(
   };
 }
 
+function withThinkingRawPatch(
+  thinking: AgentThinking,
+  patch: Record<string, unknown>,
+): AgentThinking {
+  return {
+    ...thinking,
+    raw: {
+      ...rawObject(thinking.raw),
+      ...patch,
+    },
+  };
+}
+
+function rawObject(raw: unknown): Record<string, unknown> {
+  if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  if (raw === undefined) {
+    return {};
+  }
+  return { rawValue: raw };
+}
+
 function withTurnThinking(
   turn: FimStepOutput["turn"],
   thinking: AgentThinking,
@@ -639,6 +682,24 @@ function withTurnThinking(
     case "invalid_output":
       return { ...turn, thinking };
   }
+}
+
+function createThinkingTraceSink(): {
+  append(event: ModelProgressEvent): void;
+  content(): string;
+} {
+  const chunks = new Map<number, string>();
+  return {
+    append(event) {
+      chunks.set(event.sequence, event.content);
+    },
+    content() {
+      return [...chunks.entries()]
+        .sort(([left], [right]) => left - right)
+        .map(([, content]) => content)
+        .join("");
+    },
+  };
 }
 
 function serializeErrorCause(cause: unknown): unknown {
@@ -723,7 +784,7 @@ function terminalObservationToEnvironmentEvents(input: {
     lastReturnCode: observation.terminal.lastShellPrompt?.lastReturnCode,
     foregroundProcess: observation.terminal.foregroundProcess,
   };
-  const idPrefix = `env-session-${input.runId}-${input.stepIndex}-${request.toolCallId}`;
+  const idPrefix = `env-session-${input.runId}-${stableEventIdPart(observation.observedSession)}`;
   const events: EnvironmentEvent[] = [];
 
   if (outputEvents.length > 0) {
@@ -738,7 +799,7 @@ function terminalObservationToEnvironmentEvents(input: {
   if (request.request.kind === "session_focus") {
     events.push({
       ...eventBase,
-      id: `${idPrefix}-focused`,
+      id: `${idPrefix}-focused-${stableEventIdPart(request.toolCallId)}`,
       level: 1,
       kind: "session_focused",
     });
@@ -747,16 +808,21 @@ function terminalObservationToEnvironmentEvents(input: {
   if (request.request.kind === "session_restart") {
     events.push({
       ...eventBase,
-      id: `${idPrefix}-restarted`,
+      id: `${idPrefix}-restarted-${stableEventIdPart(request.toolCallId)}`,
       level: 1,
       kind: "session_restarted",
     });
   }
 
   if (continuationEvent !== undefined) {
+    const continuationKey = promptFactKey({
+      promptSeq: continuationEvent.promptSeq,
+      promptNonce: continuationEvent.promptNonce,
+      fallback: observation.terminal.inputSeq,
+    });
     events.push({
       ...eventBase,
-      id: `${idPrefix}-continuation-${continuationEvent.promptSeq}`,
+      id: `${idPrefix}-continuation-${continuationKey}`,
       level: 10,
       kind: "session_continuation_prompt",
       promptSeq: continuationEvent.promptSeq,
@@ -764,7 +830,7 @@ function terminalObservationToEnvironmentEvents(input: {
     });
     events.push({
       ...eventBase,
-      id: `${idPrefix}-input-ready-continuation-${continuationEvent.promptSeq}`,
+      id: `${idPrefix}-input-ready-continuation-${continuationKey}`,
       level: 10,
       kind: "session_input_ready",
       promptSeq: continuationEvent.promptSeq,
@@ -775,16 +841,21 @@ function terminalObservationToEnvironmentEvents(input: {
   if (promptEvent !== undefined || observation.returnedToPrompt) {
     const promptSeq =
       promptEvent?.promptSeq ?? observation.terminal.lastShellPrompt?.promptSeq;
+    const promptKey = promptFactKey({
+      promptSeq,
+      promptNonce: promptEvent?.promptNonce,
+      fallback: observation.terminal.inputSeq,
+    });
     events.push({
       ...eventBase,
-      id: `${idPrefix}-returned-${promptSeq ?? observation.terminal.inputSeq}`,
+      id: `${idPrefix}-returned-${promptKey}`,
       level: 10,
       kind: "session_returned_to_prompt",
       promptSeq,
     });
     events.push({
       ...eventBase,
-      id: `${idPrefix}-input-ready-prompt-${promptSeq ?? observation.terminal.inputSeq}`,
+      id: `${idPrefix}-input-ready-prompt-${promptKey}`,
       level: 10,
       kind: "session_input_ready",
       promptSeq,
@@ -794,7 +865,7 @@ function terminalObservationToEnvironmentEvents(input: {
   if (observation.terminal.syncStatus.kind === "unsynced") {
     events.push({
       ...eventBase,
-      id: `${idPrefix}-unsynced`,
+      id: `${idPrefix}-unsynced-${observation.terminal.inputSeq}-${stableEventIdPart(observation.terminal.syncStatus.reason)}`,
       level: 50,
       kind: "session_unsynced",
       reason: observation.terminal.syncStatus.reason,
@@ -804,7 +875,7 @@ function terminalObservationToEnvironmentEvents(input: {
   if (!observation.terminal.alive) {
     events.push({
       ...eventBase,
-      id: `${idPrefix}-terminated`,
+      id: `${idPrefix}-terminated-${observation.terminal.inputSeq}`,
       level: 50,
       kind: "session_terminated",
       reason: observation.terminal.termination?.reason,
@@ -813,6 +884,24 @@ function terminalObservationToEnvironmentEvents(input: {
   }
 
   return events;
+}
+
+function promptFactKey(input: {
+  promptSeq: number | undefined;
+  promptNonce: string | undefined;
+  fallback: number;
+}): string {
+  if (input.promptNonce && input.promptNonce.length > 0) {
+    return `nonce-${stableEventIdPart(input.promptNonce)}`;
+  }
+  if (input.promptSeq !== undefined) {
+    return `seq-${input.promptSeq}`;
+  }
+  return `input-${input.fallback}`;
+}
+
+function stableEventIdPart(value: string): string {
+  return encodeURIComponent(value).replace(/%/gu, "_");
 }
 
 function findLastHistoryIndex(

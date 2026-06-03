@@ -1,7 +1,3 @@
-import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import * as path from "node:path";
-
 import type {
   AgentThinking,
   FimStepOutput,
@@ -22,9 +18,17 @@ import {
   THINKING_HARD_BOUNDARY_SEQUENCES,
   parseDsmlDecision,
 } from "./dsml-decision-parser.js";
+import {
+  PromptEncodingError,
+  PythonPromptEncodeRunner,
+  encodeV4PromptInput,
+  type PromptEncodeRunner,
+} from "./prompt-encoder.js";
 export { parseDsmlDecision } from "./dsml-decision-parser.js";
 
-const ENCODE_PROMPT_MAX_BUFFER_BYTES = 2 * 1024 * 1024;
+const ADAPTER_ENCODE_PROMPT_TIMEOUT_MS = 60_000;
+const ADAPTER_ENCODE_PROMPT_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
+const ADAPTER_ENCODE_PROMPT_MAX_ATTEMPTS = 2;
 
 export type DeepSeekFimConfig = {
   apiKey: string;
@@ -36,6 +40,11 @@ export type DeepSeekFimConfig = {
   requestRetryMaxAttempts?: number;
   requestRetryInitialDelayMs?: number;
   requestRetryMaxDelayMs?: number;
+  encodeRunner?: PromptEncodeRunner;
+  encodeScriptPath?: string;
+  encodeTimeoutMs?: number;
+  encodeMaxBufferBytes?: number;
+  encodeMaxAttempts?: number;
 };
 
 type FimCompletionMeta = {
@@ -138,22 +147,27 @@ const IO_WAIT_V4_TOOL: V4Tool = {
 };
 
 // ---------------------------------------------------------------------------
-// Python encoder path
-// ---------------------------------------------------------------------------
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const ENCODE_SCRIPT = path.resolve(__dirname, "../../scripts/encode-prompt.py");
-
-// ---------------------------------------------------------------------------
 // DeepSeekFimAdapter
 // ---------------------------------------------------------------------------
 
 export class DeepSeekFimAdapter {
   private readonly config: DeepSeekFimConfig;
+  private readonly encodeRunner: PromptEncodeRunner;
 
   constructor(config: DeepSeekFimConfig) {
     this.config = config;
+    this.encodeRunner =
+      config.encodeRunner ??
+      new PythonPromptEncodeRunner({
+        scriptPath: config.encodeScriptPath,
+        timeoutMs:
+          config.encodeTimeoutMs ?? ADAPTER_ENCODE_PROMPT_TIMEOUT_MS,
+        maxBufferBytes:
+          config.encodeMaxBufferBytes ??
+          ADAPTER_ENCODE_PROMPT_MAX_BUFFER_BYTES,
+        maxAttempts:
+          config.encodeMaxAttempts ?? ADAPTER_ENCODE_PROMPT_MAX_ATTEMPTS,
+      });
   }
 
   async generateTurn(
@@ -260,13 +274,22 @@ export class DeepSeekFimAdapter {
   }
 
   private encodePrompt(messages: V4ChatMessage[]): string {
-    const input = JSON.stringify({ messages, thinking_mode: "thinking" });
-    return execFileSync("python3", [ENCODE_SCRIPT], {
-      input,
-      encoding: "utf-8",
-      maxBuffer: ENCODE_PROMPT_MAX_BUFFER_BYTES,
-      timeout: 10_000,
-    });
+    const input = encodeV4PromptInput({ messages });
+    try {
+      return this.encodeRunner.runEncode(input);
+    } catch (error) {
+      if (error instanceof PromptEncodingError) {
+        throw error;
+      }
+      throw new PromptEncodingError(
+        `DeepSeek V4 prompt encoding failed: ${errorMessage(error)}`,
+        {
+          cause: error,
+          attempts: 1,
+          inputBytes: Buffer.byteLength(input, "utf-8"),
+        },
+      );
+    }
   }
 
   private async completeFim(

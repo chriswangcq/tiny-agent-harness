@@ -242,7 +242,14 @@ export function validateIoWaitRequest(wait: IoWaitRequest): string | undefined {
 // ─── Environment Port ──────────────────────────────────────────────
 
 export type EnvironmentPort = {
-  appendEvent(event: EnvironmentEvent): void;
+  /**
+   * Append a factual environment event.
+   *
+   * Returns false when the event id already exists. Older test doubles may
+   * return void; callers that care about dedupe should treat only false as
+   * "not appended".
+   */
+  appendEvent(event: EnvironmentEvent): boolean | void;
 
   consumeSince(options: {
     runId: string;

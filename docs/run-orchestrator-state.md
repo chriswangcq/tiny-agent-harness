@@ -558,6 +558,11 @@ async function runAgent(initialState: AgentRunState, ports: RunPorts) {
 
 Every event goes through `record(event)`, so transcript append and state snapshot update cannot drift apart. The transcript remains append-only; the latest state can be reconstructed or cached as a snapshot.
 
+`model_thinking_delta` is retained for historical transcript compatibility.
+The active model-progress path stores streamed thinking chunks as debug trace
+artifacts referenced from `model_output_received.output.thinking.raw.traceRef`
+instead of appending per-chunk primary RunEvents.
+
 ## Transition Rules
 
 ```text
@@ -569,7 +574,7 @@ running + model_requested
 
 waiting_for_model + model_thinking_delta
   -> waiting_for_model
-  (observability-only; does not advance stepIndex or create pending work)
+  (historical observability-only compatibility; active runs use trace artifacts)
 
 waiting_for_model + model_output_received(tool_call)
   -> running with pending tool call

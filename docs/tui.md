@@ -299,6 +299,8 @@ model_requested
 model_thinking_delta
   -> Update current model LoopFrame status=running title="model thinking"
   -> Append delta into LoopFrame detail section "thinking"
+  -> Historical compatibility only; current runs store streamed thinking as
+     debug trace artifacts referenced by final model_output_received
 
 model_output_received(tool_call)
   -> LoopFrame phase=decision status=ok title="tool call: terminal_write"

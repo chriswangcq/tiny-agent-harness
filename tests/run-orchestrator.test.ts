@@ -538,7 +538,7 @@ describe("RunOrchestrator", () => {
     );
   });
 
-  it("records model thinking deltas before the final model output", async () => {
+  it("stores model thinking progress as a debug artifact instead of transcript deltas", async () => {
     const wait: IoWaitRequest = {
       reason: "awaiting next instruction",
       condition: { kind: "new_user_message", channel: "default" },
@@ -568,27 +568,32 @@ describe("RunOrchestrator", () => {
     expect(events.map((event) => event.type)).toEqual([
       "run_started",
       "model_requested",
-      "model_thinking_delta",
-      "model_thinking_delta",
       "model_output_received",
       "io_wait_started",
       "io_wait_satisfied",
       "model_requested",
-      "model_thinking_delta",
-      "model_thinking_delta",
       "run_finished",
     ]);
-    expect(events[2]).toMatchObject({
-      type: "model_thinking_delta",
-      stepIndex: 0,
-      delta: "checking context",
-      sequence: 0,
-    });
-    expect(events[3]).toMatchObject({
-      type: "model_thinking_delta",
-      stepIndex: 0,
-      delta: "choosing action",
-      sequence: 1,
+    expect(events.some((event) => event.type === "model_thinking_delta")).toBe(false);
+
+    const tracePath = path.join(
+      path.dirname(transcript.transcriptFilePath),
+      "debug/thinking/step-0000-thinking.trace.txt",
+    );
+    expect(fs.readFileSync(tracePath, "utf-8")).toBe(
+      "checking contextchoosing action",
+    );
+
+    const modelOutput = events.find(
+      (event): event is Extract<RunEvent, { type: "model_output_received" }> =>
+        event.type === "model_output_received",
+    );
+    expect(modelOutput?.output.thinking.raw).toMatchObject({
+      traceRef: {
+        path: tracePath,
+        relativePath: path.join("debug", "thinking", "step-0000-thinking.trace.txt"),
+        bytes: Buffer.byteLength("checking contextchoosing action", "utf-8"),
+      },
     });
   });
 
@@ -692,6 +697,36 @@ describe("RunOrchestrator", () => {
     expect(contexts[0]!.messages.map((message) => message.content).join("\n")).toContain(
       "small context",
     );
+  });
+
+  it("marks the run failed when model-context preparation throws before model_requested", async () => {
+    const { orchestrator, transcript, contexts } = makeRun({
+      initialHistory: [
+        { type: "environment_reminder", content: "large context" },
+      ],
+      contextWindow: {
+        maxTokens: 1,
+        countTokens: () => {
+          throw new Error("token counter unavailable");
+        },
+        compact: () => {
+          throw new Error("should not compact after count failure");
+        },
+      },
+    });
+
+    const endState = await orchestrator.run();
+
+    expect(endState.status).toBe("failed");
+    expect(endState.data.error).toMatchObject({
+      message: "token counter unavailable",
+      code: "MODEL_CONTEXT_ERROR",
+    });
+    expect(contexts).toHaveLength(0);
+    expect(readTranscript(transcript).map((event) => event.type)).toEqual([
+      "run_started",
+      "run_finished",
+    ]);
   });
 
   it("continues after io_wait instead of stopping at a step cap", async () => {
@@ -1326,6 +1361,78 @@ describe("RunOrchestrator", () => {
         }),
       ]),
     );
+  });
+
+  it("deduplicates repeated terminal facts across different observations", async () => {
+    const environment = new Environment();
+    const environmentPort: RunPorts["environment"] = {
+      appendEvent(event) {
+        return environment.appendEvent(event);
+      },
+      consumeSince(options) {
+        return environment.consumeSince(options);
+      },
+      waitFor(options) {
+        return environment.waitFor(options);
+      },
+    };
+    const firstToolCall: InternalToolCall = {
+      id: "tool-returned-1",
+      name: "terminal_write",
+      arguments: { expectedInputSeq: 1, text: "pwd\n" },
+    };
+    const secondToolCall: InternalToolCall = {
+      id: "tool-returned-2",
+      name: "terminal_write",
+      arguments: { expectedInputSeq: 1, text: "pwd\n" },
+    };
+    const terminalObservation: TerminalObservation = {
+      currentSession: "default",
+      observedSession: "default",
+      terminal: terminal(2),
+      request: "terminal_write",
+      result: "ok",
+      returnedToPrompt: true,
+      terminalEvents: [
+        {
+          kind: "prompt",
+          returnCode: 0,
+          cwd: "/repo",
+          promptSeq: 3,
+          promptNonce: "same-prompt",
+        },
+      ],
+      screen: {
+        text: "/repo\n",
+        rows: 24,
+        cols: 80,
+        truncated: false,
+        logRef: { path: "managed-pty://default" },
+      },
+    };
+    const { orchestrator, transcript } = makeRun({
+      outputs: [toolOutput(firstToolCall), toolOutput(secondToolCall)],
+      environment: environmentPort,
+      terminalObservation,
+    });
+
+    await orchestrator.run();
+
+    expect(environment.state.events).toEqual([
+      expect.objectContaining({
+        id: "env-session-run-001-default-returned-nonce-same-prompt",
+        kind: "session_returned_to_prompt",
+      }),
+      expect.objectContaining({
+        id: "env-session-run-001-default-input-ready-prompt-nonce-same-prompt",
+        kind: "session_input_ready",
+      }),
+    ]);
+    expect(
+      readTranscript(transcript).filter(
+        (event) => event.type === "environment_event_recorded",
+      ),
+    ).toHaveLength(2);
   });
 
   it("session environment events can wake a pending io_wait", async () => {

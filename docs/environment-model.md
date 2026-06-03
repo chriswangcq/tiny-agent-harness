@@ -60,6 +60,22 @@ type EnvironmentEvent =
 - When `events.jsonl` is configured, `Environment` also watches the JSONL file while waiting so sibling CLI commands such as `skill close` can wake the run.
 - While `io_wait` is pending, the orchestrator starts a best-effort session observe pump so terminal prompt/output facts can become session environment events.
 
+TODO: Revisit ordinary `event` waits. Today `condition: { kind: "event" }` with no `minLevel` wakes on any level-0 event, including `session_output_available` produced by the session observe pump that starts during the wait itself. That matches the current priority-only rule, but it is easy to confuse with "wait for a meaningful external event" and can make a wait appear to self-wake. Future design should either name this as an explicit any-event wait or add a separate stricter wait mode for filtered/meaningful events.
+
+## Event Identity
+
+Environment events represent external facts, not the observation attempt that noticed them. Session fact IDs must therefore be stable across `terminal_write`, explicit `session_observe`, and the background session pump. For example, the same prompt return should keep the same event id when it is observed multiple times:
+
+```text
+env-session-{runId}-{session}-returned-nonce-{promptNonce}
+env-session-{runId}-{session}-input-ready-prompt-nonce-{promptNonce}
+env-session-{runId}-{session}-output-{inputSeq}
+```
+
+`Environment.appendEvent(...)` returns `false` when an event id already exists. The orchestrator records `environment_event_recorded` only when the append actually added a new event. This prevents repeated pump observations from inflating both `events.jsonl` and the transcript.
+
+`model_thinking_delta` is not an environment event. It is retained only for historical transcript/debugger compatibility. Current model thinking progress is stored as debug trace artifacts referenced by the final model output, and should not be used as durable external state or model-visible reminder material.
+
 ## Boundary
 
 ```text

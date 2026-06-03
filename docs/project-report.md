@@ -384,6 +384,7 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 | 文档与实现快速变化 | README 已包含 codeq/state/IM/skill 新能力，部分实现仍在未提交工作区中快速演进。 | 每次功能落地后同步更新对应设计文档和 project report。 |
 | 状态持久化仍需闭环 | 设计中有 `.tiny-agent/`、locks、JSONL ledger，但所有 CLI 是否都完全使用同一 resolver 还需要持续验证。 | 用集成测试覆盖多 CLI 共用 state root、并发写、resume/replay。 |
 | terminal/session 约束对模型要求高 | 模型必须学会通过 shell 调 skill/codeq/im 等 CLI，并在 heredoc、前台 stdin consumer、`--text-stdin` 和 session 管理之间做正确选择，而不是直接获得 typed business tool affordance。 | 在 system prompt 和 examples 中强化 heredoc / `--text-stdin` / session observe 的边界，并避免示例污染大生成文件路径。 |
+| 普通 `event` wait 语义过宽 | 当前 `io_wait` 是 priority-only；`condition: { kind: "event" }` 默认 `minLevel=0`，会被等待期间 session pump 自己生成的 `session_output_available` 唤醒，看起来像 wait 自己唤醒自己。 | 后续重新设计 ordinary event wait：区分 any-event、meaningful-event、filtered-event，或给 session pump 事件单独降噪/标记。 |
 | review 目前默认 approve | 默认 runtime 仍是 demo approve，但已有纯 policy evaluator / ToolPolicyReviewer 可作为产品模式基础。 | 增加显式配置开关、workspace policy、网络/文件权限和人工确认模式。 |
 | TUI 仍偏观察 | 当前 TUI 更像 transcript player，控制动作和 session tail 仍可增强。 | 增加 session log tail、active skill、review pending、approval 操作和 replay/follow。 |
 

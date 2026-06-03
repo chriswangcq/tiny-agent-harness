@@ -3,6 +3,7 @@ import { DeepSeekFimAdapter } from "../src/model/adapter.js";
 import { STATIC_TOOL_CATALOG } from "../src/tools/catalog.js";
 import type { DeepSeekFimConfig } from "../src/model/adapter.js";
 import type { ModelStepContext, V4ChatMessage } from "../src/types/model.js";
+import { PromptEncodingError } from "../src/model/prompt-encoder.js";
 
 const DSML = "｜DSML｜";
 const REMOVED_SHELL_TOOL = ["ba", "sh"].join("");
@@ -789,6 +790,39 @@ describe("DeepSeekFimAdapter", () => {
       }),
     ).rejects.toThrow("DeepSeek FIM request failed: 400 bad request");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails before the FIM request when prompt encoding exhausts retries", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      makeAdapter({
+        encodeRunner: {
+          runEncode() {
+            throw new PromptEncodingError(
+              "DeepSeek V4 prompt encoding failed after 2 attempt(s): spawnSync python3 ETIMEDOUT",
+              {
+                attempts: 2,
+                inputBytes: 123,
+                timeoutMs: 60_000,
+              },
+            );
+          },
+        },
+      }).generateTurn(BASE_CONTEXT, {
+        tools: [...STATIC_TOOL_CATALOG],
+      }),
+    ).rejects.toMatchObject({
+      name: "PromptEncodingError",
+      code: "PROMPT_ENCODING_ERROR",
+      details: {
+        attempts: 2,
+        inputBytes: 123,
+        timeoutMs: 60_000,
+      },
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("retries FIM fetch failures before a streaming response starts", async () => {

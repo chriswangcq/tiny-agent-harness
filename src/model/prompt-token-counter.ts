@@ -1,41 +1,12 @@
-import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import * as path from "node:path";
-
 import type { V4ChatMessage } from "../types/model.js";
+import {
+  PythonPromptEncodeRunner,
+  encodeV4PromptInput,
+  type PromptEncodeRunner,
+} from "./prompt-encoder.js";
 
-export interface EncodeRunner {
-  runEncode(input: string): string;
-}
-
-const DEFAULT_ENCODE_TIMEOUT_MS = 10_000;
-const DEFAULT_ENCODE_MAX_BUFFER_BYTES = 2 * 1024 * 1024;
-
-export class PythonEncodeRunner implements EncodeRunner {
-  private readonly scriptPath: string;
-  private readonly timeoutMs: number;
-  private readonly maxBufferBytes: number;
-
-  constructor(options: {
-    scriptPath?: string;
-    timeoutMs?: number;
-    maxBufferBytes?: number;
-  } = {}) {
-    this.scriptPath = options.scriptPath ?? DEFAULT_ENCODE_SCRIPT;
-    this.timeoutMs = options.timeoutMs ?? DEFAULT_ENCODE_TIMEOUT_MS;
-    this.maxBufferBytes =
-      options.maxBufferBytes ?? DEFAULT_ENCODE_MAX_BUFFER_BYTES;
-  }
-
-  runEncode(input: string): string {
-    return execFileSync("python3", [this.scriptPath], {
-      input,
-      encoding: "utf-8",
-      maxBuffer: this.maxBufferBytes,
-      timeout: this.timeoutMs,
-    });
-  }
-}
+export type EncodeRunner = PromptEncodeRunner;
+export { PythonPromptEncodeRunner as PythonEncodeRunner };
 
 export interface PromptTokenCounter {
   countMessages(messages: readonly V4ChatMessage[]): number;
@@ -48,13 +19,6 @@ export type DeepSeekV4PromptTokenCounterOptions = {
   encodeMaxBufferBytes?: number;
 };
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const DEFAULT_ENCODE_SCRIPT = path.resolve(
-  __dirname,
-  "../../scripts/encode-prompt.py",
-);
-
 export class DeepSeekV4PromptTokenCounter implements PromptTokenCounter {
   private readonly encodeRunner: EncodeRunner;
 
@@ -62,7 +26,7 @@ export class DeepSeekV4PromptTokenCounter implements PromptTokenCounter {
     if (options.encodeRunner) {
       this.encodeRunner = options.encodeRunner;
     } else {
-      this.encodeRunner = new PythonEncodeRunner({
+      this.encodeRunner = new PythonPromptEncodeRunner({
         scriptPath: options.encodeScriptPath,
         timeoutMs: options.encodeTimeoutMs,
         maxBufferBytes: options.encodeMaxBufferBytes,
@@ -75,9 +39,8 @@ export class DeepSeekV4PromptTokenCounter implements PromptTokenCounter {
       return 0;
     }
 
-    const input = JSON.stringify({
+    const input = encodeV4PromptInput({
       messages,
-      thinking_mode: "thinking",
     });
 
     try {
