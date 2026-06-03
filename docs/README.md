@@ -24,7 +24,7 @@
 - 每个写入类 terminal/session request 都带 `expectedInputSeq`。如果序号过期，runtime 会尽量先刷新终端状态，让 rejection 带回最新 `inputSeq`。
 - Observation 是 bounded human glance：模型看到最多一屏 `screen.text`、terminal facts、`returnedToPrompt` 和 log path；完整输出留在 session log。
 - Terminal facts 包含 best-effort `foregroundProcess`。它是调试和决策线索，不是可靠的路由判定。
-- FIM thinking prompt 这类大调试 payload 会写到 run 目录下的 `debug/prompts/`，transcript 和 agent-loop history 只保留 `promptRef`。
+- FIM thinking prompt 这类大调试 payload 会写到 run 目录下的 `debug/prompts/`，transcript/model output 只保留 `promptRef`。
 
 ## Durable Artifacts
 
@@ -37,16 +37,14 @@
       state.json
       transcript.jsonl
       session.json
+      sessions/
+        default-37a8eec1ce.log
       debug/
         prompts/
           step-0000-thinking.prompt.txt
-  sessions/
-    <sessionId>/
-      state.json
-      output.log
 ```
 
-`state.json` 是最新 run snapshot；`transcript.jsonl` 是 append-only audit ledger；`session.json` 保存 agent-loop history 以支持 resume；`debug/prompts/` 保存不适合直接进入 transcript/history 的大 prompt；session `output.log` 保存完整 PTY 输出。
+`state.json` 是最新 run snapshot；`transcript.jsonl` 是 append-only audit ledger；`session.json` 保存 `ModelContextSession` snapshot 以支持 resume；`debug/prompts/` 保存不适合直接进入 transcript/model-context 的大 prompt；`runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log` 保存完整 raw PTY 输出。模型看到的 `screen.text` 是一屏 semantic viewport，raw log 通过 `screen.logRef.path` 追溯。
 
 ## Keeping Docs Current
 

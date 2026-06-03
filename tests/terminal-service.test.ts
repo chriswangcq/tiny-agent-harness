@@ -6,8 +6,12 @@ import type {
   TerminalRuntimeSnapshot,
   TerminalServiceConfig,
   TerminalServicePorts,
+  PtyReadOptions,
 } from "../src/application/terminal-ports.js";
-import { createTerminalState } from "../src/terminal/state.js";
+import {
+  createTerminalState,
+  markTerminalTerminated,
+} from "../src/terminal/state.js";
 import type { TerminalScreen, TerminalState } from "../src/terminal/index.js";
 
 function terminal(inputSeq = 1): TerminalState {
@@ -65,6 +69,7 @@ function makePorts(options: {
   ports: TerminalServicePorts;
   current: () => string;
   writes: Array<{ session: string; data: string }>;
+  readCalls: Array<{ session: string; cursor?: string; options?: PtyReadOptions }>;
   saves: TerminalRuntimeSnapshot[];
   restarts: Array<{ session: string; cwd?: string }>;
   interrupts: string[];
@@ -81,6 +86,7 @@ function makePorts(options: {
   }
 
   const writes: Array<{ session: string; data: string }> = [];
+  const readCalls: Array<{ session: string; cursor?: string; options?: PtyReadOptions }> = [];
   const saves: TerminalRuntimeSnapshot[] = [];
   const restarts: Array<{ session: string; cwd?: string }> = [];
   const interrupts: string[] = [];
@@ -88,7 +94,8 @@ function makePorts(options: {
 
   return {
     current: () => currentSession,
-    writes,
+	    writes,
+	    readCalls,
     saves,
     restarts,
     interrupts,
@@ -98,10 +105,11 @@ function makePorts(options: {
         write: async (session, data) => {
           writes.push({ session, data });
         },
-        read: async (session) => {
-          const chunk = reads.get(session)?.shift() ?? "";
-          return makeRead(session, chunk);
-        },
+	        read: async (session, cursor, readOptions) => {
+	          readCalls.push({ session, cursor, options: readOptions });
+	          const chunk = reads.get(session)?.shift() ?? "";
+	          return makeRead(session, chunk);
+	        },
         interrupt: async (session) => {
           interrupts.push(session);
         },
@@ -179,6 +187,89 @@ describe("TerminalService", () => {
     expect(["output", "Preview"].join("") in observation).toBe(false);
   });
 
+  it("does not wait by default for command-like input", async () => {
+    const { ports, readCalls } = makePorts({
+      currentSession: "work",
+      snapshots: [makeSnapshot("work", terminal(1))],
+    });
+    ports.pty.read = async (session, cursor, readOptions) => {
+      readCalls.push({ session, cursor, options: readOptions });
+      return makeRead(session, "still running\n");
+    };
+    const service = new TerminalService(ports, makeConfig());
+
+    const observation = await service.handleAction({
+      kind: "terminal_write",
+      expectedInputSeq: 1,
+      text: "npm test\n",
+    });
+
+    expect(readCalls[0]).toMatchObject({
+      session: "work",
+      cursor: "0",
+      options: {
+        waitForPromptMs: 0,
+        afterPromptSeq: 1,
+      },
+    });
+    expect(observation).toMatchObject({
+      result: "ok",
+      returnedToPrompt: false,
+    });
+  });
+
+  it("honors explicit waitForReturnMs and can report timeout", async () => {
+    const { ports, readCalls } = makePorts({
+      currentSession: "work",
+      snapshots: [makeSnapshot("work", terminal(1))],
+    });
+    ports.pty.read = async (session, cursor, readOptions) => {
+      readCalls.push({ session, cursor, options: readOptions });
+      return {
+        ...makeRead(session, "still running\n"),
+        timedOut: true,
+      };
+    };
+    const service = new TerminalService(ports, makeConfig());
+
+    const observation = await service.handleAction({
+      kind: "terminal_write",
+      expectedInputSeq: 1,
+      text: "npm test\n",
+      waitForReturnMs: 30_000,
+    });
+
+    expect(readCalls[0]).toMatchObject({
+      session: "work",
+      cursor: "0",
+      options: {
+        waitForPromptMs: 30_000,
+        afterPromptSeq: 1,
+      },
+    });
+    expect(observation).toMatchObject({
+      result: "timeout",
+      returnedToPrompt: false,
+      message: expect.stringContaining("Timed out waiting 30000ms"),
+    });
+  });
+
+  it("does not wait by default for partial terminal text", async () => {
+    const { ports, readCalls } = makePorts({
+      currentSession: "work",
+      snapshots: [makeSnapshot("work", terminal(1))],
+    });
+    const service = new TerminalService(ports, makeConfig());
+
+    await service.handleAction({
+      kind: "terminal_write",
+      expectedInputSeq: 1,
+      text: "echo",
+    });
+
+    expect(readCalls[0]?.options?.waitForPromptMs).toBe(0);
+  });
+
   it("rejects stale input sequences and refreshes the snapshot before reporting", async () => {
     const promptChunk =
       formatPromptMarker({
@@ -206,6 +297,81 @@ describe("TerminalService", () => {
       result: "rejected",
       errorCode: "INPUT_SEQ_MISMATCH",
       terminal: { inputSeq: 3 },
+      screen: { text: promptChunk },
+    });
+  });
+
+  it("rejects input to a terminated current session before reaching the PTY", async () => {
+    const deadTerminal = markTerminalTerminated(terminal(5), {
+      exitCode: null,
+      reason: "done",
+    });
+    const { ports, writes, interrupts, saves } = makePorts({
+      snapshots: [makeSnapshot("default", deadTerminal)],
+    });
+    const service = new TerminalService(ports, makeConfig());
+
+    const write = await service.handleAction({
+      kind: "terminal_write",
+      expectedInputSeq: deadTerminal.inputSeq,
+      text: "pwd\n",
+    });
+    const key = await service.handleAction({
+      kind: "terminal_key",
+      expectedInputSeq: deadTerminal.inputSeq,
+      key: "enter",
+    });
+    const interrupt = await service.handleAction({
+      kind: "session_interrupt",
+      expectedInputSeq: deadTerminal.inputSeq,
+    });
+
+    expect(writes).toEqual([]);
+    expect(interrupts).toEqual([]);
+    expect(saves.every((snapshot) => snapshot.terminal.alive === false)).toBe(true);
+    for (const observation of [write, key, interrupt]) {
+      expect(observation).toMatchObject({
+        result: "rejected",
+        errorCode: "TERMINAL_TERMINATED",
+        terminal: {
+          alive: false,
+          termination: { reason: "done" },
+        },
+      });
+    }
+  });
+
+  it("keeps a terminated session dead when later observation parses old prompt output", async () => {
+    const promptChunk =
+      formatPromptMarker({
+        nonce: "nonce",
+        returnCode: 0,
+        cwd: "/repo/resurrect",
+        promptSeq: 7,
+      }) + "\n";
+    const deadTerminal = markTerminalTerminated(terminal(5), {
+      exitCode: null,
+      reason: "done",
+    });
+    const { ports, saves } = makePorts({
+      snapshots: [makeSnapshot("default", deadTerminal)],
+      reads: { default: [promptChunk] },
+    });
+    const service = new TerminalService(ports, makeConfig());
+
+    const observation = await service.handleAction({ kind: "session_observe" });
+
+    expect(saves.at(-1)?.terminal).toMatchObject({
+      alive: false,
+      termination: { reason: "done" },
+      lastShellPrompt: { cwd: "/repo/resurrect", promptSeq: 7 },
+    });
+    expect(observation).toMatchObject({
+      result: "ok",
+      terminal: {
+        alive: false,
+        termination: { reason: "done" },
+      },
       screen: { text: promptChunk },
     });
   });

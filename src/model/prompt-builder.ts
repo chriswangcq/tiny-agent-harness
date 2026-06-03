@@ -36,21 +36,23 @@ const SYSTEM_MESSAGE =
   "- Use terminal_key for non-interrupt keys: enter, ctrl-d, escape, tab, space, q, and arrows. Use session_interrupt for Ctrl-C.\n" +
   "- Use session_observe to inspect the current or a named session. Use session_list to see known sessions. Use session_focus to change the current session. Use session_restart/session_terminate for recovery.\n" +
   "- terminal_write, terminal_key, and session_interrupt require the latest terminal.inputSeq from the previous observation. Stale input is rejected.\n" +
-  "- Observations expose terminal facts, returnedToPrompt, and one terminal viewport as screen.text plus screen.logRef.path. If you need more history, inspect that log path with normal shell commands such as tail, sed, or rg.\n" +
+  "- Observations expose terminal facts, returnedToPrompt, and one semantic terminal viewport as screen.text plus screen.logRef.path. Managed marker lines and continuation-prompt chrome are removed from screen.text; inspect the log path when you need raw PTY history.\n" +
   "- The managed shell disables common pagers by default, but still prefer `git --no-pager` and sliced output (`wc`, `head`, `tail`, `sed`, `rg`) over interactive pagers.\n" +
   "- Use normal shell syntax inside terminal_write. Quoted heredocs are the default for generated files, code, Markdown, JSON, HTML, and multiline IM replies. Do not invent side-channel payload protocols.\n" +
+  "- Do not put multiline code inside shell double quotes, such as `node -e \"...\"` spread across lines. Bash will enter continuation prompt state and may expose managed PS2 markers in observations. Use a quoted heredoc (`node <<'NODE' ... NODE`) or write a temporary script file instead.\n" +
+  "- For outer heredocs, especially IM replies that include shell/heredoc examples, choose a unique delimiter that does not appear alone in the payload. Do not use generic EOF when the reply itself contains EOF lines; use different delimiters for nested examples.\n" +
   "- For user-visible IM replies, run `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin` through terminal_write. Do not use `im send --text` from the agent.\n" +
-  "- If terminal.alive is false, use session_restart. If terminal.syncStatus is unsynced, inspect with session_observe or recover with session_interrupt/session_restart.\n" +
+  "- If terminal.alive is false, the session is still observable/listable but terminal_write, terminal_key, and session_interrupt will reject; use session_restart or focus another live session. If terminal.syncStatus is unsynced, inspect with session_observe or recover with session_interrupt/session_restart.\n" +
   "- Historical assistant tool-call arguments are serialized exactly as generated. Do not copy old tool calls just because they appear in history; choose the next action from the latest observation.\n" +
-  "- io_wait: pause until the next external event. This is a TOOL CALL, not a shell command. " +
-  "Never run io_wait inside the terminal; invoke it directly as a tool.\n\n" +
+  "- io_wait: pause until the next environment event. This is a TOOL CALL, not a shell command. " +
+  "io_wait uses priority-only waiting: it wakes on the next new event whose environmentEventLevel is >= minLevel. Omit minLevel, or use 0, for any event; use 10 for meaningful session/tool lifecycle events. User messages are level 100 and wake every normal wait. All waits are for new events after the wait starts.\n\n" +
   "Thinking is reasoning-only. During thinking, do not emit tool-call markup, raw tool arguments, shell heredocs, or final user-facing prose. Describe the intended next action in words only.\n\n" +
   "Serialized assistant tool-call history is factual history. Do not copy old tool calls just because they appear in history; choose the next action from the latest observation.\n\n" +
   "There is no special User main message. User input is part of the environment and appears only in environment reminders as [user@channel] lines.\n" +
   "Environment reminders may be serialized with role=user for chat-template compatibility; only [user@channel] lines are user-authored input.\n" +
   "Treat new [user@channel] events as current user intent, not as background chatter.\n" +
   "To reply, use IM send with --text-stdin through terminal_write. Quoted heredoc is the normal form; input redirection is also fine when simpler.\n" +
-  "After replying or completing work: io_wait tool -> wait for the next user message.\n\n" +
+  "After replying or completing work: io_wait tool -> wait for the next environment event.\n\n" +
   "Workflow: read [user@channel] intent -> inspect terminal facts and screen.text -> terminal/session tools -> IM send reply -> io_wait.\n" +
   "The tiny-agent CLI is available via `node dist/cli/main.js` (subcommands: im, skill; top-level commands include run, resume, ui, tui).\n\n" +
   // Skill contract

@@ -108,6 +108,12 @@ function invalidOutput(): FimStepOutput {
     turn: {
       kind: "invalid_output",
       message: "bad output",
+      diagnostic: {
+        code: "expected_v4_dsml",
+        severity: "error",
+        message: "bad output",
+        recoverable: true,
+      },
       thinking: thinking(),
       rawDecision: "not a valid tool decision",
       raw: "<raw>",
@@ -330,6 +336,57 @@ describe("ViewModelBuilder", () => {
     expect(modelFrame!.detail).toContain("## raw decision");
   });
 
+  it("renders final model thinking detail when no thinking deltas were recorded", () => {
+    const builder = builderWithRunStarted();
+    const call = toolCall();
+    const finalThinking = {
+      content: "final thinking from model output",
+      raw: {
+        traceRef: {
+          path: "/repo/.tiny-agent/runs/run-1/debug/thinking/step-0002-thinking.trace.txt",
+          relativePath: "debug/thinking/step-0002-thinking.trace.txt",
+          bytes: 42,
+          sha256: "abc123",
+        },
+      },
+    };
+    const turn: ModelTurn = {
+      ...toolCallTurn(call),
+      thinking: finalThinking,
+    };
+    const output: FimStepOutput = {
+      thinking: finalThinking,
+      rawDecision: "tool decision",
+      turn,
+      usage: { total_tokens: 12 },
+    };
+
+    builder.applyEvent({
+      type: "model_requested",
+      stepIndex: 2,
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "model_output_received",
+      stepIndex: 2,
+      output,
+      turn,
+      timestamp: LATER,
+    });
+
+    const modelFrame = builder.getViewModel().loop.find(
+      (frame) => frame.phase === "model" && frame.stepIndex === 2,
+    );
+    expect(modelFrame).toMatchObject({
+      title: "model completed",
+      status: "ok",
+      summary: expect.stringContaining("decision=tool_call"),
+    });
+    expect(modelFrame!.detail).toContain("final thinking from model output");
+    expect(modelFrame!.detail).toContain("traceRef");
+    expect(modelFrame!.detail).toContain("step-0002-thinking.trace.txt");
+  });
+
   it("summarizes current terminal/session tool calls", () => {
     const cases: Array<[ToolName, InternalToolCall["arguments"], string[]]> = [
       [
@@ -412,6 +469,7 @@ describe("ViewModelBuilder", () => {
     });
     expect(decisionFrame.detail).toContain("not a valid tool decision");
     expect(decisionFrame.detail).toContain("bad output");
+    expect(decisionFrame.detail).toContain("expected_v4_dsml");
   });
 
   it("projects validation and review events with detail", () => {

@@ -89,9 +89,14 @@ describe("StateRootResolver", () => {
     const stateDir = path.join(tmpDir, ".tiny-agent");
     resolver.resolve({ stateDir });
 
-    const expectedSubs = ["locks", "runs", "sessions", "environment", "im", "skills", "skill-runs", "tmp"];
+    const expectedSubs = ["locks", "runs", "skills", "tmp"];
     for (const sub of expectedSubs) {
       expect(fs.existsSync(path.join(stateDir, sub))).toBe(true);
+    }
+
+    const runScopedSubs = ["sessions", "environment", "im", "skill-runs"];
+    for (const sub of runScopedSubs) {
+      expect(fs.existsSync(path.join(stateDir, sub))).toBe(false);
     }
   });
 

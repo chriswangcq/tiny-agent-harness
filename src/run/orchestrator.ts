@@ -4,7 +4,6 @@ import type {
   FimStepOutput,
   ModelProgressEvent,
   ModelStepContext,
-  V4ChatMessage,
 } from "../types/model.js";
 import type {
   ToolCallValidation,
@@ -16,15 +15,19 @@ import type {
 import type { TerminalObservation } from "../terminal/types.js";
 import type { InternalToolCall } from "../types/model.js";
 import type { EnvironmentPort, EnvironmentEvent, IoWaitRequest } from "../types/environment.js";
+import { validateIoWaitRequest } from "../types/environment.js";
 import { Environment } from "../environment/environment.js";
-import { wrapReminderAsUserContent } from "../model/prompt-builder.js";
 import type { ActiveSkillRunSummary } from "../types/skill.js";
 import { AgentRunState } from "./state.js";
 import {
   TranscriptStore,
   type RunDebugArtifact,
 } from "../transcript/store.js";
-import type { ContextWindowPort } from "./context-window.js";
+import type {
+  ModelContextItem,
+  ModelContextSessionPort,
+  ModelContextSessionSnapshot,
+} from "../model/context-session.js";
 
 export interface ModelPort {
   generateTurn(
@@ -48,36 +51,16 @@ export interface TerminalPort {
   execute(request: ToolRequest): Promise<ToolObservation>;
 }
 
-export interface PromptPort {
-  buildMessages(task: string, history: HistoryItem[]): V4ChatMessage[];
-}
-
 export interface RunSessionPort {
-  saveHistory(runId: string, history: readonly HistoryItem[]): void;
+  saveModelContext(runId: string, snapshot: ModelContextSessionSnapshot): void;
 }
-
-export type HistoryItem =
-  | { type: "tool_call"; toolCall: InternalToolCall; thinking?: AgentThinking }
-  | {
-      type: "io_wait_call";
-      toolCallId: string;
-      wait: IoWaitRequest;
-      thinking?: AgentThinking;
-    }
-  | {
-      type: "observation";
-      observation: ToolObservation;
-      toolCallId?: string;
-    }
-  | { type: "environment_reminder"; content: string };
 
 export interface RunPorts {
   model: ModelPort;
   validator: ValidatorPort;
   reviewer: ReviewerPort;
   terminal: TerminalPort;
-  prompt: PromptPort;
-  contextWindow: ContextWindowPort;
+  modelContext: ModelContextSessionPort;
   session: RunSessionPort;
   tools: ToolDefinition[];
   environment: EnvironmentPort;
@@ -88,18 +71,15 @@ export class RunOrchestrator {
   private state: AgentRunState;
   private readonly transcript: TranscriptStore;
   private readonly ports: RunPorts;
-  private readonly history: HistoryItem[];
 
   constructor(
     initialState: AgentRunState,
     transcript: TranscriptStore,
     ports: RunPorts,
-    initialHistory: HistoryItem[] = [],
   ) {
     this.state = initialState;
     this.transcript = transcript;
     this.ports = ports;
-    this.history = [...initialHistory];
   }
 
   private now(): string {
@@ -130,57 +110,57 @@ export class RunOrchestrator {
         previousStatus: this.state.status,
         timestamp: this.now(),
       });
-      this.saveHistory();
+      this.saveModelContext();
     }
 
     while (true) {
       const effect = this.state.nextEffect();
 
       if (effect.type === "call_model") {
-        // Consume environment events before calling the model
-        const envEvents = this.ports.environment.consumeSince({
-          runId: this.state.data.runId,
-        });
-        if (envEvents.length > 0) {
-          await this.record({
-            type: "environment_events_consumed",
+        let context: ModelStepContext;
+        try {
+          // Consume environment events before calling the model
+          const envEvents = this.ports.environment.consumeSince({
             runId: this.state.data.runId,
-            eventIds: envEvents.map((e) => e.id),
-            timestamp: this.now(),
           });
-
-          const envReminder = Environment.renderReminder(envEvents);
-          if (envReminder) {
-            this.history.push({
-              type: "environment_reminder",
-              content: envReminder,
+          if (envEvents.length > 0) {
+            await this.record({
+              type: "environment_events_consumed",
+              runId: this.state.data.runId,
+              eventIds: envEvents.map((e) => e.id),
+              timestamp: this.now(),
             });
-            this.saveHistory();
+
+            const envReminder = Environment.renderReminder(envEvents);
+            if (envReminder) {
+              this.ports.modelContext.append({
+                type: "environment_reminder",
+                content: envReminder,
+              });
+              this.saveModelContext();
+            }
           }
-        }
 
-        await this.compactHistoryIfNeeded();
+          await this.compactModelContextIfNeeded();
 
-        const messages = this.ports.prompt.buildMessages(
-          this.state.data.task,
-          this.history,
-        );
-
-        // Render active skill runs as persistent reminder
-        const activeSkillRuns = this.ports.listActiveSkillRuns();
-        if (activeSkillRuns.length > 0) {
-          const reminder = renderActiveSkillReminder(activeSkillRuns);
-          messages.push({
-            role: "user",
-            content: wrapReminderAsUserContent(reminder),
+          const activeSkillRuns = this.ports.listActiveSkillRuns();
+          const transientReminders =
+            activeSkillRuns.length > 0
+              ? [renderActiveSkillReminder(activeSkillRuns)]
+              : [];
+          const { messages } = this.ports.modelContext.prepareModelTurn({
+            transientReminders,
           });
-        }
 
-        const context: ModelStepContext = {
-          runId: this.state.data.runId,
-          stepIndex: this.state.data.stepIndex,
-          messages,
-        };
+          context = {
+            runId: this.state.data.runId,
+            stepIndex: this.state.data.stepIndex,
+            messages,
+          };
+        } catch (error) {
+          await this.failRun(error, "MODEL_CONTEXT_ERROR");
+          break;
+        }
 
         await this.record({
           type: "model_requested",
@@ -188,19 +168,14 @@ export class RunOrchestrator {
           timestamp: this.now(),
         });
 
+        const thinkingTrace = createThinkingTraceSink();
         let output: FimStepOutput;
         try {
           output = await this.ports.model.generateTurn(context, {
             tools: this.ports.tools,
             onProgress: async (progress) => {
               if (progress.type === "thinking_delta") {
-                await this.record({
-                  type: "model_thinking_delta",
-                  stepIndex: context.stepIndex,
-                  delta: progress.content,
-                  sequence: progress.sequence,
-                  timestamp: this.now(),
-                });
+                thinkingTrace.append(progress);
               }
             },
           });
@@ -208,7 +183,11 @@ export class RunOrchestrator {
           await this.failRun(error, "MODEL_ERROR");
           break;
         }
-        output = this.persistModelDebugArtifacts(output, this.state.data.stepIndex);
+        output = this.persistModelDebugArtifacts(
+          output,
+          this.state.data.stepIndex,
+          thinkingTrace.content(),
+        );
 
         await this.record({
           type: "model_output_received",
@@ -287,28 +266,37 @@ export class RunOrchestrator {
             : undefined);
 
         if (toolCall) {
-          this.history.push({
+          this.ports.modelContext.append({
             type: "tool_call",
             toolCall,
             thinking: this.state.data.pendingModelOutput?.thinking,
           });
         }
-        this.history.push({ type: "observation", observation });
-        this.saveHistory();
+        this.ports.modelContext.append({ type: "observation", observation });
+        this.saveModelContext();
 
+        const finishedStepIndex = this.state.data.stepIndex;
         await this.record({
           type: "tool_execution_finished",
-          stepIndex: this.state.data.stepIndex,
+          stepIndex: finishedStepIndex,
           request: effect.request,
           observation,
           timestamp: this.now(),
         });
+        await this.recordTerminalEnvironmentEvents(
+          effect.request,
+          observation,
+          finishedStepIndex,
+        );
         continue;
       }
 
       if (effect.type === "append_observation") {
-        this.history.push({ type: "observation", observation: effect.observation });
-        this.saveHistory();
+        this.ports.modelContext.append({
+          type: "observation",
+          observation: effect.observation,
+        });
+        this.saveModelContext();
 
         await this.record({
           type: "observation_appended",
@@ -321,17 +309,41 @@ export class RunOrchestrator {
 
       if (effect.type === "wait_io") {
         const ioWaitToolCallId = this.pendingIoWaitToolCallId();
-        this.history.push({
+        this.ports.modelContext.append({
           type: "io_wait_call",
           toolCallId: ioWaitToolCallId,
           wait: effect.wait,
           thinking: this.state.data.pendingModelOutput?.thinking,
         });
-        this.saveHistory();
+        this.saveModelContext();
 
-        const unsettledMessage = pendingImSendMessage(this.history);
+        const invalidWait = validateIoWaitRequest(effect.wait);
+        if (invalidWait !== undefined) {
+          const observation = {
+            kind: "io_wait" as const,
+            message: invalidWait,
+            recoverable: true,
+          };
+          this.ports.modelContext.append({
+            type: "observation",
+            toolCallId: ioWaitToolCallId,
+            observation,
+          });
+          this.saveModelContext();
+          await this.record({
+            type: "observation_appended",
+            stepIndex: this.state.data.stepIndex,
+            observation,
+            timestamp: this.now(),
+          });
+          continue;
+        }
+
+        const unsettledMessage = pendingImSendMessage(
+          this.ports.modelContext.snapshot().items,
+        );
         if (unsettledMessage !== undefined) {
-          this.history.push({
+          this.ports.modelContext.append({
             type: "observation",
             toolCallId: ioWaitToolCallId,
             observation: {
@@ -340,7 +352,7 @@ export class RunOrchestrator {
               recoverable: true,
             },
           });
-          this.saveHistory();
+          this.saveModelContext();
           await this.record({
             type: "observation_appended",
             stepIndex: this.state.data.stepIndex,
@@ -362,17 +374,23 @@ export class RunOrchestrator {
         });
 
         let event: EnvironmentEvent;
+        const waitPromise = this.ports.environment.waitFor({
+          runId: this.state.data.runId,
+          wait: effect.wait,
+        });
+        const stopSessionPump = this.startSessionEnvironmentPump(
+          this.state.data.stepIndex,
+        );
         try {
-          event = await this.ports.environment.waitFor({
-            runId: this.state.data.runId,
-            wait: effect.wait,
-          });
+          event = await waitPromise;
         } catch (error) {
           await this.failRun(error, "IO_WAIT_ERROR");
           break;
+        } finally {
+          stopSessionPump();
         }
 
-        this.history.push({
+        this.ports.modelContext.append({
           type: "observation",
           toolCallId: ioWaitToolCallId,
           observation: {
@@ -382,7 +400,7 @@ export class RunOrchestrator {
             event,
           },
         });
-        this.saveHistory();
+        this.saveModelContext();
 
         await this.record({
           type: "io_wait_satisfied",
@@ -442,20 +460,100 @@ export class RunOrchestrator {
     return this.ports.terminal.execute(request);
   }
 
+  private async recordTerminalEnvironmentEvents(
+    request: ToolRequest,
+    observation: ToolObservation,
+    stepIndex: number,
+  ): Promise<void> {
+    if (!isTerminalObservation(observation) || observation.result !== "ok") {
+      return;
+    }
+
+    const events = terminalObservationToEnvironmentEvents({
+      runId: this.state.data.runId,
+      stepIndex,
+      request,
+      observation,
+      timestamp: this.now(),
+    });
+
+    for (const event of events) {
+      const appended = this.ports.environment.appendEvent(event);
+      if (appended === false) {
+        continue;
+      }
+      await this.record({
+        type: "environment_event_recorded",
+        event,
+        timestamp: this.now(),
+      });
+    }
+  }
+
+  private startSessionEnvironmentPump(stepIndex: number): () => void {
+    let stopped = false;
+    let inFlight = false;
+    let tick = 0;
+    const interval = setInterval(() => {
+      if (stopped || inFlight) {
+        return;
+      }
+      inFlight = true;
+      void (async () => {
+        try {
+          const request: ToolRequest = {
+            kind: "terminal_tool",
+            toolName: "session_observe",
+            toolCallId: `session-watch-${this.state.data.runId}-${stepIndex}-${tick++}`,
+            request: { kind: "session_observe" },
+          };
+          const observation = await this.ports.terminal.execute(request);
+          await this.recordTerminalEnvironmentEvents(
+            request,
+            observation,
+            stepIndex,
+          );
+        } catch {
+          // Background session observation is best-effort; explicit tool calls
+          // still surface terminal failures to the model.
+        } finally {
+          inFlight = false;
+        }
+      })();
+    }, 250);
+    interval.unref?.();
+    return () => {
+      stopped = true;
+      clearInterval(interval);
+    };
+  }
+
   private persistModelDebugArtifacts(
     output: FimStepOutput,
     stepIndex: number,
+    thinkingTrace: string = "",
   ): FimStepOutput {
-    const raw = output.thinking.raw;
-    if (!hasPrompt(raw)) {
+    let thinking = output.thinking;
+    if (!hasPrompt(thinking.raw) && thinkingTrace.length === 0) {
       return output;
     }
 
-    const promptRef = this.transcript.writeDebugArtifact(
-      `debug/prompts/step-${String(stepIndex).padStart(4, "0")}-thinking.prompt.txt`,
-      raw.prompt,
-    );
-    const thinking = withPromptRef(output.thinking, promptRef);
+    if (hasPrompt(thinking.raw)) {
+      const promptRef = this.transcript.writeDebugArtifact(
+        `debug/prompts/step-${String(stepIndex).padStart(4, "0")}-thinking.prompt.txt`,
+        thinking.raw.prompt,
+      );
+      thinking = withPromptRef(thinking, promptRef);
+    }
+
+    if (thinkingTrace.length > 0) {
+      const traceRef = this.transcript.writeDebugArtifact(
+        `debug/thinking/step-${String(stepIndex).padStart(4, "0")}-thinking.trace.txt`,
+        thinkingTrace,
+      );
+      thinking = withThinkingRawPatch(thinking, { traceRef });
+    }
+
     return {
       ...output,
       thinking,
@@ -463,64 +561,16 @@ export class RunOrchestrator {
     };
   }
 
-  private async compactHistoryIfNeeded(): Promise<void> {
-    const tokenCount = this.ports.contextWindow.countHistoryTokens(this.history);
-    const maxTokens = this.ports.contextWindow.maxHistoryTokens;
-    if (tokenCount < maxTokens) {
-      return;
-    }
-
-    const compaction = this.ports.contextWindow.compactHistory({
-      history: this.history,
-      tokenCount,
-      maxTokens,
+  private async compactModelContextIfNeeded(): Promise<void> {
+    const compaction = await this.ports.modelContext.compactIfNeeded({
       stepIndex: this.state.data.stepIndex,
     });
     if (compaction === undefined || compaction.droppedItemCount === 0) {
       return;
     }
 
-
-    // Phase 2: Enrich summary via port-based LLM semantic summary
-    if (this.ports.contextWindow.llmEnrichSummary) {
-      try {
-        const enriched = await this.ports.contextWindow.llmEnrichSummary(
-          compaction.summary,
-          this.history.slice(0, compaction.droppedItemCount),
-        );
-        if (enriched && !enriched.startsWith("[LLM")) {
-          const firstItem = compaction.history[0];
-          if (firstItem && firstItem.type === "environment_reminder") {
-            firstItem.content += enriched;
-            compaction.summary += enriched;
-          }
-        }
-      } catch {
-        /* LLM enrichment is best-effort */
-      }
-    }
-
-    // Phase 3: Safe re-injection of project guidance files only
-    try {
-      const fs = await import("node:fs");
-      const { join } = await import("node:path");
-      for (const rel of ["AGENTS.md", "CLAUDE.md"]) {
-        const full = join(process.cwd(), rel);
-        try {
-          if (fs.existsSync(full) && fs.statSync(full).isFile()) {
-            const c = fs.readFileSync(full, "utf-8").slice(0, 1000);
-            compaction.history.push({
-              type: "environment_reminder",
-              content: `[Re-inject: ${rel}]\n${c}`,
-            });
-          }
-        } catch { /* skip */ }
-      }
-    } catch { /* best-effort */ }
-
-    this.history.splice(0, this.history.length, ...compaction.history);
-    this.saveHistory();
-    const { history: _history, ...eventCompaction } = compaction;
+    this.saveModelContext();
+    const { items: _items, ...eventCompaction } = compaction;
     await this.record({
       type: "history_compacted",
       stepIndex: this.state.data.stepIndex,
@@ -529,8 +579,11 @@ export class RunOrchestrator {
     });
   }
 
-  private saveHistory(): void {
-    this.ports.session.saveHistory(this.state.data.runId, this.history);
+  private saveModelContext(): void {
+    this.ports.session.saveModelContext(
+      this.state.data.runId,
+      this.ports.modelContext.snapshot(),
+    );
   }
 }
 
@@ -594,6 +647,29 @@ function withPromptRef(
   };
 }
 
+function withThinkingRawPatch(
+  thinking: AgentThinking,
+  patch: Record<string, unknown>,
+): AgentThinking {
+  return {
+    ...thinking,
+    raw: {
+      ...rawObject(thinking.raw),
+      ...patch,
+    },
+  };
+}
+
+function rawObject(raw: unknown): Record<string, unknown> {
+  if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  if (raw === undefined) {
+    return {};
+  }
+  return { rawValue: raw };
+}
+
 function withTurnThinking(
   turn: FimStepOutput["turn"],
   thinking: AgentThinking,
@@ -608,6 +684,24 @@ function withTurnThinking(
   }
 }
 
+function createThinkingTraceSink(): {
+  append(event: ModelProgressEvent): void;
+  content(): string;
+} {
+  const chunks = new Map<number, string>();
+  return {
+    append(event) {
+      chunks.set(event.sequence, event.content);
+    },
+    content() {
+      return [...chunks.entries()]
+        .sort(([left], [right]) => left - right)
+        .map(([, content]) => content)
+        .join("");
+    },
+  };
+}
+
 function serializeErrorCause(cause: unknown): unknown {
   if (cause instanceof Error) {
     const errorCode = (cause as Error & { code?: unknown }).code;
@@ -620,17 +714,19 @@ function serializeErrorCause(cause: unknown): unknown {
   return cause;
 }
 
-function pendingImSendMessage(history: readonly HistoryItem[]): string | undefined {
+function pendingImSendMessage(
+  items: readonly ModelContextItem[],
+): string | undefined {
   const latestObservationIndex = findLastHistoryIndex(
-    history,
+    items,
     (entry) => entry.type === "observation",
   );
   if (latestObservationIndex === -1) {
     return undefined;
   }
 
-  const latestObservation = history[latestObservationIndex] as Extract<
-    HistoryItem,
+  const latestObservation = items[latestObservationIndex] as Extract<
+    ModelContextItem,
     { type: "observation" }
   >;
   const observation = latestObservation.observation;
@@ -644,10 +740,10 @@ function pendingImSendMessage(history: readonly HistoryItem[]): string | undefin
     return undefined;
   }
 
-  const latestToolCall = history
+  const latestToolCall = items
     .slice(0, latestObservationIndex)
     .reverse()
-    .find((entry): entry is Extract<HistoryItem, { type: "tool_call" }> =>
+    .find((entry): entry is Extract<ModelContextItem, { type: "tool_call" }> =>
       entry.type === "tool_call",
     );
   if (
@@ -661,12 +757,159 @@ function pendingImSendMessage(history: readonly HistoryItem[]): string | undefin
   return "Cannot wait for user input yet: the latest IM send terminal_write has not returned to a shell prompt. Observe the session until the command finishes and the prompt returns, then call io_wait.";
 }
 
+function terminalObservationToEnvironmentEvents(input: {
+  runId: string;
+  stepIndex: number;
+  request: ToolRequest;
+  observation: TerminalObservation;
+  timestamp: string;
+}): EnvironmentEvent[] {
+  const { request, observation } = input;
+  const terminalEvents = observation.terminalEvents ?? [];
+  const promptEvent = terminalEvents
+    .filter((event) => event.kind === "prompt")
+    .at(-1);
+  const continuationEvent = terminalEvents
+    .filter((event) => event.kind === "continuation_prompt")
+    .at(-1);
+  const outputEvents = terminalEvents.filter((event) => event.kind === "output");
+  const eventBase = {
+    source: "session" as const,
+    timestamp: input.timestamp,
+    session: observation.observedSession,
+    currentSession: observation.currentSession,
+    request: observation.request,
+    inputSeq: observation.terminal.inputSeq,
+    cwd: observation.terminal.lastShellPrompt?.cwd,
+    lastReturnCode: observation.terminal.lastShellPrompt?.lastReturnCode,
+    foregroundProcess: observation.terminal.foregroundProcess,
+  };
+  const idPrefix = `env-session-${input.runId}-${stableEventIdPart(observation.observedSession)}`;
+  const events: EnvironmentEvent[] = [];
+
+  if (outputEvents.length > 0) {
+    events.push({
+      ...eventBase,
+      id: `${idPrefix}-output-${observation.terminal.inputSeq}`,
+      level: 0,
+      kind: "session_output_available",
+    });
+  }
+
+  if (request.request.kind === "session_focus") {
+    events.push({
+      ...eventBase,
+      id: `${idPrefix}-focused-${stableEventIdPart(request.toolCallId)}`,
+      level: 1,
+      kind: "session_focused",
+    });
+  }
+
+  if (request.request.kind === "session_restart") {
+    events.push({
+      ...eventBase,
+      id: `${idPrefix}-restarted-${stableEventIdPart(request.toolCallId)}`,
+      level: 1,
+      kind: "session_restarted",
+    });
+  }
+
+  if (continuationEvent !== undefined) {
+    const continuationKey = promptFactKey({
+      promptSeq: continuationEvent.promptSeq,
+      promptNonce: continuationEvent.promptNonce,
+      fallback: observation.terminal.inputSeq,
+    });
+    events.push({
+      ...eventBase,
+      id: `${idPrefix}-continuation-${continuationKey}`,
+      level: 10,
+      kind: "session_continuation_prompt",
+      promptSeq: continuationEvent.promptSeq,
+      continuationReason: continuationEvent.reason,
+    });
+    events.push({
+      ...eventBase,
+      id: `${idPrefix}-input-ready-continuation-${continuationKey}`,
+      level: 10,
+      kind: "session_input_ready",
+      promptSeq: continuationEvent.promptSeq,
+      continuationReason: continuationEvent.reason,
+    });
+  }
+
+  if (promptEvent !== undefined || observation.returnedToPrompt) {
+    const promptSeq =
+      promptEvent?.promptSeq ?? observation.terminal.lastShellPrompt?.promptSeq;
+    const promptKey = promptFactKey({
+      promptSeq,
+      promptNonce: promptEvent?.promptNonce,
+      fallback: observation.terminal.inputSeq,
+    });
+    events.push({
+      ...eventBase,
+      id: `${idPrefix}-returned-${promptKey}`,
+      level: 10,
+      kind: "session_returned_to_prompt",
+      promptSeq,
+    });
+    events.push({
+      ...eventBase,
+      id: `${idPrefix}-input-ready-prompt-${promptKey}`,
+      level: 10,
+      kind: "session_input_ready",
+      promptSeq,
+    });
+  }
+
+  if (observation.terminal.syncStatus.kind === "unsynced") {
+    events.push({
+      ...eventBase,
+      id: `${idPrefix}-unsynced-${observation.terminal.inputSeq}-${stableEventIdPart(observation.terminal.syncStatus.reason)}`,
+      level: 50,
+      kind: "session_unsynced",
+      reason: observation.terminal.syncStatus.reason,
+    });
+  }
+
+  if (!observation.terminal.alive) {
+    events.push({
+      ...eventBase,
+      id: `${idPrefix}-terminated-${observation.terminal.inputSeq}`,
+      level: 50,
+      kind: "session_terminated",
+      reason: observation.terminal.termination?.reason,
+      exitCode: observation.terminal.termination?.exitCode,
+    });
+  }
+
+  return events;
+}
+
+function promptFactKey(input: {
+  promptSeq: number | undefined;
+  promptNonce: string | undefined;
+  fallback: number;
+}): string {
+  if (input.promptNonce && input.promptNonce.length > 0) {
+    return `nonce-${stableEventIdPart(input.promptNonce)}`;
+  }
+  if (input.promptSeq !== undefined) {
+    return `seq-${input.promptSeq}`;
+  }
+  return `input-${input.fallback}`;
+}
+
+function stableEventIdPart(value: string): string {
+  return encodeURIComponent(value).replace(/%/gu, "_");
+}
+
 function findLastHistoryIndex(
-  history: readonly HistoryItem[],
-  predicate: (entry: HistoryItem) => boolean,
+  items: readonly ModelContextItem[],
+  predicate: (entry: ModelContextItem) => boolean,
 ): number {
-  for (let index = history.length - 1; index >= 0; index -= 1) {
-    if (predicate(history[index]!)) {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index]!)) {
       return index;
     }
   }

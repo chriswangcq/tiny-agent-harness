@@ -382,6 +382,34 @@ describe("TUI input rendering", () => {
     expect(frame.join("\n")).toContain("PTY (read only)");
   });
 
+  it("surfaces debugger summary and structured loop detail in the visible TUI", () => {
+    const state = new TuiInteractionState();
+    const vm = {
+      ...view(),
+      loop: [
+        frame("frame-ok"),
+        {
+          ...frame("frame-warn"),
+          id: "frame-warn",
+          status: "warn" as const,
+          title: "invalid model output",
+          detail: "## thinking\nNeed inspect\n\n## diagnostic\ninvalid_parameter_json",
+        },
+      ],
+    };
+    state.syncWithView(vm.conversation, vm.loop);
+
+    const output = renderTuiFrame(vm, state, new Set(), {
+      width: 120,
+      height: 44,
+    }).join("\n");
+
+    expect(output).toContain("Agent Loop 2f 1!");
+    expect(output).toContain("Sections");
+    expect(output).toContain("## thinking");
+    expect(output).toContain("invalid_parameter_json");
+  });
+
   it("merges adjacent pane borders instead of drawing double vertical seams", () => {
     const state = new TuiInteractionState();
     const vm = view();

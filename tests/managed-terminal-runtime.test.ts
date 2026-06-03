@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { formatPromptMarker } from "../src/application/managed-shell.js";
 import { ManagedTerminalRuntime } from "../src/bash/managed-terminal-runtime.js";
 import type { ForegroundInspector } from "../src/bash/managed-session.js";
@@ -45,20 +48,27 @@ vi.mock("node-pty", () => ({
   spawn: ptyMock.spawn,
 }));
 
+const tempDirs: string[] = [];
+
 afterEach(() => {
   ptyMock.spawn.mockClear();
   ptyMock.spawned.length = 0;
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 function makeRuntime(options: {
   postWriteReadDelayMs?: number;
   startupReadDelayMs?: number;
   foregroundInspector?: ForegroundInspector;
+  sessionsDir?: string;
 } = {}): ManagedTerminalRuntime {
   return new ManagedTerminalRuntime({
     defaultSessionId: "default",
     cwd: "/repo",
     promptNonce: "nonce",
+    sessionsDir: options.sessionsDir,
     screenRows: 24,
     screenCols: 80,
     postWriteReadDelayMs: options.postWriteReadDelayMs ?? 0,
@@ -118,6 +128,31 @@ describe("ManagedTerminalRuntime", () => {
     }
   });
 
+  it("persists raw PTY output to a run-scoped session log file", async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), "tiny-agent-session-logs-"));
+    tempDirs.push(sessionsDir);
+    const port = makeRuntime({ sessionsDir }).createRunPort();
+
+    await port.execute({ request: { kind: "session_observe" } });
+    ptyMock.spawned[0]?.emit("hello raw log\n");
+
+    const observation = await port.execute({ request: { kind: "session_observe" } });
+
+    expect(observation.screen.logRef.path.startsWith(sessionsDir)).toBe(true);
+    expect(observation.screen.logRef.path).toMatch(/default-[a-f0-9]{10}\.log$/u);
+    expect(existsSync(observation.screen.logRef.path)).toBe(true);
+    expect(readFileSync(observation.screen.logRef.path, "utf-8")).toContain(
+      "hello raw log\n",
+    );
+    expect(observation.screen.text).toContain("hello raw log");
+
+    const restarted = await port.execute({ request: { kind: "session_restart" } });
+    const terminated = await port.execute({ request: { kind: "session_terminate" } });
+
+    expect(restarted.screen.logRef.path.startsWith(sessionsDir)).toBe(true);
+    expect(terminated.screen.logRef.path.startsWith(sessionsDir)).toBe(true);
+  });
+
   it("resolves foregroundProcess via injected inspector", async () => {
     const inspector = vi.fn((_pid: number) => "sleep");
     const runtime = makeRuntime({ foregroundInspector: inspector });
@@ -145,6 +180,7 @@ describe("ManagedTerminalRuntime", () => {
         kind: "terminal_write",
         expectedInputSeq: 0,
         text: "pwd\n",
+        waitForReturnMs: 0,
       },
     });
 
@@ -207,6 +243,7 @@ describe("ManagedTerminalRuntime", () => {
         kind: "terminal_write",
         expectedInputSeq: 0,
         text: "pwd\n",
+        waitForReturnMs: 0,
       },
     });
     setTimeout(() => {
@@ -321,6 +358,7 @@ describe("ManagedTerminalRuntime", () => {
         kind: "terminal_write",
         expectedInputSeq: 0,
         text: largeText,
+        waitForReturnMs: 0,
       },
     });
 
@@ -357,5 +395,86 @@ describe("ManagedTerminalRuntime", () => {
         inputSeq: 0,
       },
     });
+  });
+
+  it("keeps terminated sessions observable, rejects input, and restarts fresh", async () => {
+    const port = makeRuntime().createRunPort();
+    await port.execute({ request: { kind: "session_observe" } });
+    ptyMock.spawned[0]?.emit("before terminate\n");
+    const beforeTerminate = await port.execute({
+      request: { kind: "session_observe" },
+    });
+
+    const terminated = await port.execute({
+      request: { kind: "session_terminate", reason: "done" },
+    });
+    const observedAfterTerminate = await port.execute({
+      request: { kind: "session_observe" },
+    });
+    const spawnCountBeforeList = ptyMock.spawn.mock.calls.length;
+    const listAfterTerminate = await port.execute({ request: { kind: "session_list" } });
+    const spawnCountAfterList = ptyMock.spawn.mock.calls.length;
+    const writeCountAfterTerminate = ptyMock.spawned[0]?.writes.length ?? 0;
+    const rejectedWrite = await port.execute({
+      request: {
+        kind: "terminal_write",
+        expectedInputSeq: observedAfterTerminate.terminal.inputSeq,
+        text: "pwd\n",
+      },
+    });
+    const restarted = await port.execute({
+      request: { kind: "session_restart", reason: "recover" },
+    });
+    const writeAfterRestart = await port.execute({
+      request: {
+        kind: "terminal_write",
+        expectedInputSeq: restarted.terminal.inputSeq,
+        text: "pwd\n",
+      },
+    });
+
+    expect(beforeTerminate.screen.text).toContain("before terminate");
+    expect(ptyMock.spawned[0]?.killed).toBe(true);
+    expect(terminated).toMatchObject({
+      result: "ok",
+      terminal: {
+        alive: false,
+        termination: { reason: "done" },
+      },
+    });
+    expect(observedAfterTerminate).toMatchObject({
+      result: "ok",
+      terminal: {
+        alive: false,
+        termination: { reason: "done" },
+      },
+      screen: { text: expect.stringContaining("before terminate") },
+    });
+    expect(spawnCountAfterList).toBe(spawnCountBeforeList);
+    if ("sessions" in listAfterTerminate) {
+      const listedDefault = listAfterTerminate.sessions.find(
+        (session) => session.session === "default",
+      );
+      expect(listedDefault).toMatchObject({
+        session: "default",
+        terminal: {
+          alive: false,
+          termination: { reason: "done" },
+        },
+      });
+    }
+    expect(rejectedWrite).toMatchObject({
+      result: "rejected",
+      errorCode: "TERMINAL_TERMINATED",
+      terminal: { alive: false },
+    });
+    expect(ptyMock.spawned[0]?.writes.length).toBe(writeCountAfterTerminate);
+    expect(ptyMock.spawn).toHaveBeenCalledTimes(2);
+    expect(restarted).toMatchObject({
+      result: "ok",
+      terminal: { alive: true, inputSeq: 0 },
+    });
+    expect(writeAfterRestart).toMatchObject({ result: "ok" });
+    expect(ptyMock.spawned[1]?.writes.at(-1)).toBe("pwd\n");
   });
 });

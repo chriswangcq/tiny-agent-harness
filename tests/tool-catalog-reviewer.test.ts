@@ -10,7 +10,11 @@ import {
   TERMINAL_KEY_TOOL_DEFINITION,
   TERMINAL_WRITE_TOOL_DEFINITION,
 } from "../src/tools/catalog.js";
-import { AlwaysApproveReviewer } from "../src/tools/reviewer.js";
+import { evaluateToolPolicy } from "../src/tools/index.js";
+import {
+  AlwaysApproveReviewer,
+  ToolPolicyReviewer,
+} from "../src/tools/reviewer.js";
 import type { ToolRequest } from "../src/types/tools.js";
 
 type ObjectSchema = {
@@ -129,5 +133,69 @@ describe("AlwaysApproveReviewer", () => {
       reason: "Demo mode: all tool calls are approved.",
       reviewer: "always-approve",
     });
+  });
+});
+
+describe("ToolPolicyReviewer", () => {
+  it("adapts policy approvals to the review contract", async () => {
+    const request: ToolRequest = {
+      kind: "terminal_tool",
+      toolName: "terminal_write",
+      toolCallId: "call-policy-ok",
+      request: {
+        kind: "terminal_write",
+        expectedInputSeq: 0,
+        text: "pwd\n",
+      },
+    };
+
+    await expect(new ToolPolicyReviewer().review(request)).resolves.toEqual({
+      status: "approved",
+      reason: "Approved by tool policy.",
+      reviewer: "tool-policy",
+    });
+  });
+
+  it("preserves policy warnings in review decisions", async () => {
+    const request: ToolRequest = {
+      kind: "terminal_tool",
+      toolName: "terminal_write",
+      toolCallId: "call-policy-warning",
+      request: {
+        kind: "terminal_write",
+        expectedInputSeq: 0,
+        text: "git push origin main\n",
+      },
+    };
+
+    await expect(new ToolPolicyReviewer().review(request)).resolves.toEqual({
+      status: "approved",
+      reason: "Approved by tool policy with 1 warning(s).",
+      reviewer: "tool-policy",
+      warnings: ["Git push changes remote state."],
+    });
+  });
+
+  it("preserves policy rejections in review decisions", async () => {
+    const request: ToolRequest = {
+      kind: "terminal_tool",
+      toolName: "terminal_write",
+      toolCallId: "call-policy-reject",
+      request: {
+        kind: "terminal_write",
+        expectedInputSeq: 0,
+        text: "mkfs.ext4 /dev/disk2\n",
+      },
+    };
+
+    await expect(new ToolPolicyReviewer().review(request)).resolves.toEqual({
+      status: "rejected",
+      reason: "Rejected by tool policy: Filesystem formatting command was requested.",
+      reviewer: "tool-policy",
+    });
+  });
+
+  it("keeps policy exports available from the tools barrel", () => {
+    expect(evaluateToolPolicy).toBeTypeOf("function");
   });
 });

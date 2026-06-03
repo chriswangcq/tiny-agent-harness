@@ -22,7 +22,7 @@ import type {
   AgentMessage,
 } from "./environment.js";
 import type { ActiveSkillRunSummary } from "./skill.js";
-import type { HistoryCompactionResult } from "../run/context-window.js";
+import type { ModelContextCompactionResult } from "../model/context-window.js";
 
 // ─── Agent Run Status ───────────────────────────────────────────────
 
@@ -177,7 +177,7 @@ export type RunEvent =
   | {
       type: "history_compacted";
       stepIndex: number;
-      compaction: Omit<HistoryCompactionResult, "history">;
+      compaction: Omit<ModelContextCompactionResult, "items">;
       timestamp: string;
     }
   | {

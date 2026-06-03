@@ -165,11 +165,41 @@ describe("runIm CLI", () => {
   let tmpDir: string;
   let originalWrite: typeof process.stdout.write;
   let captured: string[];
+  let originalTahStateDir: string | undefined;
+  let originalTahImDir: string | undefined;
 
   function createStateDir(): string {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "im-cli-test-"));
     fs.mkdirSync(path.join(tmpDir, "im"), { recursive: true });
     return tmpDir;
+  }
+
+  function createLatestRun(stateDir: string, runId = "run-test"): string {
+    const runDir = path.join(stateDir, "runs", runId);
+    fs.mkdirSync(path.join(runDir, "im"), { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "runs", "latest.json"),
+      JSON.stringify({ runId, runDir: path.join("runs", runId) }),
+      "utf-8",
+    );
+    return runDir;
+  }
+
+  function readInbox(baseDir: string, channel: string): Array<{ text: string }> {
+    const filePath = path.join(baseDir, `${channel}.inbox.jsonl`);
+    return fs
+      .readFileSync(filePath, "utf-8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { text: string });
+  }
+
+  function useTahStateDir(stateDir: string): void {
+    originalTahStateDir = process.env.TAH_STATE_DIR;
+    originalTahImDir = process.env.TAH_IM_DIR;
+    process.env.TAH_STATE_DIR = stateDir;
+    delete process.env.TAH_IM_DIR;
   }
 
   function captureStdout(): void {
@@ -187,6 +217,18 @@ describe("runIm CLI", () => {
 
   afterEach(() => {
     if (originalWrite) restoreStdout();
+    if (originalTahStateDir === undefined) {
+      delete process.env.TAH_STATE_DIR;
+    } else {
+      process.env.TAH_STATE_DIR = originalTahStateDir;
+    }
+    if (originalTahImDir === undefined) {
+      delete process.env.TAH_IM_DIR;
+    } else {
+      process.env.TAH_IM_DIR = originalTahImDir;
+    }
+    originalTahStateDir = undefined;
+    originalTahImDir = undefined;
     if (tmpDir && fs.existsSync(tmpDir)) {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -211,6 +253,97 @@ describe("runIm CLI", () => {
     expect(recvResult.ok).toBe(true);
     expect(recvResult.count).toBe(1);
     expect(recvResult.messages[0].text).toBe("hello world");
+  });
+
+  it("post without explicit state dir targets the latest run inbox", async () => {
+    const stateDir = createStateDir();
+    const runDir = createLatestRun(stateDir, "run-latest");
+    useTahStateDir(stateDir);
+
+    captureStdout();
+    await runIm(["post", "--channel", "default", "--text", "hello latest", "--json"]);
+    restoreStdout();
+
+    const postResult = JSON.parse(captured.join(""));
+    expect(postResult.ok).toBe(true);
+    expect(postResult.target).toBe("run");
+    expect(postResult.runId).toBe("run-latest");
+    expect(readInbox(path.join(runDir, "im"), "default")[0].text).toBe(
+      "hello latest",
+    );
+    expect(fs.existsSync(path.join(stateDir, "im", "default.inbox.jsonl"))).toBe(
+      false,
+    );
+  });
+
+  it("--run latest post targets the latest run inbox", async () => {
+    const stateDir = createStateDir();
+    const runDir = createLatestRun(stateDir, "run-explicit-latest");
+    useTahStateDir(stateDir);
+
+    captureStdout();
+    await runIm([
+      "post",
+      "--channel",
+      "default",
+      "--text",
+      "hello run latest",
+      "--run",
+      "latest",
+      "--json",
+    ]);
+    restoreStdout();
+
+    const postResult = JSON.parse(captured.join(""));
+    expect(postResult.target).toBe("run");
+    expect(postResult.runId).toBe("run-explicit-latest");
+    expect(readInbox(path.join(runDir, "im"), "default")[0].text).toBe(
+      "hello run latest",
+    );
+  });
+
+  it("post without latest run falls back to global state inbox", async () => {
+    const stateDir = createStateDir();
+    useTahStateDir(stateDir);
+
+    captureStdout();
+    await runIm(["post", "--channel", "default", "--text", "hello global", "--json"]);
+    restoreStdout();
+
+    const postResult = JSON.parse(captured.join(""));
+    expect(postResult.target).toBe("global_state");
+    expect(postResult.runId).toBeUndefined();
+    expect(readInbox(path.join(stateDir, "im"), "default")[0].text).toBe(
+      "hello global",
+    );
+  });
+
+  it("explicit --state-dir keeps the global state inbox even when latest exists", async () => {
+    const stateDir = createStateDir();
+    const runDir = createLatestRun(stateDir, "run-ignored");
+
+    captureStdout();
+    await runIm([
+      "post",
+      "--channel",
+      "default",
+      "--text",
+      "hello explicit",
+      "--state-dir",
+      stateDir,
+      "--json",
+    ]);
+    restoreStdout();
+
+    const postResult = JSON.parse(captured.join(""));
+    expect(postResult.target).toBe("explicit_state");
+    expect(postResult.runId).toBeUndefined();
+    expect(readInbox(path.join(stateDir, "im"), "default")[0].text).toBe(
+      "hello explicit",
+    );
+    expect(fs.existsSync(path.join(runDir, "im", "default.inbox.jsonl"))).toBe(
+      false,
+    );
   });
 
   it("send writes agent message with --json", async () => {

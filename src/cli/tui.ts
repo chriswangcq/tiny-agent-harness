@@ -51,7 +51,7 @@ export function runTui(args: string[]): void {
   console.log(`[tiny-agent] Opening TUI for run: ${resolvedRunId}`);
   const controller = new TuiController({
     runDir,
-    imBaseDir: path.join(baseDir, "im"),
+    imBaseDir: path.join(runDir, "im"),
     channel: channel ?? process.env.TAH_IM_CHANNEL ?? "default",
   });
   controller.start();

@@ -299,6 +299,8 @@ model_requested
 model_thinking_delta
   -> Update current model LoopFrame status=running title="model thinking"
   -> Append delta into LoopFrame detail section "thinking"
+  -> Historical compatibility only; current runs store streamed thinking as
+     debug trace artifacts referenced by final model_output_received
 
 model_output_received(tool_call)
   -> LoopFrame phase=decision status=ok title="tool call: terminal_write"
@@ -483,6 +485,24 @@ Agent Loop 使用 frame-level selection。选中的是 `LoopFrame.id`，不是 b
 
 - 左侧：loop frame list。
 - 右侧：selected frame detail，包括 step、phase、status、summary、detail、logPath。
+
+## Debugger Domain
+
+TUI 的调试能力分成两层：
+
+- `ViewModelBuilder` 仍然是 transcript/run events -> `TuiViewModel` 的唯一主路径。
+- `src/tui/debugger.ts` 消费 `TuiViewModel` / `LoopFrame` / run snapshot，提供纯函数式 debugger 数据。
+
+当前 debugger domain 提供：
+
+- `queryLoopFrames` / `matchesLoopFrame`：按文本、step、phase、status 和 warn/error 过滤 loop frames。
+- `nextLoopFrameIndex`：在过滤结果中做稳定上下跳转。
+- `buildLoopFrameDetail`：把现有 `## heading` detail 文本拆成结构化 sections，同时保留 raw detail。
+- `summarizeLoopFrames`：统计 status、phase 和 problem frame 数。
+- `buildRunIndex`：从显式 run snapshots 构造 run browser 行，不扫描文件系统。
+- `compareRuns`：比较两个 run 的状态、step、duration、frame/problem/conversation/session 计数。
+
+这层不读文件、不读时间、不依赖 blessed renderer。后续 `/` 搜索、warn/error filter、历史 run browser、run compare 和 eval viewer 都应该基于这个 domain，而不是在 renderer 里重新实现一套逻辑。
 
 ## Keyboard
 

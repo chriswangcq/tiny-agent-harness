@@ -6,12 +6,15 @@ import { AgentRunState } from "../src/run/state.js";
 import { Environment } from "../src/environment/environment.js";
 import {
   RunOrchestrator,
-  type HistoryItem,
   type RunPorts,
 } from "../src/run/orchestrator.js";
 import { TranscriptStore } from "../src/transcript/store.js";
 import { STATIC_TOOL_CATALOG } from "../src/tools/catalog.js";
-import { DeterministicHistoryCompactor } from "../src/run/context-window.js";
+import { DeterministicModelContextCompactor } from "../src/model/context-window.js";
+import {
+  ModelContextSession,
+  type ModelContextItem,
+} from "../src/model/context-session.js";
 import type { TerminalObservation, TerminalState } from "../src/terminal/types.js";
 import type { EnvironmentEvent, IoWaitRequest } from "../src/types/environment.js";
 import type { FimStepOutput, InternalToolCall, ModelStepContext, ModelTurn } from "../src/types/model.js";
@@ -87,11 +90,12 @@ function makeRun(options?: {
   validateResult?: RunPorts["validator"]["validate"];
   reviewDecision?: ToolReviewDecision;
   terminalObservation?: TerminalObservation;
-  initialHistory?: HistoryItem[];
-  contextWindow?: RunPorts["contextWindow"];
+  initialHistory?: ModelContextItem[];
+  contextWindow?: Parameters<ModelContextSession["compactIfNeeded"]>[0]["contextWindow"];
   activeSkillRuns?: ReturnType<RunPorts["listActiveSkillRuns"]>;
   modelProgress?: string[];
   modelError?: unknown;
+  onGenerateTurn?: (context: ModelStepContext) => void | Promise<void>;
   initialState?: AgentRunState;
 }) {
   const runDir = path.join(makeTmpDir(), "run-001");
@@ -109,12 +113,40 @@ function makeRun(options?: {
   };
   const outputs = [...(options?.outputs ?? [ioWaitOutput(defaultWait)])];
   const contexts: ModelStepContext[] = [];
-  const histories: HistoryItem[][] = [];
+  const histories: ModelContextItem[][] = [];
   const consumedCalls: Array<{ runId: string; afterEventId?: string }> = [];
   const waitCalls: Array<{ runId: string; wait: IoWaitRequest }> = [];
+  const appendedEvents: EnvironmentEvent[] = [];
   const reviewCalls: ToolRequest[] = [];
   const terminalCalls: ToolRequest[] = [];
-  const sessionSaves: HistoryItem[][] = [];
+  const sessionSaves: ModelContextItem[][] = [];
+
+  const modelContext = ModelContextSession.create({
+    task: state.data.task,
+    initialItems: options?.initialHistory ?? [],
+    contextWindow: options?.contextWindow ?? {
+      maxTokens: Number.POSITIVE_INFINITY,
+      countTokens: () => 0,
+      compact: () => undefined,
+    },
+    renderer: {
+      render(input) {
+        histories.push([...input.items]);
+        return [
+          { role: "system", content: "system" },
+          ...input.items.map((entry) =>
+            entry.type === "environment_reminder"
+              ? { role: "user" as const, content: entry.content }
+              : { role: "user" as const, content: JSON.stringify(entry) },
+          ),
+          ...(input.transientReminders ?? []).map((content) => ({
+            role: "user" as const,
+            content,
+          })),
+        ];
+      },
+    },
+  });
 
   const ports: RunPorts = {
     model: {
@@ -130,6 +162,7 @@ function makeRun(options?: {
             sequence,
           });
         }
+        await options?.onGenerateTurn?.(context);
         const output = outputs.shift();
         if (!output) {
           throw new Error("No queued model output");
@@ -189,33 +222,17 @@ function makeRun(options?: {
         );
       },
     },
-    prompt: {
-      buildMessages(task, history) {
-        void task;
-        histories.push([...history]);
-        return [
-          { role: "system", content: "system" },
-          ...history.map((entry) =>
-            entry.type === "environment_reminder"
-              ? { role: "user" as const, content: entry.content }
-              : { role: "user" as const, content: JSON.stringify(entry) },
-          ),
-        ];
-      },
-    },
-    contextWindow: options?.contextWindow ?? {
-      maxHistoryTokens: Number.POSITIVE_INFINITY,
-      countHistoryTokens: () => 0,
-      compactHistory: () => undefined,
-    },
+    modelContext,
     session: {
-      saveHistory(_runId, history) {
-        sessionSaves.push([...history]);
+      saveModelContext(_runId, snapshot) {
+        sessionSaves.push([...snapshot.items]);
       },
     },
     tools: [...STATIC_TOOL_CATALOG],
     environment: options?.environment ?? {
-      appendEvent() {},
+      appendEvent(event) {
+        appendedEvents.push(event);
+      },
       consumeSince(call) {
         consumedCalls.push(call);
         const events = options?.envEvents ?? [];
@@ -233,12 +250,7 @@ function makeRun(options?: {
     listActiveSkillRuns: () => options?.activeSkillRuns ?? [],
   };
 
-  const orchestrator = new RunOrchestrator(
-    state,
-    transcript,
-    ports,
-    options?.initialHistory,
-  );
+  const orchestrator = new RunOrchestrator(state, transcript, ports);
 
   return {
     orchestrator,
@@ -247,6 +259,7 @@ function makeRun(options?: {
     histories,
     consumedCalls,
     waitCalls,
+    appendedEvents,
     reviewCalls,
     terminalCalls,
     sessionSaves,
@@ -321,7 +334,7 @@ describe("RunOrchestrator", () => {
     });
   });
 
-  it("resumes a persisted run with restored agent-loop history", async () => {
+  it("resumes a persisted run with restored model context", async () => {
     const wait: IoWaitRequest = {
       reason: "awaiting next instruction",
       condition: { kind: "new_user_message", channel: "default" },
@@ -358,7 +371,7 @@ describe("RunOrchestrator", () => {
         error: { message: "previous failure" },
         timestamp: "2026-05-25T11:59:01.000Z",
       });
-    const initialHistory: HistoryItem[] = [
+    const initialHistory: ModelContextItem[] = [
       { type: "environment_reminder", content: "persisted context" },
     ];
     const { orchestrator, transcript, contexts, sessionSaves } = makeRun({
@@ -525,7 +538,7 @@ describe("RunOrchestrator", () => {
     );
   });
 
-  it("records model thinking deltas before the final model output", async () => {
+  it("stores model thinking progress as a debug artifact instead of transcript deltas", async () => {
     const wait: IoWaitRequest = {
       reason: "awaiting next instruction",
       condition: { kind: "new_user_message", channel: "default" },
@@ -555,31 +568,36 @@ describe("RunOrchestrator", () => {
     expect(events.map((event) => event.type)).toEqual([
       "run_started",
       "model_requested",
-      "model_thinking_delta",
-      "model_thinking_delta",
       "model_output_received",
       "io_wait_started",
       "io_wait_satisfied",
       "model_requested",
-      "model_thinking_delta",
-      "model_thinking_delta",
       "run_finished",
     ]);
-    expect(events[2]).toMatchObject({
-      type: "model_thinking_delta",
-      stepIndex: 0,
-      delta: "checking context",
-      sequence: 0,
-    });
-    expect(events[3]).toMatchObject({
-      type: "model_thinking_delta",
-      stepIndex: 0,
-      delta: "choosing action",
-      sequence: 1,
+    expect(events.some((event) => event.type === "model_thinking_delta")).toBe(false);
+
+    const tracePath = path.join(
+      path.dirname(transcript.transcriptFilePath),
+      "debug/thinking/step-0000-thinking.trace.txt",
+    );
+    expect(fs.readFileSync(tracePath, "utf-8")).toBe(
+      "checking contextchoosing action",
+    );
+
+    const modelOutput = events.find(
+      (event): event is Extract<RunEvent, { type: "model_output_received" }> =>
+        event.type === "model_output_received",
+    );
+    expect(modelOutput?.output.thinking.raw).toMatchObject({
+      traceRef: {
+        path: tracePath,
+        relativePath: path.join("debug", "thinking", "step-0000-thinking.trace.txt"),
+        bytes: Buffer.byteLength("checking contextchoosing action", "utf-8"),
+      },
     });
   });
 
-  it("compacts agent-loop history before model requests when the context threshold is reached", async () => {
+  it("compacts model context before model requests when the context threshold is reached", async () => {
     const wait: IoWaitRequest = {
       reason: "awaiting next instruction",
       condition: { kind: "new_user_message", channel: "default" },
@@ -597,11 +615,11 @@ describe("RunOrchestrator", () => {
         createdAt: "2026-05-25T12:00:00.000Z",
       },
     };
-    const compactor = new DeterministicHistoryCompactor({
+    const compactor = new DeterministicModelContextCompactor({
       recentItemCount: 1,
       maxSummaryItems: 8,
     });
-    const initialHistory: HistoryItem[] = [
+    const initialHistory: ModelContextItem[] = [
       { type: "environment_reminder", content: "old context that should compress" },
       { type: "environment_reminder", content: "recent context to keep" },
     ];
@@ -610,9 +628,9 @@ describe("RunOrchestrator", () => {
       waitEvent,
       initialHistory,
       contextWindow: {
-        maxHistoryTokens: 2,
-        countHistoryTokens: (history) => (history.length >= 2 ? 2 : 0),
-        compactHistory: (input) => compactor.compact(input),
+        maxTokens: 2,
+        countTokens: (history) => (history.length >= 2 ? 2 : 0),
+        compact: (input) => compactor.compact(input),
       },
     });
 
@@ -635,7 +653,7 @@ describe("RunOrchestrator", () => {
       events.findIndex((event) => event.type === "model_requested"),
     );
     const firstPrompt = contexts[0]!.messages.map((message) => message.content).join("\n");
-    expect(firstPrompt).toContain("Compressed agent-loop history.");
+    expect(firstPrompt).toContain("Compressed model-context history.");
     expect(firstPrompt).toContain("recent context to keep");
     expect(firstPrompt).toContain("Dropped history items:");
   });
@@ -665,9 +683,9 @@ describe("RunOrchestrator", () => {
         { type: "environment_reminder", content: "small context" },
       ],
       contextWindow: {
-        maxHistoryTokens: 10,
-        countHistoryTokens: () => 9,
-        compactHistory: () => {
+        maxTokens: 10,
+        countTokens: () => 9,
+        compact: () => {
           throw new Error("should not compact below threshold");
         },
       },
@@ -679,6 +697,36 @@ describe("RunOrchestrator", () => {
     expect(contexts[0]!.messages.map((message) => message.content).join("\n")).toContain(
       "small context",
     );
+  });
+
+  it("marks the run failed when model-context preparation throws before model_requested", async () => {
+    const { orchestrator, transcript, contexts } = makeRun({
+      initialHistory: [
+        { type: "environment_reminder", content: "large context" },
+      ],
+      contextWindow: {
+        maxTokens: 1,
+        countTokens: () => {
+          throw new Error("token counter unavailable");
+        },
+        compact: () => {
+          throw new Error("should not compact after count failure");
+        },
+      },
+    });
+
+    const endState = await orchestrator.run();
+
+    expect(endState.status).toBe("failed");
+    expect(endState.data.error).toMatchObject({
+      message: "token counter unavailable",
+      code: "MODEL_CONTEXT_ERROR",
+    });
+    expect(contexts).toHaveLength(0);
+    expect(readTranscript(transcript).map((event) => event.type)).toEqual([
+      "run_started",
+      "run_finished",
+    ]);
   });
 
   it("continues after io_wait instead of stopping at a step cap", async () => {
@@ -1212,6 +1260,263 @@ describe("RunOrchestrator", () => {
     );
   });
 
+  it("allows bare event io_wait conditions as any-event waits", async () => {
+    const wait: IoWaitRequest = {
+      reason: "waiting for any environment event",
+      condition: { kind: "event" },
+    };
+    const event: EnvironmentEvent = {
+      id: "env-any",
+      kind: "user_message_received",
+      source: "im",
+      timestamp: "2026-05-25T12:00:00.000Z",
+      message: {
+        id: "msg-any",
+        channel: "default",
+        role: "user",
+        text: "anything changed",
+        createdAt: "2026-05-25T12:00:00.000Z",
+      },
+    };
+    const { orchestrator, transcript, waitCalls } = makeRun({
+      outputs: [ioWaitOutput(wait)],
+      waitEvent: event,
+    });
+
+    const endState = await orchestrator.run();
+
+    expect(endState.status).toBe("failed");
+    expect(waitCalls).toHaveLength(1);
+    expect(waitCalls[0]?.wait).toEqual(wait);
+    expect(readTranscript(transcript)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "io_wait_started",
+          wait,
+        }),
+        expect.objectContaining({
+          type: "io_wait_satisfied",
+          wait,
+          event,
+        }),
+      ]),
+    );
+  });
+
+  it("records terminal prompt returns as session environment events", async () => {
+    const toolCall: InternalToolCall = {
+      id: "tool-returned",
+      name: "terminal_write",
+      arguments: { expectedInputSeq: 1, text: "pwd\n" },
+    };
+    const { orchestrator, appendedEvents } = makeRun({
+      outputs: [toolOutput(toolCall)],
+      terminalObservation: {
+        currentSession: "default",
+        observedSession: "default",
+        terminal: terminal(2),
+        request: "terminal_write",
+        result: "ok",
+        returnedToPrompt: true,
+        terminalEvents: [
+          {
+            kind: "prompt",
+            returnCode: 0,
+            cwd: "/repo",
+            promptSeq: 3,
+            promptNonce: "nonce",
+          },
+        ],
+        screen: {
+          text: "/repo\n",
+          rows: 24,
+          cols: 80,
+          truncated: false,
+          logRef: { path: "managed-pty://default" },
+        },
+      },
+    });
+
+    await orchestrator.run();
+
+    expect(appendedEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "session_returned_to_prompt",
+          source: "session",
+          session: "default",
+          request: "terminal_write",
+          inputSeq: 2,
+          promptSeq: 3,
+          level: 10,
+        }),
+        expect.objectContaining({
+          kind: "session_input_ready",
+          source: "session",
+          session: "default",
+          request: "terminal_write",
+          inputSeq: 2,
+          promptSeq: 3,
+          level: 10,
+        }),
+      ]),
+    );
+  });
+
+  it("deduplicates repeated terminal facts across different observations", async () => {
+    const environment = new Environment();
+    const environmentPort: RunPorts["environment"] = {
+      appendEvent(event) {
+        return environment.appendEvent(event);
+      },
+      consumeSince(options) {
+        return environment.consumeSince(options);
+      },
+      waitFor(options) {
+        return environment.waitFor(options);
+      },
+    };
+    const firstToolCall: InternalToolCall = {
+      id: "tool-returned-1",
+      name: "terminal_write",
+      arguments: { expectedInputSeq: 1, text: "pwd\n" },
+    };
+    const secondToolCall: InternalToolCall = {
+      id: "tool-returned-2",
+      name: "terminal_write",
+      arguments: { expectedInputSeq: 1, text: "pwd\n" },
+    };
+    const terminalObservation: TerminalObservation = {
+      currentSession: "default",
+      observedSession: "default",
+      terminal: terminal(2),
+      request: "terminal_write",
+      result: "ok",
+      returnedToPrompt: true,
+      terminalEvents: [
+        {
+          kind: "prompt",
+          returnCode: 0,
+          cwd: "/repo",
+          promptSeq: 3,
+          promptNonce: "same-prompt",
+        },
+      ],
+      screen: {
+        text: "/repo\n",
+        rows: 24,
+        cols: 80,
+        truncated: false,
+        logRef: { path: "managed-pty://default" },
+      },
+    };
+    const { orchestrator, transcript } = makeRun({
+      outputs: [toolOutput(firstToolCall), toolOutput(secondToolCall)],
+      environment: environmentPort,
+      terminalObservation,
+    });
+
+    await orchestrator.run();
+
+    expect(environment.state.events).toEqual([
+      expect.objectContaining({
+        id: "env-session-run-001-default-returned-nonce-same-prompt",
+        kind: "session_returned_to_prompt",
+      }),
+      expect.objectContaining({
+        id: "env-session-run-001-default-input-ready-prompt-nonce-same-prompt",
+        kind: "session_input_ready",
+      }),
+    ]);
+    expect(
+      readTranscript(transcript).filter(
+        (event) => event.type === "environment_event_recorded",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("session environment events can wake a pending io_wait", async () => {
+    const wait: IoWaitRequest = {
+      reason: "wait for terminal readiness",
+      condition: { kind: "event", source: "session", minLevel: 10 },
+    };
+    const environment = new Environment();
+    const appendedEvents: EnvironmentEvent[] = [];
+    const environmentPort: RunPorts["environment"] = {
+      appendEvent(event) {
+        appendedEvents.push(event);
+        environment.appendEvent(event);
+      },
+      consumeSince(options) {
+        return environment.consumeSince(options);
+      },
+      waitFor(options) {
+        return environment.waitFor(options);
+      },
+    };
+    const { orchestrator, terminalCalls, transcript } = makeRun({
+      outputs: [ioWaitOutput(wait)],
+      environment: environmentPort,
+      terminalObservation: {
+        currentSession: "default",
+        observedSession: "default",
+        terminal: terminal(2),
+        request: "session_observe",
+        result: "ok",
+        returnedToPrompt: true,
+        terminalEvents: [
+          {
+            kind: "prompt",
+            returnCode: 0,
+            cwd: "/repo",
+            promptSeq: 4,
+            promptNonce: "nonce",
+          },
+        ],
+        screen: {
+          text: "[repo]$ ",
+          rows: 24,
+          cols: 80,
+          truncated: false,
+          logRef: { path: "managed-pty://default" },
+        },
+      },
+    });
+
+    const endState = await orchestrator.run();
+
+    expect(endState.status).toBe("failed");
+    expect(terminalCalls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolName: "session_observe",
+          toolCallId: expect.stringContaining("session-watch-"),
+        }),
+      ]),
+    );
+    expect(appendedEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "session_input_ready",
+          source: "session",
+          level: 10,
+          promptSeq: 4,
+        }),
+      ]),
+    );
+    expect(readTranscript(transcript)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "io_wait_satisfied",
+          event: expect.objectContaining({
+            source: "session",
+            level: 10,
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("delivers the wait-satisfying user message into the next model context", async () => {
     const wait: IoWaitRequest = {
       reason: "need user reply",
@@ -1326,6 +1631,50 @@ describe("RunOrchestrator", () => {
         expect.objectContaining({
           type: "environment_reminder",
           content: expect.stringContaining("[user@default] 请帮我看一下文件"),
+        }),
+      ]),
+    );
+  });
+
+  it("does not miss environment events that arrive during the model turn before io_wait", async () => {
+    const wait: IoWaitRequest = {
+      reason: "wait after thinking",
+    };
+    const duringModelMessage: EnvironmentEvent = {
+      id: "msg-env-during-model",
+      kind: "user_message_received",
+      source: "im",
+      timestamp: "2026-05-25T12:00:02.000Z",
+      message: {
+        id: "msg-during-model",
+        channel: "default",
+        role: "user",
+        text: "别等了，先看这个",
+        createdAt: "2026-05-25T12:00:02.000Z",
+      },
+    };
+    const environment = new Environment();
+    const { orchestrator, transcript } = makeRun({
+      outputs: [ioWaitOutput(wait)],
+      environment,
+      onGenerateTurn() {
+        environment.appendEvent(duringModelMessage);
+      },
+    });
+
+    const endState = await orchestrator.run();
+
+    expect(endState.status).toBe("failed");
+    expect(readTranscript(transcript)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "io_wait_satisfied",
+          wait,
+          event: duringModelMessage,
+        }),
+        expect.objectContaining({
+          type: "environment_events_consumed",
+          eventIds: ["msg-env-during-model"],
         }),
       ]),
     );

@@ -1,5 +1,7 @@
 import * as nodePty from "node-pty";
 import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { buildManagedShellInitSnippet } from "../application/managed-shell.js";
 import { applyPtyChunkToSnapshot } from "../application/terminal-state-adapter.js";
 import type { TerminalRuntimeSnapshot } from "../application/terminal-ports.js";
@@ -48,6 +50,7 @@ export type ManagedPtySessionOptions = {
   env?: Record<string, string>;
   cols?: number;
   rows?: number;
+  outputLogPath?: string;
   foregroundInspector?: ForegroundInspector;
   screenBuffer?: TerminalScreenBuffer;
 };
@@ -67,6 +70,7 @@ export class ManagedPtySession {
   private currentSnapshot: TerminalRuntimeSnapshot;
   private readonly outputChunks: Buffer[] = [];
   private outputBytes = 0;
+  private readonly outputLogPath: string | undefined;
   private readonly foregroundInspector: ForegroundInspector;
   private readonly screenBuffer: TerminalScreenBuffer;
   private readonly cols: number;
@@ -85,6 +89,8 @@ export class ManagedPtySession {
     ];
     this.cols = positiveInteger(options.cols) ?? 80;
     this.rows = positiveInteger(options.rows) ?? 24;
+    this.outputLogPath = options.outputLogPath;
+    this.outputBytes = initializeOutputLog(options.outputLogPath);
     const baseEnv = options.env ?? processEnv();
     this.env = buildManagedPtyEnv(baseEnv);
     this.foregroundInspector = options.foregroundInspector ?? defaultForegroundInspector;
@@ -98,7 +104,10 @@ export class ManagedPtySession {
         promptSeq: 0,
         lastReturnCode: null,
       }),
-      parserState: { pending: "", totalBytes: 0 },
+      parserState: { pending: "", totalBytes: this.outputBytes },
+      ...(this.outputLogPath === undefined
+        ? {}
+        : { outputLog: { kind: "log" as const, ref: this.outputLogPath } }),
     };
   }
 
@@ -144,6 +153,13 @@ export class ManagedPtySession {
         reason: "terminated",
       }),
     };
+  }
+
+  dispose(): void {
+    if (this.pty !== null) {
+      this.pty.kill();
+      this.pty = null;
+    }
     this.screenBuffer.dispose();
   }
 
@@ -162,7 +178,10 @@ export class ManagedPtySession {
     endOffset: number;
   } {
     const startOffset = Math.max(0, Math.min(byteOffset, this.outputBytes));
-    const output = Buffer.concat(this.outputChunks, this.outputBytes);
+    const output =
+      this.outputLogPath === undefined
+        ? Buffer.concat(this.outputChunks, this.outputBytes)
+        : readOutputLog(this.outputLogPath);
     return {
       chunk: output.subarray(startOffset).toString("utf-8"),
       startOffset,
@@ -176,7 +195,11 @@ export class ManagedPtySession {
 
   private applyChunk(chunk: string): void {
     const bytes = Buffer.from(chunk, "utf-8");
-    this.outputChunks.push(bytes);
+    if (this.outputLogPath === undefined) {
+      this.outputChunks.push(bytes);
+    } else {
+      fs.appendFileSync(this.outputLogPath, bytes);
+    }
     this.outputBytes += bytes.byteLength;
     this.screenBuffer.write(chunk);
 
@@ -186,6 +209,23 @@ export class ManagedPtySession {
       promptNonce: this.promptNonce,
     });
     this.currentSnapshot = result.snapshot;
+  }
+}
+
+function initializeOutputLog(outputLogPath: string | undefined): number {
+  if (outputLogPath === undefined) {
+    return 0;
+  }
+  fs.mkdirSync(path.dirname(outputLogPath), { recursive: true });
+  fs.closeSync(fs.openSync(outputLogPath, "a"));
+  return fs.statSync(outputLogPath).size;
+}
+
+function readOutputLog(outputLogPath: string): Buffer {
+  try {
+    return fs.readFileSync(outputLogPath);
+  } catch {
+    return Buffer.alloc(0);
   }
 }
 

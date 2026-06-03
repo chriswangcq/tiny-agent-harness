@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { Environment } from "../src/environment/environment.js";
-import type { EnvironmentEvent } from "../src/types/environment.js";
+import {
+  ENVIRONMENT_EVENT_LEVELS,
+  environmentEventLevel,
+  type EnvironmentEvent,
+} from "../src/types/environment.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -36,10 +43,21 @@ describe("Environment", () => {
     const env = new Environment();
     const event = makeUserMessageEvent("e1", "hello");
 
-    env.appendEvent(event);
+    expect(env.appendEvent(event)).toBe(true);
 
     expect(env.state.events.length).toBe(1);
     expect(env.state.events[0]).toEqual(event);
+    expect(env.state.latestEventId).toBe("e1");
+  });
+
+  it("appendEvent returns false for duplicate event ids", () => {
+    const env = new Environment();
+    const event = makeUserMessageEvent("e1", "hello");
+
+    expect(env.appendEvent(event)).toBe(true);
+    expect(env.appendEvent(event)).toBe(false);
+
+    expect(env.state.events).toEqual([event]);
     expect(env.state.latestEventId).toBe("e1");
   });
 
@@ -118,67 +136,211 @@ describe("Environment", () => {
     expect(env.consumeSince({ runId: "run-1" })).toEqual([]);
   });
 
-  it("waitFor new_user_message waits for the requested channel", async () => {
+  it("waitFor uses priority only and ignores legacy user-message channel filters", async () => {
     const env = new Environment();
 
-    let resolved: EnvironmentEvent | undefined;
-    const promise = env
-      .waitFor({
+    const promise = env.waitFor({
+      runId: "run-1",
+      wait: {
+        reason: "waiting for user on default",
+        condition: { kind: "new_user_message", channel: "default" },
+      },
+    });
+
+    const event = makeUserMessageEvent("e-other", "wake even from other", "other");
+    env.appendEvent(event);
+
+    await expect(promise).resolves.toEqual(event);
+  });
+
+  it("waitFor ignores matching events that existed before registration", async () => {
+    const env = new Environment();
+
+    const historical = makeUserMessageEvent("e1", "already here");
+    env.appendEvent(historical);
+
+    const promise = env.waitFor({
+      runId: "run-1",
+      wait: {
+        reason: "waiting for user",
+        condition: { kind: "new_user_message", channel: "default" },
+      },
+    });
+
+    const future = makeUserMessageEvent("e2", "new event");
+    env.appendEvent(future);
+
+    await expect(promise).resolves.toEqual(future);
+  });
+
+  it("waitFor satisfaction does not consume historical or matched future events", async () => {
+    const env = new Environment();
+    const historical = makeUserMessageEvent("e1", "already here");
+    env.appendEvent(historical);
+
+    const promise = env.waitFor({
+      runId: "run-1",
+      wait: {
+        reason: "waiting for user",
+        condition: { kind: "new_user_message", channel: "default" },
+      },
+    });
+
+    const future = makeUserMessageEvent("e2", "future");
+    env.appendEvent(future);
+
+    await expect(promise).resolves.toEqual(future);
+    expect(env.consumeSince({ runId: "run-1" })).toEqual([historical, future]);
+  });
+
+  it("waitFor with no condition wakes on any future environment event", async () => {
+    const env = new Environment();
+
+    const promise = env.waitFor({
+      runId: "run-1",
+      wait: { reason: "any event" },
+    });
+
+    const event = makeUserMessageEvent("e-any", "wake");
+    env.appendEvent(event);
+
+    await expect(promise).resolves.toEqual(event);
+  });
+
+  it("waitFor uses the run consume cursor so events arriving during a model turn are not lost", async () => {
+    const env = new Environment();
+    const initial = makeUserMessageEvent("e-initial", "initial");
+    env.appendEvent(initial);
+    expect(env.consumeSince({ runId: "run-1" })).toEqual([initial]);
+
+    const duringTurn = makeUserMessageEvent("e-during-turn", "interrupt");
+    env.appendEvent(duringTurn);
+
+    await expect(
+      env.waitFor({
         runId: "run-1",
-        wait: {
-          reason: "waiting for user on default",
-          condition: { kind: "new_user_message", channel: "default" },
-        },
-      })
-      .then((event) => {
-        resolved = event;
-        return event;
-      });
+        wait: { reason: "wait after model decision" },
+      }),
+    ).resolves.toEqual(duringTurn);
+  });
 
-    env.appendEvent(makeUserMessageEvent("e-other", "wrong channel", "other"));
-    await Promise.resolve();
+  it("waitFor still sees model-turn events when the turn began with an empty environment", async () => {
+    const env = new Environment();
+    expect(env.consumeSince({ runId: "run-1" })).toEqual([]);
 
-    expect(resolved).toBeUndefined();
+    const duringTurn = makeUserMessageEvent("e-during-empty-turn", "interrupt");
+    env.appendEvent(duringTurn);
 
-    const matching = makeUserMessageEvent("e-default", "right channel", "default");
+    await expect(
+      env.waitFor({
+        runId: "run-1",
+        wait: { reason: "wait after empty model turn" },
+      }),
+    ).resolves.toEqual(duringTurn);
+  });
+
+  it("waitFor uses minLevel as the only event filter", async () => {
+    const env = new Environment();
+
+    const promise = env.waitFor({
+      runId: "run-1",
+      wait: {
+        reason: "important session event",
+        condition: { kind: "event", source: "session", minLevel: 10 },
+      },
+    });
+
+    env.appendEvent({
+      id: "session-low",
+      kind: "session_output_available",
+      source: "session",
+      timestamp: "2026-05-25T12:00:00Z",
+      session: "default",
+      currentSession: "default",
+      request: "session_observe",
+      inputSeq: 1,
+      level: 0,
+    });
+    const matching: EnvironmentEvent = {
+      id: "session-ready",
+      kind: "session_input_ready",
+      source: "session",
+      timestamp: "2026-05-25T12:00:01Z",
+      session: "default",
+      currentSession: "default",
+      request: "session_observe",
+      inputSeq: 2,
+      level: 10,
+    };
     env.appendEvent(matching);
 
     await expect(promise).resolves.toEqual(matching);
   });
 
-  it("waitFor resolves immediately if matching event exists", async () => {
+  it("high-priority user messages wake legacy narrow session waits", async () => {
     const env = new Environment();
 
-    // Append a matching event before calling waitFor
-    const event = makeUserMessageEvent("e1", "already here");
-    env.appendEvent(event);
-
-    const resolved = await env.waitFor({
+    const promise = env.waitFor({
       runId: "run-1",
       wait: {
-        reason: "waiting for user",
-        condition: { kind: "new_user_message", channel: "default" },
+        reason: "legacy narrow session wait",
+        condition: {
+          kind: "event",
+          source: "session",
+          eventKind: "session_returned_to_prompt",
+          minLevel: 10,
+        },
       },
     });
 
-    expect(resolved).toEqual(event);
+    const userEvent = makeUserMessageEvent("e-user", "operator interrupt");
+    env.appendEvent(userEvent);
+
+    await expect(promise).resolves.toEqual(userEvent);
   });
 
-  it("waitFor immediate satisfaction does not consume the matched existing event", async () => {
+  it("treats user messages as highest-priority environment events", async () => {
     const env = new Environment();
-    const event = makeUserMessageEvent("e1", "already here");
-    env.appendEvent(event);
 
-    const resolved = await env.waitFor({
+    const promise = env.waitFor({
       runId: "run-1",
       wait: {
-        reason: "waiting for user",
-        condition: { kind: "new_user_message", channel: "default" },
+        reason: "wake only for high-priority events",
+        condition: { kind: "event", minLevel: ENVIRONMENT_EVENT_LEVELS.USER_MESSAGE },
       },
     });
 
-    expect(resolved).toEqual(event);
-    expect(env.consumeSince({ runId: "run-1" })).toEqual([event]);
+    env.appendEvent({
+      id: "session-critical",
+      kind: "session_unsynced",
+      source: "session",
+      timestamp: "2026-05-25T12:00:00Z",
+      session: "default",
+      currentSession: "default",
+      request: "session_observe",
+      inputSeq: 1,
+      level: 50,
+      reason: "prompt_spoof_suspected",
+    });
+
+    const userEvent = makeUserMessageEvent("e-user", "operator says continue");
+    env.appendEvent(userEvent);
+
+    await expect(promise).resolves.toEqual(userEvent);
+  });
+
+  it("normalizes user message levels even when level is missing or too low", () => {
+    const userEvent = makeUserMessageEvent("e-user", "hello");
+    const lowUserEvent = { ...userEvent, level: 0 };
+    const highUserEvent = { ...userEvent, level: 200 };
+
+    expect(environmentEventLevel(userEvent)).toBe(
+      ENVIRONMENT_EVENT_LEVELS.USER_MESSAGE,
+    );
+    expect(environmentEventLevel(lowUserEvent)).toBe(
+      ENVIRONMENT_EVENT_LEVELS.USER_MESSAGE,
+    );
+    expect(environmentEventLevel(highUserEvent)).toBe(200);
   });
 
   it("renderReminder formats events", () => {
@@ -266,5 +428,43 @@ describe("Environment", () => {
   it("renderReminder returns empty string for no events", () => {
     const reminder = Environment.renderReminder([]);
     expect(reminder).toBe("");
+  });
+
+  it("waitFor observes events appended by another environment instance through JSONL", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "environment-jsonl-"));
+    try {
+      const eventsPath = path.join(dir, "events.jsonl");
+      const writer = new Environment();
+      writer.setEventsPath(eventsPath);
+      const reader = new Environment();
+      reader.setEventsPath(eventsPath);
+
+      const promise = reader.waitFor({
+        runId: "run-reader",
+        wait: {
+          reason: "wait for skill",
+          condition: {
+            kind: "event",
+            eventKind: "skill_run_started",
+            source: "skill",
+          },
+        },
+      });
+
+      const event: EnvironmentEvent = {
+        id: "skill-jsonl-001",
+        kind: "skill_run_started",
+        source: "skill",
+        timestamp: "2026-05-25T12:00:00Z",
+        skillRunId: "skillrun-001",
+        skill: "coding-review",
+        statePath: ".tiny-agent/runs/run-1/skill-runs/skillrun-001/state.json",
+      };
+      writer.appendEvent(event);
+
+      await expect(promise).resolves.toEqual(event);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

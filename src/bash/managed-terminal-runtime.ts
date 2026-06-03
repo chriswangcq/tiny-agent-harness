@@ -1,5 +1,7 @@
 import { TerminalService } from "../application/terminal-service.js";
 import { createTerminalRunPort } from "../application/terminal-run-port.js";
+import { createHash } from "node:crypto";
+import * as path from "node:path";
 import type {
   TerminalRuntimeSnapshot,
   TerminalServicePorts,
@@ -21,6 +23,7 @@ export type ManagedTerminalRuntimeOptions = {
   shell?: string;
   shellArgs?: string[];
   env?: Record<string, string>;
+  sessionsDir?: string;
   screenRows?: number;
   screenCols?: number;
   postWriteReadDelayMs?: number;
@@ -70,17 +73,19 @@ export class ManagedTerminalRuntime {
           }
           await delay(this.options.postWriteReadDelayMs ?? DEFAULT_POST_WRITE_READ_DELAY_MS);
         },
-        read: async (session, cursor) => {
+        read: async (session, cursor, options) => {
           const entry = this.ensureSession(session);
           await this.drainStartup(entry);
           const start = parseCursor(cursor);
+          const timedOut = await this.waitForPromptIfRequested(entry, options);
           const output = entry.pty.readOutputSince(start);
           const screen = await entry.pty.readScreen();
+          const logRef = entry.pty.snapshot.outputLog?.ref ?? `managed-pty://${session}`;
           return {
             chunk: output.chunk,
             logRef: {
               kind: "log",
-              ref: `managed-pty://${session}`,
+              ref: logRef,
               startOffset: output.startOffset,
               endOffset: output.endOffset,
             },
@@ -89,8 +94,9 @@ export class ManagedTerminalRuntime {
               rows: screen.rows,
               cols: screen.cols,
               truncated: screen.hasScrollback,
-              logRef: { path: `managed-pty://${session}` },
+              logRef: { path: logRef },
             },
+            ...(timedOut ? { timedOut } : {}),
           };
         },
         interrupt: async (session) => {
@@ -155,7 +161,7 @@ export class ManagedTerminalRuntime {
   }
 
   private restartSession(session: string, cwd?: string): RuntimeSession {
-    this.sessions.get(session)?.pty.terminate();
+    this.sessions.get(session)?.pty.dispose();
 
     const pty = new ManagedPtySession({
       id: session,
@@ -166,6 +172,7 @@ export class ManagedTerminalRuntime {
       env: this.options.env,
       cols: this.screenCols(),
       rows: this.screenRows(),
+      outputLogPath: this.sessionLogPath(session),
       foregroundInspector: this.options.foregroundInspector,
     });
     pty.spawn();
@@ -177,6 +184,13 @@ export class ManagedTerminalRuntime {
     };
     this.sessions.set(session, entry);
     return entry;
+  }
+
+  private sessionLogPath(session: string): string | undefined {
+    if (this.options.sessionsDir === undefined) {
+      return undefined;
+    }
+    return path.join(this.options.sessionsDir, sessionLogFileName(session));
   }
 
   private async drainStartup(entry: RuntimeSession): Promise<void> {
@@ -201,6 +215,34 @@ export class ManagedTerminalRuntime {
   private screenCols(): number {
     return this.options.screenCols ?? 80;
   }
+
+  private async waitForPromptIfRequested(
+    entry: RuntimeSession,
+    options:
+      | {
+          waitForPromptMs?: number;
+          afterPromptSeq?: number;
+        }
+      | undefined,
+  ): Promise<boolean> {
+    const timeoutMs = options?.waitForPromptMs ?? 0;
+    if (timeoutMs <= 0) {
+      return false;
+    }
+    const afterPromptSeq =
+      options?.afterPromptSeq ??
+      entry.snapshot.terminal.lastShellPrompt?.promptSeq ??
+      -1;
+    const returned = await waitUntil(
+      () => {
+        const terminal = entry.pty.snapshot.terminal;
+        const promptSeq = terminal.lastShellPrompt?.promptSeq ?? -1;
+        return !terminal.alive || promptSeq > afterPromptSeq;
+      },
+      timeoutMs,
+    );
+    return !returned;
+  }
 }
 
 function waitBetweenPtyWrites(delayMs: number): Promise<void> {
@@ -217,18 +259,22 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitUntil(condition: () => boolean, timeoutMs: number): Promise<void> {
+async function waitUntil(
+  condition: () => boolean,
+  timeoutMs: number,
+): Promise<boolean> {
   if (condition() || timeoutMs <= 0) {
-    return;
+    return condition();
   }
 
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     await delay(Math.min(5, deadline - Date.now()));
     if (condition()) {
-      return;
+      return true;
     }
   }
+  return condition();
 }
 
 function hasObservedStartupPrompt(snapshot: TerminalRuntimeSnapshot): boolean {
@@ -243,6 +289,12 @@ function parseCursor(cursor: string | undefined): number {
     return 0;
   }
   return Number.parseInt(cursor, 10);
+}
+
+function sessionLogFileName(session: string): string {
+  const slug = session.replace(/[^A-Za-z0-9_.-]+/gu, "_").slice(0, 80) || "session";
+  const hash = createHash("sha256").update(session).digest("hex").slice(0, 10);
+  return `${slug}-${hash}.log`;
 }
 
 function cloneSnapshot(snapshot: TerminalRuntimeSnapshot): TerminalRuntimeSnapshot {

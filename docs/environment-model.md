@@ -1,17 +1,19 @@
 # Environment Model
 
-Environment stores external facts that should wake or remind the agent outside normal tool observations. Terminal output is not duplicated here; terminal/session facts return through the tool-result path as `TerminalObservation` or `SessionListObservation`.
+Environment stores external facts that should wake or remind the agent outside normal tool observations. PTY screen text is not duplicated here; full terminal screen state still returns through the tool-result path as `TerminalObservation` or `SessionListObservation`. Durable terminal facts, such as output arriving, a session entering continuation prompt, or a session returning to prompt, are modeled as environment events.
 
 ## Event Kinds
 
 ```ts
 type EnvironmentEvent =
   | {
+      level?: number;
       kind: "user_message_received";
       source: "im";
       message: UserMessage;
     }
   | {
+      level?: number;
       kind: "skill_run_started" | "skill_run_closed" | "skill_review_pending" | "skill_review_completed";
       source: "skill";
       skillRunId: string;
@@ -20,27 +22,74 @@ type EnvironmentEvent =
       executionLogPath?: string;
       reviewTaskPath?: string;
       lessonsPath?: string;
+    }
+  | {
+      level?: number;
+      kind:
+        | "session_output_available"
+        | "session_input_ready"
+        | "session_focused"
+        | "session_restarted"
+        | "session_continuation_prompt"
+        | "session_returned_to_prompt"
+        | "session_terminated"
+        | "session_unsynced";
+      source: "session";
+      session: string;
+      currentSession: string;
+      request: TerminalToolRequest["kind"];
+      inputSeq: number;
+      cwd?: string;
+      lastReturnCode?: number | null;
+      foregroundProcess?: string | null;
+      promptSeq?: number;
+      continuationReason?: string;
+      reason?: string;
+      exitCode?: number | null;
     };
 ```
 
 ## Reminder Semantics
 
 - `consumeSince(runId)` returns unconsumed environment events and advances the run cursor.
-- `waitFor(new_user_message)` resolves without consuming the matched event, so the next model turn can still see the reminder.
-- `Environment.renderReminder` serializes user messages as `[user@channel] ...` and skill facts as factual reminder lines.
+- `waitFor(...)` resolves without consuming the matched event, so the next model turn can still see the reminder.
+- `waitFor()` with no `minLevel`, or with `minLevel: 0`, waits for any new environment event.
+- `io_wait` uses the run's consumed-event cursor from the latest model turn start, not the later wait-registration moment. Events that arrive while the model is thinking can therefore satisfy the following `io_wait` immediately. If `waitFor` is used without a prior `consumeSince` for that run, it falls back to the latest event cursor at registration time so historical events do not self-wake standalone waits.
+- `io_wait` is priority-only. Its effective threshold is `wait.minLevel ?? wait.condition?.minLevel ?? 0`; legacy `source`, `eventKind`, `session`, and `channel` fields are accepted only for historical compatibility and do not filter wake events. Missing user-message events default to level `100` and are treated as highest-priority operator input; other missing event levels default to `1`.
+- `Environment.renderReminder` serializes user messages as `[user@channel] ...` and skill/session facts as factual reminder lines.
+- When `events.jsonl` is configured, `Environment` also watches the JSONL file while waiting so sibling CLI commands such as `skill close` can wake the run.
+- While `io_wait` is pending, the orchestrator starts a best-effort session observe pump so terminal prompt/output facts can become session environment events.
+
+TODO: Revisit ordinary `event` waits. Today `condition: { kind: "event" }` with no `minLevel` wakes on any level-0 event, including `session_output_available` produced by the session observe pump that starts during the wait itself. That matches the current priority-only rule, but it is easy to confuse with "wait for a meaningful external event" and can make a wait appear to self-wake. Future design should either name this as an explicit any-event wait or add a separate stricter wait mode for filtered/meaningful events.
+
+## Event Identity
+
+Environment events represent external facts, not the observation attempt that noticed them. Session fact IDs must therefore be stable across `terminal_write`, explicit `session_observe`, and the background session pump. For example, the same prompt return should keep the same event id when it is observed multiple times:
+
+```text
+env-session-{runId}-{session}-returned-nonce-{promptNonce}
+env-session-{runId}-{session}-input-ready-prompt-nonce-{promptNonce}
+env-session-{runId}-{session}-output-{inputSeq}
+```
+
+`Environment.appendEvent(...)` returns `false` when an event id already exists. The orchestrator records `environment_event_recorded` only when the append actually added a new event. This prevents repeated pump observations from inflating both `events.jsonl` and the transcript.
+
+`model_thinking_delta` is not an environment event. It is retained only for historical transcript/debugger compatibility. Current model thinking progress is stored as debug trace artifacts referenced by the final model output, and should not be used as durable external state or model-visible reminder material.
 
 ## Boundary
 
 ```text
-IM transport / skill lifecycle
+IM transport / skill lifecycle / terminal session facts
   -> EnvironmentEvent
   -> Environment reminder
+  -> ModelContextSession
   -> PromptBuilder
 
 terminal/session tool execution
   -> ManagedTerminalRuntime
   -> TerminalObservation | SessionListObservation
-  -> tool result history
+  -> model-context observation item
+  -> selected session EnvironmentEvent facts
 ```
 
-This keeps terminal state in one place: the terminal/session observation stream.
+This keeps PTY screen text in one place: the terminal/session observation stream. Environment only stores small wake/reminder facts.

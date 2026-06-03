@@ -61,17 +61,93 @@ describe("XtermTerminalScreenBuffer", () => {
     expect(screen.text).not.toContain("__TAH_PROMPT__");
     buffer.dispose();
   });
+
+  it("removes managed shell marker lines after a visible shell prompt prefix", async () => {
+    const buffer = new XtermTerminalScreenBuffer({ rows: 4, cols: 80 });
+
+    buffer.write("> __TAH_CONT__ nonce=n reason=unknown seq=1\r\n> ");
+
+    const screen = await buffer.snapshot();
+
+    expect(screen.text).not.toContain("> __TAH_CONT__");
+    expect(screen.text).not.toContain("> ");
+    expect(screen.text).not.toContain("__TAH_CONT__");
+    buffer.dispose();
+  });
+
+  it("removes continuation prompt chrome while preserving heredoc content", async () => {
+    const buffer = new XtermTerminalScreenBuffer({ rows: 6, cols: 80 });
+
+    buffer.write(
+      "__TAH_CONT__ nonce=n reason=unknown seq=1\r\n" +
+        "> 这 9 个失败在我们改动 `state/root.ts` **之前**就已存在\r\n" +
+        "__TAH_CONT__ nonce=n reason=unknown seq=1\r\n" +
+        "> | Terminal | `terminal-*.test.ts` | ✓ |\r\n",
+    );
+
+    const screen = await buffer.snapshot();
+
+    expect(screen.text).toContain(
+      "这 9 个失败在我们改动 `state/root.ts` **之前**就已存在",
+    );
+    expect(screen.text).toContain("| Terminal | `terminal-*.test.ts` | ✓ |");
+    expect(screen.text).not.toContain("**之> 前**");
+    expect(screen.text).not.toContain("> | Terminal");
+    expect(screen.text).not.toContain("__TAH_CONT__");
+    buffer.dispose();
+  });
+
 });
 
 describe("stripManagedShellScreenNoise", () => {
   it("holds split marker prefixes until the line can be classified", () => {
     const first = stripManagedShellScreenNoise("__TAH_PRO");
-    expect(first).toEqual({ output: "", pending: "__TAH_PRO" });
+    expect(first.output).toBe("");
+    expect(first.pending).toBe("__TAH_PRO");
 
     const second = stripManagedShellScreenNoise(
-      `${first.pending}MPT__ nonce=n rc=0 cwd=/ seq=1\r\n$ `,
+      "MPT__ nonce=n rc=0 cwd=/ seq=1\r\n$ ",
+      first.state,
     );
     expect(second.output).toBe("$ ");
     expect(second.pending).toBe("");
+  });
+
+  it("holds split marker prefixes after a visible shell prompt prefix", () => {
+    const first = stripManagedShellScreenNoise("> __TAH_CO");
+    expect(first.output).toBe("");
+    expect(first.pending).toBe("> __TAH_CO");
+
+    const second = stripManagedShellScreenNoise(
+      "NT__ nonce=n reason=unknown seq=1\r\n> ",
+      first.state,
+    );
+    expect(second.output).toBe("");
+    expect(second.pending).toBe("");
+  });
+
+  it("does not remove user output that merely mentions a marker", () => {
+    const result = stripManagedShellScreenNoise(
+      "literal text __TAH_CONT__ nonce=n reason=unknown seq=1\r\n",
+    );
+
+    expect(result.output).toBe(
+      "literal text __TAH_CONT__ nonce=n reason=unknown seq=1\r\n",
+    );
+    expect(result.pending).toBe("");
+  });
+
+  it("resets continuation after PROMPT and preserves blockquote > prefix", () => {
+    const first = stripManagedShellScreenNoise(
+      "__TAH_CONT__ nonce=n reason=unknown seq=1\r\n> ",
+    );
+    expect(first.state.pendingPromptKind).toBe("continuation");
+
+    const second = stripManagedShellScreenNoise(
+      "__TAH_PROMPT__ nonce=n rc=0 cwd=/repo seq=2\r\n> user blockquote should stay\n",
+      first.state,
+    );
+    expect(second.output).toBe("> user blockquote should stay\n");
+    expect(second.state.pendingPromptKind).toBeNull();
   });
 });

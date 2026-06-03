@@ -1,4 +1,5 @@
 import type { IoWaitRequest } from "../types/environment.js";
+import { validateIoWaitRequest } from "../types/environment.js";
 import type { TerminalToolInput, ToolName } from "../types/index.js";
 import { MODEL_VISIBLE_TOOL_NAMES } from "../types/tools.js";
 
@@ -59,15 +60,36 @@ type Decision =
     }
   | {
       name: "io_wait";
-      arguments: {
-        reason?: string;
-        condition: IoWaitRequest["condition"];
-      };
+      arguments: IoWaitRequest;
     };
 
 export type ParseDecisionResult =
   | { status: "valid"; decision: Decision }
-  | { status: "invalid"; message: string };
+  | {
+      status: "invalid";
+      message: string;
+      diagnostic: ModelProtocolDiagnostic;
+    };
+
+export type ModelProtocolDiagnosticCode =
+  | "expected_v4_dsml"
+  | "missing_function_terminator"
+  | "invalid_function_name"
+  | "unclosed_parameter"
+  | "raw_json_parameters"
+  | "unexpected_text"
+  | "missing_parameters"
+  | "invalid_parameter_json"
+  | "invalid_io_wait_arguments"
+  | "unsupported_function";
+
+export type ModelProtocolDiagnostic = {
+  code: ModelProtocolDiagnosticCode;
+  severity: "error";
+  message: string;
+  recoverable: true;
+  details?: Record<string, unknown>;
+};
 
 export function parseDsmlDecision(rawDecision: string): ParseDecisionResult {
   const text = stripTrailingDecisionFrame(rawDecision);
@@ -76,10 +98,7 @@ export function parseDsmlDecision(rawDecision: string): ParseDecisionResult {
     return parseDsml(text);
   }
 
-  return {
-    status: "invalid",
-    message: "Expected a V4 DSML tool call.",
-  };
+  return invalid("expected_v4_dsml", "Expected a V4 DSML tool call.");
 }
 
 function looksLikeDsml(text: string): boolean {
@@ -108,18 +127,19 @@ function parseDsml(raw: string): ParseDecisionResult {
   // Expected: functionName">\n<params>
   const quoteClose = text.indexOf('">');
   if (quoteClose === -1) {
-    return {
-      status: "invalid",
-      message: 'Malformed DSML tool call: missing function name terminator `">`.',
-    };
+    return invalid(
+      "missing_function_terminator",
+      'Malformed DSML tool call: missing function name terminator `">`.',
+    );
   }
 
   const name = text.slice(0, quoteClose).trim();
   if (!name || name.length > 50) {
-    return {
-      status: "invalid",
-      message: "Malformed DSML tool call: invalid function name.",
-    };
+    return invalid(
+      "invalid_function_name",
+      "Malformed DSML tool call: invalid function name.",
+      { nameLength: name.length },
+    );
   }
 
   const rest = text.slice(quoteClose + 2);
@@ -133,10 +153,11 @@ function parseDsml(raw: string): ParseDecisionResult {
   );
 
   if (openParameterCount > closeParameterCount) {
-    return {
-      status: "invalid",
-      message: "Malformed DSML tool call: unclosed DSML parameter tag.",
-    };
+    return invalid(
+      "unclosed_parameter",
+      "Malformed DSML tool call: unclosed DSML parameter tag.",
+      { openParameterCount, closeParameterCount },
+    );
   }
 
   const paramsResult = parseDsmlParameters(rest);
@@ -145,19 +166,18 @@ function parseDsml(raw: string): ParseDecisionResult {
   }
 
   if (Object.keys(paramsResult.params).length === 0 && rest.includes("{")) {
-    return {
-      status: "invalid",
-      message:
-        "Malformed DSML tool call: expected DSML parameter tags, not raw JSON.",
-    };
+    return invalid(
+      "raw_json_parameters",
+      "Malformed DSML tool call: expected DSML parameter tags, not raw JSON.",
+    );
   }
 
   if (paramsResult.extraText !== "") {
-    return {
-      status: "invalid",
-      message:
-        "Malformed DSML tool call: unexpected text outside DSML parameter tags.",
-    };
+    return invalid(
+      "unexpected_text",
+      "Malformed DSML tool call: unexpected text outside DSML parameter tags.",
+      { extraTextPreview: paramsResult.extraText.slice(0, 120) },
+    );
   }
 
   if (Object.keys(paramsResult.params).length > 0) {
@@ -169,16 +189,16 @@ function parseDsml(raw: string): ParseDecisionResult {
   }
 
   if (openParameterCount > 0) {
-    return {
-      status: "invalid",
-      message: "Malformed DSML tool call: no complete DSML parameters found.",
-    };
+    return invalid(
+      "missing_parameters",
+      "Malformed DSML tool call: no complete DSML parameters found.",
+    );
   }
 
-  return {
-    status: "invalid",
-    message: "Malformed DSML tool call: expected DSML parameter tags.",
-  };
+  return invalid(
+    "missing_parameters",
+    "Malformed DSML tool call: expected DSML parameter tags.",
+  );
 }
 
 function stripTrailingDecisionFrame(raw: string): string {
@@ -206,7 +226,7 @@ function parseDsmlParameters(
   text: string,
 ):
   | { status: "valid"; params: Record<string, unknown>; extraText: string }
-  | { status: "invalid"; message: string } {
+  | Extract<ParseDecisionResult, { status: "invalid" }> {
   const params: Record<string, unknown> = {};
   let extraText = "";
   let cursor = 0;
@@ -234,10 +254,11 @@ function parseDsmlParameters(
       try {
         params[paramName] = JSON.parse(value);
       } catch {
-        return {
-          status: "invalid",
-          message: `Malformed DSML tool call: parameter "${paramName}" declared string="false" but did not contain valid JSON.`,
-        };
+        return invalid(
+          "invalid_parameter_json",
+          `Malformed DSML tool call: parameter "${paramName}" declared string="false" but did not contain valid JSON.`,
+          { paramName },
+        );
       }
     }
   }
@@ -259,10 +280,14 @@ function buildDecision(
 
   if (name === "io_wait") {
     if (!isIoWaitArguments(args)) {
-      return {
-        status: "invalid",
-        message: "io_wait arguments did not match the expected schema.",
-      };
+      return invalid(
+        "invalid_io_wait_arguments",
+        "io_wait arguments did not match the expected schema.",
+      );
+    }
+    const invalidWait = validateIoWaitRequest(args);
+    if (invalidWait !== undefined) {
+      return invalid("invalid_io_wait_arguments", invalidWait);
     }
     return {
       status: "valid",
@@ -270,9 +295,26 @@ function buildDecision(
     };
   }
 
+  return invalid("unsupported_function", `Unsupported function: ${name}`, {
+    name,
+  });
+}
+
+function invalid(
+  code: ModelProtocolDiagnosticCode,
+  message: string,
+  details?: Record<string, unknown>,
+): Extract<ParseDecisionResult, { status: "invalid" }> {
   return {
     status: "invalid",
-    message: `Unsupported function: ${name}`,
+    message,
+    diagnostic: {
+      code,
+      severity: "error",
+      message,
+      recoverable: true,
+      ...(details ? { details } : {}),
+    },
   };
 }
 
@@ -315,11 +357,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isIoWaitArguments(
   value: unknown,
-): value is { reason?: string; condition: IoWaitRequest["condition"] } {
-  if (!isRecord(value) || !isRecord(value.condition)) {
+): value is {
+  reason?: string;
+  minLevel?: number;
+  condition?: IoWaitRequest["condition"];
+} {
+  if (!isRecord(value)) {
     return false;
   }
   if (value.reason !== undefined && typeof value.reason !== "string") {
+    return false;
+  }
+  if (
+    value.minLevel !== undefined &&
+    (typeof value.minLevel !== "number" || !Number.isFinite(value.minLevel))
+  ) {
+    return false;
+  }
+  if (value.condition === undefined) {
+    return true;
+  }
+  if (!isRecord(value.condition)) {
+    return false;
+  }
+  const kind = value.condition.kind;
+  if (kind === undefined) {
+    return true;
+  }
+  if (kind !== "new_user_message" && kind !== "event") {
     return false;
   }
   return true;

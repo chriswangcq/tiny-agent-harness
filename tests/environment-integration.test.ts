@@ -95,7 +95,7 @@ describe("Environment consumeSince + waitFor closed loop", () => {
     expect(second).toHaveLength(0);
   });
 
-  it("waitFor resolves immediately when matching event already exists", async () => {
+  it("waitFor ignores matching events that already exist unless a future event arrives", async () => {
     const env = new Environment();
     const msg: UserMessage = {
       id: "msg-1",
@@ -114,13 +114,19 @@ describe("Environment consumeSince + waitFor closed loop", () => {
 
     env.appendEvent(evt);
 
-    const result = await env.waitFor({
+    const waitPromise = env.waitFor({
       runId: "run-1",
       wait: {
         condition: { kind: "new_user_message", channel: "default" },
       },
     });
-    expect(result.id).toBe("e-im-1");
+    env.appendEvent({
+      ...evt,
+      id: "e-im-2",
+      message: { ...msg, id: "msg-2", text: "future" },
+    });
+    const result = await waitPromise;
+    expect(result.id).toBe("e-im-2");
   });
 
   it("waitFor resolves when a future event arrives", async () => {

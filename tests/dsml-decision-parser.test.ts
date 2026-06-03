@@ -87,6 +87,84 @@ describe("parseDsmlDecision", () => {
     });
   });
 
+  it("parses DSML io_wait without a condition as any-event wait", () => {
+    const raw = [
+      `io_wait">`,
+      `<${DSML}parameter name="reason" string="true">waiting</${DSML}parameter>`,
+    ].join("\n");
+
+    const result = parseDsmlDecision(raw);
+
+    expect(result).toEqual({
+      status: "valid",
+      decision: {
+        name: "io_wait",
+        arguments: {
+          reason: "waiting",
+        },
+      },
+    });
+  });
+
+  it("parses DSML io_wait with top-level minLevel", () => {
+    const raw = [
+      `io_wait">`,
+      `<${DSML}parameter name="reason" string="true">waiting for important event</${DSML}parameter>`,
+      `<${DSML}parameter name="minLevel" string="false">10</${DSML}parameter>`,
+    ].join("\n");
+
+    const result = parseDsmlDecision(raw);
+
+    expect(result).toEqual({
+      status: "valid",
+      decision: {
+        name: "io_wait",
+        arguments: {
+          reason: "waiting for important event",
+          minLevel: 10,
+        },
+      },
+    });
+  });
+
+  it("parses legacy DSML io_wait with condition minLevel", () => {
+    const raw = dsmlIoWait("waiting for important session event", {
+      kind: "event",
+      source: "session",
+      minLevel: 10,
+    });
+
+    const result = parseDsmlDecision(raw);
+
+    expect(result).toEqual({
+      status: "valid",
+      decision: {
+        name: "io_wait",
+        arguments: {
+          reason: "waiting for important session event",
+          condition: { kind: "event", source: "session", minLevel: 10 },
+        },
+      },
+    });
+  });
+
+  it("parses compatibility DSML io_wait with condition minLevel only", () => {
+    const raw = dsmlIoWait("waiting for important event", { minLevel: 10 });
+
+    const result = parseDsmlDecision(raw);
+
+    expect(result).toEqual({
+      status: "valid",
+      decision: {
+        name: "io_wait",
+        arguments: {
+          reason: "waiting for important event",
+          condition: { minLevel: 10 },
+        },
+      },
+    });
+  });
+
   it.each([
     ["missing opening full-width bar", "</DSML｜parameter>"],
     ["ascii closing bar", "</DSML|parameter>"],
@@ -190,6 +268,11 @@ describe("parseDsmlDecision", () => {
     expect(result).toMatchObject({
       status: "invalid",
       message: expect.stringContaining("expected DSML parameter tags"),
+      diagnostic: {
+        code: "raw_json_parameters",
+        severity: "error",
+        recoverable: true,
+      },
     });
   });
 
@@ -285,6 +368,10 @@ describe("parseDsmlDecision", () => {
     expect(result).toMatchObject({
       status: "invalid",
       message: expect.stringContaining('declared string="false"'),
+      diagnostic: {
+        code: "invalid_parameter_json",
+        details: { paramName: "expectedInputSeq" },
+      },
     });
   });
 
@@ -341,6 +428,10 @@ describe("parseDsmlDecision", () => {
     expect(result).toMatchObject({
       status: "invalid",
       message: expect.stringContaining("Unsupported function: not_a_tool"),
+      diagnostic: {
+        code: "unsupported_function",
+        details: { name: "not_a_tool" },
+      },
     });
   });
 
@@ -350,6 +441,9 @@ describe("parseDsmlDecision", () => {
     expect(result).toMatchObject({
       status: "invalid",
       message: expect.stringContaining("Expected a V4 DSML tool call"),
+      diagnostic: {
+        code: "expected_v4_dsml",
+      },
     });
   });
 

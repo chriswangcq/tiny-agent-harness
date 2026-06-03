@@ -9,5 +9,14 @@ export {
   TERMINAL_KEY_TOOL_DEFINITION,
   TERMINAL_WRITE_TOOL_DEFINITION,
 } from "./catalog.js";
-export { AlwaysApproveReviewer } from "./reviewer.js";
+export {
+  evaluateToolPolicy,
+  type ToolPolicyDecision,
+  type ToolPolicyFinding,
+  type ToolPolicyOptions,
+  type ToolPolicyRuleCode,
+  type ToolPolicySeverity,
+  type ToolPolicyStatus,
+} from "./policy.js";
+export { AlwaysApproveReviewer, ToolPolicyReviewer } from "./reviewer.js";
 export { ToolCallValidator } from "./validator.js";

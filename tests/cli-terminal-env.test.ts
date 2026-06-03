@@ -27,6 +27,33 @@ describe("buildCliTerminalEnv", () => {
     expect(result.PATH).toBe("/bin");
   });
 
+  it("injects current run identity and run-scoped paths", () => {
+    const result = buildCliTerminalEnv({}, "default", {
+      runId: "run-123",
+      runDir: "/repo/.tiny-agent/runs/run-123",
+      imDir: "/repo/.tiny-agent/runs/run-123/im",
+      skillRunsDir: "/repo/.tiny-agent/runs/run-123/skill-runs",
+      sessionsDir: "/repo/.tiny-agent/runs/run-123/sessions",
+      skillsDir: "/repo/.tiny-agent/skills",
+      transcriptPath: "/repo/.tiny-agent/runs/run-123/transcript.jsonl",
+      environmentEventsPath: "/repo/.tiny-agent/runs/run-123/environment/events.jsonl",
+    });
+
+    expect(result).toMatchObject({
+      TAH_RUN_CHANNEL: "default",
+      TAH_RUN_ID: "run-123",
+      TAH_RUN_DIR: "/repo/.tiny-agent/runs/run-123",
+      TAH_STATE_DIR: "/repo/.tiny-agent/runs/run-123",
+      TAH_IM_DIR: "/repo/.tiny-agent/runs/run-123/im",
+      TAH_SKILL_RUNS_DIR: "/repo/.tiny-agent/runs/run-123/skill-runs",
+      TAH_SESSIONS_DIR: "/repo/.tiny-agent/runs/run-123/sessions",
+      TAH_SKILLS_DIR: "/repo/.tiny-agent/skills",
+      TAH_TRANSCRIPT_PATH: "/repo/.tiny-agent/runs/run-123/transcript.jsonl",
+      TAH_ENVIRONMENT_EVENTS_PATH:
+        "/repo/.tiny-agent/runs/run-123/environment/events.jsonl",
+    });
+  });
+
   it("uses different channels", () => {
     const result = buildCliTerminalEnv({}, "cli");
     expect(result.TAH_RUN_CHANNEL).toBe("cli");

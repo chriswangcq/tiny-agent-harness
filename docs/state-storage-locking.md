@@ -121,13 +121,9 @@ memory/sub-agent        # 第一版不是核心路径
         prompts/
           step-0000-thinking.prompt.txt
 
-  sessions/
-    default/
-      state.json
-      output.log
-    server/
-      state.json
-      output.log
+      sessions/
+        default-37a8eec1ce.log
+        server-4c1f3b8d2a.log
 
   environment/
     events.jsonl
@@ -161,10 +157,10 @@ memory/sub-agent        # 第一版不是核心路径
 
 - `runs/<runId>/state.json` 是 run snapshot。
 - `runs/<runId>/transcript.jsonl` 是 run event ledger。
-- `runs/<runId>/session.json` 是 agent-loop history snapshot，用于 resume。
-- `runs/<runId>/debug/prompts/` 保存由 transcript/history 通过 `promptRef` 引用的大 prompt artifact。
+- `runs/<runId>/session.json` 是 `ModelContextSession` snapshot，用于 resume。
+- `runs/<runId>/debug/prompts/` 保存由 transcript/model-context 通过 `promptRef` 引用的大 prompt artifact。
 - `environment/events.jsonl` 是跨 run 的外部环境事件 ledger。
-- `sessions/<sessionId>/output.log` 是完整 PTY 输出，observation 只返回一屏 terminal viewport。
+- `runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log` 是完整 raw PTY 输出，observation 只返回一屏 semantic terminal viewport，并通过 `screen.logRef.path` 指向该日志。
 - `skill-runs/<id>/execution.txt` 和 `review-task.txt` 只给 agent 通过 bash 原生命令读取，不直接塞进 prompt。
 
 ## File Types
@@ -240,7 +236,7 @@ type LedgerRecord = {
 例如：
 
 ```text
-sessions/<sessionId>/output.log
+runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log
 debug/prompts/<artifact>.txt
 skill-runs/<skillRunId>/execution.txt
 ```
@@ -346,13 +342,12 @@ runs.latest.lock
 
 ### Bash Session
 
-`tiny-agent` 内部的 ManagedTerminalRuntime 是 session owner。
+`tiny-agent` 内部的 ManagedTerminalRuntime 是 session raw log owner。
 
 它负责写：
 
 ```text
-sessions/<sessionId>/state.json
-sessions/<sessionId>/output.log
+runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log
 ```
 
 锁：
@@ -365,7 +360,7 @@ session-<sessionId>.lock
 
 1. 获取 session lock，写 state=`running`。
 2. 释放 session lock。
-3. 持续写 `output.log`。
+3. 持续写 run-scoped session raw log。
 4. 命令完成、超时、interrupt 时，再获取 session lock 更新 state。
 
 这样不会因为一个长命令卡住其它只读 CLI。

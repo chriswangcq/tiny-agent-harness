@@ -58,10 +58,12 @@ TUI
 | --- | --- | --- |
 | 模型适配层 | `src/model` | DeepSeek V4 FIM two-pass、native tool-call frame 解析、`ModelTurn` 归一化、prompt 构造。 |
 | 运行编排层 | `src/run` | agent run 状态机、effect 选择、事件驱动状态转移、run lifecycle。 |
+| 模型上下文层 | `src/model/context-session.ts`、`src/model/context-window.ts`、`src/model/prompt-builder.ts` | 本地有状态 FIM context wrapper：接收 incremental context item，负责 prompt message 渲染、context compaction、snapshot/restore。 |
 | 工具执行层 | `src/tools`、`src/bash` | 静态 terminal/session tool catalog、tool validation、review boundary、PTY-backed terminal session 和 observation。 |
 | 外部事件层 | `src/environment`、`src/im` | IM 消息、terminal/skill/environment events、`io_wait`、事件消费游标和 factual reminder。 |
 | 能力 CLI 层 | `src/skill`、`src/code-intel`、`src/cli` | skill discovery/run/review，`codeq` LSP 查询，`im` mock transport，用户命令入口。 |
-| 可观察层 | `src/transcript`、`src/tui`、`src/state` | transcript/state 持久化、文件锁、JSONL ledger、TUI transcript player 和 view model。 |
+| 可观察层 | `src/transcript`、`src/tui`、`src/state` | transcript/state 持久化、文件锁、JSONL ledger、TUI transcript player、debugger domain 和 view model。 |
+| 评估与治理层 | `src/run/recovery.ts`、`src/run/replay.ts`、`src/tools/policy.ts`、`src/subagent` | resume/replay/eval case、模型协议诊断、tool policy reviewer 和 sub-agent team FSM 基础域。 |
 
 这套架构的关键特点是：harness 内核不理解每个外部能力的业务语义。它只关心 bash 请求是否合规、是否被审核、是否执行完成、输出在哪里、事件如何进入下一轮模型上下文。
 
@@ -71,6 +73,7 @@ TUI
 
 ```text
 task / environment reminder
+  -> ModelContextSession
   -> PromptBuilder
   -> DeepSeekFimAdapter thinking pass
   -> DeepSeekFimAdapter decision pass
@@ -219,6 +222,43 @@ codeq hover src/run/orchestrator.ts:37:18 --json
 
 TUI 不拥有 agent 状态，不参与模型决策，也不直接改写 run state。这避免了“第二个 orchestrator”问题。
 
+`src/tui/debugger.ts` 是 TUI 的纯 debugger domain。它消费显式传入的 `TuiViewModel`、`LoopFrame` 和 run snapshot，提供 loop frame query、detail section 解析、problem summary、run index 和 run comparison。它不扫描文件系统，也不依赖 blessed renderer；历史 run browser、warn/error filter 和 eval viewer 后续都应该复用这层。
+
+### 4.9 Recovery / Replay / Eval
+
+`src/run/recovery.ts` 和 `src/run/replay.ts` 把 resume 与 replay 相关判断从 orchestrator 中抽出成纯函数：
+
+- `diagnoseRunRecovery(...)` 检查 `state.json`、transcript、session snapshot 和 step cursor 是否能安全恢复。
+- `buildReplayCase(...)` 从显式 run snapshot / transcript events 构造可回放 case。
+- `buildEvalCaseSummary(...)` 生成 compact eval summary，包含 model/tool/io_wait 计数、invalid output 计数和 recovery finding codes。
+
+这层的重点不是自动重放副作用，而是给 resume/debug/eval 提供可测试的事实摘要。`waiting_for_tool` 等 in-flight 状态仍然不能被自动重放。
+
+### 4.10 Model Protocol Diagnostics
+
+DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml-decision-parser.ts` 会返回稳定 diagnostic code，例如 legacy V3 token、raw JSON parameters、unsupported function、invalid parameter JSON 等。`ModelTurn.invalid_output` 携带该 diagnostic，TUI detail 可以展示协议层原因。
+
+这使得“模型为什么 warn / invalid_output”可以被复盘，而不是只能从 raw text 猜。
+
+### 4.11 Tool Policy And Redaction
+
+默认 CLI runtime 仍使用 `AlwaysApproveReviewer`，这保持 demo 行为不变。但 `src/tools/policy.ts` 已经提供纯 `evaluateToolPolicy(request, options)`，可识别危险 terminal writes、警告网络/全局安装/git push 等高风险动作，并通过 `ToolPolicyReviewer` 适配现有 reviewer port。
+
+`src/tui/redaction.ts` 只服务 TUI/display，不属于 agent runtime 历史压缩路径。它覆盖 API key / token / password / secret assignment、Bearer token、私钥块、`sk-`/`ds-` style key、长 terminal_write payload 和 base64-like payload，目的是避免 TUI detail 被敏感文本或长展示字符串污染。
+
+模型可见 `ModelContextSession` items 不走这层 display redaction。terminal observation 和 tool-call context item 应保持事实完整；真正需要压缩上下文时，应走显式 context compaction，并向模型说明压缩发生了，而不是静默把字段替换成 redacted placeholder。
+
+### 4.12 Sub-agent Team Domain
+
+`src/subagent` 当前是 sub-agent team 的本地域模型，不是实际 sub-agent process runtime。它提供：
+
+- `SubAgentTeamState`：task / worker / applied event ids。
+- `applySubAgentTeamEvent(...)`：纯 FSM reducer，处理 submit/register/assign/start/succeed/fail/cancel/offline。
+- invalid transition rejection codes 和 duplicate event id no-op。
+- `summarizeSubAgentTeam(...)` / `listActiveSubAgentAssignments(...)` 给未来 TUI、CLI、MCP、cloud adapter 消费。
+
+这个边界让未来 “subagent team 管理服务” 可以先复用可测状态机，再在外层接进 MCP、云端队列或本地 CLI。
+
 ## 5. 代码工作量统计
 
 当前源码口径统计约为：
@@ -344,7 +384,8 @@ TUI 不拥有 agent 状态，不参与模型决策，也不直接改写 run stat
 | 文档与实现快速变化 | README 已包含 codeq/state/IM/skill 新能力，部分实现仍在未提交工作区中快速演进。 | 每次功能落地后同步更新对应设计文档和 project report。 |
 | 状态持久化仍需闭环 | 设计中有 `.tiny-agent/`、locks、JSONL ledger，但所有 CLI 是否都完全使用同一 resolver 还需要持续验证。 | 用集成测试覆盖多 CLI 共用 state root、并发写、resume/replay。 |
 | terminal/session 约束对模型要求高 | 模型必须学会通过 shell 调 skill/codeq/im 等 CLI，并在 heredoc、前台 stdin consumer、`--text-stdin` 和 session 管理之间做正确选择，而不是直接获得 typed business tool affordance。 | 在 system prompt 和 examples 中强化 heredoc / `--text-stdin` / session observe 的边界，并避免示例污染大生成文件路径。 |
-| review 目前默认 approve | 安全边界存在，但策略能力还未产品化。 | 增加危险命令分类、workspace policy、网络/文件权限和人工确认模式。 |
+| 普通 `event` wait 语义过宽 | 当前 `io_wait` 是 priority-only；`condition: { kind: "event" }` 默认 `minLevel=0`，会被等待期间 session pump 自己生成的 `session_output_available` 唤醒，看起来像 wait 自己唤醒自己。 | 后续重新设计 ordinary event wait：区分 any-event、meaningful-event、filtered-event，或给 session pump 事件单独降噪/标记。 |
+| review 目前默认 approve | 默认 runtime 仍是 demo approve，但已有纯 policy evaluator / ToolPolicyReviewer 可作为产品模式基础。 | 增加显式配置开关、workspace policy、网络/文件权限和人工确认模式。 |
 | TUI 仍偏观察 | 当前 TUI 更像 transcript player，控制动作和 session tail 仍可增强。 | 增加 session log tail、active skill、review pending、approval 操作和 replay/follow。 |
 
 ## 10. 后续建设建议

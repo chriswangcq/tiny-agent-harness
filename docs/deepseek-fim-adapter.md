@@ -160,10 +160,16 @@ type ModelProgressEvent = {
 };
 ```
 
-`RunOrchestrator` persists those callbacks as `model_thinking_delta`
-transcript events. These events are observability-only: they let the TUI update
-the running model frame, but they do not replace `model_output_received` or
-change the final `ModelTurn` contract.
+`RunOrchestrator` treats those callbacks as trace input, not primary run
+state. Current runs collect the chunks into
+`debug/thinking/step-XXXX-thinking.trace.txt` and attach the artifact metadata
+as `model_output_received.output.thinking.raw.traceRef`. The final
+`model_output_received` event remains the replay source for thinking content
+and `ModelTurn` data.
+
+Older transcripts may still contain `model_thinking_delta` events from the
+pre-trace-artifact path. Those events are historical/debug compatibility only
+and should not be reintroduced as the active persistence path.
 
 Thinking content is normalized before it is stored or injected into the
 decision prompt. If a streamed thinking response accidentally crosses into
@@ -242,7 +248,7 @@ terminal_write">
 ```text
 io_wait">
 <｜DSML｜parameter name="reason" string="true">Waiting for the user's next message before continuing.</｜DSML｜parameter>
-<｜DSML｜parameter name="condition" string="false">{"kind":"new_user_message","channel":"default"}</｜DSML｜parameter>
+<｜DSML｜parameter name="minLevel" string="false">0</｜DSML｜parameter>
 ```
 
 This is still a harness decision grammar, but its surface form matches DeepSeek native tool-call training format.
@@ -305,24 +311,19 @@ type ModelTurn =
     };
 ```
 
-First version supports only one wait condition:
+`io_wait` is normalized as a first-class model turn. It uses priority-only waiting:
 
 ```ts
 type IoWaitRequest = {
   reason?: string;
-  condition:
-    | {
-        kind: "event";
-        eventKind: EnvironmentEvent["kind"];
-        source?: EnvironmentEvent["source"];
-      }
-    | {
-        kind: "new_user_message";
-        channel: string;
-        cursor?: string;
-      };
+  minLevel?: number;
+  // Deprecated compatibility shape accepted for old transcripts/model outputs.
+  // Runtime matching still uses only minLevel.
+  condition?: { minLevel?: number; [legacy: string]: unknown };
 };
 ```
+
+Omitting `minLevel`, or emitting `minLevel: 0`, wakes on any new environment event after the wait starts. `minLevel: 10` is the normal threshold for meaningful session/tool lifecycle events. User messages are level `100`.
 
 Because FIM does not provide provider-generated tool call ids, the harness creates them:
 

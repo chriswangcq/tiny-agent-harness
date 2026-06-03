@@ -3,10 +3,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  reconstructHistoryFromTranscript,
+  reconstructModelContextItemsFromTranscript,
   RunSessionStore,
 } from "../src/run/session-store.js";
-import type { HistoryItem } from "../src/run/orchestrator.js";
+import type { ModelContextItem } from "../src/model/context-session.js";
 import type { InternalToolCall, ModelTurn } from "../src/types/model.js";
 import type { RunEvent } from "../src/types/run.js";
 
@@ -26,31 +26,39 @@ afterEach(() => {
 });
 
 describe("RunSessionStore", () => {
-  it("saves and loads agent-loop history snapshots", () => {
+  it("saves and loads model-context session snapshots", () => {
     const runDir = makeTmpDir();
     const store = new RunSessionStore(runDir);
-    const history: HistoryItem[] = [
+    const items: ModelContextItem[] = [
       { type: "environment_reminder", content: "persist me" },
     ];
 
     store.save({
       runId: "run-123",
       updatedAt: "2026-05-28T00:00:00.000Z",
-      history,
+      modelContext: {
+        version: 1,
+        task: "task",
+        items,
+      },
     });
 
     expect(fs.existsSync(path.join(runDir, "session.json"))).toBe(true);
     expect(store.load()).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       runId: "run-123",
       updatedAt: "2026-05-28T00:00:00.000Z",
-      history,
+      modelContext: {
+        version: 1,
+        task: "task",
+        items,
+      },
     });
   });
 });
 
-describe("reconstructHistoryFromTranscript", () => {
-  it("rebuilds tool call, observation, and io_wait history from transcript events", () => {
+describe("reconstructModelContextItemsFromTranscript", () => {
+  it("rebuilds tool call, observation, and io_wait context items from transcript events", () => {
     const toolCall: InternalToolCall = {
       id: "call-1",
       name: "session_observe",
@@ -140,7 +148,7 @@ describe("reconstructHistoryFromTranscript", () => {
       },
     ];
 
-    expect(reconstructHistoryFromTranscript(events)).toEqual([
+    expect(reconstructModelContextItemsFromTranscript(events)).toEqual([
       {
         type: "tool_call",
         toolCall,

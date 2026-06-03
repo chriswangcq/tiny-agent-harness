@@ -77,7 +77,7 @@ type TerminalScreen = {
 };
 ```
 
-`screen.text` 是当前 terminal viewport，不是旧的任意长度 tail 字段。`returnedToPrompt` 是普通命令编排的紧凑信号，表示这次观察看到了 shell 或 continuation prompt。`screen.truncated` 只表示屏幕之外可能还有历史；工具不会返回 offset 范围或日志页。更多内容必须通过 shell 原生命令查看 `screen.logRef.path`。
+`screen.text` 是当前 semantic terminal viewport，不是旧的任意长度 tail 字段。Managed shell 的 marker 和 continuation prompt chrome 会被剥离；主 prompt 保留，用来提供 cwd/user 的操作定位。raw PTY 历史仍保留在 `screen.logRef.path`。CLI runtime 中它是 run-scoped 文件，例如 `.tiny-agent/runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log`；未配置文件日志的测试/内存 runtime 才可能使用虚拟 fallback。`returnedToPrompt` 是普通命令编排的紧凑信号，表示这次观察看到了 shell 或 continuation prompt。`screen.truncated` 只表示屏幕之外可能还有历史；更多内容必须通过 shell 原生命令查看 `screen.logRef.path`。
 
 ## Tool Schemas
 
@@ -90,7 +90,9 @@ Write exact text bytes to the current PTY session. This tool never accepts a ses
 Use it for shell commands, heredocs, REPL input, interactive answers, and stdin text.
 It does not append Enter unless text contains "\n".
 expectedInputSeq must match the current session's latest terminal.inputSeq.
-By default, wait until a shell/continuation prompt returns or 30s elapses. Timeout does not kill the process.
+By default, the write returns after an immediate one-screen glance.
+Use io_wait to wait for environment events such as session_input_ready or session_returned_to_prompt.
+Timeout does not kill the process.
 The observation is a one-screen terminal glance after the write.
 ```
 
@@ -111,7 +113,7 @@ Schema:
     },
     "waitForReturnMs": {
       "type": "number",
-      "description": "How long to wait for a shell or continuation prompt before returning a timeout observation. Defaults to 30000."
+      "description": "Optional low-level escape hatch: how long to wait for a shell or continuation prompt before returning a timeout observation. Defaults to 0."
     }
   },
   "additionalProperties": false
@@ -127,6 +129,8 @@ Send a terminal key to the current PTY session. This tool never accepts a sessio
 Use it for Enter, EOF-style input, escape/navigation, tab completion, pager keys (space/q), and arrow navigation.
 Use session_interrupt, not terminal_key, for Ctrl-C.
 expectedInputSeq must match the current session's latest terminal.inputSeq.
+By default, the key input returns after an immediate one-screen glance.
+Use io_wait to wait for environment events when the key starts or advances a command.
 The observation is a one-screen terminal glance after the key input.
 ```
 
@@ -146,7 +150,7 @@ Schema:
     },
     "waitForReturnMs": {
       "type": "number",
-      "description": "How long to wait for a shell or continuation prompt before returning a timeout observation. Defaults to 30000."
+      "description": "Optional low-level escape hatch: how long to wait for a shell or continuation prompt before returning a timeout observation. Defaults to 0."
     }
   },
   "additionalProperties": false
@@ -207,13 +211,14 @@ type SessionListObservation = {
   currentSession: string;
   sessions: Array<{
     session: string;
-    current: boolean;
-    alive: boolean;
-    inputSeq: number;
-    cwd?: string;
-    foregroundProcess?: string | null;
-    lastUpdatedAt?: string;
-    summary: string;
+    terminal: TerminalFacts;
+    parserCursor?: string;
+    outputLog?: {
+      kind: "log";
+      ref: string;
+      startOffset?: number;
+      endOffset?: number;
+    };
   }>;
 };
 ```
@@ -262,6 +267,7 @@ Interrupt the current PTY session, equivalent to Ctrl-C/SIGINT semantics.
 This tool never accepts a session id; foreground-impacting actions only affect current session.
 Use it when a command is stuck, a REPL is waiting, or a long-running process should be stopped.
 Timeout does not terminate the session; it only reports that no prompt returned in time.
+By default, interrupt returns after an immediate one-screen glance; use io_wait for follow-up terminal events.
 The observation is a one-screen terminal glance after the interrupt.
 ```
 
@@ -278,7 +284,7 @@ Schema:
     },
     "waitForReturnMs": {
       "type": "number",
-      "description": "How long to wait for a shell or continuation prompt before returning a timeout observation. Defaults to 30000."
+      "description": "Optional low-level escape hatch: how long to wait for a shell or continuation prompt before returning a timeout observation. Defaults to 0."
     }
   },
   "additionalProperties": false
@@ -325,9 +331,9 @@ Description:
 
 ```text
 Terminate a managed PTY session. If session is omitted, terminate current session.
-If current session is terminated, currentSession remains that id but terminal_write and terminal_key will reject until the agent restarts or focuses a live session.
+If current session is terminated, currentSession remains that id but terminal_write, terminal_key, and session_interrupt will reject with TERMINAL_TERMINATED until the agent restarts or focuses a live session.
 Use session_list, session_focus, or session_restart after terminating current session.
-Returns structured termination facts and, when available, the final one-screen terminal glance.
+Returns structured termination facts and, when available, the final one-screen terminal glance. Terminated sessions remain visible to session_observe and session_list; old prompt output must not resurrect them.
 ```
 
 Schema:
@@ -357,6 +363,8 @@ Description:
 Pause the agent loop until an external environment event arrives.
 This is a tool call, not a shell command. Never run it inside the terminal.
 Use after sending a user-visible reply, when waiting for user input, approval, webhook, sub-agent result, or another environment event.
+io_wait is priority-only: it wakes on the next event whose environmentEventLevel is >= minLevel.
+Omit minLevel, or use 0, to wake on any new environment event. Use 10 for meaningful session/tool lifecycle events. User messages are level 100.
 ```
 
 Schema:
@@ -369,26 +377,9 @@ Schema:
       "type": "string",
       "description": "Optional short reason shown in the run loop."
     },
-    "condition": {
-      "oneOf": [
-        {
-          "type": "object",
-          "required": ["kind"],
-          "properties": {
-            "kind": { "const": "new_environment_event" }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": ["kind"],
-          "properties": {
-            "kind": { "const": "new_user_message" },
-            "channel": { "type": "string" }
-          },
-          "additionalProperties": false
-        }
-      ]
+    "minLevel": {
+      "type": "number",
+      "description": "Minimum event level. Omit or use 0 for any event; use 10 for meaningful session/tool lifecycle events. User messages are level 100."
     }
   },
   "additionalProperties": false

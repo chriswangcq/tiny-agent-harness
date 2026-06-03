@@ -5,6 +5,7 @@
 
 import type { IoWaitRequest } from "./environment.js";
 import type { TerminalToolInput, ToolName } from "./tools.js";
+import type { ModelProtocolDiagnostic } from "../model/dsml-decision-parser.js";
 
 /**
  * Raw model output placeholder. Will be refined as the FIM adapter
@@ -61,6 +62,7 @@ export type ModelTurn =
   | {
       kind: "invalid_output";
       message: string;
+      diagnostic?: ModelProtocolDiagnostic;
       thinking?: AgentThinking;
       rawDecision?: string;
       raw?: unknown;
@@ -79,8 +81,8 @@ export type FimStepOutput = {
 /**
  * Incremental progress emitted while the model is still producing a step.
  *
- * These events are observability-only: they let the orchestrator persist
- * live thinking progress without changing the final ModelTurn contract.
+ * These events are observability-only: the orchestrator may collect them into
+ * debug trace artifacts without changing the final ModelTurn contract.
  */
 export type ModelProgressEvent = {
   type: "thinking_delta";

@@ -18,16 +18,52 @@ export function cleanEnv(
   );
 }
 
+export type CliTerminalEnvOptions = {
+  runId?: string;
+  runDir?: string;
+  stateDir?: string;
+  imDir?: string;
+  skillRunsDir?: string;
+  sessionsDir?: string;
+  skillsDir?: string;
+  transcriptPath?: string;
+  environmentEventsPath?: string;
+};
+
 /**
- * Build the env object for the ManagedTerminalRuntime,
- * ensuring TAH_RUN_CHANNEL is always set to the bound channel.
- * Existing TAH_RUN_CHANNEL in the source env is overwritten.
+ * Build the env object for the ManagedTerminalRuntime, injecting the current
+ * run identity and run-scoped paths so CLI tools executed inside the PTY never
+ * need to guess which run they belong to.
  */
 export function buildCliTerminalEnv(
   env: NodeJS.ProcessEnv,
   channel: string,
+  options: CliTerminalEnvOptions = {},
 ): Record<string, string> {
   const cleaned = cleanEnv(env);
   cleaned["TAH_RUN_CHANNEL"] = channel;
+  assignIfDefined(cleaned, "TAH_RUN_ID", options.runId);
+  assignIfDefined(cleaned, "TAH_RUN_DIR", options.runDir);
+  assignIfDefined(cleaned, "TAH_STATE_DIR", options.stateDir ?? options.runDir);
+  assignIfDefined(cleaned, "TAH_IM_DIR", options.imDir);
+  assignIfDefined(cleaned, "TAH_SKILL_RUNS_DIR", options.skillRunsDir);
+  assignIfDefined(cleaned, "TAH_SESSIONS_DIR", options.sessionsDir);
+  assignIfDefined(cleaned, "TAH_SKILLS_DIR", options.skillsDir);
+  assignIfDefined(cleaned, "TAH_TRANSCRIPT_PATH", options.transcriptPath);
+  assignIfDefined(
+    cleaned,
+    "TAH_ENVIRONMENT_EVENTS_PATH",
+    options.environmentEventsPath,
+  );
   return cleaned;
+}
+
+function assignIfDefined(
+  env: Record<string, string>,
+  key: string,
+  value: string | undefined,
+): void {
+  if (value !== undefined) {
+    env[key] = value;
+  }
 }
