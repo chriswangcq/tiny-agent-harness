@@ -39,9 +39,13 @@
 │       │       ├── execution.txt
 │       │       └── review-task.txt
 │       │
-│       └── debug/                  # 调试产物
-│           └── prompts/
-│               └── step-XXXX-thinking.prompt.txt
+│       ├── debug/                  # 调试产物
+│           ├── prompts/
+│           │   └── step-XXXX-thinking.prompt.txt
+│           └── thinking/
+│               └── step-XXXX-thinking.trace.txt
+│       │
+│       └── mcp-servers.json        # 可选：本 run 的 MCP server registry
 │
 ├── launcher/                       # 启动器日志
 │   └── ui-<ts>.log
@@ -82,7 +86,8 @@
 | `sessions/` | 终端 PTY raw log；文件名为 sanitize 后的 session id 加短 hash，避免路径穿越和重名 | 纯文本 |
 | `environment/` | 环境事件（one-shot events + persistent facts） | JSONL |
 | `skill-runs/` | 技能执行实例的状态和日志 | JSON |
-| `debug/` | 调试产物（prompt 快照等） | 纯文本 |
+| `debug/` | 调试产物（prompt 快照、thinking trace 等） | 纯文本 |
+| `mcp-servers.json` | 可选 MCP server registry；agent 在 PTY 中默认使用 run-scoped `TAH_STATE_DIR` | JSON |
 
 ### PTY 启动环境变量
 
@@ -111,25 +116,34 @@ Managed PTY 启动时会把当前 run 信息注入 shell 环境，供 agent 在 
 
 Resume 只恢复 run state、transcript 和 model context，不恢复旧 PTY 进程树。恢复后的 PTY 是 fresh shell；agent 必须先 `session_observe`/`session_list`，再用最新 `terminal.inputSeq` 输入。
 
+### Debug artifacts
+
+`debug/prompts/` 保存 DeepSeek V4 prompt encoder 产物。transcript/model output 只保留 `promptRef`，包括相对路径、字节数和 sha256。
+
+`debug/thinking/` 保存 streamed thinking progress trace。当前 active run path 不再把每个 thinking chunk 写成 `model_thinking_delta` 主 transcript event，而是在最终 `model_output_received.output.thinking.raw.traceRef` 中保留 artifact 引用。`model_thinking_delta` 只保留为历史 transcript 兼容事件。
+
 ### `launcher/` — 运维日志
 
 TUI 启动器的 stdout/stderr 日志，用于排查 UI 启动问题。不属于 run 状态，可定期清理。
 
-## 迁移方案
+## 当前落地状态
 
-当前 `.tiny-agent/` 中以下目录需要从项目级迁移到 run 级：
+当前 CLI 主路径已经按 run-scoped 目录写入：
 
-| 当前路径 | 迁移到 |
-|----------|--------|
-| `.tiny-agent/im/` | `.tiny-agent/runs/run-<ts>/im/` |
-| `.tiny-agent/sessions/` | `.tiny-agent/runs/run-<ts>/sessions/` |
-| `.tiny-agent/environment/` | `.tiny-agent/runs/run-<ts>/environment/` |
-| `.tiny-agent/skill-runs/` | `.tiny-agent/runs/run-<ts>/skill-runs/` |
+| 能力 | 当前路径 |
+|------|----------|
+| IM inbox/outbox | `.tiny-agent/runs/<runId>/im/` |
+| PTY raw logs | `.tiny-agent/runs/<runId>/sessions/` |
+| Environment events | `.tiny-agent/runs/<runId>/environment/events.jsonl` |
+| Skill runs | `.tiny-agent/runs/<runId>/skill-runs/` |
+| Model context snapshot | `.tiny-agent/runs/<runId>/session.json` |
+| Debug prompt/trace artifacts | `.tiny-agent/runs/<runId>/debug/` |
 
-保留不变：
-- `.tiny-agent/skills/` — 保持项目级
-- `.tiny-agent/runs/` — 保持现有结构，子目录扩展
-- `.tiny-agent/launcher/` — 保持不变
-- `.tiny-agent/tmp/` — 保持不变
+仍保持项目级：
 
-迁移后，`runs/run-<ts>/` 成为一个可独立打包、归档或删除的完整单元。
+- `.tiny-agent/skills/` — 跨 run 共享 skill definitions。
+- `.tiny-agent/runs/` — run 容器和 latest pointer。
+- `.tiny-agent/launcher/` — TUI launcher 日志。
+- `.tiny-agent/tmp/` — 临时文件。
+
+因此 `runs/run-<ts>/` 是一个可独立打包、归档或删除的完整运行单元。

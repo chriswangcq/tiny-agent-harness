@@ -34,7 +34,7 @@ TUI reads those facts and renders them.
 │ step 000 thinking_received                                                 │
 │ step 000 decision tool_call terminal_write(inputSeq=3)                      │
 │ step 000 review approved                                                   │
-│ step 000 terminal_write finished log=.tiny-agent/sessions/default.log       │
+│ step 000 terminal_write finished log=.tiny-agent/runs/<runId>/sessions/... │
 │ step 001 environment reminder ...                                          │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -74,8 +74,6 @@ tiny-agent ui --channel default --resume latest
 tiny-agent ui --channel default --resume run-2026-05-25T20-00-00Z
 tiny-agent tui --run latest
 tiny-agent tui --run run-2026-05-25T20-00-00Z
-tiny-agent tui --run latest --replay
-tiny-agent tui --run latest --follow
 ```
 
 语义：
@@ -84,8 +82,7 @@ tiny-agent tui --run latest --follow
 - `tiny-agent ui --channel default --task "fix tests"`: 后台启动 run 并直接注入初始任务，同时打开 live TUI。
 - `tiny-agent ui --channel default --resume <runId|latest>`: 恢复已有 run，并把 TUI attach 到恢复后的 run。
 - `tiny-agent tui --run latest`: 只 attach 到最近 run，不启动或恢复 run。
-- `--replay`: 从 transcript 起点播放，不自动跳到末尾。
-- `--follow`: tail 新事件，默认 live 模式。
+- 当前 TUI 默认 live tail transcript；完整 replay speed control 仍是后续能力。
 
 ## Data Sources
 
@@ -98,21 +95,27 @@ TUI 只读这些 durable artifacts：
       state.json
       transcript.jsonl
       session.json
+      im/
+        default.inbox.jsonl
+        default.outbox.jsonl
+        cursors/
+          default.cursor
+      environment/
+        events.jsonl
+      sessions/
+        default-37a8eec1ce.log
+        server-4c1f3b8d2a.log
+      skill-runs/
+        <skillRunId>/
+          state.json
+          execution.txt
+          review-task.txt
       debug/
         prompts/
           step-0000-thinking.prompt.txt
-  sessions/
-    default.log
-    server.log
-    test.log
-  im/
-    default.inbox.jsonl
-    default.outbox.jsonl
-  skill-runs/
-    <skillRunId>/
-      state.json
-      execution.txt
-      review-task.txt
+        thinking/
+          step-0000-thinking.trace.txt
+      mcp-servers.json
   skills/
     <skill>/
       attachments/
@@ -151,7 +154,7 @@ flowchart TD
   ORCH --> MODEL["DeepSeek FIM Adapter"]
   ORCH --> BASH["ManagedTerminalRuntime"]
   ORCH --> TR["TranscriptStore"]
-  BASH --> SLOG["Session logs"]
+  BASH --> SLOG["Run-scoped session logs"]
   ORCH --> STATE["state.json"]
   TR --> TUI
   STATE --> TUI
@@ -164,7 +167,7 @@ TUI 读：
 
 - transcript events
 - latest run state
-- session log tails
+- run-scoped session log facts / fixed PTY viewport projections
 - IM inbox/outbox
 - active skill run state
 
@@ -408,7 +411,7 @@ message> _
 2. 当前 step 自动展开。
 3. 历史 step 默认折叠，只显示 phase summary。
 4. 失败、等待、review rejected、invalid output 自动高亮。
-5. Bash output 只显示 observation excerpt 和 log path。
+5. Terminal output 显示 agent 可见的固定 PTY viewport 和 log path。
 6. 选中某个 frame 后，右侧或弹窗显示 detail。
 
 示例：
@@ -416,14 +419,14 @@ message> _
 ```text
 step 004
   model       ok       thinking received (1820 chars)
-  decision    ok       bash(session=default, command="npm test")
+  decision    ok       terminal_write(inputSeq=12, text="npm test\n")
   validation  ok       valid
   review      ok       approved by always-approve
-  tool        running  session=default timeout=30000 log=.tiny-agent/sessions/default.log
+  tool        running  session=default log=.tiny-agent/runs/<runId>/sessions/default-37a8eec1ce.log
 
 step 005
   environment ok       2 events consumed
-  skill       waiting  coding-review review_pending task=.tiny-agent/skill-runs/skillrun-001/review-task.txt
+  skill       waiting  coding-review review_pending task=.tiny-agent/runs/<runId>/skill-runs/skillrun-001/review-task.txt
 ```
 
 ## Reasoning Display
@@ -446,13 +449,13 @@ thinking received (1820 chars) [press Enter to expand]
 
 ## Log Viewing
 
-TUI 不复制完整 log 到内存。
+TUI 不复制完整 log 到内存。PTY pane 首先渲染和 agent observation 对齐的固定 semantic terminal viewport；完整 raw log 只作为 detail/排查入口。
 
 对 session log：
 
 ```text
-read tail by byte offset
-render newest N lines
+render latest fixed-size screen projection
+read tail by byte offset only for explicit log detail
 keep selected logPath and offset in UI state
 ```
 
@@ -462,6 +465,18 @@ keep selected logPath and offset in UI state
 - detail pane 支持滚动。
 - 按 `/` 在当前 log excerpt 内搜索。
 - 完整搜索仍推荐通过 agent 自己用 bash 执行 `rg` / `sed` / `tail`。
+- PTY 主 pane 是 read-only，不把 TUI 的实际窗口大小反向注入 runtime；runtime 的 `rows/cols` 决定 agent 和人看到的同一屏内容。
+
+### PTY Fit Priority
+
+Agent-visible PTY size 是 runtime contract，例如 `80x24`。TUI 的职责是只读渲染这块固定 screen buffer，并尽量让人看到一模一样的内容：
+
+1. 先按 `screen.rows` / `screen.cols` 计算 PTY pane 的最小可读区域。
+2. 在当前终端窗口不足时，优先保证 PTY pane 完整，压缩 conversation / loop / detail 的高度或宽度。
+3. 如果物理窗口仍不足，TUI 可以提示窗口太小，但不能偷偷改变 runtime PTY size。
+4. Conversation、loop detail、debugger panes 都是辅助视图，不应该导致 PTY viewport 被截断后还显示为 `fit`。
+
+这个规则保证 agent observation、TUI PTY pane、raw screen replay 三者同源：差异只能来自字体/终端渲染能力，而不是 harness 状态模型不一致。
 
 ## Follow And Selection
 
@@ -666,7 +681,7 @@ type TuiLimits = {
 4. 下半屏 loop player
 5. live tail transcript
 6. independent follow bottom / scroll / loop frame selection / detail pane
-7. bash log path 和 output excerpt 显示
+7. terminal log path、固定 PTY viewport 和 output excerpt 显示
 8. active skill reminder 显示
 9. `q` 退出 TUI，不停止 run
 

@@ -83,7 +83,7 @@ tiny-agent ui --channel default
 - **决策和副作用分离**：`AgentRunState.nextEffect()` 只决定下一步应该发生什么；`RunOrchestrator` 负责调用模型、校验工具、审核工具、执行 terminal/session 工具、等待 IO、写 transcript。
 - **FIM 是受约束的 step generator**：DeepSeek V4 FIM 被拆成 thinking pass 和 decision pass。Decision pass 只允许生成一个 native tool-call frame，并被归一化为 `ModelTurn`。
 - **外部世界事件化**：IM 消息、terminal session 状态、命令完成/超时、skill run 状态统一进入 `Environment`。模型每轮看到的是被消费过的 factual reminder，而不是隐藏的可变状态。
-- **日志是主要调试接口**：Observation 只返回当前 terminal 的一屏 `screen.text`、terminal facts 和 log path；完整输出写入 session log，run 事件写入 transcript JSONL。FIM prompt 这类大调试 payload 写入 run debug artifacts，并在 transcript/history 里保留 `promptRef`。大上下文靠路径回看，不靠一次性塞进 prompt。
+- **日志是主要调试接口**：Observation 只返回当前 terminal 的一屏 `screen.text`、terminal facts 和 log path；完整输出写入 session log，run 事件写入 transcript JSONL。FIM prompt 和 streamed thinking progress 这类大调试 payload 写入 run debug artifacts，并在 transcript/history 里保留 `promptRef` / `traceRef`。大上下文靠路径回看，不靠一次性塞进 prompt。
 - **失败也进入回路**：无效模型输出、tool validation 失败、review 拒绝都会转成 recoverable observation，让 agent 下一轮自我修正，而不是立刻把 run 打死。
 - **复盘由 agent 判断触发**：skill 执行结束后不是固定进入复盘流程，而是由 agent 根据输出、失败模式、风险和任务结果决定是否 `close --review required`。Harness 只提供状态机和记录位置。
 - **审阅先于执行**：所有 terminal/session tool request 在执行前经过 `ToolReviewer`。当前 demo 可以默认 approve，但边界已经为人工审核、策略审核、权限分级和安全审计留好入口。
@@ -96,12 +96,15 @@ tiny-agent ui --channel default
 - **Terminal/session tool catalog**：模型通过 `terminal_write`、`terminal_key` 操作 current session，通过 `session_observe`、`session_focus`、`session_interrupt`、`session_restart`、`session_terminate` 管理 PTY。普通文本 heredoc 不需要额外 payload 协议。
 - **Managed PTY runtime**：基于 `node-pty` 管理长期 session，维护 current session、terminal facts、`inputSeq`、best-effort `foregroundProcess` 和一屏 observation。
 - **长任务不会被误杀**：timeout 只释放 agent focus，不 kill 进程。Agent 后续可以 poll 新输出、发送交互输入、中断或重启 session。
-- **可恢复 run artifacts**：每个 run 产出 `state.json`、`transcript.jsonl`、`session.json` 和 `debug/prompts/`；每个 PTY session 有独立 log。`tiny-agent resume <runId|latest>` 会恢复 agent-loop history 并创建新的 PTY process tree。
+- **可恢复 run artifacts**：每个 run 产出 `state.json`、`transcript.jsonl`、`session.json`、run-scoped `im/`、`environment/`、`skill-runs/`、`debug/prompts/`、`debug/thinking/` 和 PTY session logs。`tiny-agent resume <runId|latest>` 会恢复 agent-loop history 并创建新的 PTY process tree。
 - **agent-loop context compaction**：上下文窗口只压缩 agent-loop history，system prompt/tool contract 不参与压缩。默认在 history prompt 约 700k token 时写入 `history_compacted` 事件并保留最近尾部。
 - **`io_wait` 是一等决策**：等待用户消息或外部事件不是 `sleep`，而是 run state machine 中可记录、可恢复、可回放的 `waiting_for_io` 状态。
 - **Environment 的 one-shot event 和 persistent fact 分层**：新事件只消费一次；active skill run 这类仍然成立的事实会持续提醒，直到状态关闭。
 - **Skill CLI 有生命周期闭环**：skill 可发现、可执行、可保持 active、可 close；agent 可以按需把 skill run 转入 review pending，复盘后把 lessons 追加到 skill 附件。
 - **Code Intelligence CLI 作为语义查询层**：LSP 能力不进入 harness 内核，而是通过 `codeq` CLI 暴露给 agent，用来查询 diagnostics、symbols、definition、references 和 hover。
+- **MCP 作为 CLI 能力接入**：MCP server registry、tools listing 和 tool call 都通过 `mcp` CLI 完成，agent 仍然只是在 terminal session 里执行命令。
+- **Sub-agent team 先做成纯状态域**：`src/subagent` 提供 task/worker FSM、幂等事件和 summary helper，后续可接 MCP、云端队列或本地 worker runtime。
+- **Recovery / replay 是纯事实摘要**：resume 安全诊断、replay case 和 eval summary 从显式 state/transcript/session snapshot 构造，不自动重放副作用。
 - **TUI 以 view model 播放 agent loop**：`TranscriptReader` 读 JSONL，`ViewModelBuilder` 纯逻辑归一化事件，renderer 只负责展示 conversation 和 loop frame。
 - **端口化协作边界**：model、prompt、validator、reviewer、terminal、environment、skill 都通过明确接口连接，便于替换 adapter、接真实 IM、接策略 reviewer 或做单元测试。
 - **测试覆盖架构骨架**：已有 run state、environment、validator、skill discovery/store、TUI transcript/view-model 等测试，优先保护状态转移和边界契约。
@@ -162,4 +165,9 @@ codeq hover src/run/orchestrator.ts:37:18 --json
 - [IM CLI Transport](docs/im-cli-transport.md)
 - [Environment Model](docs/environment-model.md)
 - [Skill CLI](docs/skill-cli.md)
+- [MCP CLI](docs/mcp-cli.md)
+- [Sub-agent Team Domain](docs/subagent-team.md)
+- [Recovery And Replay](docs/recovery-replay.md)
+- [State Layout](docs/state-layout.md)
+- [State Storage And File Locking](docs/state-storage-locking.md)
 - [TUI](docs/tui.md)

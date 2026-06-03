@@ -72,11 +72,13 @@ RunOrchestrator
         run
       examples/
         basic.json
-  skill-runs/
-    skillrun-2026-05-25-001/
-      state.json
-      execution.txt
-      review-task.txt
+  runs/
+    run-<ts>/
+      skill-runs/
+        skillrun-2026-05-25-001/
+          state.json
+          execution.txt
+          review-task.txt
 ```
 
 最小可用 skill 可以只有：
@@ -140,7 +142,6 @@ type SkillManifest = {
 
 ```text
 skill list --json
-skill search <query> --json
 skill show <name> --json
 skill run <name> --json '<args>'
 skill status --active --json
@@ -167,28 +168,6 @@ skill list --json
       "name": "coding-review",
       "description": "Review code changes and report risks, regressions, and missing tests.",
       "tags": ["coding", "review"]
-    }
-  ]
-}
-```
-
-### search
-
-按关键词搜索本地 skill。
-
-```bash
-skill search review --json
-```
-
-输出同 `list`，但可以带 score：
-
-```json
-{
-  "skills": [
-    {
-      "name": "coding-review",
-      "description": "Review code changes and report risks, regressions, and missing tests.",
-      "score": 0.92
     }
   ]
 }
@@ -253,7 +232,7 @@ skill run coding-review --json '{"path":"src"}'
 {
   "returnCode": 0,
   "output": "...",
-  "outputLogPath": ".tiny-agent/sessions/default.log"
+  "outputLogPath": ".tiny-agent/runs/<runId>/sessions/default-37a8eec1ce.log"
 }
 ```
 
@@ -265,8 +244,8 @@ skill run coding-review --json '{"path":"src"}'
   "skillRunId": "skillrun-2026-05-25-001",
   "skill": "coding-review",
   "status": "running",
-  "statePath": ".tiny-agent/skill-runs/skillrun-2026-05-25-001/state.json",
-  "executionLogPath": ".tiny-agent/skill-runs/skillrun-2026-05-25-001/execution.txt"
+  "statePath": ".tiny-agent/runs/<runId>/skill-runs/skillrun-2026-05-25-001/state.json",
+  "executionLogPath": ".tiny-agent/runs/<runId>/skill-runs/skillrun-2026-05-25-001/execution.txt"
 }
 ```
 
@@ -290,7 +269,7 @@ skill status --active --json
       "skill": "coding-review",
       "status": "running",
       "executionReturnCode": 0,
-      "executionLogPath": ".tiny-agent/skill-runs/skillrun-2026-05-25-001/execution.txt"
+      "executionLogPath": ".tiny-agent/runs/<runId>/skill-runs/skillrun-2026-05-25-001/execution.txt"
     }
   ]
 }
@@ -329,7 +308,7 @@ CLI 不直接把 run 从 reminder 里移除，而是创建 review task：
   "ok": true,
   "skillRunId": "skillrun-2026-05-25-001",
   "status": "review_pending",
-  "reviewTaskPath": ".tiny-agent/skill-runs/skillrun-2026-05-25-001/review-task.txt"
+  "reviewTaskPath": ".tiny-agent/runs/<runId>/skill-runs/skillrun-2026-05-25-001/review-task.txt"
 }
 ```
 
@@ -498,8 +477,8 @@ Skill reminder 是持续状态，不是一次性 event。
 
 ```text
 Active skill reminder:
-- [skillrun-2026-05-25-001] skill=coding-review status=running rc=0 log=.tiny-agent/skill-runs/skillrun-2026-05-25-001/execution.txt
-- [skillrun-2026-05-25-002] skill=debugging status=review_pending task=.tiny-agent/skill-runs/skillrun-2026-05-25-002/review-task.txt
+- [skillrun-2026-05-25-001] skill=coding-review status=running rc=0 log=.tiny-agent/runs/<runId>/skill-runs/skillrun-2026-05-25-001/execution.txt
+- [skillrun-2026-05-25-002] skill=debugging status=review_pending task=.tiny-agent/runs/<runId>/skill-runs/skillrun-2026-05-25-002/review-task.txt
 ```
 
 规则：
@@ -541,7 +520,7 @@ skill accept <proposal-id> --json
 
 ```text
 All external capabilities are available through terminal/session tool calls after the agent has inspected the terminal output.
-Use `skill list --json`, `skill search <query> --json`, and `skill show <name> --json`
+Use `skill list --json`, `skill show <name> --json`, and `skill validate <name> --json`
 to discover reusable local skills.
 Run a skill with `skill run <name> --json '<args>'`.
 ```
@@ -555,7 +534,7 @@ Agent 需要具体 skill 时，再通过 bash 自己查。
 第一版最小实现：
 
 - `.tiny-agent/skills` 作为默认 skill root
-- `.tiny-agent/skill-runs` 作为默认 skill run root
+- `.tiny-agent/runs/<runId>/skill-runs` 作为当前 run 的 skill run root（agent PTY 中通过 `TAH_SKILL_RUNS_DIR` 注入）
 - `skill list --json`
 - `skill show <name> --json`
 - `skill run <name> --json '<args>'`
@@ -572,5 +551,5 @@ Agent 需要具体 skill 时，再通过 bash 自己查。
 - search ranking
 - remote install
 - skill dependency manager
-- multi-root skill search path
+- multi-root skill discovery path
 - proposal accept workflow

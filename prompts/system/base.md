@@ -109,8 +109,8 @@ Discover skills:
 
 ```sh
 skill list --json
-skill search <query> --json
 skill show <name> --json
+skill validate <name> --json
 ```
 
 `skill show` returns only metadata: `{ name, manifest?, readmePath, contentLineCount }`.

@@ -1,6 +1,6 @@
 # tiny-agent-harness 项目报告
 
-> 生成日期：2026-05-25
+> 生成日期：2026-06-03
 >
 > 统计口径：基于当前工作区快照；排除 `node_modules/`、`dist/`、`.git/`、`.complex-problems/`、锁文件、日志文件、`package-lock.json` 和明显生成文件。行数统计覆盖 `.ts`、`.js`、`.mjs`、`.md`、`.json` 等源码、脚本、测试与文档文件；本报告自身未纳入统计。统计结果用于工程规模估算，不等同于最终发行包体积。
 >
@@ -49,7 +49,7 @@ RunOrchestrator <-> AgentRunState
                          CLI capabilities: skill / codeq / git / tests / MCP
 
 TUI
-  reads: transcript.jsonl, state.json, session logs, skill run state
+  reads: run-scoped transcript/state/session logs/environment/skill/debug artifacts
 ```
 
 按层级可以拆成六层：
@@ -103,7 +103,7 @@ task / environment reminder
 
 4. **大输出外化到日志**
 
-   Active target design 中，Observation 只返回当前 terminal viewport 的一屏 `screen.text`、terminal facts、`returnedToPrompt` 和 log path。完整输出由 session log 保存，agent 需要更多细节时再通过 bash 使用 `tail`、`sed`、`rg` 查看。FIM prompt 这类大调试 payload 通过 `debug/prompts/` artifact 外置，transcript/history 只保留 `promptRef`。
+   Active target design 中，Observation 只返回当前 terminal viewport 的一屏 `screen.text`、terminal facts、`returnedToPrompt` 和 log path。完整输出由 session log 保存，agent 需要更多细节时再通过 bash 使用 `tail`、`sed`、`rg` 查看。FIM prompt 和 streamed thinking 这类大调试 payload 分别通过 `debug/prompts/`、`debug/thinking/` artifact 外置，transcript/history 只保留 `promptRef` / `traceRef`。
 
 5. **执行轨迹可播放**
 
@@ -265,48 +265,52 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 | 指标 | 数量 |
 | --- | ---: |
-| 统计文件数 | 约 102 个 |
-| 统计总行数 | 约 19,549 行 |
-| 测试文件数 | 24 个 |
-| 测试相关行数 | 约 6,025 行 |
+| 统计文件数 | 175 个 |
+| 统计总行数 | 39,317 行 |
+| 测试文件数 | 57 个 `.test.ts` |
+| 测试相关行数 | 15,329 行 |
 
 按目录拆分：
 
 | 目录 | 文件数 | 行数 |
 | --- | ---: | ---: |
-| `src` | 63 | 8,107 |
-| `tests` | 24 | 6,025 |
-| `docs` | 10 | 5,062 |
-| `prompts` | 1 | 204 |
+| `src` | 101 | 18,195 |
+| `tests` | 58 | 15,329 |
+| `docs` | 15 | 5,592 |
+| `prompts` | 1 | 201 |
 
 按主要模块拆分：
 
 | 模块 | 文件数 | 行数 |
 | --- | ---: | ---: |
-| `src/code-intel` | 13 | 1,823 |
-| `src/tui` | 7 | 1,058 |
-| `src/bash` | 3 | 817 |
-| `src/types` | 7 | 778 |
-| `src/cli` | 6 | 769 |
-| `src/run` | 3 | 679 |
-| `src/model` | 3 | 461 |
-| `src/skill` | 4 | 459 |
+| `src/tui` | 10 | 3,633 |
+| `src/model` | 8 | 2,274 |
+| `src/run` | 6 | 1,860 |
+| `src/code-intel` | 13 | 1,818 |
+| `src/cli` | 8 | 1,546 |
+| `src/tools` | 5 | 907 |
+| `src/types` | 7 | 894 |
+| `src/terminal` | 6 | 834 |
+| `src/application` | 6 | 699 |
+| `src/bash` | 4 | 635 |
+| `src/streaming` | 3 | 511 |
+| `src/mcp` | 6 | 500 |
+| `src/subagent` | 2 | 495 |
+| `src/skill` | 4 | 478 |
 | `src/state` | 6 | 423 |
-| `src/tools` | 4 | 339 |
-| `src/environment` | 2 | 230 |
+| `src/environment` | 2 | 382 |
 | `src/im` | 2 | 216 |
-| `src/transcript` | 2 | 45 |
+| `src/transcript` | 2 | 77 |
 
 按文件类型拆分：
 
 | 类型 | 文件数 | 行数 |
 | --- | ---: | ---: |
-| TypeScript (`.ts`) | 87 | 13,985 |
-| Markdown (`.md`) | 12 | 5,357 |
-| JSON (`.json`) | 2 | 51 |
+| TypeScript (`.ts`) | 158 | 33,341 |
+| Markdown (`.md`) | 16 | 5,793 |
 | JavaScript module (`.mjs`) | 1 | 183 |
 
-从分布看，项目虽小，但已经不是一个单文件 prototype：测试行数接近源码行数的 74%，文档行数也较高，说明当前重点在协议、边界、状态机和可维护性设计。
+从分布看，项目已经不再是一个单文件 prototype：测试行数约为源码行数的 84%，文档和 prompt 也形成了较完整的设计账本，说明当前重点在协议、边界、状态机、可观察性和可维护性设计。
 
 ## 6. 工程成熟度观察
 
@@ -314,8 +318,9 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 | 命令 | 结果 |
 | --- | --- |
-| `npm test` | 通过，23 个测试文件、221 个测试。 |
-| `npm run typecheck` | 未通过，当前 TUI 相关存在 2 个类型错误：`BlessedRenderer.onMessage` 缺失，以及 `inputBox` 未初始化。 |
+| `npm run typecheck` | 通过。 |
+| `npm run build` | 通过。 |
+| `npm test` | 通过，57 个测试文件、565 个测试。 |
 
 工程成熟度可以从几个方面观察：
 
@@ -337,7 +342,7 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 5. **仍处于快速演进期**
 
-   当前工作区包含较多未提交或新增模块，说明项目在从设计文档向可运行 CLI 体系快速推进。这个阶段要特别注意 README、docs 和代码 active path 的一致性。
+   项目仍在快速迭代，尤其是 terminal/session、environment、TUI、MCP、sub-agent domain 和 context session 等边界仍会继续收敛。这个阶段要特别注意 README、docs、system prompt 和代码 active path 的一致性。
 
 ## 7. 与普通 Agent Harness 的差异
 
@@ -357,7 +362,7 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 | FIM two-pass decision | 用 FIM 控制 thinking 与 decision 的生成边界，并贴近 DeepSeek V4 native tool-call 格式。 |
 | explicit run state | pending model/tool/review/io 都是 state，不靠 orchestrator 临时变量。 |
 | durable artifacts | state、transcript、session history、debug prompt artifacts、session log、skill run state、environment events 都是可读文件。 |
-| CLI ecosystem first | skill、codeq、im、未来 MCP/memory/sub-agent 都以 CLI 方式进入同一审计边界。 |
+| CLI ecosystem first | skill、codeq、im、MCP 和未来 memory/sub-agent runtime 都以 CLI 方式进入同一审计边界。 |
 | TUI as player | TUI 播放 transcript，而不是重新拥有 agent 状态。 |
 
 因此项目不适合被描述为“又一个工具调用 demo”。更准确的叙事是：
@@ -380,13 +385,13 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 | 风险 | 说明 | 建议 |
 | --- | --- | --- |
-| 持续验证要跟上 | 最新审计中 `npm run build` 和全量 `npm test` 已通过；后续改动仍要保持这条线常绿。 | 把 build/test/diff check 固定为提交前检查。 |
-| 文档与实现快速变化 | README 已包含 codeq/state/IM/skill 新能力，部分实现仍在未提交工作区中快速演进。 | 每次功能落地后同步更新对应设计文档和 project report。 |
-| 状态持久化仍需闭环 | 设计中有 `.tiny-agent/`、locks、JSONL ledger，但所有 CLI 是否都完全使用同一 resolver 还需要持续验证。 | 用集成测试覆盖多 CLI 共用 state root、并发写、resume/replay。 |
+| 持续验证要跟上 | 最新审计中 `npm run typecheck`、`npm run build` 和全量 `npm test` 已通过；后续改动仍要保持这条线常绿。 | 把 typecheck/build/test/diff check 固定为提交前检查。 |
+| 文档与实现快速变化 | README、docs、system prompt 已覆盖 terminal/session、MCP、IM、skill、TUI、state layout、sub-agent domain 和 recovery/replay；这些边界仍会继续演进。 | 每次功能落地后同步更新对应设计文档和 project report。 |
+| 状态持久化仍需持续校准 | 主路径已经把 IM、environment、skill-runs、debug artifacts 和 session logs 收敛到 run-scoped 目录；但所有 CLI fallback、人工调试路径和锁粒度仍要持续验证。 | 用集成测试覆盖 run-scoped env 注入、多 CLI 共用 state root、并发写、resume/replay。 |
 | terminal/session 约束对模型要求高 | 模型必须学会通过 shell 调 skill/codeq/im 等 CLI，并在 heredoc、前台 stdin consumer、`--text-stdin` 和 session 管理之间做正确选择，而不是直接获得 typed business tool affordance。 | 在 system prompt 和 examples 中强化 heredoc / `--text-stdin` / session observe 的边界，并避免示例污染大生成文件路径。 |
-| 普通 `event` wait 语义过宽 | 当前 `io_wait` 是 priority-only；`condition: { kind: "event" }` 默认 `minLevel=0`，会被等待期间 session pump 自己生成的 `session_output_available` 唤醒，看起来像 wait 自己唤醒自己。 | 后续重新设计 ordinary event wait：区分 any-event、meaningful-event、filtered-event，或给 session pump 事件单独降噪/标记。 |
+| 普通 `event` wait 容易膨胀 | 当前 `io_wait` 统一采用 priority-based wait；用户消息高优先级可打断窄 wait，但 session pump 等低级事件仍可能造成事件量膨胀和“刚 wait 就被普通事件唤醒”的观感。 | 治理 event taxonomy：保留高优先级唤醒语义，同时对低价值 session noise 做降级、聚合或 persistent fact 化。 |
 | review 目前默认 approve | 默认 runtime 仍是 demo approve，但已有纯 policy evaluator / ToolPolicyReviewer 可作为产品模式基础。 | 增加显式配置开关、workspace policy、网络/文件权限和人工确认模式。 |
-| TUI 仍偏观察 | 当前 TUI 更像 transcript player，控制动作和 session tail 仍可增强。 | 增加 session log tail、active skill、review pending、approval 操作和 replay/follow。 |
+| TUI 仍偏观察 | 当前 TUI 已有 conversation/loop/detail/PTY panes 和 read-only fixed viewport，但 runtime control、run browser、eval viewer 仍可增强。 | 在不让 TUI 成为第二个 orchestrator 的前提下，增加 approval 操作、run compare、eval viewer 和更稳定的 PTY fit 提示。 |
 
 ## 10. 后续建设建议
 
@@ -394,9 +399,9 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 短期应优先确保：
 
-1. `npm run typecheck` 通过。
-2. `tiny-agent`、`im`、`skill`、`codeq` 的 bin 入口都能从 build 后产物运行。
-3. `.tiny-agent/` state root、runs、sessions、environment、skills、IM channels 使用统一 resolver。
+1. `npm run typecheck`、`npm run build`、`npm test` 持续通过。
+2. `tiny-agent`、`im`、`skill`、`mcp`、`codeq` 的 bin 入口都能从 build 后产物运行。
+3. `.tiny-agent/` project root 与 `.tiny-agent/runs/<runId>/` run-scoped state 使用统一 resolver/env 注入规则。
 4. README、design docs、system prompt 与实现保持一致。
 
 ### 10.2 把可恢复执行做成主线
@@ -426,7 +431,7 @@ capability as CLI
   -> summarized into observation / environment reminder
 ```
 
-后续 MCP、memory、sub-agent、project-specific tools 都可以沿用这个契约。这样 agent 能力会增长，但 harness 内核不会被业务工具污染。
+后续 memory、sub-agent runtime、project-specific tools 都可以沿用这个契约。这样 agent 能力会增长，但 harness 内核不会被业务工具污染。
 
 ### 10.4 对外叙事聚焦三句话
 
@@ -444,8 +449,8 @@ capability as CLI
 
 ## 11. 结论
 
-`tiny-agent-harness` 已经形成一个清晰的 coding agent runtime 骨架：DeepSeek V4 FIM two-pass model adapter、显式 run state、orchestrator effect loop、terminal/session tool 边界、PTY 输入模型、PTY session manager、environment event model、skill lifecycle、code intelligence CLI、state storage、transcript 和 TUI player。
+`tiny-agent-harness` 已经形成一个清晰的 coding agent runtime 骨架：DeepSeek V4 FIM two-pass model adapter、有状态 FIM context wrapper、显式 run state、orchestrator effect loop、terminal/session tool 边界、PTY 输入模型、PTY session manager、environment event model、skill lifecycle、MCP CLI、code intelligence CLI、state storage、transcript、recovery/replay 和 TUI player。
 
-按当前快照估算，项目约 1.95 万行统计源码/文档/测试，其中测试约 6 千行、文档约 5 千行。它的工程投入重点不是堆功能，而是把 agent 执行过程变得可解释、可审计、可恢复。
+按当前快照估算，项目约 3.93 万行统计源码/文档/测试，其中测试约 1.53 万行、文档约 5.6 千行。它的工程投入重点不是堆功能，而是把 agent 执行过程变得可解释、可审计、可恢复。
 
-当前最值得继续推进的是：把 build/test/diff check 固化到提交流程、统一 state root 落地、打通 CLI bin 入口、强化 TUI 观察和控制能力，并把 skill 复盘 lessons 机制发展成未来 skill 进化的基础。
+当前最值得继续推进的是：把 typecheck/build/test/diff check 固化到提交流程，继续治理 environment event 体量，增强 TUI 的 run browser/eval viewer/approval 体验，并把 skill 复盘 lessons 与未来 sub-agent team 管理服务连接起来。

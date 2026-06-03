@@ -1,6 +1,6 @@
 # Model Visible Tool Catalog
 
-本文记录下一版 model-visible tool catalog。目标是把「向终端输入」和「管理 PTY session」拆开，并让所有 PTY observation 都对齐人类看终端的一屏内容。
+本文记录当前 model-visible tool catalog。目标是把「向终端输入」和「管理 PTY session」拆开，并让所有 PTY observation 都对齐人类看终端的一屏内容。
 
 ## Decision
 

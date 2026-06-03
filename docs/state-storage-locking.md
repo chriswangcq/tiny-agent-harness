@@ -12,15 +12,14 @@ project/
     project.json
     locks/
     runs/
-    sessions/
-    environment/
-    im/
     skills/
-    skill-runs/
+    launcher/
     tmp/
 ```
 
 这样 demo 最简单：用户 `cd` 到项目目录，`tiny-agent`、`im`、`skill`、`tui` 看到的是同一套状态。
+
+当前实现进一步把 run 产生的可变状态全部收敛到 `runs/<runId>/`：IM inbox/outbox、environment events、PTY session log、skill-runs、model context 和 debug artifacts 都随 run 自包含。项目级目录只保留共享 skill definitions、run 容器、启动器日志、锁和临时文件。
 
 后续可以兼容 Claude Code 风格的 home cache：
 
@@ -66,24 +65,27 @@ project/
 
 ```text
 tiny-agent       # run orchestrator, agent run state, terminal/session tool execution
+tiny-agent ui    # one-command launcher: start/resume run and attach TUI
 tiny-agent tui   # transcript / state player
 im               # local mock user-message transport
 skill            # local skill discovery, run, close, review-complete
+mcp              # local MCP registry/call CLI, invoked through terminal/session tools
+codeq            # local code intelligence query CLI, invoked through terminal/session tools
 ```
 
 不需要 build 成独立 CLI 的部分：
 
 ```text
 PTY session controls   # 模型通过 session_* tool call 内部调用，不是用户命令
-mcp                    # 外部 mcp CLI，agent 通过 bash 执行
-memory/sub-agent        # 第一版不是核心路径
+memory                 # 第一版不是核心路径
+sub-agent runtime       # 当前只有纯 domain/FSM，不独立调度子进程
 ```
 
-所有 CLI 都支持：
+需要访问 harness 状态的 CLI 支持：
 
 ```text
---state-dir <path>
 --json
+--state-dir <path>
 ```
 
 错误输出规则：
@@ -104,11 +106,11 @@ memory/sub-agent        # 第一版不是核心路径
     runs.latest.lock/
     run-<runId>.lock/
     run-<runId>.transcript.lock/
+    run-<runId>.environment.events.lock/
+    run-<runId>.im-channel-<channel>.lock/
+    run-<runId>.skill-run-<skillRunId>.lock/
+    run-<runId>.mcp-registry.lock/
     session-<sessionId>.lock/
-    environment.events.lock/
-    environment.cursor-<runId>.lock/
-    im-channel-<channel>.lock/
-    skill-run-<skillRunId>.lock/
     skills.registry.lock/
 
   runs/
@@ -117,25 +119,33 @@ memory/sub-agent        # 第一版不是核心路径
       state.json
       transcript.jsonl
       session.json
-      debug/
-        prompts/
-          step-0000-thinking.prompt.txt
+
+      im/
+        default.inbox.jsonl
+        default.outbox.jsonl
+        cursors/
+          default.cursor
+
+      environment/
+        events.jsonl
 
       sessions/
         default-37a8eec1ce.log
         server-4c1f3b8d2a.log
 
-  environment/
-    events.jsonl
-    cursors/
-      run-2026-05-25T12-00-00-abc123.json
+      skill-runs/
+        skillrun-2026-05-25-001/
+          state.json
+          execution.txt
+          review-task.txt
 
-  im/
-    channels/
-      default/
-        inbox.jsonl
-        outbox.jsonl
-        cursors.json
+      debug/
+        prompts/
+          step-0000-thinking.prompt.txt
+        thinking/
+          step-0000-thinking.trace.txt
+
+      mcp-servers.json
 
   skills/
     coding-review/
@@ -144,11 +154,8 @@ memory/sub-agent        # 第一版不是核心路径
       attachments/
         lessons.md
 
-  skill-runs/
-    skillrun-2026-05-25-001/
-      state.json
-      execution.txt
-      review-task.txt
+  launcher/
+    ui-2026-05-25T12-00-00.log
 
   tmp/
 ```
@@ -159,9 +166,12 @@ memory/sub-agent        # 第一版不是核心路径
 - `runs/<runId>/transcript.jsonl` 是 run event ledger。
 - `runs/<runId>/session.json` 是 `ModelContextSession` snapshot，用于 resume。
 - `runs/<runId>/debug/prompts/` 保存由 transcript/model-context 通过 `promptRef` 引用的大 prompt artifact。
-- `environment/events.jsonl` 是跨 run 的外部环境事件 ledger。
+- `runs/<runId>/debug/thinking/` 保存 streamed thinking trace artifact；transcript 只保存 `traceRef`。
+- `runs/<runId>/environment/events.jsonl` 是本 run 的外部环境事件 ledger。
+- `runs/<runId>/im/` 是本 run 的 local mock IM inbox/outbox。
 - `runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log` 是完整 raw PTY 输出，observation 只返回一屏 semantic terminal viewport，并通过 `screen.logRef.path` 指向该日志。
-- `skill-runs/<id>/execution.txt` 和 `review-task.txt` 只给 agent 通过 bash 原生命令读取，不直接塞进 prompt。
+- `runs/<runId>/skill-runs/<id>/execution.txt` 和 `review-task.txt` 只给 agent 通过 bash 原生命令读取，不直接塞进 prompt。
+- `runs/<runId>/mcp-servers.json` 是可选 run-scoped MCP server registry。
 
 ## File Types
 
@@ -174,10 +184,10 @@ memory/sub-agent        # 第一版不是核心路径
 ```text
 project.json
 runs/<runId>/state.json
-sessions/<sessionId>/state.json
-skill-runs/<skillRunId>/state.json
-environment/cursors/<runId>.json
-im/channels/<channel>/cursors.json
+runs/<runId>/session.json
+runs/<runId>/skill-runs/<skillRunId>/state.json
+runs/<runId>/im/cursors/<channel>.cursor
+runs/<runId>/mcp-servers.json
 ```
 
 写入规则：
@@ -207,9 +217,9 @@ type SnapshotMeta = {
 
 ```text
 runs/<runId>/transcript.jsonl
-environment/events.jsonl
-im/channels/<channel>/inbox.jsonl
-im/channels/<channel>/outbox.jsonl
+runs/<runId>/environment/events.jsonl
+runs/<runId>/im/<channel>.inbox.jsonl
+runs/<runId>/im/<channel>.outbox.jsonl
 ```
 
 写入规则：
@@ -237,8 +247,9 @@ type LedgerRecord = {
 
 ```text
 runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log
-debug/prompts/<artifact>.txt
-skill-runs/<skillRunId>/execution.txt
+runs/<runId>/debug/prompts/<artifact>.txt
+runs/<runId>/debug/thinking/<artifact>.txt
+runs/<runId>/skill-runs/<skillRunId>/execution.txt
 ```
 
 写入规则：
@@ -367,37 +378,37 @@ session-<sessionId>.lock
 
 ### Environment
 
-Environment 是跨系统事件 ledger。
+Environment 是 run-scoped 外部事件 ledger。它统一建模 IM、新用户消息、session 状态变化、skill lifecycle、MCP 状态变化等外部事实；run loop 在每轮 model step 前消费新事件并渲染成 environment reminder。
 
 写入者：
 
 - `im` CLI append `user_message_received`
-- ManagedTerminalRuntime writes PTY observations through transcript tool-result events
+- ManagedTerminalRuntime append `session_output_changed`、`session_returned_to_prompt`、`session_exited` 等 session 事件
 - `skill` CLI append `skill_run_started`、`skill_run_closed`、`skill_review_pending`、`skill_review_completed`
+- `mcp` CLI 可 append MCP registry/tool-call 相关事件
 
 文件：
 
 ```text
-environment/events.jsonl
-environment/cursors/<runId>.json
+runs/<runId>/environment/events.jsonl
 ```
 
 锁：
 
 ```text
-environment.events.lock
-environment.cursor-<runId>.lock
+run-<runId>.environment.events.lock
 ```
 
 消费规则：
 
-1. run loop 读取 cursor。
+1. run loop 以当前 run state/model context 的事件 cursor 为准。
 2. 读取 cursor 之后的新 events。
-3. 渲染 system reminder。
-4. 写 transcript `environment_events_consumed`。
-5. 更新 cursor。
+3. 根据 `io_wait.minLevel` / 默认优先级判断是否唤醒；用户消息有效 level 为 `100`。
+4. 渲染 environment reminder。
+5. 写 transcript `environment_events_consumed`。
+6. 更新 run state/model context 中的 cursor。
 
-cursor 不能在 reminder 入 transcript 之前提前移动。
+cursor 不能在 reminder 入 transcript 之前提前移动。`io_wait` 统一采用优先级等待口径：窄 wait 也能被更高 level 的用户消息打断，避免用户发来的新指令卡在下一轮之外。
 
 ### IM
 
@@ -406,18 +417,18 @@ cursor 不能在 reminder 入 transcript 之前提前移动。
 文件：
 
 ```text
-im/channels/<channel>/inbox.jsonl
-im/channels/<channel>/outbox.jsonl
-im/channels/<channel>/cursors.json
+runs/<runId>/im/<channel>.inbox.jsonl
+runs/<runId>/im/<channel>.outbox.jsonl
+runs/<runId>/im/cursors/<channel>.cursor
 ```
 
 锁：
 
 ```text
-im-channel-<channel>.lock
+run-<runId>.im-channel-<channel>.lock
 ```
 
-`im listen` 不能长期持锁。它只能循环短暂读文件，然后 sleep / wait。
+`im post --run latest` 会写入最新 run 的 IM inbox；如果 PTY 已注入 `TAH_IM_DIR`，agent 在 shell 里执行 `im send/recv` 会自动落到当前 run。`im listen` 不能长期持锁。它只能循环短暂读文件，然后 sleep / wait。
 
 ### Skill
 
@@ -426,16 +437,16 @@ im-channel-<channel>.lock
 文件：
 
 ```text
-skill-runs/<skillRunId>/state.json
-skill-runs/<skillRunId>/execution.txt
-skill-runs/<skillRunId>/review-task.txt
+runs/<runId>/skill-runs/<skillRunId>/state.json
+runs/<runId>/skill-runs/<skillRunId>/execution.txt
+runs/<runId>/skill-runs/<skillRunId>/review-task.txt
 skills/<skill>/attachments/lessons.md
 ```
 
 锁：
 
 ```text
-skill-run-<skillRunId>.lock
+run-<runId>.skill-run-<skillRunId>.lock
 skills.registry.lock
 ```
 
@@ -452,10 +463,29 @@ skills.registry.lock
 加锁顺序必须固定，避免死锁：
 
 ```text
-skill-run-<id>.lock -> skills.registry.lock -> environment.events.lock
+run-<runId>.skill-run-<id>.lock -> skills.registry.lock -> run-<runId>.environment.events.lock
 ```
 
 其它地方也遵循同一原则：先具体资源锁，再 ledger 锁。
+
+### MCP Registry
+
+`mcp` CLI 负责 run-scoped MCP server registry 和 MCP tool invocation。它不是 model-visible provider tool；agent 只能通过 PTY 中的 `mcp ...` 命令使用它。
+
+文件：
+
+```text
+runs/<runId>/mcp-servers.json
+```
+
+锁：
+
+```text
+run-<runId>.mcp-registry.lock
+run-<runId>.environment.events.lock
+```
+
+`mcp add/remove/list/tools/call` 读取 `TAH_STATE_DIR`。在 agent PTY 内，`TAH_STATE_DIR` 等于当前 run dir，因此 registry 默认随 run 打包；人工调试可以显式传 `--state-dir`。
 
 ## Deadlock Avoidance
 

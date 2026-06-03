@@ -52,6 +52,7 @@ Recommended command shape:
 im recv --channel default --cursor <cursor> --json
 im send --channel default --kind status --text-stdin
 im ack --channel default --message-id <id>
+im post --channel default --run latest --from user --text "fix the failing test"
 ```
 
 In the terminal/session agent flow, `--text-stdin` is the required stdin path for all agent-authored replies. A quoted heredoc is valid for normal text replies, including Markdown, Chinese/emoji-heavy content, tables, generated reports, and multiline summaries, e.g. `im send --kind status --text-stdin <<'IM' ... IM`. Input redirection (`im send --kind status --text-stdin < reply.md`) remains valid when it makes the command simpler. `--text` remains a CLI convenience for humans and scripts, but the agent should not use it.
@@ -64,6 +65,12 @@ im listen --channel default
 ```
 
 `post` and `listen` are demo helpers. `post` only injects user-authored inbox messages; agent-visible replies must use `send` so they go to outbox and cannot be consumed again as user input. Reserved sender labels such as `assistant`, `agent`, `system`, and `tool` are rejected for `post`.
+
+Path resolution:
+
+- `im ... --run latest` writes to `.tiny-agent/runs/<latestRunId>/im/`.
+- Inside an agent PTY, `TAH_IM_DIR` is injected, so `im send/recv` defaults to the current run.
+- If neither run nor `TAH_IM_DIR` exists, the CLI can fall back to project-level `.tiny-agent/im/` for pre-run demos.
 
 ## Message Schema
 
@@ -166,26 +173,17 @@ These events go into `transcript.jsonl` with the rest of the run events.
 
 ## In-Run Messages
 
-First version:
+Current version:
 
-- read one initial user task
-- allow the Agent to submit `io_wait` for a new user message
-- while in `waiting_for_io`, do not call the model or execute bash
-- resume the Agent loop when the wait condition is satisfied
-- keep the run alive across user-visible replies by sending status through `im send` and then returning to `io_wait`
-- stop only on failed or cancelled run state
-- send error details when the run fails
-
-Defer multi-message live chat during a run.
-
-Future support can poll IM at step boundaries:
-
-```text
-after each observation
-  -> im recv --cursor ...
-  -> if cancel message: cancel run
-  -> if follow-up message: append to run context
-```
+- 用户消息不是特殊的 “main message”，而是 environment 的高优先级事件。
+- run 启动时的初始 task 也记录为 `user_message_received` / environment event。
+- agent 每轮只消费 environment event reminder；用户、PTY、skill、MCP 都是环境的一部分。
+- agent 可主动提交 `io_wait` 等待后续环境事件。
+- while in `waiting_for_io`, do not call the model or execute terminal actions。
+- 任意满足 `minLevel` 的新 environment event 都可以唤醒 wait；用户消息默认 level `100`。
+- keep the run alive across user-visible replies by sending status through `im send` and then returning to `io_wait`。
+- stop only on failed or cancelled run state。
+- send error details when the run fails。
 
 ## IO Wait
 
@@ -222,14 +220,27 @@ For demo, `im` can be backed by local JSONL files:
 
 ```text
 .tiny-agent/
+  runs/
+    <runId>/
+      im/
+        default.inbox.jsonl
+        default.outbox.jsonl
+        cursors/
+          default.cursor
+```
+
+Pre-run fallback:
+
+```text
+.tiny-agent/
   im/
     default.inbox.jsonl
     default.outbox.jsonl
     cursors/
-      tiny-agent-default.cursor
+      default.cursor
 ```
 
-This keeps the project self-contained while preserving the future shape of a real IM connector.
+The run-scoped path is the normal agent path. The fallback exists only for explicit demos before any run is available.
 
 ## Error Handling
 
