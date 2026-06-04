@@ -97,6 +97,8 @@ export type SessionTailUpdate = {
   logPath: string;
   tail: string;
   tailOffset: number;
+  screenRows?: number;
+  screenCols?: number;
   updatedAt: string;
 };
 

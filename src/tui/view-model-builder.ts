@@ -480,8 +480,8 @@ export class ViewModelBuilder {
         logPath: update.logPath,
         tail: update.tail,
         tailOffset: update.tailOffset,
-        screenRows: existing?.screenRows,
-        screenCols: existing?.screenCols,
+        screenRows: update.screenRows ?? existing?.screenRows,
+        screenCols: update.screenCols ?? existing?.screenCols,
         updatedAt: update.updatedAt,
       });
     }

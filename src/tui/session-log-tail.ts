@@ -1,36 +1,49 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { stripManagedShellScreenNoise } from "../terminal/screen-filter.js";
+import { XtermTerminalScreenBuffer } from "../terminal/screen-buffer.js";
 import type { SessionTailUpdate } from "./types.js";
 
-const DEFAULT_MAX_TAIL_BYTES = 64 * 1024;
+const DEFAULT_MAX_REPLAY_BYTES = 256 * 1024;
 const DEFAULT_MAX_TAIL_CHARS = 4000;
+const DEFAULT_SCREEN_ROWS = 24;
+const DEFAULT_SCREEN_COLS = 80;
 
-type CachedLogTail = {
+type CachedLogProjection = {
   size: number;
   mtimeMs: number;
   update: SessionTailUpdate;
+  buffer: XtermTerminalScreenBuffer;
 };
 
 export type SessionLogTailReaderOptions = {
   sessionsDir: string;
   maxTailBytes?: number;
   maxTailChars?: number;
+  screenRows?: number;
+  screenCols?: number;
 };
 
 export class SessionLogTailReader {
   private readonly sessionsDir: string;
-  private readonly maxTailBytes: number;
+  private readonly maxReplayBytes: number;
   private readonly maxTailChars: number;
-  private readonly cache = new Map<string, CachedLogTail>();
+  private readonly screenRows: number;
+  private readonly screenCols: number;
+  private readonly cache = new Map<string, CachedLogProjection>();
 
   constructor(options: SessionLogTailReaderOptions) {
     this.sessionsDir = options.sessionsDir;
-    this.maxTailBytes = positiveInteger(options.maxTailBytes) ?? DEFAULT_MAX_TAIL_BYTES;
-    this.maxTailChars = positiveInteger(options.maxTailChars) ?? DEFAULT_MAX_TAIL_CHARS;
+    this.maxReplayBytes =
+      positiveInteger(options.maxTailBytes) ?? DEFAULT_MAX_REPLAY_BYTES;
+    this.maxTailChars =
+      positiveInteger(options.maxTailChars) ?? DEFAULT_MAX_TAIL_CHARS;
+    this.screenRows =
+      positiveInteger(options.screenRows) ?? DEFAULT_SCREEN_ROWS;
+    this.screenCols =
+      positiveInteger(options.screenCols) ?? DEFAULT_SCREEN_COLS;
   }
 
-  read(): SessionTailUpdate[] {
+  async read(): Promise<SessionTailUpdate[]> {
     let entries: string[];
     try {
       entries = fs.readdirSync(this.sessionsDir);
@@ -65,54 +78,94 @@ export class SessionLogTailReader {
         continue;
       }
 
-      const update = readSessionLogTail({
+      const projection =
+        cached !== undefined &&
+        (stat.size > cached.size ||
+          (stat.size === cached.size && stat.mtimeMs === cached.mtimeMs))
+          ? cached
+          : this.resetProjection(logPath);
+      const chunk = readSessionLogChunk({
         logPath,
         size: stat.size,
-        mtimeMs: stat.mtimeMs,
-        maxTailBytes: this.maxTailBytes,
-        maxTailChars: this.maxTailChars,
+        startOffset: projection.size,
+        maxReplayBytes: this.maxReplayBytes,
       });
-      if (update === undefined) {
+      if (chunk === undefined) {
         continue;
       }
-      this.cache.set(logPath, {
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-        update,
-      });
+
+      projection.buffer.write(chunk);
+      const screen = await projection.buffer.snapshot();
+      const update: SessionTailUpdate = {
+        session: inferSessionName(logPath),
+        logPath,
+        tail: takeTailChars(screen.text, this.maxTailChars),
+        tailOffset: stat.size,
+        screenRows: screen.rows,
+        screenCols: screen.cols,
+        updatedAt: new Date(stat.mtimeMs).toISOString(),
+      };
+
+      projection.size = stat.size;
+      projection.mtimeMs = stat.mtimeMs;
+      projection.update = update;
+      this.cache.set(logPath, projection);
       updates.push(update);
     }
 
     return updates;
   }
+
+  dispose(): void {
+    for (const projection of this.cache.values()) {
+      projection.buffer.dispose();
+    }
+    this.cache.clear();
+  }
+
+  private resetProjection(logPath: string): CachedLogProjection {
+    this.cache.get(logPath)?.buffer.dispose();
+    return {
+      size: 0,
+      mtimeMs: 0,
+      update: {
+        session: inferSessionName(logPath),
+        logPath,
+        tail: "",
+        tailOffset: 0,
+        screenRows: this.screenRows,
+        screenCols: this.screenCols,
+        updatedAt: new Date(0).toISOString(),
+      },
+      buffer: new XtermTerminalScreenBuffer({
+        rows: this.screenRows,
+        cols: this.screenCols,
+      }),
+    };
+  }
 }
 
-function readSessionLogTail(input: {
+function readSessionLogChunk(input: {
   logPath: string;
   size: number;
-  mtimeMs: number;
-  maxTailBytes: number;
-  maxTailChars: number;
-}): SessionTailUpdate | undefined {
-  const readStart = Math.max(0, input.size - input.maxTailBytes - 4);
-  const length = input.size - readStart;
+  startOffset: number;
+  maxReplayBytes: number;
+}): string | undefined {
+  const replayStart =
+    input.startOffset === 0
+      ? Math.max(0, input.size - input.maxReplayBytes - 4)
+      : input.startOffset;
+  const length = input.size - replayStart;
   let fd: number | undefined;
   try {
     fd = fs.openSync(input.logPath, "r");
     const buffer = Buffer.alloc(length);
-    fs.readSync(fd, buffer, 0, length, readStart);
+    fs.readSync(fd, buffer, 0, length, replayStart);
     let text = buffer.toString("utf-8");
-    if (readStart > 0) {
+    if (input.startOffset === 0 && replayStart > 0) {
       text = dropFirstPartialLine(text);
     }
-    const filtered = stripManagedShellScreenNoise(text).output;
-    return {
-      session: inferSessionName(input.logPath),
-      logPath: input.logPath,
-      tail: takeTailChars(filtered, input.maxTailChars),
-      tailOffset: input.size,
-      updatedAt: new Date(input.mtimeMs).toISOString(),
-    };
+    return text;
   } catch {
     return undefined;
   } finally {

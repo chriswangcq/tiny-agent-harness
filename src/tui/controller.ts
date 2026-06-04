@@ -25,6 +25,7 @@ export class TuiController {
   private readonly channel: string;
   private readonly pollIntervalMs: number;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private polling = false;
   private imInboxCursor: string | undefined;
   private imOutboxCursor: string | undefined;
 
@@ -48,9 +49,11 @@ export class TuiController {
   }
 
   start(): void {
-    this.poll();
+    void this.poll();
 
-    this.timer = setInterval(() => this.poll(), this.pollIntervalMs);
+    this.timer = setInterval(() => {
+      void this.poll();
+    }, this.pollIntervalMs);
 
     this.renderer.onKey((key) => {
       if (key.name === "q") {
@@ -69,35 +72,48 @@ export class TuiController {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.sessionLogs.dispose();
     this.renderer.close();
   }
 
-  private poll(): void {
-    // Read new transcript events
-    const { events } = this.reader.readNewEvents();
-    for (const event of events) {
-      this.builder.applyEvent(event);
+  private async poll(): Promise<void> {
+    if (this.polling) {
+      return;
     }
+    this.polling = true;
+    try {
+      // Read new transcript events
+      const { events } = this.reader.readNewEvents();
+      for (const event of events) {
+        this.builder.applyEvent(event);
+      }
 
-    // Read latest state
-    const state = this.reader.readState();
-    if (state) {
-      this.builder.applyState(state);
+      // Read latest state
+      const state = this.reader.readState();
+      if (state) {
+        this.builder.applyState(state);
+      }
+
+      // Poll IM inbox for user messages
+      this.pollImInbox();
+
+      // Poll IM outbox for agent messages
+      this.pollImOutbox();
+
+      // Read live session logs for display-only PTY pane updates. This does not
+      // mutate runtime state or model-visible context.
+      try {
+        this.builder.applySessionLogTails(await this.sessionLogs.read());
+      } catch {
+        // Best-effort display projection; transcript/state rendering continues.
+      }
+
+      // Render
+      const viewModel = this.builder.getViewModel();
+      this.renderer.render(viewModel);
+    } finally {
+      this.polling = false;
     }
-
-    // Poll IM inbox for user messages
-    this.pollImInbox();
-
-    // Poll IM outbox for agent messages
-    this.pollImOutbox();
-
-    // Read live session logs for display-only PTY pane updates. This does not
-    // mutate runtime state or model-visible context.
-    this.builder.applySessionLogTails(this.sessionLogs.read());
-
-    // Render
-    const viewModel = this.builder.getViewModel();
-    this.renderer.render(viewModel);
   }
 
   private pollImInbox(): void {

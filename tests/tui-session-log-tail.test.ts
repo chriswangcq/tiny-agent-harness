@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 describe("SessionLogTailReader", () => {
-  it("reads filtered live tails from run-scoped session logs", () => {
+  it("reads filtered live screen projections from run-scoped session logs", async () => {
     const dir = makeTempDir();
     const logPath = path.join(dir, "default-37a8eec1ce.log");
     const content = [
@@ -38,7 +38,7 @@ describe("SessionLogTailReader", () => {
     ].join("\n");
     writeFileSync(logPath, content);
 
-    const [update] = new SessionLogTailReader({
+    const [update] = await new SessionLogTailReader({
       sessionsDir: dir,
       maxTailBytes: 4096,
       maxTailChars: 4096,
@@ -48,6 +48,8 @@ describe("SessionLogTailReader", () => {
       session: "default",
       logPath,
       tailOffset: Buffer.byteLength(content),
+      screenRows: 24,
+      screenCols: 80,
     });
     expect(update?.tail).toContain("npm test");
     expect(update?.tail).toContain("PASS tests/example.test.ts");
@@ -56,7 +58,25 @@ describe("SessionLogTailReader", () => {
     expect(update?.tail).not.toContain("TAH_PROMPT_RC");
   });
 
-  it("drops partial leading lines when reading a bounded byte tail", () => {
+  it("renders terminal screen semantics instead of append-only log text", async () => {
+    const dir = makeTempDir();
+    const logPath = path.join(dir, "default-37a8eec1ce.log");
+    const content = "hello world\rreplacement\r\nline-2";
+    writeFileSync(logPath, content);
+
+    const [update] = await new SessionLogTailReader({
+      sessionsDir: dir,
+      screenRows: 4,
+      screenCols: 40,
+    }).read();
+
+    expect(update?.tail).toContain("replacement");
+    expect(update?.tail).toContain("line-2");
+    expect(update?.tail).not.toContain("hello world");
+    expect(update?.tail.split("\n")).toHaveLength(4);
+  });
+
+  it("drops partial leading lines when reading a bounded byte tail", async () => {
     const dir = makeTempDir();
     const logPath = path.join(dir, "worker-abcdef1234.log");
     const content = [
@@ -65,7 +85,7 @@ describe("SessionLogTailReader", () => {
     ].join("\n");
     writeFileSync(logPath, content);
 
-    const [update] = new SessionLogTailReader({
+    const [update] = await new SessionLogTailReader({
       sessionsDir: dir,
       maxTailBytes: 32,
       maxTailChars: 4096,
@@ -79,10 +99,10 @@ describe("SessionLogTailReader", () => {
     expect(update?.tail).not.toContain("\uFFFD");
   });
 
-  it("returns no updates when the sessions directory is missing", () => {
+  it("returns no updates when the sessions directory is missing", async () => {
     const dir = path.join(makeTempDir(), "missing");
 
-    expect(new SessionLogTailReader({ sessionsDir: dir }).read()).toEqual([]);
+    await expect(new SessionLogTailReader({ sessionsDir: dir }).read()).resolves.toEqual([]);
   });
 });
 
