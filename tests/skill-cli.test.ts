@@ -289,6 +289,156 @@ describe("SkillCli", () => {
     });
   });
 
+  it("handleInstall copies a skill directory into skills root", () => {
+    const tmpDir = makeTmpDir();
+    const { cli, skillsDir } = makeHarness(tmpDir);
+
+    // Create a source skill directory with SKILL.md
+    const sourceDir = path.join(tmpDir, "source-skill");
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "SKILL.md"), "# my-skill\n\nA test skill.", "utf-8");
+    fs.writeFileSync(path.join(sourceDir, "skill.json"), JSON.stringify({
+      name: "my-skill",
+      description: "A test skill",
+    }), "utf-8");
+
+    const result = cli.handleInstall(sourceDir);
+    expect(result).toEqual({
+      ok: true,
+      name: "source-skill",
+      path: path.join(skillsDir, "source-skill"),
+    });
+
+    // Verify the skill was copied
+    expect(fs.existsSync(path.join(skillsDir, "source-skill", "SKILL.md"))).toBe(true);
+    expect(fs.existsSync(path.join(skillsDir, "source-skill", "skill.json"))).toBe(true);
+  });
+
+  it("handleInstall with a custom name", () => {
+    const tmpDir = makeTmpDir();
+    const { cli, skillsDir } = makeHarness(tmpDir);
+
+    const sourceDir = path.join(tmpDir, "source-skill");
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "SKILL.md"), "# my-skill\n\nA test skill.", "utf-8");
+
+    const result = cli.handleInstall(sourceDir, "custom-name");
+    expect(result).toEqual({
+      ok: true,
+      name: "custom-name",
+      path: path.join(skillsDir, "custom-name"),
+    });
+  });
+
+  it("handleInstall rejects missing source directory", () => {
+    const tmpDir = makeTmpDir();
+    const { cli } = makeHarness(tmpDir);
+
+    expect(cli.handleInstall("/nonexistent/path")).toEqual({
+      ok: false,
+      error: "Source directory not found: /nonexistent/path",
+    });
+  });
+
+  it("handleInstall rejects non-directory source", () => {
+    const tmpDir = makeTmpDir();
+    const { cli } = makeHarness(tmpDir);
+
+    const filePath = path.join(tmpDir, "not-a-dir");
+    fs.writeFileSync(filePath, "hello", "utf-8");
+
+    expect(cli.handleInstall(filePath)).toEqual({
+      ok: false,
+      error: expect.stringContaining("not a directory"),
+    });
+  });
+
+  it("handleInstall rejects source without SKILL.md", () => {
+    const tmpDir = makeTmpDir();
+    const { cli } = makeHarness(tmpDir);
+
+    const sourceDir = path.join(tmpDir, "bad-skill");
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "README.md"), "no SKILL.md", "utf-8");
+
+    expect(cli.handleInstall(sourceDir)).toEqual({
+      ok: false,
+      error: expect.stringContaining("SKILL.md not found"),
+    });
+  });
+
+  it("handleInstall rejects duplicate skill name", () => {
+    const tmpDir = makeTmpDir();
+    const { cli, skillsDir } = makeHarness(tmpDir);
+
+    // Pre-create a skill directory
+    const existingDir = path.join(skillsDir, "existing-skill");
+    fs.mkdirSync(existingDir, { recursive: true });
+    fs.writeFileSync(path.join(existingDir, "SKILL.md"), "# existing", "utf-8");
+
+    // Try to install to the same name
+    const sourceDir = path.join(tmpDir, "source-skill");
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "SKILL.md"), "# new skill", "utf-8");
+
+    expect(cli.handleInstall(sourceDir, "existing-skill")).toEqual({
+      ok: false,
+      error: "Skill already exists: existing-skill",
+    });
+  });
+
+  describe("isValidSkillName", () => {
+    it("rejects empty string", () => {
+      expect(SkillCli.isValidSkillName("")).toBe(false);
+      expect(SkillCli.isValidSkillName("   ")).toBe(false);
+    });
+
+    it("rejects path traversal", () => {
+      expect(SkillCli.isValidSkillName("../evil")).toBe(false);
+      expect(SkillCli.isValidSkillName("..")).toBe(false);
+      expect(SkillCli.isValidSkillName(".")).toBe(false);
+      expect(SkillCli.isValidSkillName("nested/name")).toBe(false);
+      expect(SkillCli.isValidSkillName("nested\\name")).toBe(false);
+    });
+
+    it("rejects absolute paths", () => {
+      expect(SkillCli.isValidSkillName("/etc/passwd")).toBe(false);
+      expect(SkillCli.isValidSkillName("C:\\Windows")).toBe(false);
+    });
+
+    it("rejects whitespace-only and leading/trailing whitespace", () => {
+      expect(SkillCli.isValidSkillName(" ")).toBe(false);
+      expect(SkillCli.isValidSkillName(" abc")).toBe(false);
+      expect(SkillCli.isValidSkillName("abc ")).toBe(false);
+    });
+
+    it("accepts valid single-segment names", () => {
+      expect(SkillCli.isValidSkillName("my-skill")).toBe(true);
+      expect(SkillCli.isValidSkillName("coding-review")).toBe(true);
+      expect(SkillCli.isValidSkillName("a")).toBe(true);
+      expect(SkillCli.isValidSkillName("skill_123")).toBe(true);
+    });
+  });
+
+  it("handleInstall rejects path-traversal names", () => {
+    const tmpDir = makeTmpDir();
+    const { cli } = makeHarness(tmpDir);
+
+    const sourceDir = path.join(tmpDir, "source-skill");
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "SKILL.md"), "# my-skill\n\nA test skill.", "utf-8");
+
+    expect(cli.handleInstall(sourceDir, "../outside")).toEqual({
+      ok: false,
+      error: "Invalid skill name: ../outside",
+    });
+    expect(cli.handleInstall(sourceDir, "nested/name")).toEqual({
+      ok: false,
+      error: "Invalid skill name: nested/name",
+    });
+  });
+
+
   it("handleReviewComplete rejects missing and non-pending skill runs", () => {
     const tmpDir = makeTmpDir();
     const { cli, store } = makeHarness(tmpDir);

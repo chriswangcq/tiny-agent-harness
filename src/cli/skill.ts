@@ -101,8 +101,8 @@ export async function runSkill(argv: string[]): Promise<void> {
   const { flags, positional } = parseArgs(rest);
 
   const cli = buildSkillCli(stateDir);
-
   switch (subcommand) {
+
     case "list": {
       output(cli.handleList(), jsonMode);
       break;
@@ -154,6 +154,13 @@ export async function runSkill(argv: string[]): Promise<void> {
       output(cli.handleReviewComplete(skillRunId, reviewData), jsonMode);
       break;
     }
+    case "install": {
+      const sourcePath = positional[0];
+      if (!sourcePath) die("skill install requires <source-path>");
+      const name = positional[1];
+      output(cli.handleInstall(sourcePath, name || undefined), jsonMode);
+      break;
+    }
     case "validate": {
       const name = positional[0];
       if (!name) die("skill validate requires <name>");
@@ -162,14 +169,15 @@ export async function runSkill(argv: string[]): Promise<void> {
     }
     default:
       die(
-        "Usage: skill <list|show|run|status|close|review-complete|validate> [options]\n" +
+        "Usage: skill <list|show|run|status|close|review-complete|validate|install> [options]\n" +
           "  skill list [--json]\n" +
           "  skill show <name> [--json]\n" +
           "  skill run <name> [--json '<args>']\n" +
           "  skill status [--active] [--json]\n" +
           "  skill close <skillRunId> --review none|required [--json '<summary>']\n" +
           "  skill review-complete <skillRunId> --json '<review>'\n" +
-          "  skill validate <name> [--json]",
+          "  skill validate <name> [--json]\n" +
+          "  skill install <source-path> [<name>] [--json]",
       );
   }
 }

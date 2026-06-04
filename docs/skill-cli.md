@@ -150,8 +150,26 @@ skill status --active --json
 skill close <skillRunId> --review none --json '<summary>'
 skill close <skillRunId> --review required --json '<summary>'
 skill review-complete <skillRunId> --json '<review>'
+skill install <source-path> [<name>] --json
 skill validate <name> --json
 ```
+
+### install
+
+将一个本地 skill 目录安装到 skills root。
+
+```bash
+skill install /path/to/skill-dir --json
+skill install /path/to/skill-dir custom-name --json
+```
+
+规则：
+
+1. 源目录必须存在且包含 `SKILL.md`。
+2. 默认使用源目录的 basename 作为 skill 名称，可通过第二个位置参数覆盖。
+3. 目标名称不能在 skills root 中已存在。
+4. 使用 `fs.cpSync` 递归复制整个目录树。
+5. 安装是纯目录复制操作，不创建 skill run 记录也不发送环境事件。
 
 ### list
 
@@ -537,13 +555,14 @@ Agent 需要具体 skill 时，再通过 bash 自己查。
 
 - `.tiny-agent/skills` 作为默认 skill root
 - `.tiny-agent/runs/<runId>/skill-runs` 作为当前 run 的 skill run root（agent PTY 中通过 `TAH_SKILL_RUNS_DIR` 注入）
-- 当前实现没有 `skill install`。skill package 的放置/同步是外层分发问题，不在 agent runtime 内隐藏执行。
+- `skill install <source-path> [<name>] --json` 将本地 skill 目录复制到 skills root。安装前校验 SKILL.md 存在且目标名称不冲突。
 - `skill list --json`
 - `skill show <name> --json`
 - `skill run <name> --json '<args>'`
 - `skill status --active --json`
 - `skill close <skillRunId> --review none|required --json '<summary>'`
 - `skill review-complete <skillRunId> --json '<review>'`
+- `skill install <source-path> [<name>] --json`
 - `skill validate <name> --json`
 - `SKILL.md` 必须存在
 - `skill.json` 可选
