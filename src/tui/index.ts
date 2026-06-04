@@ -3,6 +3,8 @@ export { ViewModelBuilder } from "./view-model-builder.js";
 export {
   buildLoopFrameDetail,
   buildRunBrowserControlIntent,
+  buildRunBrowserControlIntentDisplay,
+  formatRunBrowserControlAction,
   buildRunBrowserView,
   buildRunIndex,
   compareRuns,
@@ -21,6 +23,8 @@ export type {
   LoopFrameDetailSection,
   LoopFrameQuery,
   RunBrowserControlAction,
+  RunBrowserControlActionLabel,
+  RunBrowserControlIntentDisplay,
   RunBrowserControlError,
   RunBrowserControlIntent,
   RunBrowserControlRequest,

@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   buildRunBrowserControlIntent,
+  buildRunBrowserControlIntentDisplay,
   buildRunBrowserView,
+  formatRunBrowserControlAction,
+  type RunBrowserControlActionLabel,
   type RunBrowserControlIntent,
+  type RunBrowserControlIntentDisplay,
   type RunBrowserControlRequest,
   type RunIndexRow,
 } from "../src/tui/debugger.js";
@@ -271,5 +275,159 @@ describe("buildRunBrowserControlIntent run browser view integration", () => {
       expect(intent.action).toBe(action);
       expect(intent.effect).toBe("none");
     }
+  });
+});
+
+describe("formatRunBrowserControlAction", () => {
+  it("maps attach to Attach", () => {
+    expect(formatRunBrowserControlAction("attach")).toBe("Attach");
+  });
+
+  it("maps resume to Resume", () => {
+    expect(formatRunBrowserControlAction("resume")).toBe("Resume");
+  });
+
+  it("maps control to Control", () => {
+    expect(formatRunBrowserControlAction("control")).toBe("Control");
+  });
+
+  it("is pure and deterministic", () => {
+    expect(formatRunBrowserControlAction("attach"))
+      .toBe(formatRunBrowserControlAction("attach"));
+  });
+
+  it("returns a value assignable to RunBrowserControlActionLabel", () => {
+    const label: RunBrowserControlActionLabel =
+      formatRunBrowserControlAction("resume");
+    expect(label).toBe("Resume");
+  });
+});
+
+describe("buildRunBrowserControlIntentDisplay", () => {
+  it("produces valid display for a valid intent", () => {
+    const display = buildRunBrowserControlIntentDisplay(
+      rows("run-a", "run-b"),
+      { action: "attach", runId: "run-a" },
+    );
+
+    expect(display.valid).toBe(true);
+    expect(display.actionLabel).toBe("Attach");
+    expect(display.action).toBe("attach");
+    expect(display.status).toBe("valid");
+    expect(display.runId).toBe("run-a");
+    expect(display.index).toBe(0);
+    expect(display.intent).toBeDefined();
+    expect(display.intent!.effect).toBe("none");
+    expect(display.intent!.owner).toBe("runtime_cli");
+    expect(display.intent!.review).toBe("required");
+    expect(display.errorKind).toBeUndefined();
+    expect(display.errorMessage).toBeUndefined();
+  });
+
+  it("produces error display for missing target", () => {
+    const display = buildRunBrowserControlIntentDisplay(
+      rows("r1"),
+      { action: "resume" },
+    );
+
+    expect(display.valid).toBe(false);
+    expect(display.status).toBe("error");
+    expect(display.actionLabel).toBe("Resume");
+    expect(display.action).toBe("resume");
+    expect(display.errorKind).toBe("missing_run_id");
+    expect(display.errorMessage).toContain("No runId");
+    expect(display.runId).toBeUndefined();
+    expect(display.index).toBeUndefined();
+    expect(display.intent).toBeUndefined();
+  });
+
+  it("produces error display for unknown run id", () => {
+    const display = buildRunBrowserControlIntentDisplay(
+      rows("real"),
+      { action: "control", runId: "ghost" },
+    );
+
+    expect(display.valid).toBe(false);
+    expect(display.actionLabel).toBe("Control");
+    expect(display.errorKind).toBe("unknown_run_id");
+    expect(display.errorMessage).toContain("ghost");
+  });
+
+  it("produces error display for unsafe mutation", () => {
+    const display = buildRunBrowserControlIntentDisplay(
+      rows("run-1"),
+      { action: "attach", runId: "run-1", directMutation: true },
+    );
+
+    expect(display.valid).toBe(false);
+    expect(display.errorKind).toBe("unsafe_mutation");
+    expect(display.errorMessage).toContain("intent only");
+  });
+
+  it("reports correct action label for every action", () => {
+    const cases: Array<{
+      action: "attach" | "resume" | "control";
+      label: RunBrowserControlActionLabel;
+    }> = [
+      { action: "attach", label: "Attach" },
+      { action: "resume", label: "Resume" },
+      { action: "control", label: "Control" },
+    ];
+
+    for (const { action, label } of cases) {
+      const display = buildRunBrowserControlIntentDisplay(
+        rows("t"),
+        { action, runId: "t" },
+      );
+
+      expect(display.valid).toBe(true);
+      expect(display.actionLabel).toBe(label);
+    }
+  });
+
+  it("is deterministic for identical inputs", () => {
+    const inputRows = rows("same");
+    const request = { action: "attach" as const, runId: "same" };
+
+    const first = buildRunBrowserControlIntentDisplay(inputRows, request);
+    const second = buildRunBrowserControlIntentDisplay(inputRows, request);
+
+    expect(second).toEqual(first);
+    expect(second).not.toBe(first);
+  });
+
+  it("does not mutate input rows on success path", () => {
+    const inputRows = rows("a", "b");
+    const frozen = JSON.parse(JSON.stringify(inputRows));
+
+    buildRunBrowserControlIntentDisplay(inputRows, {
+      action: "attach",
+      runId: "a",
+    });
+
+    expect(inputRows).toEqual(frozen);
+  });
+
+  it("does not mutate input rows on error path", () => {
+    const inputRows = rows("real");
+    const frozen = JSON.parse(JSON.stringify(inputRows));
+
+    buildRunBrowserControlIntentDisplay(inputRows, {
+      action: "control",
+      runId: "ghost",
+    });
+
+    expect(inputRows).toEqual(frozen);
+  });
+
+  it("assigns display to RunBrowserControlIntentDisplay type", () => {
+    const display: RunBrowserControlIntentDisplay =
+      buildRunBrowserControlIntentDisplay(
+        rows("x"),
+        { action: "attach", runId: "x" },
+      );
+
+    expect(display.valid).toBe(true);
+    expect(display.actionLabel).toBe("Attach");
   });
 });

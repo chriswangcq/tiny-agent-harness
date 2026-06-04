@@ -643,3 +643,66 @@ function resolveRunBrowserTarget(
     message: "No runId or valid index provided; cannot resolve target run",
   };
 }
+
+export type RunBrowserControlActionLabel = "Attach" | "Resume" | "Control";
+
+export function formatRunBrowserControlAction(
+  action: RunBrowserControlAction,
+): RunBrowserControlActionLabel {
+  return (
+    { attach: "Attach", resume: "Resume", control: "Control" } as const
+  )[action];
+}
+
+export type RunBrowserControlIntentDisplay =
+  | {
+      status: "valid";
+      valid: true;
+      actionLabel: RunBrowserControlActionLabel;
+      action: RunBrowserControlAction;
+      runId: string;
+      index: number;
+      intent: RunBrowserControlIntent;
+      errorKind?: never;
+      errorMessage?: never;
+    }
+  | {
+      status: "error";
+      valid: false;
+      actionLabel: RunBrowserControlActionLabel;
+      action: RunBrowserControlAction;
+      errorKind: RunBrowserControlError["kind"];
+      errorMessage: string;
+      runId?: never;
+      index?: never;
+      intent?: never;
+    };
+
+export function buildRunBrowserControlIntentDisplay(
+  rows: readonly RunIndexRow[],
+  request: RunBrowserControlRequest,
+): RunBrowserControlIntentDisplay {
+  const result = buildRunBrowserControlIntent(rows, request);
+  const actionLabel = formatRunBrowserControlAction(request.action);
+
+  if ("kind" in result) {
+    return {
+      actionLabel,
+      action: request.action,
+      status: "error",
+      valid: false,
+      errorKind: result.kind,
+      errorMessage: result.message,
+    };
+  }
+
+  return {
+    actionLabel,
+    action: result.action,
+    status: "valid",
+    valid: true,
+    runId: result.runId,
+    index: result.index,
+    intent: result,
+  };
+}
