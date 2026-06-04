@@ -38,7 +38,7 @@ export class TuiController {
       baseDir: options.imBaseDir ?? ".tiny-agent/im",
     });
     this.channel = options.channel ?? "default";
-    this.pollIntervalMs = options.pollIntervalMs ?? 500;
+    this.pollIntervalMs = options.pollIntervalMs ?? 100;
   }
 
   start(): void {

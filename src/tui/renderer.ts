@@ -42,6 +42,7 @@ export class BlessedRenderer implements TuiRenderer {
   private lastRawShiftEnterSequence: string | undefined;
   private pendingRawShiftEnterEchoes: string[] = [];
   private frameScroll: TuiFrameScroll = {};
+  private animationFrame = 0;
 
   constructor() {
     this.screen = blessed.screen({
@@ -119,11 +120,12 @@ export class BlessedRenderer implements TuiRenderer {
   render(view: TuiViewModel): void {
     this.lastView = view;
     this.ui.syncWithView(view.conversation, view.loop);
+    this.animationFrame++;
     this.frameBox.setContent(
       renderStyledTuiFrame(view, this.ui, this.expandedFrames, {
         width: this.screen.cols,
         height: Math.max(1, this.screen.rows - INPUT_BAR_HEIGHT),
-      }, this.frameScroll).join("\n"),
+      }, this.frameScroll, { animationFrame: this.animationFrame }).join("\n"),
     );
 
     this.renderScreen();
@@ -544,6 +546,10 @@ export type TuiFrameScroll = {
   loop?: number;
 };
 
+export type TuiFrameRenderOptions = {
+  animationFrame?: number;
+};
+
 export type TuiPtyViewport = {
   rows: number;
   cols: number;
@@ -572,6 +578,7 @@ export function renderTuiFrame(
   expandedFrames: ReadonlySet<string>,
   size: TuiFrameSize,
   scroll: TuiFrameScroll = {},
+  options: TuiFrameRenderOptions = {},
 ): string[] {
   const width = Math.max(1, size.width);
   const height = Math.max(1, size.height);
@@ -626,7 +633,12 @@ export function renderTuiFrame(
       "Loop Detail",
       layout.detailPaneWidth,
       layout.topHeight,
-      buildLoopDetailLines(selectedLoopFrame, Math.max(1, layout.detailPaneWidth - 2)),
+      buildLoopDetailLines(
+        selectedLoopFrame,
+        Math.max(1, layout.detailPaneWidth - 2),
+        Math.max(0, layout.topHeight - 2),
+        options,
+      ),
     );
     const ptyLines = ptySession
       ? renderPtyScreenForDisplay(ptySession, 4000, Math.max(1, layout.rightWidth - 2)).split(
@@ -666,8 +678,9 @@ export function renderStyledTuiFrame(
   expandedFrames: ReadonlySet<string>,
   size: TuiFrameSize,
   scroll: TuiFrameScroll = {},
+  options: TuiFrameRenderOptions = {},
 ): string[] {
-  return renderTuiFrame(view, state, expandedFrames, size, scroll).map(
+  return renderTuiFrame(view, state, expandedFrames, size, scroll, options).map(
     styleTuiFrameLine,
   );
 }
@@ -923,9 +936,24 @@ function loopSelectedLine(
   return undefined;
 }
 
-function buildLoopDetailLines(frame: LoopFrame | undefined, width: number): string[] {
+const STREAMING_THINKING_CURSOR_FRAMES = ["•", "●", "⬤", "●"];
+
+function buildLoopDetailLines(
+  frame: LoopFrame | undefined,
+  width: number,
+  height: number,
+  options: TuiFrameRenderOptions,
+): string[] {
   if (!frame) return [];
   const detail = buildLoopFrameDetail(frame);
+  if (isStreamingThinkingFrame(frame)) {
+    return buildStreamingThinkingDetailLines(
+      detail,
+      width,
+      height,
+      streamingThinkingCursor(options.animationFrame ?? 0),
+    );
+  }
   const lines = [
     sanitizeDisplayText(detail.title),
     "",
@@ -951,6 +979,57 @@ function buildLoopDetailLines(frame: LoopFrame | undefined, width: number): stri
     lines.push("", "Log", detail.logPath);
   }
   return lines;
+}
+
+function isStreamingThinkingFrame(frame: LoopFrame): boolean {
+  return (
+    frame.phase === "model" &&
+    frame.status === "running" &&
+    frame.title === "model thinking"
+  );
+}
+
+function buildStreamingThinkingDetailLines(
+  detail: ReturnType<typeof buildLoopFrameDetail>,
+  width: number,
+  height: number,
+  cursor: string,
+): string[] {
+  const thinking = detail.sections.find((section) => section.title === "thinking");
+  const content = withStreamingCursor(thinking?.content ?? detail.rawDetail ?? "", cursor);
+  const wrappedThinking = wrapDisplayText(content, width);
+  if (height <= 4) {
+    return wrappedThinking.slice(Math.max(0, wrappedThinking.length - Math.max(1, height)));
+  }
+
+  const header = [
+    sanitizeDisplayText(detail.title),
+    `step=${detail.stepIndex} status=${detail.status}`,
+    ...(detail.summary ? wrapDisplayText(detail.summary, width) : []),
+    "",
+    "Thinking",
+  ];
+  const visibleHeader = header.slice(0, Math.max(0, height - 2));
+  const availableThinkingLines = Math.max(1, height - visibleHeader.length);
+  return [
+    ...visibleHeader,
+    ...wrappedThinking.slice(Math.max(0, wrappedThinking.length - availableThinkingLines)),
+  ];
+}
+
+function withStreamingCursor(content: string, cursor: string): string {
+  if (content.length === 0) return cursor;
+  return content.endsWith("\n") ? `${content}${cursor}` : `${content} ${cursor}`;
+}
+
+function streamingThinkingCursor(animationFrame: number): string {
+  return STREAMING_THINKING_CURSOR_FRAMES[
+    positiveModulo(animationFrame, STREAMING_THINKING_CURSOR_FRAMES.length)
+  ]!;
+}
+
+function positiveModulo(value: number, divisor: number): number {
+  return ((value % divisor) + divisor) % divisor;
 }
 
 function loopPaneTitle(frames: LoopFrame[], focused: boolean): string {

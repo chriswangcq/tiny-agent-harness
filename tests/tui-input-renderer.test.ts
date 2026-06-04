@@ -422,19 +422,71 @@ describe("TUI input rendering", () => {
           status: "running" as const,
           title: "model thinking",
           summary: "thinking... 11 chars",
-          detail: "## thinking\nNeed inspect ●",
+          detail: "## thinking\nNeed inspect",
         },
       ],
     };
     state.syncWithView(vm.conversation, vm.loop);
 
-    const output = renderTuiFrame(vm, state, new Set(), {
-      width: 120,
-      height: 34,
-    }).join("\n");
+    const first = renderTuiFrame(
+      vm,
+      state,
+      new Set(),
+      { width: 120, height: 34 },
+      {},
+      { animationFrame: 1 },
+    ).join("\n");
+    const second = renderTuiFrame(
+      vm,
+      state,
+      new Set(),
+      { width: 120, height: 34 },
+      {},
+      { animationFrame: 2 },
+    ).join("\n");
 
-    expect(output).toContain("model thinking");
-    expect(output).toContain("Need inspect ●");
+    expect(first).toContain("model thinking");
+    expect(first).toContain("Need inspect ●");
+    expect(second).toContain("Need inspect ⬤");
+  });
+
+  it("keeps streaming thinking detail followed to the latest text", () => {
+    const state = new TuiInteractionState();
+    const vm = {
+      ...view(),
+      loop: [
+        {
+          ...frame("frame-stream"),
+          id: "frame-stream",
+          phase: "model" as const,
+          status: "running" as const,
+          title: "model thinking",
+          summary: "thinking... 130 chars",
+          detail: [
+            "## thinking",
+            "first line should scroll away",
+            "middle line should scroll away",
+            "older line should scroll away",
+            "recent line zero",
+            "latest line one",
+            "latest line two",
+          ].join("\n"),
+        },
+      ],
+    };
+    state.syncWithView(vm.conversation, vm.loop);
+
+    const output = renderTuiFrame(
+      vm,
+      state,
+      new Set(),
+      { width: 120, height: 14 },
+      {},
+      { animationFrame: 1 },
+    ).join("\n");
+
+    expect(output).toContain("latest line two ●");
+    expect(output).not.toContain("first line should scroll away");
   });
 
   it("merges adjacent pane borders instead of drawing double vertical seams", () => {

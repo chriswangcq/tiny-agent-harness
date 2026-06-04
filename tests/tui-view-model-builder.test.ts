@@ -316,7 +316,7 @@ describe("ViewModelBuilder", () => {
       status: "running",
       summary: "thinking... 3 chars",
     });
-    expect(findFrame(builder, "model thinking")!.detail).toContain("abc ●");
+    expect(findFrame(builder, "model thinking")!.detail).toContain("abc");
     builder.applyEvent({
       type: "model_thinking_delta",
       stepIndex: 1,
@@ -327,7 +327,7 @@ describe("ViewModelBuilder", () => {
     expect(findFrame(builder, "model thinking")).toMatchObject({
       summary: "thinking... 5 chars",
     });
-    expect(findFrame(builder, "model thinking")!.detail).toContain("abcde ⬤");
+    expect(findFrame(builder, "model thinking")!.detail).toContain("abcde");
 
     builder.applyEvent({
       type: "model_output_received",
@@ -346,7 +346,7 @@ describe("ViewModelBuilder", () => {
     });
     expect(modelFrame!.detail).toContain("## thinking");
     expect(modelFrame!.detail).toContain("## raw decision");
-    expect(modelFrame!.detail).not.toContain("●");
+    expect(modelFrame!.detail).not.toContain("⬤");
   });
 
   it("renders final model thinking detail when no thinking deltas were recorded", () => {

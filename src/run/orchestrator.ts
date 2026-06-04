@@ -29,8 +29,8 @@ import type {
   ModelContextSessionSnapshot,
 } from "../model/context-session.js";
 
-const MODEL_THINKING_DELTA_MIN_INTERVAL_MS = 250;
-const MODEL_THINKING_DELTA_MAX_BUFFER_CHARS = 1200;
+const MODEL_THINKING_DELTA_MIN_INTERVAL_MS = 80;
+const MODEL_THINKING_DELTA_MAX_BUFFER_CHARS = 160;
 
 export interface ModelPort {
   generateTurn(
@@ -175,7 +175,7 @@ export class RunOrchestrator {
         const thinkingProgress = createThinkingProgressRecorder({
           stepIndex: this.state.data.stepIndex,
           now: () => this.now(),
-          record: (event) => this.record(event),
+          append: (event) => this.transcript.append(event),
         });
         let output: FimStepOutput;
         try {
@@ -716,7 +716,7 @@ function createThinkingTraceSink(): {
 function createThinkingProgressRecorder(options: {
   stepIndex: number;
   now: () => string;
-  record: (event: Extract<RunEvent, { type: "model_thinking_delta" }>) => Promise<void>;
+  append: (event: Extract<RunEvent, { type: "model_thinking_delta" }>) => void;
 }): {
   append(event: ModelProgressEvent): Promise<void>;
   flush(): Promise<void>;
@@ -729,7 +729,7 @@ function createThinkingProgressRecorder(options: {
     if (pending.length === 0) return;
     const delta = pending;
     pending = "";
-    await options.record({
+    options.append({
       type: "model_thinking_delta",
       stepIndex: options.stepIndex,
       delta,

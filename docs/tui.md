@@ -303,7 +303,8 @@ model_thinking_delta
   -> Update current model LoopFrame status=running title="model thinking"
   -> Append delta into LoopFrame detail section "thinking"
   -> Render a trailing breathing cursor while the model frame is running
-     (`• -> ● -> ⬤ -> ●`, keyed by streamed delta sequence)
+     (`• -> ● -> ⬤ -> ●`, keyed by the TUI render tick so it breathes even
+     when no new delta arrives)
   -> Current runs write throttled transcript deltas for live TUI detail and
      also store the final streamed thinking trace as a debug artifact referenced
      by final model_output_received
@@ -447,7 +448,7 @@ Need inspect the current run state before choosing the next tool. ●
 原因：
 
 - 默认 UI 保持扫描友好。
-- raw thinking 很长，会挤掉 tool trace；streaming 阶段的 detail 默认只展示当前聚合内容和多尺寸圆点呼吸光标。
+- raw thinking 很长，会挤掉 tool trace；streaming 阶段的 detail 默认跟随尾部最新内容，并显示多尺寸圆点呼吸光标。
 - 需要审计模型决策链路时，可以展开验证 two-pass ReAct 工作正常。
 
 如果后续不想展示 raw thinking，可以改成只显示 thinking 摘要或保存路径。
