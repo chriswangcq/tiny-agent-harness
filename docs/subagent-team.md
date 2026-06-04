@@ -126,6 +126,7 @@ CLI / MCP / cloud queue / local worker process
 已实现：
 
 - 纯 reducer
+- 合并协议纯域 (merge-protocol)：master review checklist、merge order、conflict policy、feedback loop、gate evaluation
 - duplicate event no-op
 - invalid transition rejection
 - worker offline 时释放/失败 active task
