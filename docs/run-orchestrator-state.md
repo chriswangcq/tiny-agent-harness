@@ -443,6 +443,14 @@ Before recording `model_output_received`, the orchestrator moves large raw debug
 
 Immediately after `model_output_received`, current runtime records `model_decision_recorded`. This is the compact durable decision fact for the step: `decisionId`, decision kind, tool name/arguments or `io_wait`, invalid-output diagnostic, raw decision hash/preview, and `thinking.raw.promptRef` / `thinking.raw.traceRef` when present. Later validation, review, tool execution, synthetic observation, and `io_wait` events emitted by the orchestrator include the same `decisionId` so projection and replay code can correlate facts without parsing the full model output payload.
 
+When the model adapter returns normalized provider usage (see [DeepSeek V4 Native Tool-Call FIM Adapter](deepseek-fim-adapter.md)), the orchestrator also records `model_usage_recorded` with the same `stepIndex` and `decisionId`. The `usage` field carries normalized FIM usage (`thinking` and `decision` passes) with snake_case-preferred token counts, cache hit/miss breakdowns, finish reasons, and continuation rounds. Token usage summary is always derived from these durable `model_usage_recorded` facts — never from raw prompt texts, debug payloads, or provider-specific response parsing. The `src/model/token-usage-summary.ts` helper produces an aggregated `TokenUsageSummary` from transcript events.
+
+This token usage slice records and aggregates durable token usage facts only.
+It does **not** implement pricing or billing policy, does **not** include
+dashboard or TUI cost display integration, and does **not** derive usage
+summary from raw prompt texts, debug payloads, or provider-specific response
+parsing.
+
 ## Orchestrator Loop
 
 The orchestrator is deliberately simple.
