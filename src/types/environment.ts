@@ -110,7 +110,10 @@ export type EnvironmentState = {
 
 export const ENVIRONMENT_EVENT_LEVELS = {
   ANY: 0,
+  NOISE: 0,
   DEFAULT: 1,
+  MEANINGFUL: 10,
+  IMPORTANT: 50,
   USER_MESSAGE: 100,
 } as const;
 
@@ -171,11 +174,32 @@ export function environmentEventLevel(event: EnvironmentEvent): number {
     );
   }
 
+  if (event.source === "skill") {
+    return explicitLevel ?? ENVIRONMENT_EVENT_LEVELS.MEANINGFUL;
+  }
+
+  if (event.source === "session") {
+    switch (event.kind) {
+      case "session_output_available":
+        return explicitLevel ?? ENVIRONMENT_EVENT_LEVELS.NOISE;
+      case "session_input_ready":
+      case "session_continuation_prompt":
+      case "session_returned_to_prompt":
+        return explicitLevel ?? ENVIRONMENT_EVENT_LEVELS.MEANINGFUL;
+      case "session_terminated":
+      case "session_unsynced":
+        return explicitLevel ?? ENVIRONMENT_EVENT_LEVELS.IMPORTANT;
+      case "session_focused":
+      case "session_restarted":
+        return explicitLevel ?? ENVIRONMENT_EVENT_LEVELS.DEFAULT;
+    }
+  }
+
   return explicitLevel ?? ENVIRONMENT_EVENT_LEVELS.DEFAULT;
 }
 
 export function ioWaitMinLevel(wait: IoWaitRequest): number {
-  return wait.minLevel ?? wait.condition?.minLevel ?? ENVIRONMENT_EVENT_LEVELS.ANY;
+  return wait.minLevel ?? wait.condition?.minLevel ?? ENVIRONMENT_EVENT_LEVELS.MEANINGFUL;
 }
 
 export function validateIoWaitRequest(wait: IoWaitRequest): string | undefined {

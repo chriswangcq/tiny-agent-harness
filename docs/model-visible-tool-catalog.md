@@ -364,7 +364,7 @@ Pause the agent loop until an external environment event arrives.
 This is a tool call, not a shell command. Never run it inside the terminal.
 Use after sending a user-visible reply, when waiting for user input, approval, webhook, sub-agent result, or another environment event.
 io_wait is priority-only: it wakes on the next event whose environmentEventLevel is >= minLevel.
-Omit minLevel, or use 0, to wake on any new environment event. Use 10 for meaningful session/tool lifecycle events. User messages are level 100.
+Omit minLevel to wake on meaningful events (level 10+) such as input-ready, prompt-returned, skill lifecycle, or user messages. Use explicit minLevel 0 only for any-event waits that should include low-value session output. User messages are level 100.
 ```
 
 Schema:
@@ -379,7 +379,7 @@ Schema:
     },
     "minLevel": {
       "type": "number",
-      "description": "Minimum event level. Omit or use 0 for any event; use 10 for meaningful session/tool lifecycle events. User messages are level 100."
+      "description": "Minimum event level. Omit for meaningful events (10+). Use explicit 0 only when low-value session output should also wake the run. User messages are level 100."
     }
   },
   "additionalProperties": false

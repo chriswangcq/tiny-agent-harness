@@ -146,6 +146,7 @@ export async function executeCodeIntelCommand(
 
 export function parseCodeIntelArgv(argv: string[]): CodeIntelCommand {
   const args = argv.filter((arg) => arg !== "--json");
+  rejectWriteFlags(args);
   const [command, ...rest] = args;
 
   switch (command) {
@@ -183,6 +184,12 @@ export function parseCodeIntelArgv(argv: string[]): CodeIntelCommand {
       throw new Error(
         "Usage: codeq <capabilities|diagnostics|symbols|definition|references|hover> ... --json",
       );
+  }
+}
+
+function rejectWriteFlags(args: string[]): void {
+  if (args.includes("--apply")) {
+    throw new Error("codeq is read-only; --apply is not supported");
   }
 }
 

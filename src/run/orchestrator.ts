@@ -15,7 +15,7 @@ import type {
 import type { TerminalObservation } from "../terminal/types.js";
 import type { InternalToolCall } from "../types/model.js";
 import type { EnvironmentPort, EnvironmentEvent, IoWaitRequest } from "../types/environment.js";
-import { validateIoWaitRequest } from "../types/environment.js";
+import { ENVIRONMENT_EVENT_LEVELS, validateIoWaitRequest } from "../types/environment.js";
 import { Environment } from "../environment/environment.js";
 import type { ActiveSkillRunSummary } from "../types/skill.js";
 import { AgentRunState } from "./state.js";
@@ -791,7 +791,7 @@ function terminalObservationToEnvironmentEvents(input: {
     events.push({
       ...eventBase,
       id: `${idPrefix}-output-${observation.terminal.inputSeq}`,
-      level: 0,
+      level: ENVIRONMENT_EVENT_LEVELS.NOISE,
       kind: "session_output_available",
     });
   }
@@ -800,7 +800,7 @@ function terminalObservationToEnvironmentEvents(input: {
     events.push({
       ...eventBase,
       id: `${idPrefix}-focused-${stableEventIdPart(request.toolCallId)}`,
-      level: 1,
+      level: ENVIRONMENT_EVENT_LEVELS.DEFAULT,
       kind: "session_focused",
     });
   }
@@ -809,7 +809,7 @@ function terminalObservationToEnvironmentEvents(input: {
     events.push({
       ...eventBase,
       id: `${idPrefix}-restarted-${stableEventIdPart(request.toolCallId)}`,
-      level: 1,
+      level: ENVIRONMENT_EVENT_LEVELS.DEFAULT,
       kind: "session_restarted",
     });
   }
@@ -823,7 +823,7 @@ function terminalObservationToEnvironmentEvents(input: {
     events.push({
       ...eventBase,
       id: `${idPrefix}-continuation-${continuationKey}`,
-      level: 10,
+      level: ENVIRONMENT_EVENT_LEVELS.MEANINGFUL,
       kind: "session_continuation_prompt",
       promptSeq: continuationEvent.promptSeq,
       continuationReason: continuationEvent.reason,
@@ -831,7 +831,7 @@ function terminalObservationToEnvironmentEvents(input: {
     events.push({
       ...eventBase,
       id: `${idPrefix}-input-ready-continuation-${continuationKey}`,
-      level: 10,
+      level: ENVIRONMENT_EVENT_LEVELS.MEANINGFUL,
       kind: "session_input_ready",
       promptSeq: continuationEvent.promptSeq,
       continuationReason: continuationEvent.reason,
@@ -849,14 +849,14 @@ function terminalObservationToEnvironmentEvents(input: {
     events.push({
       ...eventBase,
       id: `${idPrefix}-returned-${promptKey}`,
-      level: 10,
+      level: ENVIRONMENT_EVENT_LEVELS.MEANINGFUL,
       kind: "session_returned_to_prompt",
       promptSeq,
     });
     events.push({
       ...eventBase,
       id: `${idPrefix}-input-ready-prompt-${promptKey}`,
-      level: 10,
+      level: ENVIRONMENT_EVENT_LEVELS.MEANINGFUL,
       kind: "session_input_ready",
       promptSeq,
     });
@@ -866,7 +866,7 @@ function terminalObservationToEnvironmentEvents(input: {
     events.push({
       ...eventBase,
       id: `${idPrefix}-unsynced-${observation.terminal.inputSeq}-${stableEventIdPart(observation.terminal.syncStatus.reason)}`,
-      level: 50,
+      level: ENVIRONMENT_EVENT_LEVELS.IMPORTANT,
       kind: "session_unsynced",
       reason: observation.terminal.syncStatus.reason,
     });
@@ -876,7 +876,7 @@ function terminalObservationToEnvironmentEvents(input: {
     events.push({
       ...eventBase,
       id: `${idPrefix}-terminated-${observation.terminal.inputSeq}`,
-      level: 50,
+      level: ENVIRONMENT_EVENT_LEVELS.IMPORTANT,
       kind: "session_terminated",
       reason: observation.terminal.termination?.reason,
       exitCode: observation.terminal.termination?.exitCode,

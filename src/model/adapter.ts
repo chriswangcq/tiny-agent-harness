@@ -139,7 +139,7 @@ const IO_WAIT_V4_TOOL: V4Tool = {
         minLevel: {
           type: "number",
           description:
-            "Optional minimum event level. Omit or use 0 for any event; use 10 for meaningful session/tool lifecycle events; user messages are level 100.",
+            "Optional minimum event level. Omit for meaningful events (10+); use explicit 0 only for any-event waits that include low-value session output; user messages are level 100.",
         },
       },
     },

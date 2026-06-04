@@ -393,9 +393,11 @@ Hover output must be capped by byte length. If the LSP server returns long docs,
 
 ## Edit Commands
 
-Edit-producing commands should be phase 2.
+Edit-producing commands are not implemented in the current CLI. `codeq` is
+read-only today; `--apply` is rejected instead of being treated as a hidden
+mutation path.
 
-Recommended commands:
+Future edit-planning commands can start as dry-run planners:
 
 ```text
 codeq prepare-rename <location> --json
@@ -403,14 +405,18 @@ codeq rename <location> <new-name> --dry-run --json
 codeq code-actions <path-or-range> --json
 ```
 
-First implementation rule:
+Future implementation rule:
 
 ```text
 Read-only by default.
-No command writes files unless it has an explicit --apply flag.
+No command writes files unless a later product decision adds an explicit apply
+mode with policy review.
 ```
 
-Even with `--apply`, codeq should emit the exact `WorkspaceEdit` summary before writing, and the agent's terminal/session request still goes through tool review. For the tiny-agent-harness first pass, prefer `--dry-run` only and let the agent apply edits through normal patch workflow.
+If an apply mode is added later, codeq should emit the exact `WorkspaceEdit`
+summary before writing, and the agent's terminal/session request still goes
+through tool review. For the tiny-agent-harness first pass, keep codeq
+read-only and let the agent apply edits through the normal patch workflow.
 
 Dry-run rename output:
 
@@ -689,7 +695,7 @@ Do not make tests depend on a user's editor, global VS Code install, or existing
 - Add `prepare-rename`.
 - Add `rename --dry-run`.
 - Add `code-actions`.
-- Do not write files by default.
+- Keep the first edit-planning pass read-only; reject `--apply`.
 
 ### Phase 4: explicit daemon
 

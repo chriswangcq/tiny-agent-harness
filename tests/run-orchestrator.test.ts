@@ -1517,6 +1517,91 @@ describe("RunOrchestrator", () => {
     );
   });
 
+  it("background low-priority session output does not satisfy default io_wait", async () => {
+    const wait: IoWaitRequest = {
+      reason: "wait for meaningful external input",
+    };
+    const environment = new Environment();
+    const environmentPort: RunPorts["environment"] = {
+      appendEvent(event) {
+        return environment.appendEvent(event);
+      },
+      consumeSince(options) {
+        return environment.consumeSince(options);
+      },
+      waitFor(options) {
+        return environment.waitFor(options);
+      },
+    };
+    const { orchestrator, terminalCalls, transcript } = makeRun({
+      outputs: [ioWaitOutput(wait)],
+      environment: environmentPort,
+      terminalObservation: {
+        currentSession: "default",
+        observedSession: "default",
+        terminal: terminal(2),
+        request: "session_observe",
+        result: "ok",
+        returnedToPrompt: false,
+        terminalEvents: [{ kind: "output", bytes: 14, preview: "still running" }],
+        screen: {
+          text: "still running\n",
+          rows: 24,
+          cols: 80,
+          truncated: false,
+          logRef: { path: "managed-pty://default" },
+        },
+      },
+    });
+
+    const runPromise = orchestrator.run();
+
+    await waitForTranscriptCount(transcript, "environment_event_recorded", 1);
+    expect(terminalCalls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolName: "session_observe",
+          toolCallId: expect.stringContaining("session-watch-"),
+        }),
+      ]),
+    );
+    expect(readTranscript(transcript)).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "io_wait_satisfied",
+        }),
+      ]),
+    );
+
+    const userEvent: EnvironmentEvent = {
+      id: "msg-env-operator-interrupt",
+      kind: "user_message_received",
+      source: "im",
+      timestamp: "2026-05-25T12:00:01.000Z",
+      message: {
+        id: "msg-operator-interrupt",
+        channel: "default",
+        role: "user",
+        text: "pause that and answer me",
+        createdAt: "2026-05-25T12:00:01.000Z",
+      },
+    };
+    environment.appendEvent(userEvent);
+
+    const endState = await runPromise;
+
+    expect(endState.status).toBe("failed");
+    expect(readTranscript(transcript)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "io_wait_satisfied",
+          wait,
+          event: userEvent,
+        }),
+      ]),
+    );
+  });
+
   it("delivers the wait-satisfying user message into the next model context", async () => {
     const wait: IoWaitRequest = {
       reason: "need user reply",

@@ -180,8 +180,8 @@ Dead sessions do not accept foreground input. `terminal_write`, `terminal_key`, 
 `terminal_write`, `terminal_key`, and `session_interrupt` return after an immediate one-screen glance by default. They can still wait up to an explicit `waitForReturnMs` for a shell or continuation prompt as a low-level escape hatch, but normal orchestration should use `io_wait` for environment events.
 
 - Default wait budget is `0`.
-- To wait for command completion or other meaningful terminal lifecycle events, use `io_wait` with `minLevel: 10`.
-- To wait for any event, omit `minLevel` or use `minLevel: 0`. User messages are level `100`, so they can always wake normal waits.
+- To wait for command completion or other meaningful terminal lifecycle events, use `io_wait` with no `minLevel` or with `minLevel: 10`.
+- To wait for every event, including low-value session output, use explicit `minLevel: 0`. User messages are level `100`, so they can always wake normal waits.
 
 Timeout means:
 
@@ -193,6 +193,18 @@ the agent should use session_observe, session_interrupt, session_restart, or io_
 ```
 
 Timeout never kills the PTY process. It only releases the agent loop from focusing on that action.
+
+## Tool Policy Review
+
+All terminal/session requests pass through the `ToolReviewer` boundary before execution. Demo runs can still use `AlwaysApproveReviewer`, but the product path has a pure `ToolPolicyReviewer` adapter around `evaluateToolPolicy(request, options)`.
+
+The policy evaluator does not execute shell commands or read process state. It classifies the explicit `ToolRequest` payload and returns transcript/display-ready findings:
+
+- rejected dangerous terminal writes: broad recursive delete, raw disk writes, filesystem formatting, broad permission changes, pipe-to-shell installers, privileged destructive commands, force push, fork bombs, likely secret file reads, and system directory writes;
+- warning terminal writes: network transfer, global package install, recursive permission changes, ownership changes, and ordinary git push;
+- safe cases: constrained terminal keys, session/read tools, and simple terminal writes.
+
+`allowDangerousTerminalWrites` is an explicit policy option. When enabled, dangerous findings become warnings so audits still show why the request was risky.
 
 ## Input Sequence
 

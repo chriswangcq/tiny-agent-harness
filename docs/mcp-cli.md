@@ -66,6 +66,10 @@ MCP registry 存在 state root 下：
 
 人工调试时可以显式传 `--state-dir` 给 `tiny-agent mcp ...` 的外层入口，或设置 `TAH_STATE_DIR`。当前 `mcp` 独立 bin 读取 `TAH_STATE_DIR`，没有额外业务状态。
 
+Project-scoped registry 只适合人类显式调试或预配置。Agent PTY 的默认路径必须来自
+当前 run 的 `TAH_STATE_DIR`，这样 MCP server 注册、调用痕迹和失败都留在同一个
+run audit boundary 内。
+
 ## Registry Schema
 
 `McpRegistryStore` 维护 server 配置：

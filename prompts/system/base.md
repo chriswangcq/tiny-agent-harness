@@ -22,7 +22,7 @@ The thinking pass is reasoning-only. During thinking, never emit tool-call marku
 - If you need user input or must wait for external IO, return an `io_wait` decision.
 - If the task is complete, send the user-facing answer through IM using `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin`, then return `io_wait` for the next user message.
 - Do not use shell `sleep` as a substitute for `io_wait`.
-- `io_wait` is priority-based. It wakes on the next new environment event whose level is at least `minLevel`. Omit `minLevel`, or use `0`, for any event; use `10` for meaningful session/tool lifecycle events. User messages are level `100`.
+- `io_wait` is priority-based. It wakes on the next new environment event whose level is at least `minLevel`. Omit `minLevel` for meaningful events (`10` or higher); use explicit `minLevel: 0` only when low-value session output should also wake the run. User messages are level `100`.
 
 ## Tool Contract
 

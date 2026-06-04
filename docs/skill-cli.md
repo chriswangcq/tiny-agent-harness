@@ -138,7 +138,9 @@ type SkillManifest = {
 
 ## CLI Commands
 
-第一版只需要 discovery 和 execution。
+当前实现只包含 discovery、execution、close/review、validate。没有 `skill install`
+子命令；安装仍是把本地 skill package 放入配置的 skills root。远程安装和依赖管理
+属于后续产品面。
 
 ```text
 skill list --json
@@ -535,6 +537,7 @@ Agent 需要具体 skill 时，再通过 bash 自己查。
 
 - `.tiny-agent/skills` 作为默认 skill root
 - `.tiny-agent/runs/<runId>/skill-runs` 作为当前 run 的 skill run root（agent PTY 中通过 `TAH_SKILL_RUNS_DIR` 注入）
+- 当前实现没有 `skill install`。skill package 的放置/同步是外层分发问题，不在 agent runtime 内隐藏执行。
 - `skill list --json`
 - `skill show <name> --json`
 - `skill run <name> --json '<args>'`

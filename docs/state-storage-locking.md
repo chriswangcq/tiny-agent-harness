@@ -403,7 +403,7 @@ run-<runId>.environment.events.lock
 
 1. run loop 以当前 run state/model context 的事件 cursor 为准。
 2. 读取 cursor 之后的新 events。
-3. 根据 `io_wait.minLevel` / 默认优先级判断是否唤醒；用户消息有效 level 为 `100`。
+3. 根据 `io_wait.minLevel` / 默认 meaningful 优先级判断是否唤醒；省略 `minLevel` 等价于 `level >= 10`，显式 `minLevel: 0` 才会被低价值 session output 唤醒；用户消息有效 level 为 `100`。
 4. 渲染 environment reminder。
 5. 写 transcript `environment_events_consumed`。
 6. 更新 run state/model context 中的 cursor。

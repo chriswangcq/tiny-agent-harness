@@ -106,4 +106,44 @@ describe("evaluateToolPolicy", () => {
       "Network transfer command may fetch unreviewed remote content.",
     ]);
   });
+
+  it("rejects secret file reads by default", () => {
+    const decision = evaluateToolPolicy(
+      terminalWrite("cat ~/.ssh/id_rsa && cat ak.txt\n"),
+    );
+
+    expect(decision.status).toBe("rejected");
+    expect(decision.reason).toBe(
+      "Rejected by tool policy: Terminal write attempts to read a likely secret file.",
+    );
+    expect(decision.findings.map((finding) => finding.code)).toEqual([
+      "dangerous_secret_read",
+    ]);
+  });
+
+  it("rejects writes to system directories by default", () => {
+    const decision = evaluateToolPolicy(
+      terminalWrite("echo '127.0.0.1 local' | sudo tee /etc/hosts\n"),
+    );
+
+    expect(decision.status).toBe("rejected");
+    expect(decision.findings.map((finding) => finding.code)).toEqual([
+      "dangerous_system_path_write",
+    ]);
+  });
+
+  it("warns on ownership changes even outside sudo destructive commands", () => {
+    const decision = evaluateToolPolicy(
+      terminalWrite("chown -R wangchaoqun ./dist\n"),
+    );
+
+    expect(decision.status).toBe("approved");
+    expect(decision.findings.map((finding) => finding.code)).toEqual([
+      "warning_ownership_change",
+      "safe_terminal_write",
+    ]);
+    expect(decision.warnings).toEqual([
+      "Ownership changes can break local project access and are hard to undo.",
+    ]);
+  });
 });

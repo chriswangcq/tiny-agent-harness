@@ -346,6 +346,7 @@ io_wait_started
 
 io_wait_satisfied
   -> LoopFrame phase=io_wait status=ok title="IO wait satisfied"
+     detail sections: wake reason (event id/kind/source/effective level/minLevel), wait, event
 
 environment_events_consumed
   -> LoopFrame phase=environment status=ok title="environment reminder consumed"
@@ -443,7 +444,7 @@ thinking received (1820 chars) [press Enter to expand]
 
 - 默认 UI 保持扫描友好。
 - raw thinking 很长，会挤掉 tool trace。
-- 面试展示时可以展开证明 two-pass ReAct 工作正常。
+- 需要审计模型决策链路时，可以展开验证 two-pass ReAct 工作正常。
 
 如果后续不想展示 raw thinking，可以改成只显示 thinking 摘要或保存路径。
 

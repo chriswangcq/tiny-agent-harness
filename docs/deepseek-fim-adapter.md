@@ -323,7 +323,7 @@ type IoWaitRequest = {
 };
 ```
 
-Omitting `minLevel`, or emitting `minLevel: 0`, wakes on any new environment event after the wait starts. `minLevel: 10` is the normal threshold for meaningful session/tool lifecycle events. User messages are level `100`.
+Omitting `minLevel` wakes on meaningful events (`level >= 10`) after the wait starts. Emitting explicit `minLevel: 0` wakes on any new environment event, including low-value session output. User messages are level `100`.
 
 Because FIM does not provide provider-generated tool call ids, the harness creates them:
 

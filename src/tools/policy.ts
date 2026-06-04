@@ -16,9 +16,12 @@ export type ToolPolicyRuleCode =
   | "dangerous_privileged_command"
   | "dangerous_force_push"
   | "dangerous_fork_bomb"
+  | "dangerous_secret_read"
+  | "dangerous_system_path_write"
   | "warning_network_transfer"
   | "warning_global_package_install"
   | "warning_recursive_permission_change"
+  | "warning_ownership_change"
   | "warning_git_push";
 
 export type ToolPolicyFinding = {
@@ -100,6 +103,20 @@ const DANGEROUS_TERMINAL_WRITE_RULES: Rule[] = [
     message: "Fork bomb pattern was requested.",
     pattern: /:\s*\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/u,
   },
+  {
+    code: "dangerous_secret_read",
+    severity: "error",
+    message: "Terminal write attempts to read a likely secret file.",
+    pattern:
+      /\b(?:cat|less|more|head|tail|sed|awk|grep|rg)\b[^\n;]*(?:~\/\.ssh\/(?:id_[\w-]+|config)|(?:^|[\/\s])(?:ak\.txt|\.env(?:\.[\w-]+)?|\.npmrc|\.netrc|id_rsa|id_ed25519|[^\/\s]+\.pem|[^\/\s]+\.key|[^\/\s]+\.p12)(?:\s|$))/u,
+  },
+  {
+    code: "dangerous_system_path_write",
+    severity: "error",
+    message: "Terminal write attempts to modify a system directory.",
+    pattern:
+      /(?:>\s*|>>\s*|\btee\s+(?:-a\s+)?|\b(?:cp|mv|install|touch|mkdir)\b[^\n;]*\s)(?:\/etc\/|\/usr\/|\/bin\/|\/sbin\/|\/System\/|\/Library\/)/u,
+  },
 ];
 
 const WARNING_TERMINAL_WRITE_RULES: Rule[] = [
@@ -121,6 +138,12 @@ const WARNING_TERMINAL_WRITE_RULES: Rule[] = [
     severity: "warning",
     message: "Recursive permission changes can be hard to undo.",
     pattern: /\bchmod\s+-R\b/u,
+  },
+  {
+    code: "warning_ownership_change",
+    severity: "warning",
+    message: "Ownership changes can break local project access and are hard to undo.",
+    pattern: /\bchown\b/u,
   },
   {
     code: "warning_git_push",

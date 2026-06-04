@@ -1,4 +1,5 @@
 import type { ModelContextItem } from "./context-session.js";
+import { ioWaitMinLevel } from "../types/environment.js";
 
 export const DEFAULT_CONTEXT_WINDOW_MAX_TOKENS = 700_000;
 export const DEFAULT_CONTEXT_WINDOW_RECENT_ITEMS = 40;
@@ -183,7 +184,7 @@ function describeHistoryItemExtended(item: ModelContextItem): string {
     }
     case "io_wait_call": {
       const reason = item.wait.reason ?? "wait";
-      const minLevel = item.wait.minLevel ?? item.wait.condition?.minLevel ?? 0;
+      const minLevel = ioWaitMinLevel(item.wait);
       return `io_wait reason=${preview(reason, 60)} minLevel=${minLevel}`;
     }
     case "observation": {

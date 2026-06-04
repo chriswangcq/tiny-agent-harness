@@ -53,14 +53,26 @@ type EnvironmentEvent =
 
 - `consumeSince(runId)` returns unconsumed environment events and advances the run cursor.
 - `waitFor(...)` resolves without consuming the matched event, so the next model turn can still see the reminder.
-- `waitFor()` with no `minLevel`, or with `minLevel: 0`, waits for any new environment event.
+- `waitFor()` with no `minLevel` waits for the next meaningful event (`level >= 10`). Explicit `minLevel: 0` waits for any new environment event, including low-value session output.
 - `io_wait` uses the run's consumed-event cursor from the latest model turn start, not the later wait-registration moment. Events that arrive while the model is thinking can therefore satisfy the following `io_wait` immediately. If `waitFor` is used without a prior `consumeSince` for that run, it falls back to the latest event cursor at registration time so historical events do not self-wake standalone waits.
-- `io_wait` is priority-only. Its effective threshold is `wait.minLevel ?? wait.condition?.minLevel ?? 0`; legacy `source`, `eventKind`, `session`, and `channel` fields are accepted only for historical compatibility and do not filter wake events. Missing user-message events default to level `100` and are treated as highest-priority operator input; other missing event levels default to `1`.
+- `io_wait` is priority-only. Its effective threshold is `wait.minLevel ?? wait.condition?.minLevel ?? 10`; legacy `source`, `eventKind`, `session`, and `channel` fields are accepted only for historical compatibility and do not filter wake events. Missing user-message events default to level `100` and are treated as highest-priority operator input; skill lifecycle events default to level `10`; other missing non-user event levels default to `1`.
 - `Environment.renderReminder` serializes user messages as `[user@channel] ...` and skill/session facts as factual reminder lines.
 - When `events.jsonl` is configured, `Environment` also watches the JSONL file while waiting so sibling CLI commands such as `skill close` can wake the run.
 - While `io_wait` is pending, the orchestrator starts a best-effort session observe pump so terminal prompt/output facts can become session environment events.
 
-TODO: Revisit ordinary `event` waits. Today `condition: { kind: "event" }` with no `minLevel` wakes on any level-0 event, including `session_output_available` produced by the session observe pump that starts during the wait itself. That matches the current priority-only rule, but it is easy to confuse with "wait for a meaningful external event" and can make a wait appear to self-wake. Future design should either name this as an explicit any-event wait or add a separate stricter wait mode for filtered/meaningful events.
+## Event Levels
+
+The current taxonomy is intentionally small:
+
+| Level | Constant | Meaning |
+| ---: | --- | --- |
+| 0 | `ANY` / `NOISE` | Explicit any-event waits and low-value session output facts such as `session_output_available`. |
+| 1 | `DEFAULT` | Ordinary facts that should be consumed into the next reminder but should not wake a default wait. |
+| 10 | `MEANINGFUL` | Lifecycle facts that should wake default waits, such as `session_input_ready`, `session_continuation_prompt`, `session_returned_to_prompt`, and skill lifecycle events. |
+| 50 | `IMPORTANT` | Runtime safety or liveness facts such as `session_unsynced` and `session_terminated`. |
+| 100 | `USER_MESSAGE` | Operator input. User messages are normalized to at least this level, even if the persisted event has a lower level. |
+
+This keeps the session observe pump useful without turning level-0 terminal output into a wake storm. A model can still request a true any-event wait by emitting explicit `minLevel: 0`.
 
 ## Event Identity
 

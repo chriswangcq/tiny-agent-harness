@@ -6,6 +6,7 @@ import { Environment } from "../src/environment/environment.js";
 import {
   ENVIRONMENT_EVENT_LEVELS,
   environmentEventLevel,
+  ioWaitMinLevel,
   type EnvironmentEvent,
 } from "../src/types/environment.js";
 
@@ -31,6 +32,20 @@ function makeUserMessageEvent(
       text,
       createdAt: timestamp,
     },
+  };
+}
+
+function makeSessionOutputEvent(id: string): EnvironmentEvent {
+  return {
+    id,
+    kind: "session_output_available",
+    source: "session",
+    timestamp: "2026-05-25T12:00:00.000Z",
+    session: "default",
+    currentSession: "default",
+    request: "session_observe",
+    inputSeq: 1,
+    level: ENVIRONMENT_EVENT_LEVELS.NOISE,
   };
 }
 
@@ -193,15 +208,53 @@ describe("Environment", () => {
     expect(env.consumeSince({ runId: "run-1" })).toEqual([historical, future]);
   });
 
-  it("waitFor with no condition wakes on any future environment event", async () => {
+  it("waitFor with no condition wakes on a future meaningful environment event", async () => {
     const env = new Environment();
 
     const promise = env.waitFor({
       runId: "run-1",
-      wait: { reason: "any event" },
+      wait: { reason: "meaningful event" },
     });
 
     const event = makeUserMessageEvent("e-any", "wake");
+    env.appendEvent(event);
+
+    await expect(promise).resolves.toEqual(event);
+  });
+
+  it("waitFor with no minLevel ignores low-priority session output noise", async () => {
+    const env = new Environment();
+    let resolved = false;
+
+    const promise = env
+      .waitFor({
+        runId: "run-1",
+        wait: { reason: "default meaningful event wait" },
+      })
+      .then((event) => {
+        resolved = true;
+        return event;
+      });
+
+    env.appendEvent(makeSessionOutputEvent("session-low"));
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    const userEvent = makeUserMessageEvent("e-user", "operator interrupt");
+    env.appendEvent(userEvent);
+
+    await expect(promise).resolves.toEqual(userEvent);
+  });
+
+  it("waitFor with explicit minLevel 0 still supports any-event waits", async () => {
+    const env = new Environment();
+
+    const promise = env.waitFor({
+      runId: "run-1",
+      wait: { reason: "explicit any event", minLevel: ENVIRONMENT_EVENT_LEVELS.ANY },
+    });
+
+    const event = makeSessionOutputEvent("session-low-explicit");
     env.appendEvent(event);
 
     await expect(promise).resolves.toEqual(event);
@@ -341,6 +394,21 @@ describe("Environment", () => {
       ENVIRONMENT_EVENT_LEVELS.USER_MESSAGE,
     );
     expect(environmentEventLevel(highUserEvent)).toBe(200);
+  });
+
+  it("defaults io_wait to meaningful events unless minLevel 0 is explicit", () => {
+    expect(ioWaitMinLevel({ reason: "default" })).toBe(
+      ENVIRONMENT_EVENT_LEVELS.MEANINGFUL,
+    );
+    expect(ioWaitMinLevel({ reason: "any", minLevel: ENVIRONMENT_EVENT_LEVELS.ANY })).toBe(
+      ENVIRONMENT_EVENT_LEVELS.ANY,
+    );
+    expect(
+      ioWaitMinLevel({
+        reason: "legacy nested any",
+        condition: { kind: "event", minLevel: ENVIRONMENT_EVENT_LEVELS.ANY },
+      }),
+    ).toBe(ENVIRONMENT_EVENT_LEVELS.ANY);
   });
 
   it("renderReminder formats events", () => {

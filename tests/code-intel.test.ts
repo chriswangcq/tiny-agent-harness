@@ -83,6 +83,12 @@ describe("code-intel argv parsing", () => {
       includeDeclaration: true,
     });
   });
+
+  it("rejects apply flags because codeq is read-only", () => {
+    expect(() => parseCodeIntelArgv(["references", "src/file.ts:1:2", "--apply", "--json"])).toThrow(
+      "read-only",
+    );
+  });
 });
 
 describe("code-intel TypeScript diagnostics parser", () => {

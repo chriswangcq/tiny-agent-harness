@@ -162,6 +162,11 @@ timeout 只释放 agent focus，不 kill 进程；长任务可以继续运行，
 | one-shot event | 按 run cursor 消费一次，渲染成 factual environment reminder。 |
 | persistent fact | 例如 active skill run，每轮持续提醒，直到状态关闭。 |
 
+事件还有显式 priority level。默认 `io_wait` 只等待 meaningful 及以上事件，避免
+level-0 session output noise 造成 wake storm；用户消息固定归一到 level `100`，
+可以立即打断普通 wait。TUI detail 会展示 wait/event 的 wake reason，但这只是
+观察面解释，不改变 runtime prompt 中的事实事件。
+
 `src/im` 则提供用户消息 transport 的边界。设计上用户通信不是模型工具，而是 orchestrator port。agent 如果需要等待用户输入，应使用 `io_wait`，而不是 shell sleep 或直接阻塞模型循环。
 
 ### 4.5 Skill CLI
@@ -175,9 +180,14 @@ skill run coding-review --json '{"path":"src"}'
 skill close <skillRunId> --review none --json '<summary>'
 skill close <skillRunId> --review required --json '<summary>'
 skill review-complete <skillRunId> --json '<review>'
+skill validate coding-review --json
 ```
 
 `skill show` 只返回元数据（`name`, `manifest?`, `readmePath`, `contentLineCount`），不返回 SKILL.md 正文。读取正文需由 agent 在终端对 `readmePath` 执行 `sed -n` 等 shell 命令分段获取。
+
+当前 runtime 没有内置 `skill install` 子命令；skill package 的放置、同步或远程安装
+属于外层分发问题。agent runtime 只审计通过 terminal/session 执行的 discovery、
+run、close、review-complete 和 validate。
 
 一个关键设计点是：skill 执行完成后是否复盘由 agent 判断。harness 提供 `running`、`review_pending`、`closed` 状态和 lessons 写入位置，但不把复盘作为固定后置流程强加给所有 skill run。
 
@@ -196,6 +206,10 @@ codeq hover src/run/orchestrator.ts:37:18 --json
 ```
 
 `codeq` 补齐 `rg` 和直接读文件不擅长的语义查询能力，例如真实定义、引用点、document symbols、hover 类型信息和 language server diagnostics。当前实现保持 stateless，每次命令启动 language server 或 compiler fallback，执行查询后关闭。
+
+当前 `codeq` 是只读查询 CLI，`--apply` 会被解析层拒绝。未来如果增加 rename 或
+code action，也应先以 dry-run `WorkspaceEdit` 摘要形式进入 terminal/session
+review，再由 agent 用普通补丁流程落盘。
 
 ### 4.7 State Storage 与 File Locking
 
@@ -320,7 +334,7 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 | --- | --- |
 | `npm run typecheck` | 通过。 |
 | `npm run build` | 通过。 |
-| `npm test` | 通过，57 个测试文件、565 个测试。 |
+| `npm test` | 通过，57 个测试文件、573 个测试。 |
 
 工程成熟度可以从几个方面观察：
 
@@ -389,7 +403,7 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 | 文档与实现快速变化 | README、docs、system prompt 已覆盖 terminal/session、MCP、IM、skill、TUI、state layout、sub-agent domain 和 recovery/replay；这些边界仍会继续演进。 | 每次功能落地后同步更新对应设计文档和 project report。 |
 | 状态持久化仍需持续校准 | 主路径已经把 IM、environment、skill-runs、debug artifacts 和 session logs 收敛到 run-scoped 目录；但所有 CLI fallback、人工调试路径和锁粒度仍要持续验证。 | 用集成测试覆盖 run-scoped env 注入、多 CLI 共用 state root、并发写、resume/replay。 |
 | terminal/session 约束对模型要求高 | 模型必须学会通过 shell 调 skill/codeq/im 等 CLI，并在 heredoc、前台 stdin consumer、`--text-stdin` 和 session 管理之间做正确选择，而不是直接获得 typed business tool affordance。 | 在 system prompt 和 examples 中强化 heredoc / `--text-stdin` / session observe 的边界，并避免示例污染大生成文件路径。 |
-| 普通 `event` wait 容易膨胀 | 当前 `io_wait` 统一采用 priority-based wait；用户消息高优先级可打断窄 wait，但 session pump 等低级事件仍可能造成事件量膨胀和“刚 wait 就被普通事件唤醒”的观感。 | 治理 event taxonomy：保留高优先级唤醒语义，同时对低价值 session noise 做降级、聚合或 persistent fact 化。 |
+| 低级 session noise 仍需观察 | 当前 `io_wait` 采用 priority-based wait；默认 wait 已提升为 meaningful event 阈值，level-0 `session_output_available` 不再唤醒普通 wait，用户消息仍以 level `100` 打断窄 wait。剩余风险在于长期运行 session 的事件体量和 reminder 可读性。 | 持续治理 event taxonomy：对低价值 session noise 做去重、聚合或 persistent fact 化，并用 TUI/debugger 展示 wake reason。 |
 | review 目前默认 approve | 默认 runtime 仍是 demo approve，但已有纯 policy evaluator / ToolPolicyReviewer 可作为产品模式基础。 | 增加显式配置开关、workspace policy、网络/文件权限和人工确认模式。 |
 | TUI 仍偏观察 | 当前 TUI 已有 conversation/loop/detail/PTY panes 和 read-only fixed viewport，但 runtime control、run browser、eval viewer 仍可增强。 | 在不让 TUI 成为第二个 orchestrator 的前提下，增加 approval 操作、run compare、eval viewer 和更稳定的 PTY fit 提示。 |
 

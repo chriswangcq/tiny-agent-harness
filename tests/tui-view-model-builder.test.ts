@@ -766,6 +766,16 @@ describe("ViewModelBuilder", () => {
     });
     expect(view.loop.find((frame) => frame.title === "IO wait satisfied")!.summary)
       .toContain("[user@cli] hello");
+    expect(view.loop.find((frame) => frame.title === "IO wait satisfied")!.detail)
+      .toContain("## wake reason");
+    expect(view.loop.find((frame) => frame.title === "IO wait satisfied")!.detail)
+      .toContain('"eventLevel": 100');
+    expect(view.loop.find((frame) => frame.title === "IO wait satisfied")!.detail)
+      .toContain('"minLevel": 10');
+    expect(view.loop.find((frame) => frame.title === "IO wait satisfied")!.detail)
+      .toContain("## wait");
+    expect(view.loop.find((frame) => frame.title === "IO wait satisfied")!.detail)
+      .toContain("## event");
     expect(view.loop.at(-1)).toMatchObject({
       phase: "environment",
       title: "2 events consumed",

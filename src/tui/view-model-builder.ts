@@ -15,6 +15,11 @@ import type {
   UserMessage,
   AgentMessage,
   EnvironmentEvent,
+  IoWaitRequest,
+} from "../types/environment.js";
+import {
+  environmentEventLevel,
+  ioWaitMinLevel,
 } from "../types/environment.js";
 import type {
   TuiViewModel,
@@ -356,7 +361,11 @@ export class ViewModelBuilder {
           status: "ok",
           title: "IO wait satisfied",
           summary: formatEnvironmentEventSummary(event.event),
-          detail: JSON.stringify(event.event, null, 2),
+          detail: formatDetail([
+            ["wake reason", formatIoWaitWakeReason(event.wait, event.event)],
+            ["wait", event.wait],
+            ["event", event.event],
+          ]),
         });
         break;
 
@@ -590,6 +599,22 @@ function formatEnvironmentEventSummary(event: EnvironmentEvent): string {
     case "session_unsynced":
       return `event=${event.id} ${event.kind} session=${event.session}`;
   }
+}
+
+function formatIoWaitWakeReason(
+  wait: IoWaitRequest,
+  event: EnvironmentEvent,
+): Record<string, unknown> {
+  const eventLevel = environmentEventLevel(event);
+  const minLevel = ioWaitMinLevel(wait);
+  return {
+    eventId: event.id,
+    eventKind: event.kind,
+    source: event.source,
+    eventLevel,
+    minLevel,
+    prioritySatisfied: eventLevel >= minLevel,
+  };
 }
 
 function truncateForSummary(text: string, maxLength = 80): string {
