@@ -893,7 +893,12 @@ describe("RunOrchestrator", () => {
       },
     ]);
     expect(histories[1]).toEqual([
-      { type: "tool_call", toolCall, thinking: { content: "need terminal" } },
+      {
+        type: "tool_call",
+        toolCall,
+        thinking: { content: "need terminal" },
+        provenance: { kind: "runtime_effect", stepIndex: 0 },
+      },
       {
         type: "observation",
         observation: expect.objectContaining({
@@ -901,6 +906,7 @@ describe("RunOrchestrator", () => {
           result: "ok",
           request: "terminal_write",
         }),
+        provenance: { kind: "runtime_effect", stepIndex: 0 },
       },
     ]);
   });
@@ -972,6 +978,7 @@ describe("RunOrchestrator", () => {
             }),
           }),
         },
+        provenance: { kind: "runtime_effect", stepIndex: 0 },
       },
       expect.objectContaining({ type: "observation" }),
     ]);
@@ -1045,10 +1052,13 @@ describe("RunOrchestrator", () => {
     await orchestrator.run();
 
     expect(terminalCalls).toHaveLength(1);
-    expect(histories[1]).toContainEqual({
-      type: "observation",
-      observation: rejected,
-    });
+    expect(histories[1]).toContainEqual(
+      expect.objectContaining({
+        type: "observation",
+        observation: rejected,
+        provenance: { kind: "runtime_effect", stepIndex: 0 },
+      }),
+    );
   });
 
   it("appends a synthetic observation after invalid model output and recovers on the next model step", async () => {

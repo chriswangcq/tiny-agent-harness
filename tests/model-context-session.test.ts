@@ -254,6 +254,12 @@ describe("ModelContextSession", () => {
           condition: { kind: "new_user_message", channel: "default" },
         },
         thinking: { content: "Pause." },
+        provenance: {
+          kind: "transcript_replay",
+          stepIndex: 4,
+          eventType: "io_wait_started",
+          eventTimestamp: "2026-06-01T00:00:00.000Z",
+        },
       },
     ]);
 

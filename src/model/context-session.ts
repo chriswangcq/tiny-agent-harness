@@ -15,20 +15,40 @@ import type {
   ModelContextWindowPort,
 } from "./context-window.js";
 
-export type ModelContextItem =
-  | { type: "tool_call"; toolCall: InternalToolCall; thinking?: AgentThinking }
+export type ModelContextItemProvenance =
   | {
+      kind: "runtime_effect";
+      stepIndex: number;
+    }
+  | {
+      kind: "transcript_replay";
+      stepIndex: number;
+      eventType: string;
+      eventTimestamp: string;
+    };
+
+type ModelContextItemBase = {
+  provenance?: ModelContextItemProvenance;
+};
+
+export type ModelContextItem =
+  | ({
+      type: "tool_call";
+      toolCall: InternalToolCall;
+      thinking?: AgentThinking;
+    } & ModelContextItemBase)
+  | ({
       type: "io_wait_call";
       toolCallId: string;
       wait: IoWaitRequest;
       thinking?: AgentThinking;
-    }
-  | {
+    } & ModelContextItemBase)
+  | ({
       type: "observation";
       observation: ToolObservation;
       toolCallId?: string;
-    }
-  | { type: "environment_reminder"; content: string };
+    } & ModelContextItemBase)
+  | ({ type: "environment_reminder"; content: string } & ModelContextItemBase);
 
 export type ModelContextSessionState = {
   task: string;

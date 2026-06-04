@@ -153,6 +153,12 @@ describe("reconstructModelContextItemsFromTranscript", () => {
         type: "tool_call",
         toolCall,
         thinking: { content: "inspect terminal" },
+        provenance: {
+          kind: "transcript_replay",
+          stepIndex: 0,
+          eventType: "tool_execution_finished",
+          eventTimestamp: "2026-05-28T00:00:02.000Z",
+        },
       },
       {
         type: "observation",
@@ -161,12 +167,24 @@ describe("reconstructModelContextItemsFromTranscript", () => {
           message: "ok",
           recoverable: false,
         },
+        provenance: {
+          kind: "transcript_replay",
+          stepIndex: 0,
+          eventType: "tool_execution_finished",
+          eventTimestamp: "2026-05-28T00:00:02.000Z",
+        },
       },
       {
         type: "io_wait_call",
         toolCallId: "fim-call-run-123-1",
         wait: waitTurn.wait,
         thinking: { content: "wait" },
+        provenance: {
+          kind: "transcript_replay",
+          stepIndex: 1,
+          eventType: "io_wait_started",
+          eventTimestamp: "2026-05-28T00:00:04.000Z",
+        },
       },
       {
         type: "observation",
@@ -175,6 +193,12 @@ describe("reconstructModelContextItemsFromTranscript", () => {
           kind: "io_wait",
           recoverable: false,
         }),
+        provenance: {
+          kind: "transcript_replay",
+          stepIndex: 1,
+          eventType: "io_wait_satisfied",
+          eventTimestamp: "2026-05-28T00:00:05.000Z",
+        },
       },
     ]);
   });

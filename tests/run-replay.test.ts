@@ -155,8 +155,15 @@ describe("run replay/eval case builders", () => {
       },
     });
     expect(replayCase.modelContextItems).toEqual([
-      expect.objectContaining({ type: "tool_call", toolCall }),
-      expect.objectContaining({ type: "observation" }),
+      expect.objectContaining({
+        type: "tool_call",
+        toolCall,
+        provenance: expect.objectContaining({ kind: "transcript_replay" }),
+      }),
+      expect.objectContaining({
+        type: "observation",
+        provenance: expect.objectContaining({ kind: "transcript_replay" }),
+      }),
     ]);
   });
 
