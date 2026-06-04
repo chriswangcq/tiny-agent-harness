@@ -317,6 +317,31 @@ type RunEvent =
       timestamp: string;
     }
   | {
+      type: "model_decision_recorded";
+      stepIndex: number;
+      decision: {
+        schemaVersion: 1;
+        decisionId: string;
+        stepIndex: number;
+        kind: "tool_call" | "io_wait" | "invalid_output";
+        thinking: {
+          contentChars: number;
+          contentBytes: number;
+          promptRef?: RunArtifactRef;
+          traceRef?: RunArtifactRef;
+        };
+        rawDecision?: {
+          bytes: number;
+          sha256: string;
+          preview: string;
+        };
+        toolCall?: { id: string; name: ToolName; arguments: TerminalToolInput };
+        ioWait?: IoWaitRequest;
+        invalidOutput?: { message: string; diagnostic?: ModelProtocolDiagnostic };
+      };
+      timestamp: string;
+    }
+  | {
       type: "model_thinking_delta";
       stepIndex: number;
       delta: string;
@@ -338,12 +363,14 @@ type RunEvent =
   | {
       type: "io_wait_started";
       stepIndex: number;
+      decisionId?: string;
       wait: IoWaitRequest;
       timestamp: string;
     }
   | {
       type: "io_wait_satisfied";
       stepIndex: number;
+      decisionId?: string;
       wait: IoWaitRequest;
       event: EnvironmentEvent;
       timestamp: string;
@@ -362,6 +389,7 @@ type RunEvent =
   | {
       type: "tool_call_validated";
       stepIndex: number;
+      decisionId?: string;
       toolCall: InternalToolCall;
       result: ToolCallValidation;
       timestamp: string;
@@ -369,12 +397,14 @@ type RunEvent =
   | {
       type: "tool_review_requested";
       stepIndex: number;
+      decisionId?: string;
       request: ToolRequest;
       timestamp: string;
     }
   | {
       type: "tool_reviewed";
       stepIndex: number;
+      decisionId?: string;
       request: ToolRequest;
       decision: ToolReviewDecision;
       timestamp: string;
@@ -382,12 +412,14 @@ type RunEvent =
   | {
       type: "tool_execution_started";
       stepIndex: number;
+      decisionId?: string;
       request: ToolRequest;
       timestamp: string;
     }
   | {
       type: "tool_execution_finished";
       stepIndex: number;
+      decisionId?: string;
       request: ToolRequest;
       observation: TerminalObservation | SessionListObservation | AgentObservation;
       timestamp: string;
@@ -395,6 +427,7 @@ type RunEvent =
   | {
       type: "observation_appended";
       stepIndex: number;
+      decisionId?: string;
       observation: AgentObservation;
       timestamp: string;
     }
@@ -407,6 +440,8 @@ type RunEvent =
 ```
 
 Before recording `model_output_received`, the orchestrator moves large raw debug payloads out of model output when possible. Today this applies to `thinking.raw.prompt`: the prompt text is written under the run directory as a debug artifact, and transcript/model output keep only a `promptRef` with `path`, `relativePath`, `bytes`, and `sha256`. This keeps `transcript.jsonl` and `session.json` useful for replay without repeatedly embedding full FIM prompts into model context.
+
+Immediately after `model_output_received`, current runtime records `model_decision_recorded`. This is the compact durable decision fact for the step: `decisionId`, decision kind, tool name/arguments or `io_wait`, invalid-output diagnostic, raw decision hash/preview, and `thinking.raw.promptRef` / `thinking.raw.traceRef` when present. Later validation, review, tool execution, synthetic observation, and `io_wait` events emitted by the orchestrator include the same `decisionId` so projection and replay code can correlate facts without parsing the full model output payload.
 
 ## Orchestrator Loop
 

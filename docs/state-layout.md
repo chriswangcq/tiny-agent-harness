@@ -122,6 +122,8 @@ Resume 只恢复 run state、transcript 和 model context，不恢复旧 PTY 进
 
 `debug/thinking/` 保存 streamed thinking progress trace。当前 active run path 不再把每个 thinking chunk 写成 `model_thinking_delta` 主 transcript event，而是在最终 `model_output_received.output.thinking.raw.traceRef` 中保留 artifact 引用。`model_thinking_delta` 只保留为历史 transcript 兼容事件。
 
+`transcript.jsonl` 同时写入 compact `model_decision_recorded` 事件，引用上述 `promptRef` / `traceRef`，并记录 `decisionId`、decision kind、tool args / `io_wait` / invalid-output diagnostic 与 raw decision hash/preview。后续 validation、review、tool、observation 和 `io_wait` 事件可用同一个 `decisionId` 串起这次决策的事实链。
+
 ### `launcher/` — 运维日志
 
 TUI 启动器的 stdout/stderr 日志，用于排查 UI 启动问题。不属于 run 状态，可定期清理。

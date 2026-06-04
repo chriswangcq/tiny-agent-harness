@@ -622,6 +622,103 @@ describe("RunOrchestrator", () => {
     });
   });
 
+  it("records structured decision facts and correlates later runtime events", async () => {
+    const toolCall: InternalToolCall = {
+      id: "call-decision-trace",
+      name: "terminal_write",
+      arguments: {
+        expectedInputSeq: 1,
+        text: "pwd\n",
+      },
+    };
+    const thinking = {
+      content: "need terminal",
+      raw: {
+        prompt: "encoded prompt for decision trace",
+        finishReasons: ["stop"],
+      },
+    };
+    const turn: ModelTurn = {
+      kind: "tool_call",
+      toolCall,
+      thinking,
+      rawDecision: "terminal_write",
+    };
+    const output: FimStepOutput = {
+      thinking,
+      rawDecision: turn.rawDecision,
+      turn,
+    };
+    const { orchestrator, transcript } = makeRun({
+      outputs: [output],
+      modelProgress: ["trace part"],
+    });
+
+    await orchestrator.run();
+
+    const events = readTranscript(transcript);
+    const promptPath = path.join(
+      path.dirname(transcript.transcriptFilePath),
+      "debug/prompts/step-0000-thinking.prompt.txt",
+    );
+    const tracePath = path.join(
+      path.dirname(transcript.transcriptFilePath),
+      "debug/thinking/step-0000-thinking.trace.txt",
+    );
+    const decisionEvent = events.find(
+      (event): event is Extract<RunEvent, { type: "model_decision_recorded" }> =>
+        event.type === "model_decision_recorded",
+    );
+    expect(decisionEvent?.decision).toMatchObject({
+      schemaVersion: 1,
+      decisionId: "decision-run-001-0",
+      stepIndex: 0,
+      kind: "tool_call",
+      thinking: {
+        contentChars: "need terminal".length,
+        contentBytes: Buffer.byteLength("need terminal", "utf-8"),
+        promptRef: {
+          path: promptPath,
+          relativePath: path.join("debug", "prompts", "step-0000-thinking.prompt.txt"),
+          bytes: Buffer.byteLength("encoded prompt for decision trace", "utf-8"),
+        },
+        traceRef: {
+          path: tracePath,
+          relativePath: path.join("debug", "thinking", "step-0000-thinking.trace.txt"),
+          bytes: Buffer.byteLength("trace part", "utf-8"),
+        },
+      },
+      rawDecision: {
+        bytes: Buffer.byteLength("terminal_write", "utf-8"),
+        sha256: expect.any(String),
+        preview: "terminal_write",
+      },
+      toolCall: {
+        id: "call-decision-trace",
+        name: "terminal_write",
+        arguments: {
+          expectedInputSeq: 1,
+          text: "pwd\n",
+        },
+      },
+    });
+    expect(events.find((event) => event.type === "tool_call_validated")).toMatchObject({
+      decisionId: "decision-run-001-0",
+    });
+    expect(events.find((event) => event.type === "tool_review_requested")).toMatchObject({
+      decisionId: "decision-run-001-0",
+    });
+    expect(events.find((event) => event.type === "tool_reviewed")).toMatchObject({
+      decisionId: "decision-run-001-0",
+    });
+    expect(events.find((event) => event.type === "tool_execution_started")).toMatchObject({
+      decisionId: "decision-run-001-0",
+    });
+    expect(events.find((event) => event.type === "tool_execution_finished")).toMatchObject({
+      decisionId: "decision-run-001-0",
+    });
+  });
+
   it("compacts model context before model requests when the context threshold is reached", async () => {
     const wait: IoWaitRequest = {
       reason: "awaiting next instruction",
@@ -787,6 +884,7 @@ describe("RunOrchestrator", () => {
       "run_started",
       "model_requested",
       "model_output_received",
+      "model_decision_recorded",
       "io_wait_started",
       "io_wait_satisfied",
       "model_requested",
