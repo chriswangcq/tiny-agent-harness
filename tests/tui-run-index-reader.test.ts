@@ -71,6 +71,7 @@ describe("scanRunIndex", () => {
         problemFrameCount: 0,
         conversationCount: 0,
         sessionCount: 0,
+        taskPreview: "test task",
       });
     });
   });
@@ -164,6 +165,106 @@ describe("scanRunIndex", () => {
       });
       expect(rows[0]!.durationMs).toBeUndefined();
       expect(rows[0]!.failureSummary).toBeUndefined();
+      expect(rows[0]!.taskPreview).toBeUndefined();
+    });
+  });
+
+  describe("task preview", () => {
+    it("derives taskPreview from state.task", () => {
+      withTempDir((dir) => {
+        writeRunState(dir, "run-1", makeState({
+          runId: "run-1",
+          task: "Add task preview to durable run index rows",
+        }));
+
+        const rows = scanRunIndex(dir);
+        expect(rows[0]!.taskPreview).toBe("Add task preview to durable run index rows");
+      });
+    });
+
+    it("returns undefined for empty task", () => {
+      withTempDir((dir) => {
+        writeRunState(dir, "run-1", makeState({
+          runId: "run-1",
+          task: "",
+        }));
+
+        const rows = scanRunIndex(dir);
+        expect(rows[0]!.taskPreview).toBeUndefined();
+      });
+    });
+
+    it("returns undefined for whitespace-only task", () => {
+      withTempDir((dir) => {
+        writeRunState(dir, "run-1", makeState({
+          runId: "run-1",
+          task: "   ",
+        }));
+
+        const rows = scanRunIndex(dir);
+        expect(rows[0]!.taskPreview).toBeUndefined();
+      });
+    });
+
+    it("returns undefined when parsed state omits task", () => {
+      withTempDir((dir) => {
+        writeRunState(dir, "run-1", {
+          runId: "run-1",
+          status: "running",
+          cwd: "/repo",
+          createdAt: "2026-06-01T00:00:00.000Z",
+          updatedAt: "2026-06-01T00:01:00.000Z",
+          stepIndex: 5,
+          transcriptPath: "/tmp/run-1/transcript.jsonl",
+        } as AgentRunStateData);
+
+        const rows = scanRunIndex(dir);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.taskPreview).toBeUndefined();
+      });
+    });
+
+    it("truncates long task with ASCII ellipsis", () => {
+      withTempDir((dir) => {
+        const longTask = "A".repeat(200);
+        writeRunState(dir, "run-1", makeState({
+          runId: "run-1",
+          task: longTask,
+        }));
+
+        const rows = scanRunIndex(dir);
+        expect(rows[0]!.taskPreview).toBeDefined();
+        expect(rows[0]!.taskPreview!.length).toBeLessThanOrEqual(83); // 80 chars + "..."
+        expect(rows[0]!.taskPreview!).toMatch(/\.\.\.$/);
+        expect(rows[0]!.taskPreview!).toContain("A");
+      });
+    });
+
+    it("does not truncate task exactly at the limit", () => {
+      withTempDir((dir) => {
+        const task80 = "A".repeat(80);
+        writeRunState(dir, "run-1", makeState({
+          runId: "run-1",
+          task: task80,
+        }));
+
+        const rows = scanRunIndex(dir);
+        expect(rows[0]!.taskPreview).toBe(task80);
+        expect(rows[0]!.taskPreview!).not.toMatch(/\.\.\.$/);
+      });
+    });
+
+    it("truncates task one over the limit", () => {
+      withTempDir((dir) => {
+        const task81 = "A".repeat(81);
+        writeRunState(dir, "run-1", makeState({
+          runId: "run-1",
+          task: task81,
+        }));
+
+        const rows = scanRunIndex(dir);
+        expect(rows[0]!.taskPreview).toBe("A".repeat(80) + "...");
+      });
     });
   });
 });

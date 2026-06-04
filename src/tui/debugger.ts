@@ -47,6 +47,7 @@ export type RunIndexRow = {
   conversationCount: number;
   sessionCount: number;
   failureSummary?: string;
+  taskPreview?: string;
 };
 
 export type RunComparisonChange = {

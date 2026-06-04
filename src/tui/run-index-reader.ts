@@ -89,6 +89,7 @@ function buildRowFromState(
     problemFrameCount: 0,
     conversationCount: 0,
     sessionCount: 0,
+    taskPreview: makeTaskPreview(state.task),
   };
 
   if (state.createdAt) row.startedAt = state.createdAt;
@@ -102,6 +103,23 @@ function buildRowFromState(
   }
 
   return row;
+}
+
+/** Maximum task length before truncation. */
+const TASK_PREVIEW_MAX = 80;
+
+/**
+ * Derive a deterministic short preview from a task string.
+ *
+ * Returns undefined when task is empty or whitespace-only.
+ * Long tasks are truncated to TASK_PREVIEW_MAX characters followed by "...".
+ */
+export function makeTaskPreview(task: unknown): string | undefined {
+  if (typeof task !== "string") return undefined;
+  const trimmed = task.trim();
+  if (trimmed.length === 0) return undefined;
+  if (trimmed.length <= TASK_PREVIEW_MAX) return trimmed;
+  return trimmed.slice(0, TASK_PREVIEW_MAX) + "...";
 }
 
 export function timestampMs(timestamp: string | undefined): number {
