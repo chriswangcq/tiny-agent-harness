@@ -350,3 +350,187 @@ function timestampMs(timestamp: string | undefined): number {
   const ms = Date.parse(timestamp);
   return Number.isFinite(ms) ? ms : 0;
 }
+
+// Run browser view model.
+
+export type RunBrowserOptions = {
+  selectedRunId?: string;
+  selectedIndex?: number;
+};
+
+export type RunBrowserView = {
+  rows: RunBrowserRow[];
+  totalCount: number;
+  isEmpty: boolean;
+  selected?: RunBrowserSelected;
+};
+
+export type RunBrowserRow = {
+  runId: string;
+  index: number;
+  statusDisplay: string;
+  stepDisplay: string;
+  durationDisplay: string;
+  taskPreview: string;
+  cwdPreview: string;
+  failureSummary?: string;
+  isSelected: boolean;
+};
+
+export type RunBrowserSelected = {
+  runId: string;
+  index: number;
+  detail: RunBrowserDetail;
+};
+
+export type RunBrowserDetail = {
+  runId: string;
+  status: string;
+  stepIndex: number;
+  cwd: string;
+  startedAt?: string;
+  updatedAt?: string;
+  durationDisplay: string;
+  frameCount: number;
+  problemFrameCount: number;
+  conversationCount: number;
+  sessionCount: number;
+  taskPreview?: string;
+  failureSummary?: string;
+};
+
+/**
+ * Build a pure, read-only run browser view model from RunIndexRow data.
+ *
+ * Returns a structured view with formatted display strings, an optional
+ * selected row with detail, and empty-list state. No filesystem I/O,
+ * no runtime mutation, no external reads.
+ */
+export function buildRunBrowserView(
+  rows: readonly RunIndexRow[],
+  options: RunBrowserOptions = {},
+): RunBrowserView {
+  if (rows.length === 0) {
+    return { rows: [], totalCount: 0, isEmpty: true };
+  }
+
+  const selectedIndex = resolveSelectedIndex(rows, options);
+  const selected =
+    selectedIndex !== undefined
+      ? buildSelected(rows, selectedIndex)
+      : undefined;
+
+  const browserRows: RunBrowserRow[] = rows.map((row, idx) => ({
+    runId: row.runId,
+    index: idx,
+    statusDisplay: formatStatusDisplay(row.status),
+    stepDisplay: `step ${row.stepIndex}`,
+    durationDisplay: formatDurationDisplay(row.durationMs),
+    taskPreview: row.taskPreview ?? "",
+    cwdPreview: formatCwdPreview(row.cwd),
+    failureSummary: row.failureSummary,
+    isSelected: idx === selectedIndex,
+  }));
+
+  return {
+    rows: browserRows,
+    totalCount: rows.length,
+    isEmpty: false,
+    selected,
+  };
+}
+
+function resolveSelectedIndex(
+  rows: readonly RunIndexRow[],
+  options: RunBrowserOptions,
+): number | undefined {
+  if (options.selectedRunId !== undefined) {
+    const byId = rows.findIndex((r) => r.runId === options.selectedRunId);
+    if (byId >= 0) return byId;
+    // unknown selection fallback: return undefined (no selection)
+    return undefined;
+  }
+  if (options.selectedIndex !== undefined) {
+    if (options.selectedIndex >= 0 && options.selectedIndex < rows.length) {
+      return options.selectedIndex;
+    }
+    // unknown selection fallback: return undefined (no selection)
+    return undefined;
+  }
+  return undefined;
+}
+
+function buildSelected(
+  rows: readonly RunIndexRow[],
+  index: number,
+): RunBrowserSelected {
+  const row = rows[index]!;
+  return {
+    runId: row.runId,
+    index,
+    detail: {
+      runId: row.runId,
+      status: row.status,
+      stepIndex: row.stepIndex,
+      cwd: row.cwd,
+      startedAt: row.startedAt,
+      updatedAt: row.updatedAt,
+      durationDisplay: formatDurationDisplay(row.durationMs),
+      frameCount: row.frameCount,
+      problemFrameCount: row.problemFrameCount,
+      conversationCount: row.conversationCount,
+      sessionCount: row.sessionCount,
+      taskPreview: row.taskPreview,
+      failureSummary: row.failureSummary,
+    },
+  };
+}
+
+/** Maximum path segments to show in cwd preview. */
+const CWD_PREVIEW_SEGMENTS = 2;
+
+function formatCwdPreview(cwd: string): string {
+  if (!cwd) return "";
+  // Normalize separators and remove trailing slashes
+  const cleaned = cwd.replace(/[/\\]+/g, "/").replace(/\/+$/u, "");
+  if (!cleaned) return "";
+  const segments = cleaned.split("/").filter(Boolean);
+  if (segments.length === 0) return "/";
+  // Show last N segments prefixed with ".../"
+  if (segments.length > CWD_PREVIEW_SEGMENTS) {
+    return ".../" + segments.slice(-CWD_PREVIEW_SEGMENTS).join("/");
+  }
+  // Absolute path has leading "/"
+  return (cwd.startsWith("/") ? "/" : "") + segments.join("/");
+}
+
+const STATUS_DISPLAY: Record<string, string> = {
+  created: "created",
+  running: "running",
+  waiting_for_model: "wait:model",
+  waiting_for_review: "wait:review",
+  waiting_for_tool: "wait:tool",
+  waiting_for_io: "wait:io",
+  failed: "FAILED",
+  cancelled: "cancelled",
+};
+
+function formatStatusDisplay(status: string): string {
+  return STATUS_DISPLAY[status] ?? status;
+}
+
+function formatDurationDisplay(durationMs: number | undefined): string {
+  if (durationMs === undefined || durationMs < 0) return "--";
+  const totalSec = Math.floor(durationMs / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const totalMin = Math.floor(totalSec / 60);
+  const remainingSec = totalSec % 60;
+  if (totalMin < 60) {
+    if (remainingSec === 0) return `${totalMin}m`;
+    return `${totalMin}m ${remainingSec}s`;
+  }
+  const hours = Math.floor(totalMin / 60);
+  const remainingMin = totalMin % 60;
+  if (remainingMin === 0) return `${hours}h`;
+  return `${hours}h ${remainingMin}m`;
+}
