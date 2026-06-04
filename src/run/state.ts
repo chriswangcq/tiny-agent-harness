@@ -220,6 +220,9 @@ export class AgentRunState {
       case "model_decision_recorded":
         return this.next({ updatedAt: now });
 
+      case "model_usage_recorded":
+        return this.next({ updatedAt: now });
+
       case "tool_call_validated": {
         this.assertStatus("running", event.type);
         if (!s.pendingToolCall) {

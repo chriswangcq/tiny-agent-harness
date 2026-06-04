@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { RunError, RunEvent } from "../types/run.js";
 import type { ModelDecisionTrace, RunArtifactRef } from "../types/run.js";
+import type { NormalizedFimUsage } from "../types/model.js";
 import type {
   AgentThinking,
   FimStepOutput,
@@ -211,16 +212,28 @@ export class RunOrchestrator {
           turn: output.turn,
           timestamp: this.now(),
         });
+        const decisionTrace = buildModelDecisionTrace({
+          runId: this.state.data.runId,
+          stepIndex: modelStepIndex,
+          output,
+        });
         await this.record({
           type: "model_decision_recorded",
           stepIndex: modelStepIndex,
-          decision: buildModelDecisionTrace({
-            runId: this.state.data.runId,
-            stepIndex: modelStepIndex,
-            output,
-          }),
+          decision: decisionTrace,
           timestamp: this.now(),
         });
+        if (output.usage) {
+          await this.record({
+            type: "model_usage_recorded",
+            stepIndex: modelStepIndex,
+            decisionId: decisionTrace.decisionId,
+            usage: output.usage,
+            promptRef: decisionTrace.thinking.promptRef,
+            traceRef: decisionTrace.thinking.traceRef,
+            timestamp: this.now(),
+          });
+        }
         continue;
       }
 
