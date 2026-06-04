@@ -242,10 +242,40 @@ export class ViewModelBuilder {
       case "tool_reviewed": {
           const decision = event.decision;
           const warnings = decision.warnings ?? [];
-          const summaryParts = [decision.reason ?? ""];
+          const findings = decision.findings ?? [];
+          const summaryParts: string[] = [];
+
+          // Truncate long reason messages in display summary
+          const MAX_REASON_DISPLAY = 120;
+          const reasonText = decision.reason ?? "";
+          const displayReason =
+            reasonText.length > MAX_REASON_DISPLAY
+              ? reasonText.slice(0, MAX_REASON_DISPLAY) + "..."
+              : reasonText;
+          if (displayReason) {
+            summaryParts.push(displayReason);
+          }
           if (warnings.length > 0) {
             summaryParts.push(`warnings=${warnings.length}`);
           }
+          if (findings.length > 0) {
+            const counts = findings.reduce(
+              (acc, f) => {
+                acc[f.severity] = (acc[f.severity] ?? 0) + 1;
+                return acc;
+              },
+              {} as Record<string, number>,
+            );
+            const countText = Object.entries(counts)
+              .sort(([a], [b]) => {
+                const order: Record<string, number> = { error: 0, warning: 1, info: 2 };
+                return (order[a] ?? 9) - (order[b] ?? 9);
+              })
+              .map(([sev, count]) => `${sev}=${count}`)
+              .join(" ");
+            summaryParts.push(`findings[${countText}]`);
+          }
+
           this.pushFrame({
             stepIndex: event.stepIndex,
             timestamp: event.timestamp,
@@ -257,6 +287,9 @@ export class ViewModelBuilder {
             detail: formatDetail([
               ["request", event.request],
               ["decision", decision],
+              ...(findings.length > 0
+                ? [["risk findings", findings]] as Array<[string, unknown]>
+                : []),
             ]),
           });
           break;

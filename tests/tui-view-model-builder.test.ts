@@ -1214,4 +1214,145 @@ describe("ViewModelBuilder", () => {
     expect(reviewedFrame!.reviewDecision!.warnings).toBeUndefined();
   });
 
+
+  it("surfaces findings count in review summary when policy findings are present", () => {
+    const builder = builderWithRunStarted();
+    const decision = {
+      status: "approved" as const,
+      reason: "Approved by tool policy with 2 warning(s).",
+      reviewer: "tool-policy",
+      warnings: ["Network transfer detected"],
+      findings: [
+        { code: "warning_network_transfer", severity: "warning" as const, message: "Network transfer detected" },
+        { code: "dangerous_force_push", severity: "error" as const, message: "Force push can rewrite remote history" },
+      ],
+    };
+
+    builder.applyEvent({
+      type: "tool_review_requested",
+      stepIndex: 1,
+      request: request(),
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "tool_reviewed",
+      stepIndex: 1,
+      request: request(),
+      decision,
+      timestamp: LATER,
+    });
+
+    const reviewedFrame = builder
+      .getViewModel()
+      .loop.find((frame) => frame.phase === "review" && frame.status === "ok");
+    expect(reviewedFrame).toBeDefined();
+    expect(reviewedFrame!.summary).toContain("Approved by tool policy with 2 warning(s).");
+    expect(reviewedFrame!.summary).toContain("warnings=1");
+    expect(reviewedFrame!.summary).toContain("findings[error=1 warning=1]");
+    // Detail should include risk findings section
+    expect(reviewedFrame!.detail).toContain("## risk findings");
+    expect(reviewedFrame!.detail).toContain("dangerous_force_push");
+  });
+
+  it("truncates long review reason in summary display", () => {
+    const builder = builderWithRunStarted();
+    const longReason = "A".repeat(200);
+    const decision = {
+      status: "approved" as const,
+      reason: longReason,
+      reviewer: "tool-policy",
+    };
+
+    builder.applyEvent({
+      type: "tool_review_requested",
+      stepIndex: 1,
+      request: request(),
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "tool_reviewed",
+      stepIndex: 1,
+      request: request(),
+      decision,
+      timestamp: LATER,
+    });
+
+    const reviewedFrame = builder
+      .getViewModel()
+      .loop.find((frame) => frame.phase === "review" && frame.status === "ok");
+    expect(reviewedFrame).toBeDefined();
+    // Summary should be truncated to 120 chars + "..."
+    expect(reviewedFrame!.summary.length).toBeLessThanOrEqual(124);
+    expect(reviewedFrame!.summary).toContain("...");
+    // Detail should still have full reason
+    expect(reviewedFrame!.detail).toContain(longReason);
+  });
+
+  it("omits findings section when no findings are present", () => {
+    const builder = builderWithRunStarted();
+    const decision = {
+      status: "approved" as const,
+      reason: "Safe command",
+      reviewer: "always-approve",
+    };
+
+    builder.applyEvent({
+      type: "tool_review_requested",
+      stepIndex: 1,
+      request: request(),
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "tool_reviewed",
+      stepIndex: 1,
+      request: request(),
+      decision,
+      timestamp: LATER,
+    });
+
+    const reviewedFrame = builder
+      .getViewModel()
+      .loop.find((frame) => frame.phase === "review" && frame.status === "ok");
+    expect(reviewedFrame).toBeDefined();
+    expect(reviewedFrame!.summary).toBe("Safe command");
+    expect(reviewedFrame!.summary).not.toContain("findings");
+    expect(reviewedFrame!.detail).not.toContain("## risk findings");
+  });
+
+  it("shows findings with mixed severities in correct order (error first)", () => {
+    const builder = builderWithRunStarted();
+    const decision = {
+      status: "approved" as const,
+      reason: "Approved.",
+      reviewer: "tool-policy",
+      findings: [
+        { code: "safe_terminal_write", severity: "info" as const, message: "Safe" },
+        { code: "warning_network_transfer", severity: "warning" as const, message: "Warning1" },
+        { code: "dangerous_force_push", severity: "error" as const, message: "Error1" },
+        { code: "warning_git_push", severity: "warning" as const, message: "Warning2" },
+      ],
+    };
+
+    builder.applyEvent({
+      type: "tool_review_requested",
+      stepIndex: 1,
+      request: request(),
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "tool_reviewed",
+      stepIndex: 1,
+      request: request(),
+      decision,
+      timestamp: LATER,
+    });
+
+    const reviewedFrame = builder
+      .getViewModel()
+      .loop.find((frame) => frame.phase === "review" && frame.status === "ok");
+    expect(reviewedFrame).toBeDefined();
+    // Error should come before warning, then info
+    expect(reviewedFrame!.summary).toContain("findings[error=1 warning=2 info=1]");
+  });
+
 });
