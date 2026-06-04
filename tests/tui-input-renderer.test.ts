@@ -649,6 +649,79 @@ describe("TUI input rendering", () => {
     expect(model.conversation.contentLines.join("\n")).not.toContain("┌");
   });
 
+  it("uses the selected loop frame as the detail source", () => {
+    const state = new TuiInteractionState();
+    const vm = {
+      ...view(),
+      loop: [
+        { ...frame("frame-old"), title: "old frame", detail: "old detail" },
+        { ...frame("frame-new"), title: "new frame", detail: "new detail" },
+      ],
+    };
+    state.selectedLoopFrameId = "frame-old";
+
+    const model = buildTuiPaneModel(vm, state, new Set(), {
+      width: 96,
+      height: 18,
+    });
+    const detail = model.detail?.contentLines.join("\n") ?? "";
+
+    expect(detail).toContain("old frame");
+    expect(detail).toContain("old detail");
+    expect(detail).not.toContain("new frame");
+  });
+
+  it("uses the latest loop frame as the detail source without active selection", () => {
+    const state = new TuiInteractionState();
+    const first = {
+      ...view(),
+      loop: [
+        { ...frame("frame-old"), title: "old frame", detail: "old detail" },
+      ],
+    };
+    const second = {
+      ...first,
+      loop: [
+        ...first.loop,
+        { ...frame("frame-new"), title: "new frame", detail: "new detail" },
+      ],
+    };
+
+    const firstModel = buildTuiPaneModel(first, state, new Set(), {
+      width: 96,
+      height: 18,
+    });
+    const secondModel = buildTuiPaneModel(second, state, new Set(), {
+      width: 96,
+      height: 18,
+    });
+
+    expect(firstModel.detail?.contentLines.join("\n")).toContain("old frame");
+    expect(secondModel.detail?.contentLines.join("\n")).toContain("new frame");
+    expect(secondModel.detail?.contentLines.join("\n")).toContain("new detail");
+  });
+
+  it("falls back to the latest loop detail when selection is stale", () => {
+    const state = new TuiInteractionState();
+    const vm = {
+      ...view(),
+      loop: [
+        { ...frame("frame-old"), title: "old frame", detail: "old detail" },
+        { ...frame("frame-new"), title: "new frame", detail: "new detail" },
+      ],
+    };
+    state.selectedLoopFrameId = "missing-frame";
+
+    const model = buildTuiPaneModel(vm, state, new Set(), {
+      width: 96,
+      height: 18,
+    });
+    const detail = model.detail?.contentLines.join("\n") ?? "";
+
+    expect(detail).toContain("new frame");
+    expect(detail).toContain("new detail");
+  });
+
   it("adds trusted blessed color tags while escaping pane text braces", () => {
     const state = new TuiInteractionState();
     const vm = {

@@ -5,6 +5,7 @@ import {
   compareRuns,
   nextLoopFrameIndex,
   queryLoopFrames,
+  resolveLoopDetailFrame,
   summarizeLoopFrames,
 } from "../src/tui/debugger.js";
 import type { LoopFrame, TuiViewModel } from "../src/tui/types.js";
@@ -98,6 +99,32 @@ describe("TUI debugger loop frame helpers", () => {
         { title: "raw", content: "{bad" },
       ],
     });
+  });
+
+  it("resolves selected loop detail frame before latest fallback", () => {
+    expect(resolveLoopDetailFrame(frames, { selectedFrameId: "f2" })?.id)
+      .toBe("f2");
+  });
+
+  it("resolves latest loop detail frame without an active selection", () => {
+    expect(resolveLoopDetailFrame(frames)?.id).toBe("f3");
+    expect(resolveLoopDetailFrame(frames, { selectedFrameId: "missing" })?.id)
+      .toBe("f3");
+  });
+
+  it("resolves no loop detail frame from empty input", () => {
+    expect(resolveLoopDetailFrame([])).toBeUndefined();
+  });
+
+  it("keeps latest loop detail resolution advancing with appended frames", () => {
+    const first = resolveLoopDetailFrame(frames);
+    const next = resolveLoopDetailFrame([
+      ...frames,
+      frame({ id: "f4", stepIndex: 4, title: "new latest" }),
+    ]);
+
+    expect(first?.id).toBe("f3");
+    expect(next?.id).toBe("f4");
   });
 
   it("summarizes status and phase counts", () => {
