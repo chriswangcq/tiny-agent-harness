@@ -24,6 +24,7 @@ import {
   buildLoopFrameDetail,
   summarizeLoopFrames,
 } from "./debugger.js";
+import type { RunBrowserView } from "./debugger.js";
 import wcwidth from "wcwidth";
 
 const INPUT_BAR_HEIGHT = 5;
@@ -754,14 +755,27 @@ export function buildTuiPaneModel(
     state,
     conversationContentWidth,
   );
+  const runBrowserLines = buildRunBrowserFrameLines(
+    view.runBrowser,
+    conversationContentWidth,
+  );
+  const conversationPaneLines =
+    runBrowserLines.length > 0
+      ? [...conversationLines, ...runBrowserLines]
+      : conversationLines;
+  const selectedConversationLine = conversationSelectedLine(
+    view.conversation,
+    state,
+    conversationContentWidth,
+  );
   const conversation: TuiPaneModel = {
     title: state.pane === "conversation" ? "* Messages *" : "Messages",
     width: layout.conversationPaneWidth,
     height: bodyHeight,
     contentLines: visibleWindow(
-      conversationLines,
+      conversationPaneLines,
       Math.max(0, bodyHeight - 2),
-      conversationSelectedLine(view.conversation, state, conversationContentWidth),
+      selectedConversationLine,
       state.followBottom.conversation,
       scroll.conversation,
     ),
@@ -978,6 +992,61 @@ function renderHeaderLine(run: RunHeaderView): string {
     `cwd=${run.cwd}` +
     (run.model ? ` model=${run.model}` : "")
   );
+}
+
+function buildRunBrowserFrameLines(
+  runBrowser: RunBrowserView | undefined,
+  width: number,
+): string[] {
+  if (!runBrowser) return [];
+  const safeWidth = Math.max(1, width);
+  const lines: string[] = [];
+  lines.push(truncateDisplayText(`Runs (${runBrowser.totalCount})`, safeWidth));
+  if (runBrowser.isEmpty || runBrowser.rows.length === 0) {
+    lines.push("  No runs found", "");
+    return lines;
+  }
+
+  for (const row of runBrowser.rows) {
+    const marker = row.isSelected ? ">" : " ";
+    const preview = row.taskPreview || row.cwdPreview || "-";
+    const failure = row.failureSummary ? " failure" : "";
+    lines.push(
+      truncateDisplayText(
+        `${marker} ${row.runId} ${row.statusDisplay} ${row.stepDisplay} ${row.durationDisplay} ${preview}${failure}`,
+        safeWidth,
+      ),
+    );
+    if (row.isSelected && row.failureSummary) {
+      lines.push(...wrapDisplayText(`  failure: ${row.failureSummary}`, safeWidth));
+    }
+  }
+
+  const detail = runBrowser.selected?.detail;
+  if (detail) {
+    lines.push(
+      ...wrapDisplayText(
+        `  selected: ${detail.runId} ${detail.status} step ${detail.stepIndex}`,
+        safeWidth,
+      ),
+      ...wrapDisplayText(`  cwd: ${detail.cwd}`, safeWidth),
+    );
+    if (detail.taskPreview) {
+      lines.push(...wrapDisplayText(`  task: ${detail.taskPreview}`, safeWidth));
+    }
+    lines.push(
+      ...wrapDisplayText(
+        `  frames: ${detail.frameCount} problems: ${detail.problemFrameCount} messages: ${detail.conversationCount} sessions: ${detail.sessionCount}`,
+        safeWidth,
+      ),
+    );
+    if (detail.failureSummary) {
+      lines.push(...wrapDisplayText(`  failure: ${detail.failureSummary}`, safeWidth));
+    }
+  }
+
+  lines.push("");
+  return lines;
 }
 
 function buildConversationFrameLines(

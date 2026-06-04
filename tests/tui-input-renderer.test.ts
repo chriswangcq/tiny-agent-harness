@@ -733,3 +733,180 @@ describe("TUI input rendering", () => {
     expect(output).not.toContain("step 000");
   });
 });
+
+describe("buildTuiPaneModel runBrowser", () => {
+  it("renders run browser rows when view.runBrowser exists", () => {
+    const state = new TuiInteractionState();
+    const vm = {
+      ...view(),
+      runBrowser: {
+        rows: [
+          {
+            runId: "run-a",
+            index: 0,
+            statusDisplay: "running",
+            stepDisplay: "step 3",
+            durationDisplay: "12s",
+            taskPreview: "npm test",
+            cwdPreview: "/repo",
+            isSelected: false,
+          },
+          {
+            runId: "run-b",
+            index: 1,
+            statusDisplay: "FAILED",
+            stepDisplay: "step 7",
+            durationDisplay: "45s",
+            taskPreview: "npx vitest",
+            cwdPreview: "/tmp",
+            isSelected: true,
+            failureSummary: "1 test failed",
+          },
+        ],
+        totalCount: 2,
+        isEmpty: false,
+      },
+    };
+    state.syncWithView(vm.conversation, vm.loop);
+
+    const model = buildTuiPaneModel(vm, state, new Set(), {
+      width: 96,
+      height: 18,
+    });
+
+    const text = model.conversation.contentLines.join("\n");
+    expect(text).toContain("run-a");
+    expect(text).toContain("running");
+    expect(text).toContain("step 3");
+    expect(text).toContain("12s");
+    expect(text).toContain("npm test");
+    expect(text).toContain("run-b");
+    expect(text).toContain("FAILED");
+    expect(text).toContain("step 7");
+    expect(text).toContain("45s");
+    expect(text).toContain("npx vitest");
+  });
+
+  it("shows selected failure summary in run browser", () => {
+    const state = new TuiInteractionState();
+    const vm = {
+      ...view(),
+      runBrowser: {
+        rows: [
+          {
+            runId: "run-x",
+            index: 0,
+            statusDisplay: "FAILED",
+            stepDisplay: "step 1",
+            durationDisplay: "5s",
+            taskPreview: "cmd",
+            cwdPreview: "/x",
+            isSelected: true,
+            failureSummary: "crash in main",
+          },
+        ],
+        totalCount: 1,
+        isEmpty: false,
+        selected: {
+          runId: "run-x",
+          index: 0,
+          detail: {
+            runId: "run-x",
+            status: "failed",
+            stepIndex: 1,
+            cwd: "/x",
+            durationDisplay: "5s",
+            frameCount: 10,
+            problemFrameCount: 1,
+            conversationCount: 5,
+            sessionCount: 1,
+            failureSummary: "crash in main",
+          },
+        },
+      },
+    };
+    state.syncWithView(vm.conversation, vm.loop);
+
+    const model = buildTuiPaneModel(vm, state, new Set(), {
+      width: 96,
+      height: 18,
+    });
+
+    const text = model.conversation.contentLines.join("\n");
+    expect(text).toContain("crash in main");
+    expect(text).toContain("failed");
+    expect(text).toContain("run-x");
+  });
+
+  it("handles empty runBrowser compactly", () => {
+    const state = new TuiInteractionState();
+    const vm = {
+      ...view(),
+      runBrowser: {
+        rows: [],
+        totalCount: 0,
+        isEmpty: true,
+      },
+    };
+    state.syncWithView(vm.conversation, vm.loop);
+
+    const model = buildTuiPaneModel(vm, state, new Set(), {
+      width: 96,
+      height: 18,
+    });
+
+    const text = model.conversation.contentLines.join("\n");
+    expect(text).toContain("Runs (0)");
+    expect(text).toContain("No runs found");
+  });
+
+  it("does not break layout when runBrowser is undefined", () => {
+    const state = new TuiInteractionState();
+    const vm = view();
+    state.syncWithView(vm.conversation, vm.loop);
+
+    const model = buildTuiPaneModel(vm, state, new Set(), {
+      width: 96,
+      height: 18,
+    });
+
+    expect(model.header).toContain("run=run-1");
+    expect(model.conversation.title).toBe("* Messages *");
+    expect(model.pty?.title).toBe("PTY (read only)");
+    expect(model.pty?.contentLines).toContain("pty tail");
+  });
+
+  it("renderTuiFrame output includes run browser text", () => {
+    const state = new TuiInteractionState();
+    const vm = {
+      ...view(),
+      runBrowser: {
+        rows: [
+          {
+            runId: "run-z",
+            index: 0,
+            statusDisplay: "ok",
+            stepDisplay: "step 5",
+            durationDisplay: "2s",
+            taskPreview: "echo hi",
+            cwdPreview: "/home",
+            isSelected: false,
+          },
+        ],
+        totalCount: 1,
+        isEmpty: false,
+      },
+    };
+    state.syncWithView(vm.conversation, vm.loop);
+
+    const output = renderTuiFrame(
+      vm,
+      state,
+      new Set(),
+      { width: 96, height: 18 },
+    ).join("\n");
+
+    expect(output).toContain("run-z");
+    expect(output).toContain("echo hi");
+  });
+});
