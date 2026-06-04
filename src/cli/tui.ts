@@ -1,6 +1,25 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { TuiController } from "../tui/controller.js";
+import type { TuiControllerOptions } from "../tui/controller.js";
+
+export type TuiControllerOptionInput = {
+  runDir: string;
+  runsDir: string;
+  channel?: string;
+  env?: Record<string, string | undefined>;
+};
+
+export function buildTuiControllerOptions(
+  input: TuiControllerOptionInput,
+): TuiControllerOptions {
+  return {
+    runDir: input.runDir,
+    runsDir: input.runsDir,
+    imBaseDir: path.join(input.runDir, "im"),
+    channel: input.channel ?? input.env?.TAH_IM_CHANNEL ?? "default",
+  };
+}
 
 export function runTui(args: string[]): void {
   // Parse --run flag
@@ -49,11 +68,12 @@ export function runTui(args: string[]): void {
   }
 
   console.log(`[tiny-agent] Opening TUI for run: ${resolvedRunId}`);
-  const controller = new TuiController({
+  const controller = new TuiController(buildTuiControllerOptions({
     runDir,
-    imBaseDir: path.join(runDir, "im"),
-    channel: channel ?? process.env.TAH_IM_CHANNEL ?? "default",
-  });
+    runsDir,
+    channel,
+    env: process.env,
+  }));
   controller.start();
 }
 

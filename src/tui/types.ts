@@ -6,6 +6,7 @@
 import type { AgentRunStatus } from "../types/run.js";
 import type { ToolReviewDecision } from "../types/tools.js";
 import type { TokenUsageView } from "./token-usage-consumer.js";
+import type { RunBrowserView } from "./debugger.js";
 
 // ─── Top-level View Model ──────────────────────────────────────────
 
@@ -17,6 +18,7 @@ export type TuiViewModel = {
   activeSkills: ActiveSkillView[];
   tokenUsage?: TokenUsageView;
   selected?: Selection;
+  runBrowser?: RunBrowserView;
 };
 
 // ─── Run Header ────────────────────────────────────────────────────

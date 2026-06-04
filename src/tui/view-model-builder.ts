@@ -35,6 +35,8 @@ import type {
   TuiLimits,
 } from "./types.js";
 import { DEFAULT_TUI_LIMITS } from "./types.js";
+import { buildRunBrowserView } from "./debugger.js";
+import type { RunBrowserView, RunBrowserOptions, RunIndexRow } from "./debugger.js";
 import { buildTokenUsageView } from "./token-usage-consumer.js";
 import { redactTerminalWriteDisplayText } from "./redaction.js";
 
@@ -58,6 +60,7 @@ export class ViewModelBuilder {
   private seenConversationIds = new Set<string>();
   private thinkingStreams = new Map<number, string>();
   private tokenUsageEvents: RunEvent[] = [];
+  private runBrowser?: RunBrowserView;
   private readonly limits: TuiLimits;
 
   constructor(limits?: Partial<TuiLimits>) {
@@ -561,6 +564,17 @@ export class ViewModelBuilder {
     }
   }
 
+  applyRunBrowserRows(
+    rows: readonly RunIndexRow[],
+    options?: RunBrowserOptions,
+  ): void {
+    this.runBrowser = buildRunBrowserView(rows, options);
+  }
+
+  applyRunBrowserView(view: RunBrowserView): void {
+    this.runBrowser = view;
+  }
+
   getViewModel(): TuiViewModel {
     const sortedConversation = [...this.conversation].sort(compareConversationItems);
     const conversation =
@@ -581,6 +595,7 @@ export class ViewModelBuilder {
         return a.session.localeCompare(b.session);
       }),
       activeSkills: [],
+      runBrowser: this.runBrowser,
       tokenUsage: buildTokenUsageView(this.tokenUsageEvents),
     };
   }

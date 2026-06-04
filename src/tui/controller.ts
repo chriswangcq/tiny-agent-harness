@@ -15,6 +15,15 @@ import { BlessedRenderer } from "./renderer.js";
 import { ImCliTransport } from "../im/transport.js";
 import { SessionLogTailReader } from "./session-log-tail.js";
 import * as path from "node:path";
+import { scanRunIndex } from "./run-index-reader.js";
+
+export type TuiControllerOptions = {
+  runDir: string;
+  imBaseDir?: string;
+  channel?: string;
+  pollIntervalMs?: number;
+  runsDir?: string;
+};
 
 export class TuiController {
   private readonly reader: TranscriptReader;
@@ -24,17 +33,13 @@ export class TuiController {
   private readonly sessionLogs: SessionLogTailReader;
   private readonly channel: string;
   private readonly pollIntervalMs: number;
+  private readonly runsDir?: string;
   private timer: ReturnType<typeof setInterval> | null = null;
   private polling = false;
   private imInboxCursor: string | undefined;
   private imOutboxCursor: string | undefined;
 
-  constructor(options: {
-    runDir: string;
-    imBaseDir?: string;
-    channel?: string;
-    pollIntervalMs?: number;
-  }) {
+  constructor(options: TuiControllerOptions) {
     this.reader = new TranscriptReader(options.runDir);
     this.builder = new ViewModelBuilder();
     this.renderer = new BlessedRenderer();
@@ -46,6 +51,7 @@ export class TuiController {
     });
     this.channel = options.channel ?? "default";
     this.pollIntervalMs = options.pollIntervalMs ?? 100;
+    this.runsDir = options.runsDir;
   }
 
   start(): void {
@@ -106,6 +112,16 @@ export class TuiController {
         this.builder.applySessionLogTails(await this.sessionLogs.read());
       } catch {
         // Best-effort display projection; transcript/state rendering continues.
+      }
+
+      // Optional: scan runs directory for run browser data
+      if (this.runsDir) {
+        try {
+          const runRows = scanRunIndex(this.runsDir);
+          this.builder.applyRunBrowserRows(runRows);
+        } catch {
+          // Best-effort; transcript/state rendering continues.
+        }
       }
 
       // Render
