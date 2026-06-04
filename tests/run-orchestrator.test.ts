@@ -296,6 +296,20 @@ async function waitForTranscriptCount(
   throw new Error(`Timed out waiting for ${count} transcript events of type ${type}`);
 }
 
+async function waitForTerminalCallCount(
+  calls: ToolRequest[],
+  count: number,
+): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    if (calls.length >= count) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for ${count} terminal calls`);
+}
+
 describe("RunOrchestrator", () => {
   it("marks the run failed when the model port throws after model_requested", async () => {
     const cause = Object.assign(new Error("Connect Timeout Error"), {
@@ -1612,7 +1626,7 @@ describe("RunOrchestrator", () => {
     );
   });
 
-  it("background low-priority session output does not satisfy default io_wait", async () => {
+  it("deduplicates repeated background output noise while preserving user-message wake", async () => {
     const wait: IoWaitRequest = {
       reason: "wait for meaningful external input",
     };
@@ -1652,6 +1666,7 @@ describe("RunOrchestrator", () => {
     const runPromise = orchestrator.run();
 
     await waitForTranscriptCount(transcript, "environment_event_recorded", 1);
+    await waitForTerminalCallCount(terminalCalls, 3);
     expect(terminalCalls).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -1660,6 +1675,18 @@ describe("RunOrchestrator", () => {
         }),
       ]),
     );
+    expect(environment.state.events).toEqual([
+      expect.objectContaining({
+        id: "env-session-run-001-default-output-2",
+        kind: "session_output_available",
+        level: 0,
+      }),
+    ]);
+    expect(
+      readTranscript(transcript).filter(
+        (event) => event.type === "environment_event_recorded",
+      ),
+    ).toHaveLength(1);
     expect(readTranscript(transcript)).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
