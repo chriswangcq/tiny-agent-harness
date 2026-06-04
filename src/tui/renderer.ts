@@ -196,7 +196,7 @@ export class BlessedRenderer implements TuiRenderer {
       active: this.ui.pane === "conversation",
     });
 
-    const rightLeft = Math.max(0, model.layout.conversationPaneWidth - 1);
+    const rightLeft = Math.max(0, model.layout.conversationPaneWidth);
     this.updatePaneBox(this.loopBox, {
       pane: model.loop,
       top: 1,
@@ -206,7 +206,7 @@ export class BlessedRenderer implements TuiRenderer {
     this.updatePaneBox(this.detailBox, {
       pane: model.detail,
       top: 1,
-      left: rightLeft + Math.max(0, model.layout.loopPaneWidth - 1),
+      left: rightLeft + Math.max(0, model.layout.loopPaneWidth),
       active: false,
     });
     this.updatePaneBox(this.ptyBox, {
@@ -714,13 +714,13 @@ export function renderTuiFrame(
     for (let row = 0; row < model.layout.bodyHeight; row++) {
       const rightRow =
         row < model.layout.topHeight
-          ? mergeAdjacentPanes(
+          ? joinPaneRows(
               loopPane[row] ?? " ".repeat(model.layout.loopPaneWidth),
               detailPane[row] ?? " ".repeat(model.layout.detailPaneWidth),
             )
           : ptyPane[row - model.layout.topHeight] ?? " ".repeat(model.layout.rightWidth);
       bodyRows.push(
-        mergeAdjacentPanes(
+        joinPaneRows(
           conversationPane[row] ?? " ".repeat(model.layout.conversationPaneWidth),
           rightRow,
         ),
@@ -918,7 +918,7 @@ export function planTuiLayout(input: TuiLayoutInput): TuiLayoutPlan {
       ? preferredRightWidth
       : clampNumber(Math.max(preferredRightWidth, requiredPtyWidth), 0, width);
   const leftWidth = Math.max(0, width - rightWidth);
-  const conversationPaneWidth = rightWidth > 0 ? leftWidth + 1 : width;
+  const conversationPaneWidth = rightWidth > 0 ? leftWidth : width;
 
   const requiredPtyHeight = ptyRows === undefined ? undefined : ptyRows + 2;
   const bottomHeight =
@@ -953,14 +953,14 @@ function planTopRightSplit(rightWidth: number): {
     return { loopPaneWidth: rightWidth, detailPaneWidth: 0 };
   }
 
-  const loopCoreWidth = clampNumber(
+  const loopPaneWidth = clampNumber(
     Math.floor(rightWidth * 0.51),
     12,
     rightWidth - 12,
   );
   return {
-    loopPaneWidth: loopCoreWidth + 1,
-    detailPaneWidth: rightWidth - loopCoreWidth,
+    loopPaneWidth,
+    detailPaneWidth: rightWidth - loopPaneWidth,
   };
 }
 
@@ -1237,51 +1237,8 @@ function paneTop(title: string, width: number): string {
   return `┌${fittedLabel}${"─".repeat(fill)}┐`;
 }
 
-function mergeAdjacentPanes(left: string, right: string): string {
-  if (!left) return right;
-  if (!right) return left;
-  const leftChars = Array.from(left);
-  const rightChars = Array.from(right);
-  leftChars[leftChars.length - 1] = mergeBorderChars(
-    leftChars[leftChars.length - 1] ?? " ",
-    rightChars[0] ?? " ",
-  );
-  return `${leftChars.join("")}${rightChars.slice(1).join("")}`;
-}
-
-type BorderDirection = "up" | "down" | "left" | "right";
-
-const BORDER_DIRECTIONS: Record<string, BorderDirection[]> = {
-  "│": ["up", "down"],
-  "─": ["left", "right"],
-  "┌": ["right", "down"],
-  "┐": ["left", "down"],
-  "└": ["right", "up"],
-  "┘": ["left", "up"],
-  "├": ["up", "down", "right"],
-  "┤": ["up", "down", "left"],
-  "┬": ["left", "right", "down"],
-  "┴": ["left", "right", "up"],
-  "┼": ["up", "down", "left", "right"],
-};
-
-const BORDER_BY_DIRECTIONS = new Map(
-  Object.entries(BORDER_DIRECTIONS).map(([char, directions]) => [
-    directionKey(directions),
-    char,
-  ]),
-);
-
-function mergeBorderChars(left: string, right: string): string {
-  const directions = new Set<BorderDirection>([
-    ...(BORDER_DIRECTIONS[left] ?? []),
-    ...(BORDER_DIRECTIONS[right] ?? []),
-  ]);
-  return BORDER_BY_DIRECTIONS.get(directionKey([...directions])) ?? left;
-}
-
-function directionKey(directions: BorderDirection[]): string {
-  return [...directions].sort().join(",");
+function joinPaneRows(left: string, right: string): string {
+  return `${left}${right}`;
 }
 
 function exactFrame(lines: string[], width: number, height: number): string[] {

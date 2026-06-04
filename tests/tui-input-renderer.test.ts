@@ -490,21 +490,18 @@ describe("TUI input rendering", () => {
     expect(output).not.toContain("first line should scroll away");
   });
 
-  it("merges adjacent pane borders instead of drawing double vertical seams", () => {
+  it("renders panes without overlapping adjacent widget columns", () => {
     const state = new TuiInteractionState();
     const vm = view();
     state.syncWithView(vm.conversation, vm.loop);
 
-    const output = renderTuiFrame(vm, state, new Set(), { width: 96, height: 18 }).join(
-      "\n",
-    );
+    const frame = renderTuiFrame(vm, state, new Set(), { width: 96, height: 18 });
+    const output = frame.join("\n");
 
-    expect(output).toContain("┬");
-    expect(output).toContain("├ PTY (read only)");
-    expect(output).not.toContain("┐┌");
-    expect(output).not.toContain("│┌");
-    expect(output).not.toContain("││");
-    expect(output).not.toContain("┘└");
+    expect(frame).toHaveLength(18);
+    expect(frame.every((line) => displayWidth(line) === 96)).toBe(true);
+    expect(output).toContain("┐┌ Agent Loop");
+    expect(output).toContain("│┌ PTY (read only)");
   });
 
   it("keeps framebuffer output plain so blessed cannot reinterpret pane text", () => {
@@ -585,7 +582,9 @@ describe("TUI input rendering", () => {
 
     expect(plan.rightWidth).toBe(122);
     expect(plan.bottomHeight).toBe(42);
-    expect(plan.conversationPaneWidth).toBe(29);
+    expect(plan.conversationPaneWidth).toBe(28);
+    expect(plan.conversationPaneWidth + plan.rightWidth).toBe(150);
+    expect(plan.loopPaneWidth + plan.detailPaneWidth).toBe(plan.rightWidth);
     expect(plan.topHeight).toBe(8);
     expect(plan.ptyFitsViewport).toBe(true);
   });
@@ -598,7 +597,9 @@ describe("TUI input rendering", () => {
     });
 
     expect(plan.rightWidth).toBe(100);
-    expect(plan.conversationPaneWidth).toBe(1);
+    expect(plan.conversationPaneWidth).toBe(0);
+    expect(plan.conversationPaneWidth + plan.rightWidth).toBe(100);
+    expect(plan.loopPaneWidth + plan.detailPaneWidth).toBe(plan.rightWidth);
     expect(plan.bottomHeight).toBe(42);
     expect(plan.ptyFitsViewport).toBe(false);
   });
@@ -619,8 +620,10 @@ describe("TUI input rendering", () => {
   it("falls back to the existing proportional layout without a PTY viewport", () => {
     const plan = planTuiLayout({ width: 96, bodyHeight: 17 });
 
-    expect(plan.conversationPaneWidth).toBe(44);
+    expect(plan.conversationPaneWidth).toBe(43);
     expect(plan.rightWidth).toBe(53);
+    expect(plan.conversationPaneWidth + plan.rightWidth).toBe(96);
+    expect(plan.loopPaneWidth + plan.detailPaneWidth).toBe(plan.rightWidth);
     expect(plan.topHeight).toBe(8);
     expect(plan.bottomHeight).toBe(9);
     expect(plan.ptyFitsViewport).toBe(false);

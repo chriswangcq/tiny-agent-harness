@@ -671,6 +671,7 @@ type TuiRenderer = {
 - 布局计算必须从 `TuiViewModel`、交互状态、窗口尺寸、scroll offset、animation frame 等显式参数推导。
 - renderer 可以读取 blessed 的当前窗口尺寸；纯布局和内容函数不能读文件、时间、环境变量、session log 或 transcript。
 - TUI pane 是 observer/control surface；它不改变 runtime PTY rows/cols，也不把 live display projection 写回 transcript 或 model context。
+- Blessed pane widgets 不能共享同一行列坐标；相邻边框宁可独立显示，也不能通过 overlap 合成单线边框。
 - 不保留整屏 styled frame repaint 作为运行时路径；需要文本投影时只使用纯 framebuffer helper。
 
 ## Performance
