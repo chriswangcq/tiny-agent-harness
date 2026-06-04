@@ -254,6 +254,61 @@ describe("runSkill CLI", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("install copies a skill directory into skills root", async () => {
+    const stateDir = createStateDir();
+
+    // Create a source skill directory outside the state dir
+    const sourceDir = path.join(tmpDir, "to-install");
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "SKILL.md"), "# to-install\n\nA test skill.", "utf-8");
+    fs.writeFileSync(path.join(sourceDir, "skill.json"), JSON.stringify({
+      name: "to-install",
+      description: "test",
+    }), "utf-8");
+
+    captureStdout();
+    await runSkill(["install", sourceDir, "--state-dir", stateDir, "--json"]);
+    restoreStdout();
+
+    const result = getCapturedJson() as { ok: boolean; name: string };
+    expect(result.ok).toBe(true);
+    expect(result.name).toBe("to-install");
+
+    // Verify it appears in skill list
+    captureStdout();
+    await runSkill(["list", "--state-dir", stateDir, "--json"]);
+    restoreStdout();
+    const listResult = getCapturedJson() as { skills: Array<{ name: string }> };
+    expect(listResult.skills.map((s) => s.name)).toContain("to-install");
+  });
+
+  it("install with custom name", async () => {
+    const stateDir = createStateDir();
+
+    const sourceDir = path.join(tmpDir, "source");
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "SKILL.md"), "# source\n\nTest.", "utf-8");
+
+    captureStdout();
+    await runSkill(["install", sourceDir, "custom-name", "--state-dir", stateDir, "--json"]);
+    restoreStdout();
+
+    const result = getCapturedJson() as { ok: boolean; name: string };
+    expect(result.ok).toBe(true);
+    expect(result.name).toBe("custom-name");
+  });
+
+  it("install rejects missing source", async () => {
+    const stateDir = createStateDir();
+
+    captureStdout();
+    await runSkill(["install", "/nonexistent", "--state-dir", stateDir, "--json"]);
+    restoreStdout();
+
+    const result = getCapturedJson() as { ok: boolean; error: string };
+    expect(result.ok).toBe(false);
+  });
+
   it("validate returns ok:false for missing skill", async () => {
     const stateDir = createStateDir();
 

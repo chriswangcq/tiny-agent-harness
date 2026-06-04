@@ -187,6 +187,63 @@ export class SkillCli {
     };
   }
 
+
+  handleInstall(
+    sourcePath: string,
+    name?: string,
+  ):
+    | { ok: true; name: string; path: string }
+    | { ok: false; error: string } {
+    const resolved = path.resolve(sourcePath);
+    if (!fs.existsSync(resolved)) {
+      return { ok: false, error: `Source directory not found: ${sourcePath}` };
+    }
+    const stat = fs.statSync(resolved);
+    if (!stat.isDirectory()) {
+      return { ok: false, error: `Source is not a directory: ${sourcePath}` };
+    }
+
+    const skillMdPath = path.join(resolved, "SKILL.md");
+    if (!fs.existsSync(skillMdPath)) {
+      return { ok: false, error: `SKILL.md not found in source directory: ${sourcePath}` };
+    }
+
+    const targetName = name ?? path.basename(resolved);
+    if (!SkillCli.isValidSkillName(targetName)) {
+      return { ok: false, error: `Invalid skill name: ${targetName}` };
+    }
+    const targetDir = path.join(this.skillsDir, targetName);
+    // Defence: path.join normalises, but we also assert containment
+    if (!path.resolve(targetDir).startsWith(path.resolve(this.skillsDir) + path.sep)) {
+      return { ok: false, error: `Skill name escapes skills root: ${targetName}` };
+    }
+    if (fs.existsSync(targetDir)) {
+      return { ok: false, error: `Skill already exists: ${targetName}` };
+    }
+
+    fs.cpSync(resolved, targetDir, { recursive: true });
+
+    return { ok: true, name: targetName, path: targetDir };
+  }
+
+  /**
+   * A skill name must be a single non-empty path segment:
+   * no slashes, no dots-only traversal, no whitespace-only, no absolute paths.
+   */
+  static isValidSkillName(name: string): boolean {
+    if (typeof name !== "string") return false;
+    const trimmed = name.trim();
+    if (trimmed.length === 0) return false;
+    if (trimmed !== name) return false; // reject leading/trailing whitespace
+    if (trimmed === "." || trimmed === "..") return false;
+    if (path.isAbsolute(trimmed)) return false;
+    if (trimmed.includes("/") || trimmed.includes("\\")) return false;
+    // Additional defence: must not resolve to a path outside itself
+    const resolved = path.resolve("/fake-root", trimmed);
+    if (!resolved.startsWith(path.resolve("/fake-root") + path.sep)) return false;
+    return true;
+  }
+
   handleValidate(name: string): { ok: boolean; errors: string[]; warnings: string[] } {
     return this.discovery.validate(name);
   }
