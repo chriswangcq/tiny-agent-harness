@@ -59,10 +59,10 @@ export interface AgentRunStateData {
   pendingReview?: ToolReviewDecision;
   pendingIoWait?: IoWaitRequest;
 
-  
+
   pendingObservation?: AgentObservation;
 
-  
+
   runtimeProgress?: RuntimeProgressState;
 
   activeSkillRuns?: ActiveSkillRunSummary[];
