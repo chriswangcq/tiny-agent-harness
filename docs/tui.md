@@ -532,6 +532,7 @@ TUI 的调试能力分成两层：
 - `buildLoopFrameDetail`：把现有 `## heading` detail 文本拆成结构化 sections，同时保留 raw detail。
 - `summarizeLoopFrames`：统计 status、phase 和 problem frame 数。
 - `buildRunIndex`：从显式 run snapshots 构造 run browser 行，不扫描文件系统。
+- `buildRunBrowserControlIntent` / `buildRunBrowserControlIntentDisplay`：从显式 run rows 和 request 构造 attach/resume/control 的意图 metadata。结果只表达 `effect: "none"`、`owner: "runtime_cli"` 和 `review: "required"` 这些边界事实，不执行控制动作。
 - `compareRuns`：比较两个 run 的状态、step、duration、frame/problem/conversation/session 计数。
 
 这层不读文件、不读时间、不依赖 blessed renderer。后续 `/` 搜索、warn/error filter、历史 run browser、run compare 和 eval viewer 都应该基于这个 domain，而不是在 renderer 里重新实现一套逻辑。
@@ -605,6 +606,16 @@ TUI control request
 ```
 
 第一版可以不做 runtime control，只做 user message input。这样 TUI 更安全。
+
+### Run Browser Control Intents
+
+Run browser 可以显示 attach、resume、control 的 intent metadata，但这是展示和审计信息，不是 effectful control path。当前 TUI renderer 只渲染 view model 中的 `RunBrowserControlIntentDisplay[]`：
+
+- valid intent 显示 action label、target run、`owner=runtime_cli`、`review: required` 和 `effect=none`。
+- unavailable intent 显示紧凑的 `ctl: unavailable` / `why: ...`，用于解释缺少 target、未知 run 或 unsafe mutation 这类纯校验结果。
+- attach/resume/control 的实际执行仍必须走 runtime/CLI 控制边界，并保留 tool review / transcript / environment event 链路。
+
+因此 TUI 可以帮助 operator 看见“如果发起控制会指向谁、由谁拥有、是否需要 review”，但不能绕过 runtime 私下修改 run state，也不能把 display projection 当作 agent-visible fact 写回 transcript/model context。
 
 ## Live And Replay Modes
 
