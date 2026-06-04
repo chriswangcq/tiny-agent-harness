@@ -1012,4 +1012,125 @@ describe("ViewModelBuilder", () => {
     });
     expect(view.run.status).toBe("failed");
   });
+  it("surfaces tool name in pending review summary", () => {
+    const builder = builderWithRunStarted();
+    const toolRequest = request("terminal_write", {
+      kind: "terminal_write",
+      expectedInputSeq: 2,
+      text: "rm -rf /tmp/test\n",
+    });
+
+    builder.applyEvent({
+      type: "tool_review_requested",
+      stepIndex: 1,
+      request: toolRequest,
+      timestamp: NOW,
+    });
+
+    const reviewFrame = findFrame(builder, "review requested");
+    expect(reviewFrame).toMatchObject({
+      phase: "review",
+      status: "running",
+      summary: "tool=terminal_write",
+    });
+    expect(reviewFrame!.detail).toContain("terminal_write");
+  });
+
+  it("exposes reviewDecision on reviewed frames", () => {
+    const builder = builderWithRunStarted();
+    const toolRequest = request();
+    const decision: ToolReviewDecision = {
+      status: "rejected",
+      reason: "Dangerous command blocked by policy",
+      reviewer: "tool-policy",
+      warnings: ["Recursive delete detected"],
+    };
+
+    builder.applyEvent({
+      type: "tool_review_requested",
+      stepIndex: 1,
+      request: toolRequest,
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "tool_reviewed",
+      stepIndex: 1,
+      request: toolRequest,
+      decision,
+      timestamp: LATER,
+    });
+
+    const view = builder.getViewModel();
+    const reviewedFrame = view.loop.find(
+      (frame) => frame.phase === "review" && frame.title === "rejected"
+    );
+    expect(reviewedFrame).toBeDefined();
+    expect(reviewedFrame!.reviewDecision).toEqual(decision);
+    expect(reviewedFrame!.reviewDecision!.status).toBe("rejected");
+    expect(reviewedFrame!.reviewDecision!.warnings).toEqual(["Recursive delete detected"]);
+  });
+
+  it("surfaces warning count in review summary when policy emits warnings", () => {
+    const builder = builderWithRunStarted();
+    const decision: ToolReviewDecision = {
+      status: "approved",
+      reason: "Approved with warnings",
+      reviewer: "tool-policy",
+      warnings: ["Network transfer detected", "Git push detected"],
+    };
+
+    builder.applyEvent({
+      type: "tool_review_requested",
+      stepIndex: 1,
+      request: request(),
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "tool_reviewed",
+      stepIndex: 1,
+      request: request(),
+      decision,
+      timestamp: LATER,
+    });
+
+    const reviewedFrame = builder
+      .getViewModel()
+      .loop.find((frame) => frame.phase === "review" && frame.status === "ok");
+    expect(reviewedFrame).toBeDefined();
+    expect(reviewedFrame!.summary).toContain("Approved with warnings");
+    expect(reviewedFrame!.summary).toContain("warnings=2");
+    expect(reviewedFrame!.reviewDecision!.warnings).toHaveLength(2);
+  });
+
+  it("omits warnings prefix when review has no warnings", () => {
+    const builder = builderWithRunStarted();
+    const decision: ToolReviewDecision = {
+      status: "approved",
+      reason: "Safe command",
+      reviewer: "always-approve",
+    };
+
+    builder.applyEvent({
+      type: "tool_review_requested",
+      stepIndex: 1,
+      request: request(),
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "tool_reviewed",
+      stepIndex: 1,
+      request: request(),
+      decision,
+      timestamp: LATER,
+    });
+
+    const reviewedFrame = builder
+      .getViewModel()
+      .loop.find((frame) => frame.phase === "review" && frame.status === "ok");
+    expect(reviewedFrame).toBeDefined();
+    expect(reviewedFrame!.summary).toBe("Safe command");
+    expect(reviewedFrame!.summary).not.toContain("warnings");
+    expect(reviewedFrame!.reviewDecision!.warnings).toBeUndefined();
+  });
+
 });

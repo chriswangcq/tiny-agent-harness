@@ -4,6 +4,7 @@
 // No runtime code except the DEFAULT_TUI_LIMITS constant.
 
 import type { AgentRunStatus } from "../types/run.js";
+import type { ToolReviewDecision } from "../types/tools.js";
 
 // ─── Top-level View Model ──────────────────────────────────────────
 
@@ -75,6 +76,8 @@ export type LoopFrame = {
   detail?: string;
   logPath?: string;
   transcriptEventId?: string;
+  /** Present when phase is "review" and a decision has been made. */
+  reviewDecision?: ToolReviewDecision;
 };
 
 // ─── Sessions ──────────────────────────────────────────────────────
