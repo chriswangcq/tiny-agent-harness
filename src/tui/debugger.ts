@@ -46,6 +46,7 @@ export type RunIndexRow = {
   problemFrameCount: number;
   conversationCount: number;
   sessionCount: number;
+  failureSummary?: string;
 };
 
 export type RunComparisonChange = {
