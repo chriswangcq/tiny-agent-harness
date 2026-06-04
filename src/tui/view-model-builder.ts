@@ -226,25 +226,33 @@ export class ViewModelBuilder {
           phase: "review",
           status: "running",
           title: "review requested",
-          summary: "",
+          summary: `tool=${event.request.toolName}`,
           detail: formatDetail([["request", event.request]]),
         });
         break;
 
-      case "tool_reviewed":
-        this.pushFrame({
-          stepIndex: event.stepIndex,
-          timestamp: event.timestamp,
-          phase: "review",
-          status: event.decision.status === "approved" ? "ok" : "warn",
-          title: event.decision.status === "approved" ? "approved" : "rejected",
-          summary: event.decision.reason ?? "",
-          detail: formatDetail([
-            ["request", event.request],
-            ["decision", event.decision],
-          ]),
-        });
-        break;
+      case "tool_reviewed": {
+          const decision = event.decision;
+          const warnings = decision.warnings ?? [];
+          const summaryParts = [decision.reason ?? ""];
+          if (warnings.length > 0) {
+            summaryParts.push(`warnings=${warnings.length}`);
+          }
+          this.pushFrame({
+            stepIndex: event.stepIndex,
+            timestamp: event.timestamp,
+            phase: "review",
+            status: decision.status === "approved" ? "ok" : "warn",
+            title: decision.status === "approved" ? "approved" : "rejected",
+            summary: summaryParts.filter(Boolean).join(" "),
+            reviewDecision: decision,
+            detail: formatDetail([
+              ["request", event.request],
+              ["decision", decision],
+            ]),
+          });
+          break;
+        }
 
       case "tool_execution_started":
         this.header.status = "waiting_for_tool";
