@@ -29,7 +29,7 @@ describe("TUI display redaction", () => {
       "-----BEGIN PRIVATE KEY-----",
       "secret-material",
       "-----END PRIVATE KEY-----",
-      "sk-abcdefghijklmnopqrstuvwxyz",
+      "sk-4a7b3c8d2e1f9a6b5c",
     ].join("\n");
 
     expect(redactSensitiveDisplayText(text)).toBe(
@@ -38,6 +38,24 @@ describe("TUI display redaction", () => {
         "[redacted private key]",
         "[redacted secret]",
       ].join("\n"),
+    );
+  });
+
+  it("redacts sk-/ds- prefixed secret keys with high entropy", () => {
+    expect(redactSensitiveDisplayText("key=sk-4a7b3c8d2e1f9a6b5c")).toBe(
+      "key=[redacted secret]",
+    );
+    expect(redactSensitiveDisplayText("key=ds-9f3a2c8b1e5d7f4a6b9c0")).toBe(
+      "key=[redacted secret]",
+    );
+  });
+
+  it("does not redact sk-/ds- prefixed names without enough digits", () => {
+    expect(redactSensitiveDisplayText("using sk-learn for ML")).toBe(
+      "using sk-learn for ML",
+    );
+    expect(redactSensitiveDisplayText("using sk-learn-model-v2-beta-test")).toBe(
+      "using sk-learn-model-v2-beta-test",
     );
   });
 

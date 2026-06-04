@@ -16,7 +16,7 @@ const JSON_SECRET_PROPERTY_PATTERN =
   /(["'])([^"']*(?:api[_-]?key|token|secret|password|passwd|auth)[^"']*)\1\s*:\s*(["'])(.*?)\3/giu;
 
 const BEARER_TOKEN_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/gu;
-const SECRET_KEY_PATTERN = /\b(?:sk|ds)-[A-Za-z0-9_-]{16,}\b/gu;
+const SECRET_KEY_PATTERN = /\b(?:sk|ds)-(?=[A-Za-z0-9_-]*\d[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{18,}\b/gu;
 
 export function redactSensitiveDisplayText(text: string): string {
   return text
