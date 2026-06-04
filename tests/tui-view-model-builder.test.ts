@@ -580,6 +580,44 @@ describe("ViewModelBuilder", () => {
     ]);
   });
 
+  it("applies live session log tail updates without changing runtime facts", () => {
+    const builder = builderWithRunStarted();
+    builder.applyEvent({
+      type: "tool_execution_finished",
+      stepIndex: 1,
+      request: request(),
+      observation: terminalObservation({
+        terminal: terminal(3, { foregroundProcess: "npm test" }),
+      }),
+      timestamp: NOW,
+    });
+
+    builder.applySessionLogTails([
+      {
+        session: "default",
+        logPath: "terminal-log://default",
+        tail: "latest live log output\n",
+        tailOffset: 2048,
+        updatedAt: LATER,
+      },
+    ]);
+
+    expect(builder.getViewModel().sessions).toEqual([
+      {
+        session: "default",
+        state: "running",
+        currentCommand: "npm test",
+        returnCode: 0,
+        logPath: "terminal-log://default",
+        tail: "latest live log output\n",
+        tailOffset: 2048,
+        screenRows: 24,
+        screenCols: 80,
+        updatedAt: LATER,
+      },
+    ]);
+  });
+
   it("marks terminal timeout and rejected observations distinctly", () => {
     const builder = builderWithRunStarted();
     builder.applyEvent({

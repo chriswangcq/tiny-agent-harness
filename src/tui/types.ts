@@ -92,6 +92,14 @@ export type SessionView = {
   updatedAt: string;
 };
 
+export type SessionTailUpdate = {
+  session: string;
+  logPath: string;
+  tail: string;
+  tailOffset: number;
+  updatedAt: string;
+};
+
 // ─── Active Skills ─────────────────────────────────────────────────
 
 export type ActiveSkillView = {

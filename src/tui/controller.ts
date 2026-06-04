@@ -13,12 +13,15 @@ import { TranscriptReader } from "./transcript-reader.js";
 import { ViewModelBuilder } from "./view-model-builder.js";
 import { BlessedRenderer } from "./renderer.js";
 import { ImCliTransport } from "../im/transport.js";
+import { SessionLogTailReader } from "./session-log-tail.js";
+import * as path from "node:path";
 
 export class TuiController {
   private readonly reader: TranscriptReader;
   private readonly builder: ViewModelBuilder;
   private readonly renderer: BlessedRenderer;
   private readonly im: ImCliTransport;
+  private readonly sessionLogs: SessionLogTailReader;
   private readonly channel: string;
   private readonly pollIntervalMs: number;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -34,6 +37,9 @@ export class TuiController {
     this.reader = new TranscriptReader(options.runDir);
     this.builder = new ViewModelBuilder();
     this.renderer = new BlessedRenderer();
+    this.sessionLogs = new SessionLogTailReader({
+      sessionsDir: path.join(options.runDir, "sessions"),
+    });
     this.im = new ImCliTransport({
       baseDir: options.imBaseDir ?? ".tiny-agent/im",
     });
@@ -84,6 +90,10 @@ export class TuiController {
 
     // Poll IM outbox for agent messages
     this.pollImOutbox();
+
+    // Read live session logs for display-only PTY pane updates. This does not
+    // mutate runtime state or model-visible context.
+    this.builder.applySessionLogTails(this.sessionLogs.read());
 
     // Render
     const viewModel = this.builder.getViewModel();

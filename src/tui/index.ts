@@ -11,6 +11,7 @@ export {
 } from "./debugger.js";
 export { BlessedRenderer } from "./renderer.js";
 export { TuiController } from "./controller.js";
+export { SessionLogTailReader } from "./session-log-tail.js";
 export { DEFAULT_TUI_LIMITS } from "./types.js";
 export type {
   DebuggerRunSnapshot,
@@ -27,6 +28,7 @@ export type {
   ConversationItem,
   LoopFrame,
   SessionView,
+  SessionTailUpdate,
   ActiveSkillView,
   Selection,
   TuiKey,

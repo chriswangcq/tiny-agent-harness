@@ -27,6 +27,7 @@ import type {
   ConversationItem,
   LoopFrame,
   SessionView,
+  SessionTailUpdate,
   TuiLimits,
 } from "./types.js";
 import { DEFAULT_TUI_LIMITS } from "./types.js";
@@ -466,6 +467,24 @@ export class ViewModelBuilder {
       updatedAt: state.updatedAt,
       startedAt: state.createdAt,
     };
+  }
+
+  applySessionLogTails(updates: readonly SessionTailUpdate[]): void {
+    for (const update of updates) {
+      const existing = this.sessions.get(update.session);
+      this.sessions.set(update.session, {
+        session: update.session,
+        state: existing?.state ?? "idle",
+        currentCommand: existing?.currentCommand,
+        returnCode: existing?.returnCode,
+        logPath: update.logPath,
+        tail: update.tail,
+        tailOffset: update.tailOffset,
+        screenRows: existing?.screenRows,
+        screenCols: existing?.screenCols,
+        updatedAt: update.updatedAt,
+      });
+    }
   }
 
   getViewModel(): TuiViewModel {

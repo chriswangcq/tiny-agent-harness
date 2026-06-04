@@ -455,13 +455,13 @@ Need inspect the current run state before choosing the next tool. ●
 
 ## Log Viewing
 
-TUI 不复制完整 log 到内存。PTY pane 首先渲染和 agent observation 对齐的固定 semantic terminal viewport；完整 raw log 只作为 detail/排查入口。
+TUI 不复制完整 log 到内存。PTY pane 首先使用 agent observation 对齐的固定 semantic terminal viewport；当 run 进入 `io_wait` 或长命令仍在输出而 transcript 尚未产生新的 terminal observation 时，TUI 每轮 poll 只读 run-scoped session log 的尾部，作为 display-only live tail 更新。这个 live tail 不写入 runtime state、transcript 或 model context。
 
 对 session log：
 
 ```text
-render latest fixed-size screen projection
-read tail by byte offset only for explicit log detail
+render latest fixed-size screen projection when a terminal observation exists
+read filtered log tail by byte offset for live PTY display and explicit detail
 keep selected logPath and offset in UI state
 ```
 
@@ -471,7 +471,7 @@ keep selected logPath and offset in UI state
 - detail pane 支持滚动。
 - 按 `/` 在当前 log excerpt 内搜索。
 - 完整搜索仍推荐通过 agent 自己用 bash 执行 `rg` / `sed` / `tail`。
-- PTY 主 pane 是 read-only，不把 TUI 的实际窗口大小反向注入 runtime；runtime 的 `rows/cols` 决定 agent 和人看到的同一屏内容。
+- PTY 主 pane 是 read-only，不把 TUI 的实际窗口大小反向注入 runtime；runtime 的 `rows/cols` 决定 agent-visible observation viewport。live log tail 只是 TUI 观察层的补充，不能成为 agent-visible 事实来源。
 
 ### PTY Fit Priority
 
@@ -482,7 +482,7 @@ Agent-visible PTY size 是 runtime contract，例如 `80x24`。TUI 的职责是�
 3. 如果物理窗口仍不足，TUI 可以提示窗口太小，但不能偷偷改变 runtime PTY size。
 4. Conversation、loop detail、debugger panes 都是辅助视图，不应该导致 PTY viewport 被截断后还显示为 `fit`。
 
-这个规则保证 agent observation、TUI PTY pane、raw screen replay 三者同源：差异只能来自字体/终端渲染能力，而不是 harness 状态模型不一致。
+这个规则保证 agent observation、TUI PTY pane、raw screen replay 三者同源：terminal observation 是固定 viewport 的事实来源，session log tail 是同一 PTY 输出的只读 live projection。差异只能来自字体/终端渲染能力或 tail/viewport 投影方式，而不是 harness 状态模型不一致。
 
 ## Follow And Selection
 
@@ -661,7 +661,7 @@ type TuiRenderer = {
 第一版约束：
 
 - transcript 按 offset tail，不每轮全量读取。
-- session log 只读 tail。
+- session log 只读 tail，并缓存未变化的 log stat，避免每轮重读完整文件。
 - view model 对历史 step 做虚拟化或窗口化。
 - 单个 LoopFrame detail 默认截断。
 - 大 prompt / raw output 只显示路径。模型 prompt 通过 `promptRef` 指向 `debug/prompts/` artifact，不在 loop frame 内整段展开。
