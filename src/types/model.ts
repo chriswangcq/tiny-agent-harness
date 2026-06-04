@@ -6,6 +6,7 @@
 import type { IoWaitRequest } from "./environment.js";
 import type { TerminalToolInput, ToolName } from "./tools.js";
 import type { ModelProtocolDiagnostic } from "../model/dsml-decision-parser.js";
+import type { NormalizedFimUsage } from "../model/token-usage-normalizer.js";
 
 /**
  * Raw model output placeholder. Will be refined as the FIM adapter
@@ -75,7 +76,7 @@ export type FimStepOutput = {
   thinking: AgentThinking;
   rawDecision: string;
   turn: ModelTurn;
-  usage?: unknown;
+  usage?: NormalizedFimUsage;
 };
 
 /**

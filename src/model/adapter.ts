@@ -24,6 +24,10 @@ import {
   encodeV4PromptInput,
   type PromptEncodeRunner,
 } from "./prompt-encoder.js";
+
+import {
+  normalizeFimUsage,
+} from "./token-usage-normalizer.js";
 export { parseDsmlDecision } from "./dsml-decision-parser.js";
 
 const ADAPTER_ENCODE_PROMPT_TIMEOUT_MS = 60_000;
@@ -193,10 +197,10 @@ export class DeepSeekFimAdapter {
       thinking,
       rawDecision: decision.text,
       turn,
-      usage: {
+      usage: normalizeFimUsage({
         thinking: extractFimMeta(thinking.raw),
         decision: extractFimMeta(decision.meta),
-      },
+      }),
     };
   }
 
