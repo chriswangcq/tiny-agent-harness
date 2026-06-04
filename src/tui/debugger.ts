@@ -363,6 +363,7 @@ export type RunBrowserView = {
   totalCount: number;
   isEmpty: boolean;
   selected?: RunBrowserSelected;
+  controlIntentDisplays?: RunBrowserControlIntentDisplay[];
 };
 
 export type RunBrowserRow = {
@@ -399,6 +400,12 @@ export type RunBrowserDetail = {
   failureSummary?: string;
 };
 
+const RUN_BROWSER_CONTROL_ACTIONS: readonly RunBrowserControlAction[] = [
+  "attach",
+  "resume",
+  "control",
+];
+
 /**
  * Build a pure, read-only run browser view model from RunIndexRow data.
  *
@@ -419,6 +426,9 @@ export function buildRunBrowserView(
     selectedIndex !== undefined
       ? buildSelected(rows, selectedIndex)
       : undefined;
+  const controlIntentDisplays = selected
+    ? buildSelectedControlIntentDisplays(rows, selected)
+    : undefined;
 
   const browserRows: RunBrowserRow[] = rows.map((row, idx) => ({
     runId: row.runId,
@@ -437,7 +447,21 @@ export function buildRunBrowserView(
     totalCount: rows.length,
     isEmpty: false,
     selected,
+    ...(controlIntentDisplays ? { controlIntentDisplays } : {}),
   };
+}
+
+function buildSelectedControlIntentDisplays(
+  rows: readonly RunIndexRow[],
+  selected: RunBrowserSelected,
+): RunBrowserControlIntentDisplay[] {
+  return RUN_BROWSER_CONTROL_ACTIONS.map((action) =>
+    buildRunBrowserControlIntentDisplay(rows, {
+      action,
+      runId: selected.runId,
+      index: selected.index,
+    }),
+  );
 }
 
 function resolveSelectedIndex(

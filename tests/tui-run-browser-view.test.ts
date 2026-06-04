@@ -67,6 +67,32 @@ describe("buildRunBrowserView", () => {
     expect(view.rows[2]!.isSelected).toBe(false);
   });
 
+  it("builds selected run control intent display metadata", () => {
+    const rows: RunIndexRow[] = [
+      row({ runId: "run-a" }),
+      row({ runId: "run-b" }),
+    ];
+    const view = buildRunBrowserView(rows, { selectedRunId: "run-b" });
+
+    expect(view.controlIntentDisplays).toHaveLength(3);
+    expect(view.controlIntentDisplays?.map((display) => display.actionLabel)).toEqual([
+      "Attach",
+      "Resume",
+      "Control",
+    ]);
+
+    for (const display of view.controlIntentDisplays ?? []) {
+      expect(display.valid).toBe(true);
+      if (!display.valid) throw new Error("expected valid control intent display");
+      expect(display.status).toBe("valid");
+      expect(display.runId).toBe("run-b");
+      expect(display.index).toBe(1);
+      expect(display.intent.effect).toBe("none");
+      expect(display.intent.owner).toBe("runtime_cli");
+      expect(display.intent.review).toBe("required");
+    }
+  });
+
   it("selects by index", () => {
     const rows: RunIndexRow[] = [
       row({ runId: "run-a" }),
@@ -83,6 +109,7 @@ describe("buildRunBrowserView", () => {
     const view = buildRunBrowserView(rows, { selectedRunId: "nonexistent" });
     expect(view.selected).toBeUndefined();
     expect(view.rows[0]!.isSelected).toBe(false);
+    expect(view.controlIntentDisplays).toBeUndefined();
   });
 
   it("falls back to no selection for out-of-range index", () => {
