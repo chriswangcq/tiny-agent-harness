@@ -1,9 +1,12 @@
 import type {
   AgentRunStateData,
+  RuntimeStuckReason,
+
   AgentRunStatus,
   NextEffect,
   RunEvent,
 } from "../types/run.js";
+import { markRuntimeStuckReported } from "./progress.js";
 import type { AgentObservation } from "../types/tools.js";
 
 const TERMINAL_STATUSES: Set<AgentRunStatus> = new Set([
@@ -311,6 +314,16 @@ export class AgentRunState {
           updatedAt: now,
         });
       }
+      case "runtime_stuck_detected": {
+        return this.next({
+          runtimeProgress: markRuntimeStuckReported(
+            s.runtimeProgress,
+            event.reason,
+          ),
+          updatedAt: now,
+        });
+      }
+
 
       case "run_finished": {
         if (TERMINAL_STATUSES.has(s.status)) {
@@ -365,6 +378,10 @@ export class AgentRunState {
         throw new Error(`Unknown event type: ${(_exhaustive as RunEvent).type}`);
       }
     }
+  }
+
+  withRuntimeProgress(patch: Pick<AgentRunStateData, "runtimeProgress">): AgentRunState {
+    return this.next(patch);
   }
 
   private assertStatus(expected: AgentRunStatus, eventType: string): void {

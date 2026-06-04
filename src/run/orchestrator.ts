@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { RunError, RunEvent } from "../types/run.js";
+import type { RunError, RunEvent, RuntimeStuckReason } from "../types/run.js";
 import type { ModelDecisionTrace, RunArtifactRef } from "../types/run.js";
 import type {
   AgentThinking,
@@ -21,6 +21,12 @@ import { ENVIRONMENT_EVENT_LEVELS, validateIoWaitRequest } from "../types/enviro
 import { Environment } from "../environment/environment.js";
 import type { ActiveSkillRunSummary } from "../types/skill.js";
 import { AgentRunState } from "./state.js";
+import {
+  recordObservationProgress,
+  recordToolObservationProgress,
+  recordIoWaitProgress,
+  runtimeStuckReasonForProgress,
+} from "./progress.js";
 import {
   TranscriptStore,
   type RunDebugArtifact,
@@ -323,6 +329,19 @@ export class RunOrchestrator {
           observation,
           timestamp: this.now(),
         });
+
+        const toolProgress = recordToolObservationProgress(
+          this.state.data.runtimeProgress,
+          effect.request,
+          observation,
+          finishedStepIndex,
+        );
+        if (toolProgress !== undefined) {
+          this.state = this.state.withRuntimeProgress({ runtimeProgress: toolProgress });
+        }
+        if (await this.recordRuntimeStuckIfNeeded()) {
+          break;
+        }
         await this.recordTerminalEnvironmentEvents(
           effect.request,
           observation,
@@ -345,6 +364,18 @@ export class RunOrchestrator {
           observation: effect.observation,
           timestamp: this.now(),
         });
+
+        const obsProgress = recordObservationProgress(
+          this.state.data.runtimeProgress,
+          effect.observation,
+          this.state.data.stepIndex,
+        );
+        if (obsProgress !== undefined) {
+          this.state = this.state.withRuntimeProgress({ runtimeProgress: obsProgress });
+        }
+        if (await this.recordRuntimeStuckIfNeeded()) {
+          break;
+        }
         continue;
       }
 
@@ -406,6 +437,18 @@ export class RunOrchestrator {
             },
             timestamp: this.now(),
           });
+
+          const unsettledProgress = recordObservationProgress(
+            this.state.data.runtimeProgress,
+            { kind: "io_wait", message: unsettledMessage, recoverable: true },
+            this.state.data.stepIndex,
+          );
+          if (unsettledProgress !== undefined) {
+            this.state = this.state.withRuntimeProgress({ runtimeProgress: unsettledProgress });
+          }
+          if (await this.recordRuntimeStuckIfNeeded()) {
+            break;
+          }
           continue;
         }
 
@@ -454,6 +497,19 @@ export class RunOrchestrator {
           event,
           timestamp: this.now(),
         });
+
+        const ioProgress = recordIoWaitProgress(
+          this.state.data.runtimeProgress,
+          effect.wait,
+          event,
+          this.state.data.stepIndex,
+        );
+        if (ioProgress !== undefined) {
+          this.state = this.state.withRuntimeProgress({ runtimeProgress: ioProgress });
+        }
+        if (await this.recordRuntimeStuckIfNeeded()) {
+          break;
+        }
         continue;
       }
 
@@ -492,6 +548,35 @@ export class RunOrchestrator {
 
   private currentDecisionId(): string {
     return buildDecisionId(this.state.data.runId, this.state.data.stepIndex);
+  }
+
+  private async recordRuntimeStuckIfNeeded(): Promise<boolean> {
+    const reason = runtimeStuckReasonForProgress(
+      this.state.data.runtimeProgress,
+    );
+    if (reason === undefined) {
+      return false;
+    }
+
+    await this.record({
+      type: "runtime_stuck_detected",
+      stepIndex: this.state.data.stepIndex,
+      severity: reason.severity,
+      reason,
+      timestamp: this.now(),
+    });
+
+    if (reason.severity !== "blocked") {
+      return false;
+    }
+
+    await this.record({
+      type: "run_finished",
+      status: "failed",
+      error: runtimeStuckRunError(reason),
+      timestamp: this.now(),
+    });
+    return true;
   }
 
   private async failRun(error: unknown, code: string): Promise<void> {
@@ -741,6 +826,14 @@ function isRunArtifactRef(value: unknown): value is RunArtifactRef {
     typeof (value as { bytes?: unknown }).bytes === "number" &&
     typeof (value as { sha256?: unknown }).sha256 === "string"
   );
+}
+
+function runtimeStuckRunError(reason: RuntimeStuckReason): RunError {
+  return {
+    message: reason.message,
+    code: "RUNTIME_STUCK",
+    details: reason,
+  };
 }
 
 function toRunError(error: unknown, code: string): RunError {
