@@ -238,6 +238,9 @@ TUI 不拥有 agent 状态，不参与模型决策，也不直接改写 run stat
 
 `src/tui/debugger.ts` 是 TUI 的纯 debugger domain。它消费显式传入的 `TuiViewModel`、`LoopFrame` 和 run snapshot，提供 loop frame query、detail section 解析、problem summary、run index 和 run comparison。它不扫描文件系统，也不依赖 blessed renderer；历史 run browser、warn/error filter 和 eval viewer 后续都应该复用这层。
 
+
+`buildRunBrowserControlIntent(rows, request)` 是同一文件中新增的纯控制意图边界。TUI 调用它生成可审计的 `RunBrowserControlIntent`（包含 action、runId、index、`effect: "none"`、`owner: "runtime_cli"`、`review: "required"`），但不执行任何副作用，也不读取时间、文件系统或运行态全局状态。实际的 attach、resume、control 执行归 runtime/CLI 所有，tool review 链必须在 effectful 路径中保留。TUI 绝不直接修改 run state；direct mutation 请求会确定性地返回 `unsafe_mutation`，其他错误路径会返回 `missing_run_id` 或 `unknown_run_id`。
+
 ### 4.9 Recovery / Replay / Eval
 
 `src/run/recovery.ts` 和 `src/run/replay.ts` 把 resume 与 replay 相关判断从 orchestrator 中抽出成纯函数：

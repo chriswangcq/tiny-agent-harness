@@ -2,6 +2,7 @@ export { TranscriptReader } from "./transcript-reader.js";
 export { ViewModelBuilder } from "./view-model-builder.js";
 export {
   buildLoopFrameDetail,
+  buildRunBrowserControlIntent,
   buildRunBrowserView,
   buildRunIndex,
   compareRuns,
@@ -19,6 +20,10 @@ export type {
   LoopFrameDetail,
   LoopFrameDetailSection,
   LoopFrameQuery,
+  RunBrowserControlAction,
+  RunBrowserControlError,
+  RunBrowserControlIntent,
+  RunBrowserControlRequest,
   RunBrowserDetail,
   RunBrowserOptions,
   RunBrowserRow,
