@@ -45,3 +45,13 @@ export type {
   ModelContextCompactionResult,
   ModelContextWindowPort,
 } from "./context-window.js";
+
+export {
+  normalizeFimUsage,
+  normalizePassUsage,
+} from "./token-usage-normalizer.js";
+export type {
+  NormalizedFimUsage,
+  NormalizedPassUsage,
+  NormalizedProviderUsage,
+} from "./token-usage-normalizer.js";
