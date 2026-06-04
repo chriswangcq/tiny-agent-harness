@@ -432,6 +432,26 @@ export class ViewModelBuilder {
           detail: event.compaction.summary,
         });
         break;
+      case "runtime_stuck_detected":
+        this.pushFrame({
+          stepIndex: event.stepIndex,
+          timestamp: event.timestamp,
+          phase: "environment",
+          status: event.severity === "blocked" ? "error" : "warn",
+          title: `runtime stuck: ${event.reason.pattern}`,
+          summary: event.reason.message,
+          detail: formatDetail([
+            ["severity", event.severity],
+            ["pattern", event.reason.pattern],
+            ["threshold", event.reason.threshold],
+            ["signature", event.reason.signature],
+            ["consecutiveCount", event.reason.consecutiveCount],
+            ["sinceStepIndex", event.reason.sinceStepIndex],
+            ["lastStepIndex", event.reason.lastStepIndex],
+          ]),
+        });
+        break;
+
 
       case "run_finished":
         this.header.status = event.status;

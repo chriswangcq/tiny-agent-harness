@@ -59,10 +59,71 @@ export interface AgentRunStateData {
   pendingReview?: ToolReviewDecision;
   pendingIoWait?: IoWaitRequest;
 
+
+  pendingObservation?: AgentObservation;
+
+
+  runtimeProgress?: RuntimeProgressState;
+
   activeSkillRuns?: ActiveSkillRunSummary[];
 
   error?: RunError;
 }
+
+// ─── Runtime Progress / Stuck Detection ───────────────────────────────
+
+export type RuntimeStuckSeverity = "warn" | "blocked";
+
+export type RuntimeNoProgressPattern =
+  | "repeated_model_output"
+  | "repeated_tool_validation"
+  | "repeated_tool_review"
+  | "repeated_io_wait"
+  | "repeated_tool_error";
+
+export type RuntimeNoProgressSignal =
+  | {
+      kind: "model_output" | "tool_validation" | "tool_review" | "io_wait";
+      message: string;
+    }
+  | {
+      kind: "tool_error";
+      toolName: string;
+      request: string;
+      result: string;
+      errorCode?: string;
+      message?: string;
+    };
+
+export type RuntimeNoProgressState = {
+  signature: string;
+  pattern: RuntimeNoProgressPattern;
+  signal: RuntimeNoProgressSignal;
+  consecutiveCount: number;
+  sinceStepIndex: number;
+  lastStepIndex: number;
+  lastReportedSeverity?: RuntimeStuckSeverity;
+};
+
+export type RuntimeStuckReason = {
+  code: "repeated_no_progress";
+  severity: RuntimeStuckSeverity;
+  pattern: RuntimeNoProgressPattern;
+  message: string;
+  signal: RuntimeNoProgressSignal;
+  signature: string;
+  consecutiveCount: number;
+  threshold: number;
+  warnThreshold: number;
+  blockThreshold: number;
+  sinceStepIndex: number;
+  lastStepIndex: number;
+};
+
+export type RuntimeProgressState = {
+  noProgress?: RuntimeNoProgressState;
+  stuckReason?: RuntimeStuckReason;
+};
 
 // ─── Next Effect ────────────────────────────────────────────────────
 //
@@ -223,6 +284,13 @@ export type RunEvent =
       type: "history_compacted";
       stepIndex: number;
       compaction: Omit<ModelContextCompactionResult, "items">;
+      timestamp: string;
+    }
+  | {
+      type: "runtime_stuck_detected";
+      stepIndex: number;
+      severity: RuntimeStuckSeverity;
+      reason: RuntimeStuckReason;
       timestamp: string;
     }
   | {
