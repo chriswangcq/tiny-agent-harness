@@ -534,3 +534,112 @@ function formatDurationDisplay(durationMs: number | undefined): string {
   if (remainingMin === 0) return `${hours}h`;
   return `${hours}h ${remainingMin}m`;
 }
+
+// Run browser control intent boundary.
+
+/** Data-only action a user can request through the run browser. */
+export type RunBrowserControlAction = "attach" | "resume" | "control";
+
+/** User-initiated request from the run browser UI. */
+export type RunBrowserControlRequest = {
+  action: RunBrowserControlAction;
+  /** Target run by id (preferred). */
+  runId?: string;
+  /** Target run by row index (fallback). */
+  index?: number;
+  /** Reject requests that try to bypass the intent-only control path. */
+  directMutation?: boolean;
+};
+
+/** Auditable intent produced by the TUI.  No side-effects are executed here. */
+export type RunBrowserControlIntent = {
+  action: RunBrowserControlAction;
+  runId: string;
+  index: number;
+  /** TUI emits an inert request; runtime/CLI owns every effect. */
+  effect: "none";
+  /** Runtime/CLI is the only owner allowed to execute the intent. */
+  owner: "runtime_cli";
+  /** Tool review must be preserved before any effectful control action. */
+  review: "required";
+};
+
+/** Deterministic rejection reasons. */
+export type RunBrowserControlError = {
+  kind: "missing_run_id" | "unknown_run_id" | "unsafe_mutation";
+  message: string;
+};
+
+/**
+ * Build a pure, auditable run-browser control intent.
+ *
+ * The intent is a **request contract only**:
+ * - TUI creates the intent; it never mutates run state.
+ * - Runtime / CLI owns the actual attach / resume / control effects.
+ * - Tool review must be preserved upstream.
+ *
+ * Rejects deterministically:
+ * - `missing_run_id` - no `runId` or `index` provided, or `index` out of range.
+ * - `unknown_run_id` - `runId` is not present in `rows`.
+ * - `unsafe_mutation` - the request tries to bypass the intent path.
+ */
+export function buildRunBrowserControlIntent(
+  rows: readonly RunIndexRow[],
+  request: RunBrowserControlRequest,
+): RunBrowserControlIntent | RunBrowserControlError {
+  if (request.directMutation === true) {
+    return {
+      kind: "unsafe_mutation",
+      message: "TUI control requests must produce intent only; direct mutation is unsafe",
+    };
+  }
+
+  const resolved = resolveRunBrowserTarget(rows, request);
+  if ("kind" in resolved) return resolved;
+
+  return {
+    action: request.action,
+    runId: resolved.runId,
+    index: resolved.index,
+    effect: "none",
+    owner: "runtime_cli",
+    review: "required",
+  };
+}
+
+type ResolvedTarget = { runId: string; index: number };
+
+function resolveRunBrowserTarget(
+  rows: readonly RunIndexRow[],
+  request: RunBrowserControlRequest,
+): ResolvedTarget | RunBrowserControlError {
+  // Prefer explicit runId.
+  if (request.runId !== undefined && request.runId !== "") {
+    const idx = rows.findIndex((r) => r.runId === request.runId);
+    if (idx < 0) {
+      return {
+        kind: "unknown_run_id",
+        message: `Run "${request.runId}" is not in the current run list`,
+      };
+    }
+    return { runId: request.runId, index: idx };
+  }
+
+  // Fallback to index.
+  if (request.index !== undefined) {
+    if (request.index < 0 || request.index >= rows.length) {
+      return {
+        kind: "missing_run_id",
+        message: `Index ${request.index} is out of range (0..${rows.length - 1})`,
+      };
+    }
+    const row = rows[request.index]!;
+    return { runId: row.runId, index: request.index };
+  }
+
+  // Nothing resolvable.
+  return {
+    kind: "missing_run_id",
+    message: "No runId or valid index provided; cannot resolve target run",
+  };
+}
