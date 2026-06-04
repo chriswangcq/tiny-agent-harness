@@ -38,6 +38,36 @@ function parseOutputMode(argv: string[]): {
 
   return { cleanArgv: argv, jsonMode: false };
 }
+/** Extract --state-dir <dir> from argv before -- separator.
+ *  Returns the overridden state dir (if any) and cleaned argv.
+ *  After --, everything is server args; --state-dir there is NOT consumed. */
+function parseStateDir(argv: string[]): {
+  stateDirOverride: string | undefined;
+  cleanArgv: string[];
+  error?: string;
+} {
+  const dashIdx = argv.indexOf("--");
+  const preDash = dashIdx === -1 ? argv : argv.slice(0, dashIdx);
+  const postDash = dashIdx === -1 ? [] : argv.slice(dashIdx);
+
+  const stateIdx = preDash.indexOf("--state-dir");
+  if (stateIdx !== -1) {
+    // Validate: must have a next token that is not another flag
+    if (stateIdx + 1 >= preDash.length || preDash[stateIdx + 1].startsWith("--")) {
+      return {
+        stateDirOverride: undefined,
+        cleanArgv: argv,
+        error: "Missing value for --state-dir",
+      };
+    }
+    const stateDirOverride = preDash[stateIdx + 1];
+    const cleanPreDash = [...preDash.slice(0, stateIdx), ...preDash.slice(stateIdx + 2)];
+    return { stateDirOverride, cleanArgv: [...cleanPreDash, ...postDash] };
+  }
+
+  // --state-dir found in post-dash region: leave it alone (it's a server arg)
+  return { stateDirOverride: undefined, cleanArgv: argv };
+}
 
 /** Extract tool args from call command. Throws on invalid JSON. */
 function extractCallJsonArgs(remaining: string[]): Record<string, unknown> {
@@ -81,7 +111,8 @@ function writeStderrError(deps: McpCliDeps, message: string): void {
   deps.stderr.write(JSON.stringify({ ok: false, error: message }) + "\n");
 }
 
-function resolveStateDir(deps: McpCliDeps): string {
+function resolveStateDir(deps: McpCliDeps, override?: string): string {
+  if (override) return path.resolve(deps.cwd, override);
   return deps.env.TAH_STATE_DIR ?? path.resolve(deps.cwd, ".tiny-agent");
 }
 
@@ -89,9 +120,14 @@ export async function runMcpCli(
   argv: string[],
   deps: McpCliDeps = defaultMcpCliDeps(),
 ): Promise<number> {
-  const { cleanArgv, jsonMode } = parseOutputMode(argv);
+  const { cleanArgv, jsonMode: finalJsonMode } = parseOutputMode(argv);
+  const { stateDirOverride, cleanArgv: finalArgv, error: stateDirError } = parseStateDir(cleanArgv);
+  if (stateDirError) {
+    writeStderrError(deps, stateDirError);
+    return 1;
+  }
 
-  const cmd = cleanArgv[0];
+  const cmd = finalArgv[0];
 
   if (!cmd || cmd === "--help") {
     deps.stdout.write(`Usage: mcp [--json] <command> [args...] [--json]
@@ -106,10 +142,10 @@ Commands:
     return 0;
   }
 
-  const stateDir = resolveStateDir(deps);
+  const stateDir = resolveStateDir(deps, stateDirOverride);
   const registryPath = path.join(stateDir, "mcp-servers.json");
   const registry = new McpRegistryStore(registryPath, stateDir);
-  const remaining = cleanArgv;
+  const remaining = finalArgv;
 
   switch (cmd) {
     case "add": {
@@ -128,7 +164,7 @@ Commands:
           : remaining.slice(3).filter((a) => a !== "--json");
 
       await registry.add({ name, command, args });
-      writeStdout(deps, { ok: true, name }, jsonMode);
+      writeStdout(deps, { ok: true, name }, finalJsonMode);
       break;
     }
 
@@ -139,13 +175,13 @@ Commands:
         return 1;
       }
       const removed = await registry.remove(name);
-      writeStdout(deps, { ok: removed, name }, jsonMode);
+      writeStdout(deps, { ok: removed, name }, finalJsonMode);
       break;
     }
 
     case "list": {
       const servers = registry.list();
-      writeStdout(deps, { ok: true, servers }, jsonMode);
+      writeStdout(deps, { ok: true, servers }, finalJsonMode);
       break;
     }
 
@@ -173,7 +209,7 @@ Commands:
         writeStdout(
           deps,
           { ok: true, ...(result as Record<string, unknown>) },
-          jsonMode,
+          finalJsonMode,
         );
       } finally {
         client.disconnect();
@@ -220,7 +256,7 @@ Commands:
         writeStdout(
           deps,
           { ok: true, ...(result as Record<string, unknown>) },
-          jsonMode,
+          finalJsonMode,
         );
       } finally {
         client.disconnect();

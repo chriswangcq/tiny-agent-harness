@@ -285,4 +285,191 @@ describe("mcp CLI", () => {
       fs.rmSync(altTmp, { recursive: true, force: true });
     }
   });
+  it("--state-dir before -- is consumed as CLI state dir", async () => {
+    // Use a custom state dir, not the default one
+    const customState = path.join(tmpBase, "custom-state");
+    fs.mkdirSync(customState, { recursive: true });
+    try {
+      const h = makeDeps({ cwd: tmpBase, env: {} });
+      const rc = await runMcpCli(
+        ["add", "s1", "echo", "--state-dir", customState],
+        h.deps,
+      );
+      expect(rc).toBe(0);
+
+      // Verify it wrote to the custom state dir, not the default
+      const customPath = path.join(customState, "mcp-servers.json");
+      expect(fs.existsSync(customPath)).toBe(true);
+      const data = JSON.parse(fs.readFileSync(customPath, "utf-8"));
+      expect(data.servers["s1"]).toBeDefined();
+
+      // Default cwd-based path should NOT exist
+      const defaultPath = path.join(tmpBase, ".tiny-agent", "mcp-servers.json");
+      expect(fs.existsSync(defaultPath)).toBe(false);
+    } finally {
+      fs.rmSync(customState, { recursive: true, force: true });
+    }
+  });
+
+  it("--state-dir after -- is preserved as server arg", async () => {
+    const h = makeTestDeps();
+    const rc = await runMcpCli(
+      ["add", "s1", "echo", "--", "--state-dir", "/server-state"],
+      h.deps,
+    );
+    expect(rc).toBe(0);
+
+    const raw = fs.readFileSync(
+      path.join(stateDir, "mcp-servers.json"),
+      "utf-8",
+    );
+    const data = JSON.parse(raw);
+    expect(data.servers["s1"]).toBeDefined();
+    expect(data.servers["s1"].args).toEqual(["--state-dir", "/server-state"]);
+  });
+
+  it("--state-dir with --json output mode works together", async () => {
+    const customState = path.join(tmpBase, "json-state");
+    fs.mkdirSync(customState, { recursive: true });
+    try {
+      const h = makeDeps({ cwd: tmpBase, env: {} });
+      const rc = await runMcpCli(
+        ["--json", "add", "s1", "echo", "--state-dir", customState],
+        h.deps,
+      );
+      expect(rc).toBe(0);
+      const json = JSON.parse(h.stdoutLines()[0]);
+      expect(json.ok).toBe(true);
+      expect(json.name).toBe("s1");
+
+      // Verify custom state dir was used
+      const customPath = path.join(customState, "mcp-servers.json");
+      expect(fs.existsSync(customPath)).toBe(true);
+    } finally {
+      fs.rmSync(customState, { recursive: true, force: true });
+    }
+  });
+
+  it("TAH_STATE_DIR is overridden by --state-dir flag", async () => {
+    const flagState = path.join(tmpBase, "flag-state");
+    const envState = path.join(tmpBase, "env-state");
+    fs.mkdirSync(flagState, { recursive: true });
+    fs.mkdirSync(envState, { recursive: true });
+    try {
+      // Set TAH_STATE_DIR to envState, but pass --state-dir flagState
+      const h = makeDeps({
+        cwd: tmpBase,
+        env: { TAH_STATE_DIR: envState },
+      });
+      const rc = await runMcpCli(
+        ["add", "s1", "echo", "--state-dir", flagState],
+        h.deps,
+      );
+      expect(rc).toBe(0);
+
+      // Should write to flagState, not envState
+      const flagPath = path.join(flagState, "mcp-servers.json");
+      expect(fs.existsSync(flagPath)).toBe(true);
+      const envPath = path.join(envState, "mcp-servers.json");
+      expect(fs.existsSync(envPath)).toBe(false);
+    } finally {
+      fs.rmSync(flagState, { recursive: true, force: true });
+      fs.rmSync(envState, { recursive: true, force: true });
+    }
+  });
+
+  it("list and remove also respect --state-dir", async () => {
+    const customState = path.join(tmpBase, "list-state");
+    fs.mkdirSync(customState, { recursive: true });
+    try {
+      const h = makeDeps({ cwd: tmpBase, env: {} });
+
+      // Add a server using custom state dir
+      let rc = await runMcpCli(
+        ["add", "s1", "echo", "--state-dir", customState],
+        h.deps,
+      );
+      expect(rc).toBe(0);
+
+      // List using same custom state dir
+      const h2 = makeDeps({ cwd: tmpBase, env: {} });
+      rc = await runMcpCli(
+        ["--json", "list", "--state-dir", customState],
+        h2.deps,
+      );
+      expect(rc).toBe(0);
+      const listJson = JSON.parse(h2.stdoutLines()[0]);
+      expect(listJson.ok).toBe(true);
+      expect(listJson.servers.some((s) => s.name === "s1")).toBe(true);
+
+      // Remove using same custom state dir
+      const h3 = makeDeps({ cwd: tmpBase, env: {} });
+      rc = await runMcpCli(
+        ["remove", "s1", "--state-dir", customState],
+        h3.deps,
+      );
+      expect(rc).toBe(0);
+    } finally {
+      fs.rmSync(customState, { recursive: true, force: true });
+    }
+  });
+
+  it("--state-dir before --json and -- works together", async () => {
+    const customState = path.join(tmpBase, "combo-state");
+    fs.mkdirSync(customState, { recursive: true });
+    try {
+      const h = makeDeps({ cwd: tmpBase, env: {} });
+      // --state-dir before --, --json trailing, server has -- separator with args
+      const rc = await runMcpCli(
+        ["add", "s1", "echo", "--state-dir", customState, "--", "--json", "--verbose", "--json"],
+        h.deps,
+      );
+      expect(rc).toBe(0);
+
+      const customPath = path.join(customState, "mcp-servers.json");
+      const data = JSON.parse(fs.readFileSync(customPath, "utf-8"));
+      expect(data.servers["s1"]).toBeDefined();
+      // The --json in the -- part should be preserved as server arg
+      expect(data.servers["s1"].args).toEqual(["--json", "--verbose", "--json"]);
+    } finally {
+      fs.rmSync(customState, { recursive: true, force: true });
+    }
+  });
+
+  it("--state-dir with no value returns rc=1", async () => {
+    const h = makeTestDeps();
+    const rc = await runMcpCli(
+      ["add", "s1", "echo", "--state-dir"],
+      h.deps,
+    );
+    expect(rc).toBe(1);
+    const err = JSON.parse(h.stderrLines()[0]);
+    expect(err.ok).toBe(false);
+    expect(err.error).toContain("Missing value");
+  });
+
+  it("--state-dir with next token being another flag returns rc=1", async () => {
+    const h = makeTestDeps();
+    const rc = await runMcpCli(
+      ["add", "s1", "echo", "--state-dir", "--json"],
+      h.deps,
+    );
+    expect(rc).toBe(1);
+    const err = JSON.parse(h.stderrLines()[0]);
+    expect(err.ok).toBe(false);
+    expect(err.error).toContain("Missing value");
+  });
+
+  it("--state-dir before -- with no value returns rc=1", async () => {
+    const h = makeTestDeps();
+    const rc = await runMcpCli(
+      ["add", "s1", "echo", "--state-dir", "--", "server.js"],
+      h.deps,
+    );
+    expect(rc).toBe(1);
+    const err = JSON.parse(h.stderrLines()[0]);
+    expect(err.ok).toBe(false);
+    expect(err.error).toContain("Missing value");
+  });
+
 });
