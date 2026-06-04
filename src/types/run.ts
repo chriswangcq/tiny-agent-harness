@@ -100,6 +100,43 @@ export type NextEffect =
       reason: "failed" | "cancelled";
     };
 
+// ─── Model Decision Trace ────────────────────────────────────────────
+
+export type RunArtifactRef = {
+  path: string;
+  relativePath: string;
+  bytes: number;
+  sha256: string;
+};
+
+export type ModelDecisionTrace = {
+  schemaVersion: 1;
+  decisionId: string;
+  stepIndex: number;
+  kind: ModelTurn["kind"];
+  thinking: {
+    contentChars: number;
+    contentBytes: number;
+    promptRef?: RunArtifactRef;
+    traceRef?: RunArtifactRef;
+  };
+  rawDecision?: {
+    bytes: number;
+    sha256: string;
+    preview: string;
+  };
+  toolCall?: {
+    id: InternalToolCall["id"];
+    name: InternalToolCall["name"];
+    arguments: InternalToolCall["arguments"];
+  };
+  ioWait?: IoWaitRequest;
+  invalidOutput?: {
+    message: string;
+    diagnostic?: Extract<ModelTurn, { kind: "invalid_output" }>["diagnostic"];
+  };
+};
+
 // ─── Run Events ─────────────────────────────────────────────────────
 //
 // State changes are driven by events. Events are also appended to
@@ -132,6 +169,12 @@ export type RunEvent =
       timestamp: string;
     }
   | {
+      type: "model_decision_recorded";
+      stepIndex: number;
+      decision: ModelDecisionTrace;
+      timestamp: string;
+    }
+  | {
       type: "model_thinking_delta";
       stepIndex: number;
       delta: string;
@@ -153,12 +196,14 @@ export type RunEvent =
   | {
       type: "io_wait_started";
       stepIndex: number;
+      decisionId?: string;
       wait: IoWaitRequest;
       timestamp: string;
     }
   | {
       type: "io_wait_satisfied";
       stepIndex: number;
+      decisionId?: string;
       wait: IoWaitRequest;
       event: EnvironmentEvent;
       timestamp: string;
@@ -183,6 +228,7 @@ export type RunEvent =
   | {
       type: "tool_call_validated";
       stepIndex: number;
+      decisionId?: string;
       toolCall: InternalToolCall;
       result: ToolCallValidation;
       timestamp: string;
@@ -190,12 +236,14 @@ export type RunEvent =
   | {
       type: "tool_review_requested";
       stepIndex: number;
+      decisionId?: string;
       request: ToolRequest;
       timestamp: string;
     }
   | {
       type: "tool_reviewed";
       stepIndex: number;
+      decisionId?: string;
       request: ToolRequest;
       decision: ToolReviewDecision;
       timestamp: string;
@@ -203,12 +251,14 @@ export type RunEvent =
   | {
       type: "tool_execution_started";
       stepIndex: number;
+      decisionId?: string;
       request: ToolRequest;
       timestamp: string;
     }
   | {
       type: "tool_execution_finished";
       stepIndex: number;
+      decisionId?: string;
       request: ToolRequest;
       observation: ToolObservation;
       timestamp: string;
@@ -216,6 +266,7 @@ export type RunEvent =
   | {
       type: "observation_appended";
       stepIndex: number;
+      decisionId?: string;
       observation: AgentObservation;
       timestamp: string;
     }

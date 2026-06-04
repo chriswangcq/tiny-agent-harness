@@ -313,13 +313,23 @@ model_output_received(tool_call)
   -> LoopFrame phase=decision status=ok title="tool call: terminal_write"
   -> Complete current model LoopFrame with final thinking/raw decision detail
 
+model_decision_recorded(tool_call)
+  -> Enrich existing decision LoopFrame detail section "decision trace"
+  -> If no model_output_received frame exists, create a compact decision LoopFrame from structured facts
+
 model_output_received(io_wait)
   -> LoopFrame phase=io_wait status=waiting title="io wait requested"
   -> Complete current model LoopFrame with final thinking/raw decision detail
 
+model_decision_recorded(io_wait)
+  -> Enrich existing io_wait LoopFrame detail section "decision trace"
+
 model_output_received(invalid_output)
   -> LoopFrame phase=decision status=warn title="invalid model output"
   -> Complete current model LoopFrame with final diagnostic detail
+
+model_decision_recorded(invalid_output)
+  -> Enrich existing warning decision LoopFrame detail section "decision trace"
 
 tool_call_validated(valid)
   -> LoopFrame phase=validation status=ok title="tool call validated"

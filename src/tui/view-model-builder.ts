@@ -4,7 +4,11 @@
 // Pure logic, no I/O. The builder is append-only: apply events in order,
 // then call getViewModel() to snapshot the current state.
 
-import type { RunEvent, AgentRunStateData } from "../types/run.js";
+import type {
+  RunEvent,
+  AgentRunStateData,
+  ModelDecisionTrace,
+} from "../types/run.js";
 import type { ModelTurn } from "../types/model.js";
 import type {
   SessionListObservation,
@@ -196,6 +200,10 @@ export class ViewModelBuilder {
         }
         break;
       }
+
+      case "model_decision_recorded":
+        this.upsertDecisionTraceFrame(event);
+        break;
 
       case "tool_call_validated": {
         const isValid = event.result.status === "valid";
@@ -515,6 +523,29 @@ export class ViewModelBuilder {
     this.loop.push({ ...frame, id: `frame-${this.frameCounter}` });
   }
 
+  private upsertDecisionTraceFrame(
+    event: Extract<RunEvent, { type: "model_decision_recorded" }>,
+  ): void {
+    const phase = decisionTracePhase(event.decision);
+    const frame = this.findLatestFrame(event.stepIndex, phase);
+    const projection = decisionTraceFrameProjection(event.decision);
+    if (frame) {
+      frame.timestamp = event.timestamp;
+      frame.detail = appendDecisionTraceDetail(frame.detail, event.decision);
+      return;
+    }
+
+    this.pushFrame({
+      stepIndex: event.stepIndex,
+      timestamp: event.timestamp,
+      phase,
+      status: projection.status,
+      title: projection.title,
+      summary: projection.summary,
+      detail: formatDetail([["decision trace", event.decision]]),
+    });
+  }
+
   private completeModelFrame(
     event: Extract<RunEvent, { type: "model_output_received" }>,
   ): void {
@@ -557,9 +588,16 @@ export class ViewModelBuilder {
   }
 
   private findLatestModelFrame(stepIndex: number): LoopFrame | undefined {
+    return this.findLatestFrame(stepIndex, "model");
+  }
+
+  private findLatestFrame(
+    stepIndex: number,
+    phase: LoopFrame["phase"],
+  ): LoopFrame | undefined {
     for (let index = this.loop.length - 1; index >= 0; index--) {
       const frame = this.loop[index]!;
-      if (frame.stepIndex === stepIndex && frame.phase === "model") {
+      if (frame.stepIndex === stepIndex && frame.phase === phase) {
         return frame;
       }
     }
@@ -727,6 +765,51 @@ function formatModelOutputSummary(turn: ModelTurn): string {
     case "invalid_output":
       return `decision=invalid_output ${turn.message}`.trim();
   }
+}
+
+function decisionTracePhase(decision: ModelDecisionTrace): LoopFrame["phase"] {
+  return decision.kind === "io_wait" ? "io_wait" : "decision";
+}
+
+function decisionTraceFrameProjection(
+  decision: ModelDecisionTrace,
+): Pick<LoopFrame, "status" | "title" | "summary"> {
+  switch (decision.kind) {
+    case "tool_call": {
+      const toolCall = decision.toolCall;
+      return {
+        status: "ok",
+        title: `tool call: ${toolCall?.name ?? "unknown"}`,
+        summary: toolCall === undefined ? "" : formatToolCallSummary(toolCall),
+      };
+    }
+    case "io_wait":
+      return {
+        status: "waiting",
+        title: "io wait requested",
+        summary: decision.ioWait?.reason ?? "",
+      };
+    case "invalid_output":
+      return {
+        status: "warn",
+        title: "invalid model output",
+        summary: decision.invalidOutput?.message ?? "",
+      };
+  }
+}
+
+function appendDecisionTraceDetail(
+  existing: string | undefined,
+  decision: ModelDecisionTrace,
+): string {
+  const detail = formatDetail([["decision trace", decision]]);
+  if (!existing || existing.length === 0) {
+    return detail;
+  }
+  if (existing.includes("## decision trace")) {
+    return existing;
+  }
+  return `${existing}\n\n${detail}`;
 }
 
 function formatDetail(

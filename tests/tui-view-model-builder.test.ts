@@ -460,6 +460,66 @@ describe("ViewModelBuilder", () => {
     }
   });
 
+  it("enriches decision frames from structured model decision facts without duplicating them", () => {
+    const builder = builderWithRunStarted();
+    const call = toolCall("terminal_write", {
+      expectedInputSeq: 2,
+      text: "echo hi\n",
+    });
+
+    builder.applyEvent({
+      type: "model_output_received",
+      stepIndex: 1,
+      output: toolCallOutput(call),
+      turn: toolCallTurn(call),
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "model_decision_recorded",
+      stepIndex: 1,
+      decision: {
+        schemaVersion: 1,
+        decisionId: "decision-run-1-1",
+        stepIndex: 1,
+        kind: "tool_call",
+        thinking: {
+          contentChars: "thinking about it".length,
+          contentBytes: Buffer.byteLength("thinking about it", "utf-8"),
+          promptRef: {
+            path: "/repo/.tiny-agent/runs/run-1/debug/prompts/step-0001-thinking.prompt.txt",
+            relativePath: "debug/prompts/step-0001-thinking.prompt.txt",
+            bytes: 12,
+            sha256: "prompt-sha",
+          },
+        },
+        rawDecision: {
+          bytes: Buffer.byteLength("tool decision", "utf-8"),
+          sha256: "decision-sha",
+          preview: "tool decision",
+        },
+        toolCall: {
+          id: call.id,
+          name: call.name,
+          arguments: call.arguments,
+        },
+      },
+      timestamp: LATER,
+    });
+
+    const decisionFrames = builder.getViewModel().loop.filter(
+      (frame) => frame.phase === "decision" && frame.stepIndex === 1,
+    );
+    expect(decisionFrames).toHaveLength(1);
+    expect(decisionFrames[0]).toMatchObject({
+      title: "tool call: terminal_write",
+      summary: expect.stringContaining("tool=terminal_write"),
+    });
+    expect(decisionFrames[0]!.detail).toContain("## decision trace");
+    expect(decisionFrames[0]!.detail).toContain("decision-run-1-1");
+    expect(decisionFrames[0]!.detail).toContain("promptRef");
+    expect(decisionFrames[0]!.detail).toContain("tool decision");
+  });
+
   it("keeps invalid model output detail visible", () => {
     const builder = builderWithRunStarted();
     const output = invalidOutput();

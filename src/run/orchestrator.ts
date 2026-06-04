@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import type { RunError, RunEvent } from "../types/run.js";
+import type { ModelDecisionTrace, RunArtifactRef } from "../types/run.js";
 import type {
   AgentThinking,
   FimStepOutput,
@@ -31,6 +33,7 @@ import type {
 
 const MODEL_THINKING_DELTA_MIN_INTERVAL_MS = 80;
 const MODEL_THINKING_DELTA_MAX_BUFFER_CHARS = 160;
+const RAW_DECISION_PREVIEW_CHARS = 400;
 
 export interface ModelPort {
   generateTurn(
@@ -200,11 +203,22 @@ export class RunOrchestrator {
           thinkingTrace.content(),
         );
 
+        const modelStepIndex = this.state.data.stepIndex;
         await this.record({
           type: "model_output_received",
-          stepIndex: this.state.data.stepIndex,
+          stepIndex: modelStepIndex,
           output,
           turn: output.turn,
+          timestamp: this.now(),
+        });
+        await this.record({
+          type: "model_decision_recorded",
+          stepIndex: modelStepIndex,
+          decision: buildModelDecisionTrace({
+            runId: this.state.data.runId,
+            stepIndex: modelStepIndex,
+            output,
+          }),
           timestamp: this.now(),
         });
         continue;
@@ -222,6 +236,7 @@ export class RunOrchestrator {
         await this.record({
           type: "tool_call_validated",
           stepIndex: this.state.data.stepIndex,
+          decisionId: this.currentDecisionId(),
           toolCall: effect.toolCall,
           result,
           timestamp: this.now(),
@@ -233,6 +248,7 @@ export class RunOrchestrator {
         await this.record({
           type: "tool_review_requested",
           stepIndex: this.state.data.stepIndex,
+          decisionId: this.currentDecisionId(),
           request: effect.request,
           timestamp: this.now(),
         });
@@ -248,6 +264,7 @@ export class RunOrchestrator {
         await this.record({
           type: "tool_reviewed",
           stepIndex: this.state.data.stepIndex,
+          decisionId: this.currentDecisionId(),
           request: effect.request,
           decision,
           timestamp: this.now(),
@@ -259,6 +276,7 @@ export class RunOrchestrator {
         await this.record({
           type: "tool_execution_started",
           stepIndex: this.state.data.stepIndex,
+          decisionId: this.currentDecisionId(),
           request: effect.request,
           timestamp: this.now(),
         });
@@ -290,6 +308,7 @@ export class RunOrchestrator {
         await this.record({
           type: "tool_execution_finished",
           stepIndex: finishedStepIndex,
+          decisionId: buildDecisionId(this.state.data.runId, finishedStepIndex),
           request: effect.request,
           observation,
           timestamp: this.now(),
@@ -312,6 +331,7 @@ export class RunOrchestrator {
         await this.record({
           type: "observation_appended",
           stepIndex: this.state.data.stepIndex,
+          decisionId: this.currentDecisionId(),
           observation: effect.observation,
           timestamp: this.now(),
         });
@@ -344,6 +364,7 @@ export class RunOrchestrator {
           await this.record({
             type: "observation_appended",
             stepIndex: this.state.data.stepIndex,
+            decisionId: this.currentDecisionId(),
             observation,
             timestamp: this.now(),
           });
@@ -367,6 +388,7 @@ export class RunOrchestrator {
           await this.record({
             type: "observation_appended",
             stepIndex: this.state.data.stepIndex,
+            decisionId: this.currentDecisionId(),
             observation: {
               kind: "io_wait",
               message: unsettledMessage,
@@ -380,6 +402,7 @@ export class RunOrchestrator {
         await this.record({
           type: "io_wait_started",
           stepIndex: this.state.data.stepIndex,
+          decisionId: this.currentDecisionId(),
           wait: effect.wait,
           timestamp: this.now(),
         });
@@ -416,6 +439,7 @@ export class RunOrchestrator {
         await this.record({
           type: "io_wait_satisfied",
           stepIndex: this.state.data.stepIndex,
+          decisionId: this.currentDecisionId(),
           wait: effect.wait,
           event,
           timestamp: this.now(),
@@ -454,6 +478,10 @@ export class RunOrchestrator {
 
   private pendingIoWaitToolCallId(): string {
     return `fim-call-${this.state.data.runId}-${this.state.data.stepIndex}`;
+  }
+
+  private currentDecisionId(): string {
+    return buildDecisionId(this.state.data.runId, this.state.data.stepIndex);
   }
 
   private async failRun(error: unknown, code: string): Promise<void> {
@@ -612,6 +640,97 @@ function renderActiveSkillReminder(runs: ActiveSkillRunSummary[]): string {
     lines.push(line);
   }
   return lines.join("\n");
+}
+
+function buildDecisionId(runId: string, stepIndex: number): string {
+  return `decision-${runId}-${stepIndex}`;
+}
+
+function buildModelDecisionTrace(input: {
+  runId: string;
+  stepIndex: number;
+  output: FimStepOutput;
+}): ModelDecisionTrace {
+  const { output, runId, stepIndex } = input;
+  const turn = output.turn;
+  const trace: ModelDecisionTrace = {
+    schemaVersion: 1,
+    decisionId: buildDecisionId(runId, stepIndex),
+    stepIndex,
+    kind: turn.kind,
+    thinking: buildThinkingFacts(output.thinking),
+    rawDecision: buildRawDecisionFacts(output.rawDecision),
+  };
+
+  if (turn.kind === "tool_call") {
+    trace.toolCall = {
+      id: turn.toolCall.id,
+      name: turn.toolCall.name,
+      arguments: turn.toolCall.arguments,
+    };
+  } else if (turn.kind === "io_wait") {
+    trace.ioWait = turn.wait;
+  } else {
+    trace.invalidOutput = {
+      message: turn.message,
+      ...(turn.diagnostic ? { diagnostic: turn.diagnostic } : {}),
+    };
+  }
+
+  return trace;
+}
+
+function buildThinkingFacts(thinking: AgentThinking): ModelDecisionTrace["thinking"] {
+  return {
+    contentChars: thinking.content.length,
+    contentBytes: Buffer.byteLength(thinking.content, "utf-8"),
+    ...optionalArtifactRef("promptRef", artifactRef(thinking.raw, "promptRef")),
+    ...optionalArtifactRef("traceRef", artifactRef(thinking.raw, "traceRef")),
+  };
+}
+
+function optionalArtifactRef<K extends "promptRef" | "traceRef">(
+  key: K,
+  value: RunArtifactRef | undefined,
+): Pick<ModelDecisionTrace["thinking"], K> | Record<string, never> {
+  return value === undefined ? {} : { [key]: value } as Pick<ModelDecisionTrace["thinking"], K>;
+}
+
+function buildRawDecisionFacts(rawDecision: string): NonNullable<ModelDecisionTrace["rawDecision"]> {
+  return {
+    bytes: Buffer.byteLength(rawDecision, "utf-8"),
+    sha256: createHash("sha256").update(rawDecision, "utf-8").digest("hex"),
+    preview: compactRawDecisionPreview(rawDecision),
+  };
+}
+
+function compactRawDecisionPreview(rawDecision: string): string {
+  if (rawDecision.length <= RAW_DECISION_PREVIEW_CHARS) {
+    return rawDecision;
+  }
+  return `${rawDecision.slice(0, RAW_DECISION_PREVIEW_CHARS - 3)}...`;
+}
+
+function artifactRef(
+  raw: unknown,
+  key: "promptRef" | "traceRef",
+): RunArtifactRef | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return undefined;
+  }
+  const value = (raw as Record<string, unknown>)[key];
+  return isRunArtifactRef(value) ? value : undefined;
+}
+
+function isRunArtifactRef(value: unknown): value is RunArtifactRef {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { path?: unknown }).path === "string" &&
+    typeof (value as { relativePath?: unknown }).relativePath === "string" &&
+    typeof (value as { bytes?: unknown }).bytes === "number" &&
+    typeof (value as { sha256?: unknown }).sha256 === "string"
+  );
 }
 
 function toRunError(error: unknown, code: string): RunError {

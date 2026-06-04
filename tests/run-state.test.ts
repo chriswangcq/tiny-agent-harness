@@ -301,6 +301,51 @@ describe("AgentRunState transitions", () => {
     expect(running.data.pendingToolCall).toEqual(tc);
   });
 
+  it("model_decision_recorded is durable metadata and does not change pending work", () => {
+    const waiting = toWaitingForModel(initial);
+    const tc = makeToolCall();
+    const running = waiting.apply({
+      type: "model_output_received",
+      stepIndex: 0,
+      output: makeToolCallOutput(tc),
+      turn: makeToolCallTurn(tc),
+      timestamp: NOW,
+    });
+
+    const traced = running.apply({
+      type: "model_decision_recorded",
+      stepIndex: 0,
+      decision: {
+        schemaVersion: 1,
+        decisionId: "decision-test-run-0",
+        stepIndex: 0,
+        kind: "tool_call",
+        thinking: {
+          contentChars: "thinking about it".length,
+          contentBytes: Buffer.byteLength("thinking about it", "utf-8"),
+        },
+        rawDecision: {
+          bytes: Buffer.byteLength("terminal_write", "utf-8"),
+          sha256: "sha",
+          preview: "terminal_write",
+        },
+        toolCall: {
+          id: tc.id,
+          name: tc.name,
+          arguments: tc.arguments,
+        },
+      },
+      timestamp: "2024-01-01T00:00:01.000Z",
+    });
+
+    expect(traced.status).toBe("running");
+    expect(traced.data.pendingToolCall).toEqual(tc);
+    expect(traced.nextEffect()).toMatchObject({
+      type: "validate_tool_call",
+      toolCall: tc,
+    });
+  });
+
   it("waiting_for_model + model_output_received(invalid_output) -> running with pendingModelTurn", () => {
     const waiting = toWaitingForModel(initial);
     const running = waiting.apply({
