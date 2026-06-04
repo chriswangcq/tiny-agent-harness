@@ -348,18 +348,28 @@ describe("runIm CLI", () => {
 
   it("send writes agent message with --json", async () => {
     const stateDir = createStateDir();
+    const origChannel = process.env.TAH_RUN_CHANNEL;
+    delete process.env.TAH_RUN_CHANNEL;
 
-    captureStdout();
-    await runIm(["send", "--channel", "default", "--kind", "status", "--text", "all done", "--state-dir", stateDir, "--json"]);
-    restoreStdout();
+    try {
+      captureStdout();
+      await runIm(["send", "--channel", "default", "--kind", "status", "--text", "all done", "--state-dir", stateDir, "--json"]);
+      restoreStdout();
 
-    const sendResult = JSON.parse(captured.join(""));
-    expect(sendResult.ok).toBe(true);
-    expect(sendResult.id).toMatch(/^agent-/);
-    expect(sendResult.kind).toBe("status");
+      const sendResult = JSON.parse(captured.join(""));
+      expect(sendResult.ok).toBe(true);
+      expect(sendResult.id).toMatch(/^agent-/);
+      expect(sendResult.kind).toBe("status");
 
-    const outboxPath = path.join(stateDir, "im", "default.outbox.jsonl");
-    expect(fs.existsSync(outboxPath)).toBe(true);
+      const outboxPath = path.join(stateDir, "im", "default.outbox.jsonl");
+      expect(fs.existsSync(outboxPath)).toBe(true);
+    } finally {
+      if (origChannel === undefined) {
+        delete process.env.TAH_RUN_CHANNEL;
+      } else {
+        process.env.TAH_RUN_CHANNEL = origChannel;
+      }
+    }
   });
 
   it("send auto-corrects channel via TAH_RUN_CHANNEL (cli->default)", async () => {
@@ -402,22 +412,32 @@ describe("runIm CLI", () => {
 
   it("send reads multiline agent message with --text-stdin", async () => {
     const stateDir = createStateDir();
+    const origChannel = process.env.TAH_RUN_CHANNEL;
+    delete process.env.TAH_RUN_CHANNEL;
     const text = "## report\n\n- `cli/` stays literal\n- done\n";
 
-    captureStdout();
-    await runIm(
-      ["send", "--channel", "default", "--kind", "status", "--text-stdin", "--state-dir", stateDir, "--json"],
-      { stdin: Readable.from([text]) },
-    );
-    restoreStdout();
+    try {
+      captureStdout();
+      await runIm(
+        ["send", "--channel", "default", "--kind", "status", "--text-stdin", "--state-dir", stateDir, "--json"],
+        { stdin: Readable.from([text]) },
+      );
+      restoreStdout();
 
-    const sendResult = JSON.parse(captured.join(""));
-    expect(sendResult.ok).toBe(true);
+      const sendResult = JSON.parse(captured.join(""));
+      expect(sendResult.ok).toBe(true);
 
-    const outboxPath = path.join(stateDir, "im", "default.outbox.jsonl");
-    const messages = fs.readFileSync(outboxPath, "utf-8").trim().split("\n").map((line) => JSON.parse(line));
-    expect(messages).toHaveLength(1);
-    expect(messages[0].text).toBe(text);
+      const outboxPath = path.join(stateDir, "im", "default.outbox.jsonl");
+      const messages = fs.readFileSync(outboxPath, "utf-8").trim().split("\n").map((line) => JSON.parse(line));
+      expect(messages).toHaveLength(1);
+      expect(messages[0].text).toBe(text);
+    } finally {
+      if (origChannel === undefined) {
+        delete process.env.TAH_RUN_CHANNEL;
+      } else {
+        process.env.TAH_RUN_CHANNEL = origChannel;
+      }
+    }
   });
 
   it("post rejects reserved agent sender labels", async () => {
