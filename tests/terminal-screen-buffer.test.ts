@@ -137,6 +137,19 @@ describe("stripManagedShellScreenNoise", () => {
     expect(result.pending).toBe("");
   });
 
+  it("strips managed shell prompt counter setup lines", () => {
+    const result = stripManagedShellScreenNoise(
+      [
+        "export TAH_PROMPT_RC=0\r\n",
+        "export PROMPT_COMMAND='TAH_PROMPT_RC=$?; TAH_PROMPT_SEQ=$((TAH_PROMPT_SEQ + 1))'\r\n",
+        "visible output\r\n",
+      ].join(""),
+    );
+
+    expect(result.output).toBe("visible output\r\n");
+    expect(result.pending).toBe("");
+  });
+
   it("resets continuation after PROMPT and preserves blockquote > prefix", () => {
     const first = stripManagedShellScreenNoise(
       "__TAH_CONT__ nonce=n reason=unknown seq=1\r\n> ",

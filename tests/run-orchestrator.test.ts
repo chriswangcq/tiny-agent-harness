@@ -90,6 +90,7 @@ function makeRun(options?: {
   validateResult?: RunPorts["validator"]["validate"];
   reviewDecision?: ToolReviewDecision;
   terminalObservation?: TerminalObservation;
+  terminalObservations?: TerminalObservation[];
   initialHistory?: ModelContextItem[];
   contextWindow?: Parameters<ModelContextSession["compactIfNeeded"]>[0]["contextWindow"];
   activeSkillRuns?: ReturnType<RunPorts["listActiveSkillRuns"]>;
@@ -120,6 +121,7 @@ function makeRun(options?: {
   const reviewCalls: ToolRequest[] = [];
   const terminalCalls: ToolRequest[] = [];
   const sessionSaves: ModelContextItem[][] = [];
+  const terminalObservations = [...(options?.terminalObservations ?? [])];
 
   const modelContext = ModelContextSession.create({
     task: state.data.task,
@@ -201,6 +203,7 @@ function makeRun(options?: {
       async execute(request) {
         terminalCalls.push(request);
         return (
+          terminalObservations.shift() ??
           options?.terminalObservation ?? {
             currentSession: "default",
             observedSession: "default",
@@ -1428,11 +1431,11 @@ describe("RunOrchestrator", () => {
 
     expect(environment.state.events).toEqual([
       expect.objectContaining({
-        id: "env-session-run-001-default-returned-nonce-same-prompt",
+        id: "env-session-run-001-default-returned-nonce-same-prompt-seq-3",
         kind: "session_returned_to_prompt",
       }),
       expect.objectContaining({
-        id: "env-session-run-001-default-input-ready-prompt-nonce-same-prompt",
+        id: "env-session-run-001-default-input-ready-prompt-nonce-same-prompt-seq-3",
         kind: "session_input_ready",
       }),
     ]);
@@ -1441,6 +1444,90 @@ describe("RunOrchestrator", () => {
         (event) => event.type === "environment_event_recorded",
       ),
     ).toHaveLength(2);
+  });
+
+  it("records distinct terminal prompt facts for the same nonce when prompt sequence advances", async () => {
+    const environment = new Environment();
+    const environmentPort: RunPorts["environment"] = {
+      appendEvent(event) {
+        return environment.appendEvent(event);
+      },
+      consumeSince(options) {
+        return environment.consumeSince(options);
+      },
+      waitFor(options) {
+        return environment.waitFor(options);
+      },
+    };
+    const firstToolCall: InternalToolCall = {
+      id: "tool-returned-seq-1",
+      name: "terminal_write",
+      arguments: { expectedInputSeq: 1, text: "npm run typecheck\n" },
+    };
+    const secondToolCall: InternalToolCall = {
+      id: "tool-returned-seq-2",
+      name: "terminal_write",
+      arguments: { expectedInputSeq: 2, text: "npm test\n" },
+    };
+    const observation = (
+      inputSeq: number,
+      promptSeq: number,
+    ): TerminalObservation => ({
+      currentSession: "default",
+      observedSession: "default",
+      terminal: terminal(inputSeq),
+      request: "terminal_write",
+      result: "ok",
+      returnedToPrompt: true,
+      terminalEvents: [
+        {
+          kind: "prompt",
+          returnCode: 0,
+          cwd: "/repo",
+          promptSeq,
+          promptNonce: "same-runtime",
+        },
+      ],
+      screen: {
+        text: "[repo]$ ",
+        rows: 24,
+        cols: 80,
+        truncated: false,
+        logRef: { path: "managed-pty://default" },
+      },
+    });
+    const { orchestrator, transcript } = makeRun({
+      outputs: [toolOutput(firstToolCall), toolOutput(secondToolCall)],
+      environment: environmentPort,
+      terminalObservations: [observation(2, 3), observation(3, 4)],
+    });
+
+    await orchestrator.run();
+
+    expect(
+      environment.state.events.filter(
+        (event) => event.kind === "session_returned_to_prompt",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        id: "env-session-run-001-default-returned-nonce-same-runtime-seq-3",
+        promptSeq: 3,
+      }),
+      expect.objectContaining({
+        id: "env-session-run-001-default-returned-nonce-same-runtime-seq-4",
+        promptSeq: 4,
+      }),
+    ]);
+    expect(
+      environment.state.events.filter(
+        (event) => event.kind === "session_input_ready",
+      ),
+    ).toHaveLength(2);
+    expect(
+      readTranscript(transcript).filter(
+        (event) => event.type === "environment_event_recorded",
+      ),
+    ).toHaveLength(4);
   });
 
   it("session environment events can wake a pending io_wait", async () => {

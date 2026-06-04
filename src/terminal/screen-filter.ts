@@ -14,6 +14,8 @@ const NOISE_MARKERS = [
   "__TAH_CONT__",
   "export TAH_PROMPT_NONCE=",
   "export TAH_PROMPT_SEQ=",
+  "export TAH_PROMPT_RC=",
+  "export PROMPT_COMMAND=",
   "export PS1=",
   "export PS2=",
 ];

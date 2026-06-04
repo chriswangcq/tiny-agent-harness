@@ -956,7 +956,10 @@ function promptFactKey(input: {
   fallback: number;
 }): string {
   if (input.promptNonce && input.promptNonce.length > 0) {
-    return `nonce-${stableEventIdPart(input.promptNonce)}`;
+    const nonceKey = `nonce-${stableEventIdPart(input.promptNonce)}`;
+    return input.promptSeq === undefined
+      ? nonceKey
+      : `${nonceKey}-seq-${input.promptSeq}`;
   }
   if (input.promptSeq !== undefined) {
     return `seq-${input.promptSeq}`;

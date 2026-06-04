@@ -79,10 +79,16 @@ This keeps the session observe pump useful without turning level-0 terminal outp
 Environment events represent external facts, not the observation attempt that noticed them. Session fact IDs must therefore be stable across `terminal_write`, explicit `session_observe`, and the background session pump. For example, the same prompt return should keep the same event id when it is observed multiple times:
 
 ```text
-env-session-{runId}-{session}-returned-nonce-{promptNonce}
-env-session-{runId}-{session}-input-ready-prompt-nonce-{promptNonce}
+env-session-{runId}-{session}-returned-nonce-{promptNonce}-seq-{promptSeq}
+env-session-{runId}-{session}-input-ready-prompt-nonce-{promptNonce}-seq-{promptSeq}
 env-session-{runId}-{session}-output-{inputSeq}
 ```
+
+Managed shell prompts increment `promptSeq` before each displayed prompt. The
+runtime nonce identifies the managed PTY instance; the prompt sequence identifies
+one concrete prompt fact inside that instance. This lets repeated observations
+deduplicate the same prompt while still waking `io_wait` for later command
+completions in the same session.
 
 `Environment.appendEvent(...)` returns `false` when an event id already exists. The orchestrator records `environment_event_recorded` only when the append actually added a new event. This prevents repeated pump observations from inflating both `events.jsonl` and the transcript.
 

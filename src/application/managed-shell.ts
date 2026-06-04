@@ -39,8 +39,10 @@ export function buildManagedShellInitSnippet(input: { nonce: string }): string {
     "set +H",
     `export TAH_PROMPT_NONCE=${quotedNonce}`,
     "export TAH_PROMPT_SEQ=0",
-    "export PS1='__TAH_PROMPT__ nonce='\"$TAH_PROMPT_NONCE\"' rc=$? cwd=\\w seq='\"$TAH_PROMPT_SEQ\"$'\\n[\\u@\\h:\\w]\\$ '",
-    "export PS2='__TAH_CONT__ nonce='\"$TAH_PROMPT_NONCE\"' reason=unknown seq='\"$TAH_PROMPT_SEQ\"$'\\n> '",
+    "export TAH_PROMPT_RC=0",
+    "export PROMPT_COMMAND='TAH_PROMPT_RC=$?; TAH_PROMPT_SEQ=$((TAH_PROMPT_SEQ + 1))'",
+    "export PS1='__TAH_PROMPT__ nonce=${TAH_PROMPT_NONCE} rc=${TAH_PROMPT_RC} cwd=\\w seq=${TAH_PROMPT_SEQ}'$'\\n''[\\u@\\h:\\w]\\$ '",
+    "export PS2='__TAH_CONT__ nonce=${TAH_PROMPT_NONCE} reason=unknown seq=${TAH_PROMPT_SEQ}'$'\\n''> '",
   ].join("\n");
 }
 

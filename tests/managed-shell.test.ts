@@ -58,8 +58,14 @@ describe("managed shell marker formatting", () => {
 
     expect(snippet.split("\n")[0]).toBe("set +H");
     expect(snippet).toContain("export TAH_PROMPT_NONCE='nonce%20%27%20space'");
+    expect(snippet).toContain("export TAH_PROMPT_RC=0");
+    expect(snippet).toContain(
+      "export PROMPT_COMMAND='TAH_PROMPT_RC=$?; TAH_PROMPT_SEQ=$((TAH_PROMPT_SEQ + 1))'",
+    );
     expect(snippet).toContain("__TAH_PROMPT__");
     expect(snippet).toContain("__TAH_CONT__");
+    expect(snippet).toContain("seq=${TAH_PROMPT_SEQ}");
+    expect(snippet).toContain("rc=${TAH_PROMPT_RC}");
     expect(snippet).toContain("PS1=");
     expect(snippet).toContain("PS2=");
     expect(snippet).toContain("[\\u@\\h:\\w]\\$ ");
