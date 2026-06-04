@@ -13,6 +13,7 @@
 - 想理解用户消息和外部事件：读 [IM CLI Transport](im-cli-transport.md) 和 [Environment Model](environment-model.md)。
 - 想理解 CLI 能力生态：读 [Skill CLI](skill-cli.md)、[Code Intelligence CLI](code-intelligence-cli.md) 和 [MCP CLI](mcp-cli.md)。
 - 想理解 sub-agent 管理域：读 [Sub-agent Team Domain](subagent-team.md)。
+- 想试运行多 agent ticket/workspace/branch 协作：读 [Agent Team Trial Plan](agent-team-trial.md)。
 - 想理解 resume/replay/eval：读 [Recovery And Replay](recovery-replay.md)。
 - 想理解持久化与调试文件：读 [State Layout](state-layout.md) 和 [State Storage And File Locking](state-storage-locking.md)。
 - 想理解观察界面：读 [TUI](tui.md)。
