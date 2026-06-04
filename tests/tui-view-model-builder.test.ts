@@ -3,6 +3,8 @@ import { ViewModelBuilder } from "../src/tui/view-model-builder.js";
 import type {
   AgentRunStateData,
   RunEvent,
+  RuntimeStuckReason,
+
 } from "../src/types/run.js";
 import type {
   FimStepOutput,
@@ -893,6 +895,86 @@ describe("ViewModelBuilder", () => {
       summary: "ev-1, ev-2",
     });
   });
+
+  it("projects runtime stuck detected as environment frame with reason fields", () => {
+    const reason: RuntimeStuckReason = {
+      code: "repeated_no_progress",
+      severity: "warn",
+      pattern: "repeated_model_output",
+      message: "Runtime observed 3 repeated no-progress model_output signals.",
+      signal: { kind: "model_output", message: "invalid output" },
+      signature: '{"kind":"model_output","message":"invalid output"}',
+      consecutiveCount: 3,
+      threshold: 3,
+      warnThreshold: 3,
+      blockThreshold: 5,
+      sinceStepIndex: 1,
+      lastStepIndex: 3,
+    };
+
+    const builder = builderWithRunStarted();
+    builder.applyEvent({
+      type: "runtime_stuck_detected",
+      stepIndex: 3,
+      severity: "warn",
+      reason,
+      timestamp: LATER,
+    });
+
+    const view = builder.getViewModel();
+    const stuckFrame = view.loop.find(
+      (frame) => frame.title === "runtime stuck: repeated_model_output",
+    );
+    expect(stuckFrame).toBeDefined();
+    expect(stuckFrame!).toMatchObject({
+      phase: "environment",
+      status: "warn",
+      summary: reason.message,
+    });
+    expect(stuckFrame!.detail).toContain("## severity\nwarn");
+    expect(stuckFrame!.detail).toContain("## pattern\nrepeated_model_output");
+    expect(stuckFrame!.detail).toContain("## threshold\n3");
+    expect(stuckFrame!.detail).toContain("## signature");
+    expect(stuckFrame!.detail).toContain("## consecutiveCount\n3");
+    expect(stuckFrame!.detail).toContain("## sinceStepIndex\n1");
+    expect(stuckFrame!.detail).toContain("## lastStepIndex\n3");
+  });
+
+  it("projects runtime stuck detected as error frame when blocked", () => {
+    const reason: RuntimeStuckReason = {
+      code: "repeated_no_progress",
+      severity: "blocked",
+      pattern: "repeated_tool_error",
+      message: "Runtime blocked after 5 repeated no-progress tool_error signals.",
+      signal: { kind: "tool_error", toolName: "terminal_write", request: "tw/1", result: "rejected" },
+      signature: '{"kind":"tool_error","toolName":"terminal_write"}',
+      consecutiveCount: 5,
+      threshold: 5,
+      warnThreshold: 3,
+      blockThreshold: 5,
+      sinceStepIndex: 1,
+      lastStepIndex: 5,
+    };
+
+    const builder = builderWithRunStarted();
+    builder.applyEvent({
+      type: "runtime_stuck_detected",
+      stepIndex: 5,
+      severity: "blocked",
+      reason,
+      timestamp: LATER,
+    });
+
+    const stuckFrame = builder.getViewModel().loop.find(
+      (frame) => frame.title === "runtime stuck: repeated_tool_error",
+    );
+    expect(stuckFrame).toBeDefined();
+    expect(stuckFrame!.status).toBe("error");
+    expect(stuckFrame!.detail).toContain("## severity\nblocked");
+    expect(stuckFrame!.detail).toContain("## threshold\n5");
+    expect(stuckFrame!.detail).toContain("## consecutiveCount\n5");
+  });
+
 
   it("keeps conversation sorted by timestamp and deduped by id", () => {
     const builder = builderWithRunStarted();
