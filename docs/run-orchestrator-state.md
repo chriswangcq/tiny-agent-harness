@@ -450,6 +450,9 @@ It does **not** implement pricing or billing policy, does **not** include
 dashboard or TUI cost display integration, and does **not** derive usage
 summary from raw prompt texts, debug payloads, or provider-specific response
 parsing.
+TUI `tokenUsage` is a read-only `ViewModelBuilder` projection of the same
+durable `model_usage_recorded` facts; it is not a pricing, billing, cost,
+or raw prompt/debug/provider parsing dashboard.
 
 ## Orchestrator Loop
 

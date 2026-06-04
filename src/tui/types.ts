@@ -5,6 +5,7 @@
 
 import type { AgentRunStatus } from "../types/run.js";
 import type { ToolReviewDecision } from "../types/tools.js";
+import type { TokenUsageView } from "./token-usage-consumer.js";
 
 // ─── Top-level View Model ──────────────────────────────────────────
 
@@ -14,6 +15,7 @@ export type TuiViewModel = {
   loop: LoopFrame[];
   sessions: SessionView[];
   activeSkills: ActiveSkillView[];
+  tokenUsage?: TokenUsageView;
   selected?: Selection;
 };
 
