@@ -18,6 +18,7 @@ export type ToolPolicyRuleCode =
   | "dangerous_fork_bomb"
   | "dangerous_secret_read"
   | "dangerous_system_path_write"
+  | "dangerous_overlong_input"
   | "warning_network_transfer"
   | "warning_global_package_install"
   | "warning_recursive_permission_change"
@@ -31,11 +32,8 @@ export type ToolPolicyFinding = {
 };
 
 export type ToolPolicyOptions = {
-  /**
-   * Demo/runtime escape hatch. Keep explicit so tests can prove the evaluator
-   * does not read hidden process state to decide whether dangerous writes pass.
-   */
   allowDangerousTerminalWrites?: boolean;
+  maxWriteLength?: number;
 };
 
 export type ToolPolicyDecision = {
@@ -51,6 +49,10 @@ type Rule = {
   message: string;
   pattern: RegExp;
 };
+
+const DEFAULT_MAX_WRITE_LENGTH = 32_000;
+
+const SYSTEM_PATH = String.raw`\/etc\/|\/usr\/|\/bin\/|\/sbin\/|\/System\/|\/Library\/|\/boot\/|\/dev\/|\/proc\/|\/sys\/`;
 
 const DANGEROUS_TERMINAL_WRITE_RULES: Rule[] = [
   {
@@ -75,27 +77,34 @@ const DANGEROUS_TERMINAL_WRITE_RULES: Rule[] = [
   {
     code: "dangerous_permission_change",
     severity: "error",
-    message: "Recursive broad permission change targets a root or home path.",
-    pattern:
-      /\bchmod\s+-R\s+777\s+(?:"\/"|'\/'|\/(?:\s|$)|~(?:\/|\s|$)|["']?\$HOME["']?(?:\/|\s|$))/u,
+    message: "Recursive broad permission change targets a root, home, or system path.",
+    pattern: new RegExp(
+      String.raw`\bchmod\s+-R\s+\S+\s+(?:"\/"|'\/'|\/(?:\s|$)|\/\*|~(?:\/|\s|$)|["']?\$HOME["']?(?:\/|\s|$)|\/(?:etc|usr|bin|sbin|System|Library|boot|dev|proc|sys)\b)`,
+      "u",
+    ),
   },
   {
+    // Pipe | bash, pipe | sudo -E bash, pipe | sudo --preserve-env bash,
+    // bash <(curl ...), source <(wget ...)
     code: "dangerous_pipe_to_shell",
     severity: "error",
-    message: "Downloaded content is piped directly into a shell.",
-    pattern: /\b(?:curl|wget)\b[^;\n|]*\|\s*(?:sudo\s+)?(?:ba)?sh\b/u,
+    message: "Downloaded content is executed in a shell (pipe or process substitution).",
+    pattern:
+      /\b(?:curl|wget)\b[^;\n|]*\|\s*(?:sudo(?:\s+(?:-[A-Za-z]+|--[A-Za-z][A-Za-z-]*)\b)*\s+)?(?:ba)?sh\b|(?:bash|sh|source|\.)\s+<\(\s*(?:curl|wget)\b/u,
   },
   {
     code: "dangerous_privileged_command",
     severity: "error",
     message: "Privileged destructive system command was requested.",
-    pattern: /\bsudo\s+(?:rm|chmod|chown|dd|mkfs|shutdown|reboot)\b/u,
+    pattern:
+      /\bsudo\s+(?:rm|chmod|chown|dd|mkfs|shutdown|reboot|halt|poweroff)\b/u,
   },
   {
     code: "dangerous_force_push",
     severity: "error",
     message: "Force push can rewrite remote history.",
-    pattern: /\bgit\s+push\b[^\n;]*(?:--force(?:-with-lease)?|\s-f(?:\s|$))/u,
+    pattern:
+      /\bgit\s+push\b[^\n;]*(?:--force(?:-with-lease)?|[+-]f(?:\s|$)|\+[a-zA-Z][\w/.-]*)/u,
   },
   {
     code: "dangerous_fork_bomb",
@@ -108,14 +117,21 @@ const DANGEROUS_TERMINAL_WRITE_RULES: Rule[] = [
     severity: "error",
     message: "Terminal write attempts to read a likely secret file.",
     pattern:
-      /\b(?:cat|less|more|head|tail|sed|awk|grep|rg)\b[^\n;]*(?:~\/\.ssh\/(?:id_[\w-]+|config)|(?:^|[\/\s])(?:ak\.txt|\.env(?:\.[\w-]+)?|\.npmrc|\.netrc|id_rsa|id_ed25519|[^\/\s]+\.pem|[^\/\s]+\.key|[^\/\s]+\.p12)(?:\s|$))/u,
+      /\b(?:cat|less|more|head|tail|sed|awk|grep|rg)\b[^\n;]*(?:~\/\.ssh\/(?:id_[\w-]+|config)|(?:^|[\s/])(?:ak\.txt|\.env(?:\.(?:local|production|development|test|staging|prod|dev))?|\.npmrc|\.netrc|\.git-credentials|id_rsa|id_ecdsa|id_ed25519|[^\s/]+\.pem|[^\s/]+\.key|[^\s/]+\.p12|credentials|secrets)(?:\s|$))/u,
   },
   {
+    // Write to a system directory.
+    //   a) Redirect / tee – destination follows the operator.
+    //   b) cp / mv / install / touch / mkdir – greedy .* ensures only the LAST
+    //      system-path token matches; $ terminator handles input without \n.
     code: "dangerous_system_path_write",
     severity: "error",
     message: "Terminal write attempts to modify a system directory.",
-    pattern:
-      /(?:>\s*|>>\s*|\btee\s+(?:-a\s+)?|\b(?:cp|mv|install|touch|mkdir)\b[^\n;]*\s)(?:\/etc\/|\/usr\/|\/bin\/|\/sbin\/|\/System\/|\/Library\/)/u,
+    pattern: new RegExp(
+      String.raw`(?:>\s*|>>\s*|\btee\s+(?:-a\s+)?)(?:${SYSTEM_PATH})` +
+      String.raw`|\b(?:cp|mv|install|touch|mkdir)\b.*\s(?:${SYSTEM_PATH})\S*\s*(?:[;\n]|$)`,
+      "u",
+    ),
   },
 ];
 
@@ -131,7 +147,7 @@ const WARNING_TERMINAL_WRITE_RULES: Rule[] = [
     severity: "warning",
     message: "Global package installation mutates the developer environment.",
     pattern:
-      /\b(?:npm|pnpm|yarn)\s+(?:install|add)\b[^\n;]*(?:\s-g(?:\s|$)|--global\b)/u,
+      /\b(?:npm|pnpm|yarn)\s+(?:install|add)\b[^\n;]*(?:\s-g(?:$|\s)|--global\b)|\byarn\s+global\s+(?:add|upgrade)\b/u,
   },
   {
     code: "warning_recursive_permission_change",
@@ -186,8 +202,26 @@ function evaluateTerminalWrite(
   text: string,
   options: ToolPolicyOptions,
 ): ToolPolicyDecision {
+  const maxLen = options.maxWriteLength ?? DEFAULT_MAX_WRITE_LENGTH;
+
   const dangerousFindings = findingsForRules(text, DANGEROUS_TERMINAL_WRITE_RULES);
   const warningFindings = findingsForRules(text, WARNING_TERMINAL_WRITE_RULES);
+
+  if (text.length > maxLen) {
+    const overlongFinding: ToolPolicyFinding = {
+      code: "dangerous_overlong_input",
+      severity: "error",
+      message: `Terminal write text exceeds maximum length of ${maxLen} characters.`,
+    };
+    const allFindings = [overlongFinding, ...dangerousFindings, ...warningFindings];
+    const allWarnings = warningFindings.map((f) => f.message);
+    return {
+      status: "rejected",
+      reason: `Rejected by tool policy: terminal write text is overlong (${text.length} > ${maxLen} chars).`,
+      findings: allFindings,
+      warnings: allWarnings,
+    };
+  }
 
   if (dangerousFindings.length > 0 && !options.allowDangerousTerminalWrites) {
     const findings = [...dangerousFindings, ...warningFindings];
@@ -195,7 +229,7 @@ function evaluateTerminalWrite(
       status: "rejected",
       reason: `Rejected by tool policy: ${dangerousFindings[0]?.message}`,
       findings,
-      warnings: warningFindings.map((finding) => finding.message),
+      warnings: warningFindings.map((f) => f.message),
     };
   }
 
@@ -216,8 +250,8 @@ function evaluateTerminalWrite(
     },
   ];
   const warnings = findings
-    .filter((finding) => finding.code !== "safe_terminal_write")
-    .map((finding) => finding.message);
+    .filter((f) => f.code !== "safe_terminal_write")
+    .map((f) => f.message);
 
   return {
     status: "approved",
@@ -244,10 +278,5 @@ function approved(
   reason: string,
   findings: ToolPolicyFinding[] = [],
 ): ToolPolicyDecision {
-  return {
-    status: "approved",
-    reason,
-    findings,
-    warnings: [],
-  };
+  return { status: "approved", reason, findings, warnings: [] };
 }
