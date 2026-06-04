@@ -111,6 +111,17 @@ agentMessages
 
 `modelContextItems` 通过 transcript 重建，只用于 eval/debug/replay 输入分析。它不代表可以安全重放旧 PTY 副作用。
 
+从 transcript 重建的 item 必须携带 provenance：
+
+```text
+provenance.kind = "transcript_replay"
+provenance.stepIndex = <event stepIndex>
+provenance.eventType = <source transcript event type>
+provenance.eventTimestamp = <source transcript event timestamp>
+```
+
+运行时真实执行 terminal/session tool 后写入的 model-context item 使用 `provenance.kind = "runtime_effect"`。这两个标记只服务 recovery、eval、debug 和 session-store 审计；`ModelContextSession` 渲染 provider prompt 时不把 provenance 当作新的 tool request，也不能把 `transcript_replay` item 当作执行许可。
+
 ## Eval Summary
 
 入口：

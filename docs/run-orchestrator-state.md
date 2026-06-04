@@ -760,6 +760,8 @@ environment_reminder | tool_call | observation | io_wait_call
 
 The important boundary is ownership: `RunOrchestrator` does not own prompt history arrays, does not call `PromptBuilder` directly, and does not decide the context-window rewrite. It executes effects and records events; `ModelContextSession` owns the model-visible timeline and returns the next model messages.
 
+Tool execution history is explicit about provenance. When the live runtime executes a terminal/session request, the appended tool call and observation carry `provenance.kind = "runtime_effect"`. When resume/replay rebuilds model-context items from transcript events, those rebuilt facts carry `provenance.kind = "transcript_replay"` plus the source event type, timestamp, and step index. Prompt rendering ignores this bookkeeping; it exists so recovery/eval/session-store code can distinguish historical facts from newly executed effects without creating a second execution path.
+
 Active skill reminders are transient render inputs. They appear in the next model turn but are not persisted into the durable model context unless an explicit environment event or observation records them.
 
 ## Context Window

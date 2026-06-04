@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type {
   ModelContextItem,
+  ModelContextItemProvenance,
   ModelContextSessionSnapshot,
 } from "../model/context-session.js";
 import type { RunEvent } from "../types/run.js";
@@ -75,16 +76,25 @@ export function reconstructModelContextItemsFromTranscript(
 
       case "tool_execution_finished":
         if (pendingOutput?.turn.kind === "tool_call") {
+          const provenance = transcriptReplayProvenance(event);
           items.push({
             type: "tool_call",
             toolCall: pendingOutput.turn.toolCall,
             thinking: pendingOutput.output.thinking,
+            provenance,
+          });
+          items.push({
+            type: "observation",
+            observation: event.observation,
+            provenance,
+          });
+        } else {
+          items.push({
+            type: "observation",
+            observation: event.observation,
+            provenance: transcriptReplayProvenance(event),
           });
         }
-        items.push({
-          type: "observation",
-          observation: event.observation,
-        });
         pendingOutput = undefined;
         break;
 
@@ -92,6 +102,7 @@ export function reconstructModelContextItemsFromTranscript(
         items.push({
           type: "observation",
           observation: event.observation,
+          provenance: transcriptReplayProvenance(event),
         });
         pendingOutput = undefined;
         break;
@@ -103,6 +114,7 @@ export function reconstructModelContextItemsFromTranscript(
             toolCallId: `fim-call-${findRunId(events)}-${event.stepIndex}`,
             wait: event.wait,
             thinking: pendingOutput.output.thinking,
+            provenance: transcriptReplayProvenance(event),
           });
         }
         break;
@@ -117,6 +129,7 @@ export function reconstructModelContextItemsFromTranscript(
             recoverable: false,
             event: event.event,
           },
+          provenance: transcriptReplayProvenance(event),
         });
         pendingOutput = undefined;
         break;
@@ -146,6 +159,19 @@ function isModelContextSessionSnapshot(
     typeof (value as { task?: unknown }).task === "string" &&
     Array.isArray((value as { items?: unknown }).items)
   );
+}
+
+function transcriptReplayProvenance(event: {
+  type: string;
+  stepIndex: number;
+  timestamp: string;
+}): ModelContextItemProvenance {
+  return {
+    kind: "transcript_replay",
+    stepIndex: event.stepIndex,
+    eventType: event.type,
+    eventTimestamp: event.timestamp,
+  };
 }
 
 function findRunId(events: readonly RunEvent[]): string {

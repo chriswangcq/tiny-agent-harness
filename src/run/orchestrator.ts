@@ -276,17 +276,27 @@ export class RunOrchestrator {
             ? this.state.data.pendingModelTurn.toolCall
             : undefined);
 
+        const finishedStepIndex = this.state.data.stepIndex;
+        const runtimeEffectProvenance = {
+          kind: "runtime_effect" as const,
+          stepIndex: finishedStepIndex,
+        };
+
         if (toolCall) {
           this.ports.modelContext.append({
             type: "tool_call",
             toolCall,
             thinking: this.state.data.pendingModelOutput?.thinking,
+            provenance: runtimeEffectProvenance,
           });
         }
-        this.ports.modelContext.append({ type: "observation", observation });
+        this.ports.modelContext.append({
+          type: "observation",
+          observation,
+          provenance: runtimeEffectProvenance,
+        });
         this.saveModelContext();
 
-        const finishedStepIndex = this.state.data.stepIndex;
         await this.record({
           type: "tool_execution_finished",
           stepIndex: finishedStepIndex,
