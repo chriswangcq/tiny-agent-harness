@@ -25,6 +25,7 @@ export class ToolPolicyReviewer {
     const decision = evaluateToolPolicy(request, this.options);
 
     return {
+      findings: decision.findings,
       status: decision.status,
       reason: decision.reason,
       reviewer: "tool-policy",
