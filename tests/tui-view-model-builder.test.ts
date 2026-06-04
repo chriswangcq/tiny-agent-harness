@@ -4,7 +4,6 @@ import type {
   AgentRunStateData,
   RunEvent,
   RuntimeStuckReason,
-
 } from "../src/types/run.js";
 import type {
   FimStepOutput,

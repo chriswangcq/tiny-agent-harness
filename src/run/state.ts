@@ -1,7 +1,6 @@
 import type {
   AgentRunStateData,
   RuntimeStuckReason,
-
   AgentRunStatus,
   NextEffect,
   RunEvent,
