@@ -436,4 +436,40 @@ describe("mcp CLI", () => {
     }
   });
 
+  it("--state-dir with no value returns rc=1", async () => {
+    const h = makeTestDeps();
+    const rc = await runMcpCli(
+      ["add", "s1", "echo", "--state-dir"],
+      h.deps,
+    );
+    expect(rc).toBe(1);
+    const err = JSON.parse(h.stderrLines()[0]);
+    expect(err.ok).toBe(false);
+    expect(err.error).toContain("Missing value");
+  });
+
+  it("--state-dir with next token being another flag returns rc=1", async () => {
+    const h = makeTestDeps();
+    const rc = await runMcpCli(
+      ["add", "s1", "echo", "--state-dir", "--json"],
+      h.deps,
+    );
+    expect(rc).toBe(1);
+    const err = JSON.parse(h.stderrLines()[0]);
+    expect(err.ok).toBe(false);
+    expect(err.error).toContain("Missing value");
+  });
+
+  it("--state-dir before -- with no value returns rc=1", async () => {
+    const h = makeTestDeps();
+    const rc = await runMcpCli(
+      ["add", "s1", "echo", "--state-dir", "--", "server.js"],
+      h.deps,
+    );
+    expect(rc).toBe(1);
+    const err = JSON.parse(h.stderrLines()[0]);
+    expect(err.ok).toBe(false);
+    expect(err.error).toContain("Missing value");
+  });
+
 });

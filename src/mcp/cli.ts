@@ -44,13 +44,22 @@ function parseOutputMode(argv: string[]): {
 function parseStateDir(argv: string[]): {
   stateDirOverride: string | undefined;
   cleanArgv: string[];
+  error?: string;
 } {
   const dashIdx = argv.indexOf("--");
   const preDash = dashIdx === -1 ? argv : argv.slice(0, dashIdx);
   const postDash = dashIdx === -1 ? [] : argv.slice(dashIdx);
 
   const stateIdx = preDash.indexOf("--state-dir");
-  if (stateIdx !== -1 && stateIdx + 1 < preDash.length) {
+  if (stateIdx !== -1) {
+    // Validate: must have a next token that is not another flag
+    if (stateIdx + 1 >= preDash.length || preDash[stateIdx + 1].startsWith("--")) {
+      return {
+        stateDirOverride: undefined,
+        cleanArgv: argv,
+        error: "Missing value for --state-dir",
+      };
+    }
     const stateDirOverride = preDash[stateIdx + 1];
     const cleanPreDash = [...preDash.slice(0, stateIdx), ...preDash.slice(stateIdx + 2)];
     return { stateDirOverride, cleanArgv: [...cleanPreDash, ...postDash] };
@@ -112,7 +121,11 @@ export async function runMcpCli(
   deps: McpCliDeps = defaultMcpCliDeps(),
 ): Promise<number> {
   const { cleanArgv, jsonMode: finalJsonMode } = parseOutputMode(argv);
-  const { stateDirOverride, cleanArgv: finalArgv } = parseStateDir(cleanArgv);
+  const { stateDirOverride, cleanArgv: finalArgv, error: stateDirError } = parseStateDir(cleanArgv);
+  if (stateDirError) {
+    writeStderrError(deps, stateDirError);
+    return 1;
+  }
 
   const cmd = finalArgv[0];
 
