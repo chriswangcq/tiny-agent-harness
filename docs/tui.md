@@ -637,13 +637,22 @@ TUI 遇到坏数据不应该崩。
 
 ## Rendering Backend
 
-项目是 TypeScript CLI，推荐第一版用 `blessed` 或类似 terminal layout 库。
+项目是 TypeScript CLI，当前运行时 renderer 使用 `neo-blessed`。
 
 原因：
 
 - 上下分屏和滚动 pane 是核心需求。
 - 日志 tail、focus、快捷键用 terminal widget 更直接。
 - 比自己手写 ANSI/raw mode 更少状态 bug。
+
+当前渲染路径：
+
+1. `TuiController` 读取 transcript / state / IM / session log projection。
+2. `ViewModelBuilder` 构建 `TuiViewModel`。
+3. `buildTuiPaneModel` 从显式输入计算 header、conversation、loop、detail、PTY pane 的 title、尺寸和可见内容。
+4. `BlessedRenderer` 把这些 pane model 写入独立 `neo-blessed` widgets，并调用 `screen.render()`。
+
+`renderTuiFrame` 只保留为纯文本 framebuffer projection，用于单元测试和调试输出。它和真实 blessed renderer 共享 `buildTuiPaneModel`，不能作为第二套运行时渲染逻辑演化。
 
 保持抽象：
 
@@ -656,6 +665,13 @@ type TuiRenderer = {
 ```
 
 这样后续可以从 `blessed` 换到别的库。
+
+边界约束：
+
+- 布局计算必须从 `TuiViewModel`、交互状态、窗口尺寸、scroll offset、animation frame 等显式参数推导。
+- renderer 可以读取 blessed 的当前窗口尺寸；纯布局和内容函数不能读文件、时间、环境变量、session log 或 transcript。
+- TUI pane 是 observer/control surface；它不改变 runtime PTY rows/cols，也不把 live display projection 写回 transcript 或 model context。
+- 不保留整屏 styled frame repaint 作为运行时路径；需要文本投影时只使用纯 framebuffer helper。
 
 ## Performance
 

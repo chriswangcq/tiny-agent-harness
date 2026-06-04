@@ -3,6 +3,8 @@
 // Implements TuiRenderer using neo-blessed (maintained fork of blessed).
 // Renders the TUI layout: header, full-height messages, agent loop,
 // loop detail, read-only PTY output, and a persistent input bar.
+// The visible panes are separate blessed widgets; pure framebuffer helpers
+// are kept for tests and text projections, and share the same pane model.
 //
 // Input is handled via manual keypress buffer (not readInput which freezes).
 // fullUnicode + wcwidth for CJK character support.
@@ -29,7 +31,11 @@ const INPUT_INNER_ROWS = INPUT_BAR_HEIGHT - 2;
 
 export class BlessedRenderer implements TuiRenderer {
   private screen: blessed.Widgets.Screen;
-  private frameBox: blessed.Widgets.BoxElement;
+  private headerBox: blessed.Widgets.BoxElement;
+  private conversationBox: blessed.Widgets.BoxElement;
+  private loopBox: blessed.Widgets.BoxElement;
+  private detailBox: blessed.Widgets.BoxElement;
+  private ptyBox: blessed.Widgets.BoxElement;
   private helpBox: blessed.Widgets.BoxElement;
   private inputBar: blessed.Widgets.BoxElement;
   private ui = new TuiInteractionState();
@@ -46,22 +52,27 @@ export class BlessedRenderer implements TuiRenderer {
 
   constructor() {
     this.screen = blessed.screen({
-      smartCSR: false,
+      smartCSR: true,
       fullUnicode: true,
       title: "tiny-agent TUI",
     });
 
     this.enableModifiedKeyReporting();
 
-    this.frameBox = blessed.box({
+    this.headerBox = blessed.box({
       top: 0,
       left: 0,
       width: "100%",
-      height: `100%-${INPUT_BAR_HEIGHT}`,
+      height: 1,
       tags: true,
       wrap: false,
       style: { fg: "white", bg: "black" },
     });
+
+    this.conversationBox = this.createPaneBox();
+    this.loopBox = this.createPaneBox();
+    this.detailBox = this.createPaneBox();
+    this.ptyBox = this.createPaneBox();
 
     this.helpBox = blessed.box({
       top: "center",
@@ -109,9 +120,13 @@ export class BlessedRenderer implements TuiRenderer {
       },
     });
 
-    this.screen.append(this.frameBox);
-    this.screen.append(this.helpBox);
+    this.screen.append(this.headerBox);
+    this.screen.append(this.conversationBox);
+    this.screen.append(this.loopBox);
+    this.screen.append(this.detailBox);
+    this.screen.append(this.ptyBox);
     this.screen.append(this.inputBar);
+    this.screen.append(this.helpBox);
 
     this.setupKeys();
     this.refreshInputBar();
@@ -121,11 +136,11 @@ export class BlessedRenderer implements TuiRenderer {
     this.lastView = view;
     this.ui.syncWithView(view.conversation, view.loop);
     this.animationFrame++;
-    this.frameBox.setContent(
-      renderStyledTuiFrame(view, this.ui, this.expandedFrames, {
+    this.renderPaneModel(
+      buildTuiPaneModel(view, this.ui, this.expandedFrames, {
         width: this.screen.cols,
         height: Math.max(1, this.screen.rows - INPUT_BAR_HEIGHT),
-      }, this.frameScroll, { animationFrame: this.animationFrame }).join("\n"),
+      }, this.frameScroll, { animationFrame: this.animationFrame }),
     );
 
     this.renderScreen();
@@ -153,6 +168,79 @@ export class BlessedRenderer implements TuiRenderer {
   }
 
   // ─── Input Bar ────────────────────────────────────────────────────
+
+  private createPaneBox(): blessed.Widgets.BoxElement {
+    return blessed.box({
+      top: 1,
+      left: 0,
+      width: 1,
+      height: 1,
+      border: { type: "line" },
+      tags: true,
+      wrap: false,
+      style: {
+        fg: "white",
+        bg: "black",
+        border: { fg: "white" },
+      },
+    });
+  }
+
+  private renderPaneModel(model: TuiPaneFrameModel): void {
+    this.headerBox.setContent(styleTuiFrameLine(fitDisplayLine(model.header, this.screen.cols)));
+
+    this.updatePaneBox(this.conversationBox, {
+      pane: model.conversation,
+      top: 1,
+      left: 0,
+      active: this.ui.pane === "conversation",
+    });
+
+    const rightLeft = Math.max(0, model.layout.conversationPaneWidth - 1);
+    this.updatePaneBox(this.loopBox, {
+      pane: model.loop,
+      top: 1,
+      left: rightLeft,
+      active: this.ui.pane === "loop",
+    });
+    this.updatePaneBox(this.detailBox, {
+      pane: model.detail,
+      top: 1,
+      left: rightLeft + Math.max(0, model.layout.loopPaneWidth - 1),
+      active: false,
+    });
+    this.updatePaneBox(this.ptyBox, {
+      pane: model.pty,
+      top: 1 + model.layout.topHeight,
+      left: rightLeft,
+      active: false,
+    });
+  }
+
+  private updatePaneBox(
+    box: blessed.Widgets.BoxElement,
+    input: {
+      pane?: TuiPaneModel;
+      top: number;
+      left: number;
+      active: boolean;
+    },
+  ): void {
+    if (!input.pane || input.pane.width <= 0 || input.pane.height <= 0) {
+      box.hide();
+      return;
+    }
+
+    box.show();
+    box.top = input.top;
+    box.left = input.left;
+    box.width = input.pane.width;
+    box.height = input.pane.height;
+    box.setLabel(` ${input.pane.title} `);
+    box.setContent(renderBlessedPaneContent(input.pane));
+    const border = box.style.border as Record<string, string>;
+    border.fg = input.active ? "cyan" : "white";
+  }
 
   private refreshInputBar(): void {
     this.updateInputBarContent();
@@ -197,24 +285,8 @@ export class BlessedRenderer implements TuiRenderer {
 
   private renderScreen(): void {
     this.updateInputBarContent();
-    this.prepareFullFrameRepaint();
     this.screen.render();
     this.updateTerminalCursor();
-  }
-
-  private prepareFullFrameRepaint(): void {
-    // Repaint stability: clear the physical terminal and blessed's old-buffer
-    // together. A raw program.clear() leaves olines stale, so unchanged cells
-    // can be skipped after the screen has already been blanked.
-    const scr = this.screen as unknown as {
-      realloc?: () => void;
-      alloc?: (dirty?: boolean) => void;
-    };
-    if (scr.realloc) {
-      scr.realloc();
-    } else {
-      scr.alloc?.(true);
-    }
   }
 
   private updateTerminalCursor(): void {
@@ -572,6 +644,22 @@ export type TuiLayoutInput = {
   ptyViewport?: TuiPtyViewport;
 };
 
+export type TuiPaneModel = {
+  title: string;
+  width: number;
+  height: number;
+  contentLines: string[];
+};
+
+export type TuiPaneFrameModel = {
+  header: string;
+  layout: TuiLayoutPlan;
+  conversation: TuiPaneModel;
+  loop?: TuiPaneModel;
+  detail?: TuiPaneModel;
+  pty?: TuiPaneModel;
+};
+
 export function renderTuiFrame(
   view: TuiViewModel,
   state: TuiInteractionState,
@@ -582,10 +670,78 @@ export function renderTuiFrame(
 ): string[] {
   const width = Math.max(1, size.width);
   const height = Math.max(1, size.height);
-  const header = fitDisplayLine(renderHeaderLine(view.run), width);
+  const model = buildTuiPaneModel(
+    view,
+    state,
+    expandedFrames,
+    { width, height },
+    scroll,
+    options,
+  );
+  const header = fitDisplayLine(model.header, width);
   if (height === 1) return [header];
 
-  const bodyHeight = height - 1;
+  const conversationPane = renderPane(
+    model.conversation.title,
+    model.conversation.width,
+    model.conversation.height,
+    model.conversation.contentLines,
+  );
+
+  const bodyRows: string[] = [];
+  if (!model.loop || !model.detail || !model.pty || model.layout.rightWidth <= 0) {
+    bodyRows.push(...conversationPane);
+  } else {
+    const loopPane = renderPane(
+      model.loop.title,
+      model.loop.width,
+      model.loop.height,
+      model.loop.contentLines,
+    );
+    const detailPane = renderPane(
+      model.detail.title,
+      model.detail.width,
+      model.detail.height,
+      model.detail.contentLines,
+    );
+    const ptyPane = renderPane(
+      model.pty.title,
+      model.pty.width,
+      model.pty.height,
+      model.pty.contentLines,
+    );
+
+    for (let row = 0; row < model.layout.bodyHeight; row++) {
+      const rightRow =
+        row < model.layout.topHeight
+          ? mergeAdjacentPanes(
+              loopPane[row] ?? " ".repeat(model.layout.loopPaneWidth),
+              detailPane[row] ?? " ".repeat(model.layout.detailPaneWidth),
+            )
+          : ptyPane[row - model.layout.topHeight] ?? " ".repeat(model.layout.rightWidth);
+      bodyRows.push(
+        mergeAdjacentPanes(
+          conversationPane[row] ?? " ".repeat(model.layout.conversationPaneWidth),
+          rightRow,
+        ),
+      );
+    }
+  }
+
+  return exactFrame([header, ...bodyRows], width, height);
+}
+
+export function buildTuiPaneModel(
+  view: TuiViewModel,
+  state: TuiInteractionState,
+  expandedFrames: ReadonlySet<string>,
+  size: TuiFrameSize,
+  scroll: TuiFrameScroll = {},
+  options: TuiFrameRenderOptions = {},
+): TuiPaneFrameModel {
+  const width = Math.max(1, size.width);
+  const height = Math.max(1, size.height);
+  const bodyHeight = Math.max(0, height - 1);
   const ptySession = selectPtySession(view.sessions);
   const layout = planTuiLayout({
     width,
@@ -598,91 +754,81 @@ export function renderTuiFrame(
     state,
     conversationContentWidth,
   );
-  const conversationPane = renderPane(
-    state.pane === "conversation" ? "* Messages *" : "Messages",
-    layout.conversationPaneWidth,
-    bodyHeight,
-    visibleWindow(
+  const conversation: TuiPaneModel = {
+    title: state.pane === "conversation" ? "* Messages *" : "Messages",
+    width: layout.conversationPaneWidth,
+    height: bodyHeight,
+    contentLines: visibleWindow(
       conversationLines,
       Math.max(0, bodyHeight - 2),
       conversationSelectedLine(view.conversation, state, conversationContentWidth),
       state.followBottom.conversation,
       scroll.conversation,
     ),
-  );
+  };
 
-  const bodyRows: string[] = [];
   if (layout.rightWidth <= 0) {
-    bodyRows.push(...conversationPane);
-  } else {
-    const selectedLoopFrame = state.selectedLoopFrame(view.loop);
-    const loopLines = buildLoopFrameLines(view.loop, state, expandedFrames);
-    const loopPane = renderPane(
-      loopPaneTitle(view.loop, state.pane === "loop"),
-      layout.loopPaneWidth,
-      layout.topHeight,
-      visibleWindow(
-        loopLines,
-        Math.max(0, layout.topHeight - 2),
-        loopSelectedLine(view.loop, state, expandedFrames),
-        state.followBottom.loop,
-        scroll.loop,
-      ),
-    );
-    const detailPane = renderPane(
-      "Loop Detail",
-      layout.detailPaneWidth,
-      layout.topHeight,
-      buildLoopDetailLines(
-        selectedLoopFrame,
-        Math.max(1, layout.detailPaneWidth - 2),
-        Math.max(0, layout.topHeight - 2),
-        options,
-      ),
-    );
-    const ptyLines = ptySession
-      ? renderPtyScreenForDisplay(ptySession, 4000, Math.max(1, layout.rightWidth - 2)).split(
-          "\n",
-        )
-      : ["No PTY session yet"];
-    const ptyPane = renderPane(
-      ptyPaneTitle(ptySession, layout),
-      layout.rightWidth,
-      layout.bottomHeight,
-      ptyLines,
-    );
-
-    for (let row = 0; row < bodyHeight; row++) {
-      const rightRow =
-        row < layout.topHeight
-          ? mergeAdjacentPanes(
-              loopPane[row] ?? " ".repeat(layout.loopPaneWidth),
-              detailPane[row] ?? " ".repeat(layout.detailPaneWidth),
-            )
-          : ptyPane[row - layout.topHeight] ?? " ".repeat(layout.rightWidth);
-      bodyRows.push(
-        mergeAdjacentPanes(
-          conversationPane[row] ?? " ".repeat(layout.conversationPaneWidth),
-          rightRow,
-        ),
-      );
-    }
+    return {
+      header: renderHeaderLine(view.run),
+      layout,
+      conversation,
+    };
   }
 
-  return exactFrame([header, ...bodyRows], width, height);
+  const selectedLoopFrame = state.selectedLoopFrame(view.loop);
+  const loopLines = buildLoopFrameLines(view.loop, state, expandedFrames);
+  const loop: TuiPaneModel = {
+    title: loopPaneTitle(view.loop, state.pane === "loop"),
+    width: layout.loopPaneWidth,
+    height: layout.topHeight,
+    contentLines: visibleWindow(
+      loopLines,
+      Math.max(0, layout.topHeight - 2),
+      loopSelectedLine(view.loop, state, expandedFrames),
+      state.followBottom.loop,
+      scroll.loop,
+    ),
+  };
+  const detail: TuiPaneModel = {
+    title: "Loop Detail",
+    width: layout.detailPaneWidth,
+    height: layout.topHeight,
+    contentLines: buildLoopDetailLines(
+      selectedLoopFrame,
+      Math.max(1, layout.detailPaneWidth - 2),
+      Math.max(0, layout.topHeight - 2),
+      options,
+    ),
+  };
+  const ptyLines = ptySession
+    ? renderPtyScreenForDisplay(ptySession, 4000, Math.max(1, layout.rightWidth - 2)).split(
+        "\n",
+      )
+    : ["No PTY session yet"];
+  const pty: TuiPaneModel = {
+    title: ptyPaneTitle(ptySession, layout),
+    width: layout.rightWidth,
+    height: layout.bottomHeight,
+    contentLines: ptyLines,
+  };
+
+  return {
+    header: renderHeaderLine(view.run),
+    layout,
+    conversation,
+    loop,
+    detail,
+    pty,
+  };
 }
 
-export function renderStyledTuiFrame(
-  view: TuiViewModel,
-  state: TuiInteractionState,
-  expandedFrames: ReadonlySet<string>,
-  size: TuiFrameSize,
-  scroll: TuiFrameScroll = {},
-  options: TuiFrameRenderOptions = {},
-): string[] {
-  return renderTuiFrame(view, state, expandedFrames, size, scroll, options).map(
-    styleTuiFrameLine,
-  );
+export function renderBlessedPaneContent(pane: TuiPaneModel): string {
+  const innerWidth = Math.max(0, pane.width - 2);
+  const visibleRows = Math.max(0, pane.height - 2);
+  return pane.contentLines
+    .slice(0, visibleRows)
+    .map((line) => styleTuiFrameLine(fitDisplayLine(line, innerWidth)))
+    .join("\n");
 }
 
 function styleTuiFrameLine(line: string): string {

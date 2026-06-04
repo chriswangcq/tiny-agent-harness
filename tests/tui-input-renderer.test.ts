@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import wcwidth from "wcwidth";
 import {
   consumeRawShiftEnterEchoCandidate,
+  buildTuiPaneModel,
   isRawCtrlCSequence,
   isRawShiftEnterSequence,
   isShiftEnterKey,
@@ -10,7 +11,7 @@ import {
   rawShiftEnterEchoCandidates,
   renderConversationBodyLinesForDisplay,
   renderInputBufferForBox,
-  renderStyledTuiFrame,
+  renderBlessedPaneContent,
   renderPtySessionForDisplay,
   renderTuiFrame,
   sanitizeDisplayText,
@@ -625,7 +626,26 @@ describe("TUI input rendering", () => {
     expect(plan.ptyFitsViewport).toBe(false);
   });
 
-  it("adds trusted blessed color tags while escaping message braces", () => {
+  it("builds a pane model for widget rendering from explicit inputs", () => {
+    const state = new TuiInteractionState();
+    const vm = view();
+    state.syncWithView(vm.conversation, vm.loop);
+
+    const model = buildTuiPaneModel(vm, state, new Set(), {
+      width: 96,
+      height: 18,
+    });
+
+    expect(model.header).toContain("run=run-1");
+    expect(model.conversation.title).toBe("* Messages *");
+    expect(model.loop?.title).toContain("Agent Loop");
+    expect(model.detail?.title).toBe("Loop Detail");
+    expect(model.pty?.title).toBe("PTY (read only)");
+    expect(model.pty?.contentLines).toContain("pty tail");
+    expect(model.conversation.contentLines.join("\n")).not.toContain("┌");
+  });
+
+  it("adds trusted blessed color tags while escaping pane text braces", () => {
     const state = new TuiInteractionState();
     const vm = {
       ...view(),
@@ -641,13 +661,13 @@ describe("TUI input rendering", () => {
     };
     state.syncWithView(vm.conversation, vm.loop);
 
-    const output = renderStyledTuiFrame(vm, state, new Set(), {
+    const model = buildTuiPaneModel(vm, state, new Set(), {
       width: 96,
       height: 18,
-    }).join("\n");
+    });
+    const output = renderBlessedPaneContent(model.conversation);
 
     expect(output).toContain("{green-fg}agent [status]{/green-fg}");
-    expect(output).toContain("{green-fg}ok{/green-fg}");
     expect(output).toContain("{open}red-fg{close}not color{open}/red-fg{close}");
     expect(output).not.toContain("literal {red-fg}not color{/red-fg}");
   });
