@@ -149,11 +149,15 @@ describe("ToolPolicyReviewer", () => {
       },
     };
 
-    await expect(new ToolPolicyReviewer().review(request)).resolves.toEqual({
+    const approvalResult = await new ToolPolicyReviewer().review(request);
+    expect(approvalResult).toMatchObject({
       status: "approved",
       reason: "Approved by tool policy.",
       reviewer: "tool-policy",
     });
+    expect(approvalResult.findings).toBeDefined();
+    expect(approvalResult.findings!.length).toBeGreaterThan(0);
+    expect(approvalResult.findings!.some(f => f.code === "safe_terminal_write")).toBe(true);
   });
 
   it("preserves policy warnings in review decisions", async () => {
@@ -168,12 +172,16 @@ describe("ToolPolicyReviewer", () => {
       },
     };
 
-    await expect(new ToolPolicyReviewer().review(request)).resolves.toEqual({
+    const warningResult = await new ToolPolicyReviewer().review(request);
+    expect(warningResult).toMatchObject({
       status: "approved",
       reason: "Approved by tool policy with 1 warning(s).",
       reviewer: "tool-policy",
       warnings: ["Git push changes remote state."],
     });
+    expect(warningResult.findings).toBeDefined();
+    expect(warningResult.findings!.some(f => f.code === "warning_git_push")).toBe(true);
+    expect(warningResult.findings!.some(f => f.code === "safe_terminal_write")).toBe(true);
   });
 
   it("preserves policy rejections in review decisions", async () => {
@@ -188,11 +196,14 @@ describe("ToolPolicyReviewer", () => {
       },
     };
 
-    await expect(new ToolPolicyReviewer().review(request)).resolves.toEqual({
+    const rejectResult = await new ToolPolicyReviewer().review(request);
+    expect(rejectResult).toMatchObject({
       status: "rejected",
       reason: "Rejected by tool policy: Filesystem formatting command was requested.",
       reviewer: "tool-policy",
     });
+    expect(rejectResult.findings).toBeDefined();
+    expect(rejectResult.findings!.some(f => f.code === "dangerous_filesystem_format")).toBe(true);
   });
 
   it("keeps policy exports available from the tools barrel", () => {

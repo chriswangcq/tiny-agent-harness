@@ -79,6 +79,12 @@ export type ToolReviewDecision = {
   reason: string;
   reviewer: string;
   warnings?: string[];
+  /** Risk findings from policy evaluation (present when reviewer is "tool-policy"). */
+  findings?: {
+    code: string;
+    severity: "info" | "warning" | "error";
+    message: string;
+  }[];
 };
 
 // ─── Tool Result ────────────────────────────────────────────────────
