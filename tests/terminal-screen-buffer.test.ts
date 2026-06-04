@@ -20,6 +20,40 @@ describe("XtermTerminalScreenBuffer", () => {
     buffer.dispose();
   });
 
+
+  it("handles backspace overwrite like a real terminal", async () => {
+    const buffer = new XtermTerminalScreenBuffer({ rows: 3, cols: 20 });
+
+    buffer.write("ab\bX\r\n");
+
+    const screen = await buffer.snapshot();
+
+    expect(screen.text.split("\n")[0]).toBe("aX");
+    buffer.dispose();
+  });
+
+  it("handles consecutive backspaces with overwrite", async () => {
+    const buffer = new XtermTerminalScreenBuffer({ rows: 3, cols: 20 });
+
+    buffer.write("abc\b\bXY\r\n");
+
+    const screen = await buffer.snapshot();
+
+    expect(screen.text.split("\n")[0]).toBe("aXY");
+    buffer.dispose();
+  });
+
+  it("handles backspace with UTF-8 multi-byte characters", async () => {
+    const buffer = new XtermTerminalScreenBuffer({ rows: 3, cols: 20 });
+
+    buffer.write("a\u4e2d\bX\r\n");
+
+    const screen = await buffer.snapshot();
+
+    expect(screen.text.split("\n")[0]).toBe("a X");
+    buffer.dispose();
+  });
+
   it("handles ANSI clear-screen and cursor positioning", async () => {
     const buffer = new XtermTerminalScreenBuffer({ rows: 3, cols: 20 });
 
