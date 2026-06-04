@@ -538,7 +538,7 @@ describe("RunOrchestrator", () => {
     );
   });
 
-  it("stores model thinking progress as a debug artifact instead of transcript deltas", async () => {
+  it("streams model thinking progress into transcript detail and debug artifact", async () => {
     const wait: IoWaitRequest = {
       reason: "awaiting next instruction",
       condition: { kind: "new_user_message", channel: "default" },
@@ -565,16 +565,24 @@ describe("RunOrchestrator", () => {
     await orchestrator.run();
 
     const events = readTranscript(transcript);
-    expect(events.map((event) => event.type)).toEqual([
+    const firstModelOutputIndex = events.findIndex(
+      (event) => event.type === "model_output_received",
+    );
+    expect(events.slice(0, firstModelOutputIndex + 1).map((event) => event.type)).toEqual([
       "run_started",
       "model_requested",
+      "model_thinking_delta",
+      "model_thinking_delta",
       "model_output_received",
-      "io_wait_started",
-      "io_wait_satisfied",
-      "model_requested",
-      "run_finished",
     ]);
-    expect(events.some((event) => event.type === "model_thinking_delta")).toBe(false);
+    const thinkingDeltas = events.filter(
+      (event): event is Extract<RunEvent, { type: "model_thinking_delta" }> =>
+        event.type === "model_thinking_delta",
+    );
+    expect(thinkingDeltas.slice(0, 2).map((event) => event.delta)).toEqual([
+      "checking context",
+      "choosing action",
+    ]);
 
     const tracePath = path.join(
       path.dirname(transcript.transcriptFilePath),

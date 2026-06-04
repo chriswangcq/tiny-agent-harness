@@ -29,6 +29,9 @@ import type {
   ModelContextSessionSnapshot,
 } from "../model/context-session.js";
 
+const MODEL_THINKING_DELTA_MIN_INTERVAL_MS = 250;
+const MODEL_THINKING_DELTA_MAX_BUFFER_CHARS = 1200;
+
 export interface ModelPort {
   generateTurn(
     context: ModelStepContext,
@@ -169,6 +172,11 @@ export class RunOrchestrator {
         });
 
         const thinkingTrace = createThinkingTraceSink();
+        const thinkingProgress = createThinkingProgressRecorder({
+          stepIndex: this.state.data.stepIndex,
+          now: () => this.now(),
+          record: (event) => this.record(event),
+        });
         let output: FimStepOutput;
         try {
           output = await this.ports.model.generateTurn(context, {
@@ -176,13 +184,16 @@ export class RunOrchestrator {
             onProgress: async (progress) => {
               if (progress.type === "thinking_delta") {
                 thinkingTrace.append(progress);
+                await thinkingProgress.append(progress);
               }
             },
           });
         } catch (error) {
+          await thinkingProgress.flush();
           await this.failRun(error, "MODEL_ERROR");
           break;
         }
+        await thinkingProgress.flush();
         output = this.persistModelDebugArtifacts(
           output,
           this.state.data.stepIndex,
@@ -700,6 +711,59 @@ function createThinkingTraceSink(): {
         .join("");
     },
   };
+}
+
+function createThinkingProgressRecorder(options: {
+  stepIndex: number;
+  now: () => string;
+  record: (event: Extract<RunEvent, { type: "model_thinking_delta" }>) => Promise<void>;
+}): {
+  append(event: ModelProgressEvent): Promise<void>;
+  flush(): Promise<void>;
+} {
+  let pending = "";
+  let sequence = 0;
+  let lastEmittedAtMs: number | undefined;
+
+  async function flushAt(timestamp: string, timestampMs: number): Promise<void> {
+    if (pending.length === 0) return;
+    const delta = pending;
+    pending = "";
+    await options.record({
+      type: "model_thinking_delta",
+      stepIndex: options.stepIndex,
+      delta,
+      sequence,
+      timestamp,
+    });
+    sequence++;
+    lastEmittedAtMs = timestampMs;
+  }
+
+  return {
+    async append(event): Promise<void> {
+      if (event.content.length === 0) return;
+      pending += event.content;
+      const timestamp = options.now();
+      const nowMs = timestampMsOrZero(timestamp);
+      const shouldEmit =
+        lastEmittedAtMs === undefined ||
+        pending.length >= MODEL_THINKING_DELTA_MAX_BUFFER_CHARS ||
+        nowMs - lastEmittedAtMs >= MODEL_THINKING_DELTA_MIN_INTERVAL_MS;
+      if (shouldEmit) {
+        await flushAt(timestamp, nowMs);
+      }
+    },
+    async flush(): Promise<void> {
+      const timestamp = options.now();
+      await flushAt(timestamp, timestampMsOrZero(timestamp));
+    },
+  };
+}
+
+function timestampMsOrZero(timestamp: string): number {
+  const ms = Date.parse(timestamp);
+  return Number.isFinite(ms) ? ms : 0;
 }
 
 function serializeErrorCause(cause: unknown): unknown {

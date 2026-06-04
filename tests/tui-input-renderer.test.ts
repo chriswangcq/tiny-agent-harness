@@ -410,6 +410,33 @@ describe("TUI input rendering", () => {
     expect(output).toContain("invalid_parameter_json");
   });
 
+  it("shows the streaming thinking breathing cursor in the visible loop detail pane", () => {
+    const state = new TuiInteractionState();
+    const vm = {
+      ...view(),
+      loop: [
+        {
+          ...frame("frame-stream"),
+          id: "frame-stream",
+          phase: "model" as const,
+          status: "running" as const,
+          title: "model thinking",
+          summary: "thinking... 11 chars",
+          detail: "## thinking\nNeed inspect ●",
+        },
+      ],
+    };
+    state.syncWithView(vm.conversation, vm.loop);
+
+    const output = renderTuiFrame(vm, state, new Set(), {
+      width: 120,
+      height: 34,
+    }).join("\n");
+
+    expect(output).toContain("model thinking");
+    expect(output).toContain("Need inspect ●");
+  });
+
   it("merges adjacent pane borders instead of drawing double vertical seams", () => {
     const state = new TuiInteractionState();
     const vm = view();

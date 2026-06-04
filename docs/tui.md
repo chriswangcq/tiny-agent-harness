@@ -302,8 +302,11 @@ model_requested
 model_thinking_delta
   -> Update current model LoopFrame status=running title="model thinking"
   -> Append delta into LoopFrame detail section "thinking"
-  -> Historical compatibility only; current runs store streamed thinking as
-     debug trace artifacts referenced by final model_output_received
+  -> Render a trailing breathing cursor while the model frame is running
+     (`• -> ● -> ⬤ -> ●`, keyed by streamed delta sequence)
+  -> Current runs write throttled transcript deltas for live TUI detail and
+     also store the final streamed thinking trace as a debug artifact referenced
+     by final model_output_received
 
 model_output_received(tool_call)
   -> LoopFrame phase=decision status=ok title="tool call: terminal_write"
@@ -437,13 +440,14 @@ DeepSeek FIM pass 1 会生成 thinking artifact。
 TUI 可以显示它，但建议默认折叠：
 
 ```text
-thinking received (1820 chars) [press Enter to expand]
+thinking... 1820 chars
+Need inspect the current run state before choosing the next tool. ●
 ```
 
 原因：
 
 - 默认 UI 保持扫描友好。
-- raw thinking 很长，会挤掉 tool trace。
+- raw thinking 很长，会挤掉 tool trace；streaming 阶段的 detail 默认只展示当前聚合内容和多尺寸圆点呼吸光标。
 - 需要审计模型决策链路时，可以展开验证 two-pass ReAct 工作正常。
 
 如果后续不想展示 raw thinking，可以改成只显示 thinking 摘要或保存路径。

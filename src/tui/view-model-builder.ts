@@ -133,7 +133,9 @@ export class ViewModelBuilder {
           frame.title = "model thinking";
           frame.timestamp = event.timestamp;
           frame.summary = `thinking... ${content.length} chars`;
-          frame.detail = formatDetail([["thinking", compactLongText(content)]]);
+          frame.detail = formatDetail([
+            ["thinking", formatStreamingThinking(content, event.sequence)],
+          ]);
         }
         break;
       }
@@ -740,6 +742,22 @@ function compactLongText(value: string | undefined, maxLength = 2400): string | 
     "",
     value.slice(-tailLength),
   ].join("\n");
+}
+
+const STREAMING_THINKING_CURSOR_FRAMES = ["•", "●", "⬤", "●"];
+
+function formatStreamingThinking(content: string, sequence: number): string {
+  const compacted = compactLongText(content) ?? "";
+  const cursor =
+    STREAMING_THINKING_CURSOR_FRAMES[
+      positiveModulo(sequence, STREAMING_THINKING_CURSOR_FRAMES.length)
+    ]!;
+  if (compacted.length === 0) return cursor;
+  return compacted.endsWith("\n") ? `${compacted}${cursor}` : `${compacted} ${cursor}`;
+}
+
+function positiveModulo(value: number, divisor: number): number {
+  return ((value % divisor) + divisor) % divisor;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -334,7 +334,7 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 | --- | --- |
 | `npm run typecheck` | 通过。 |
 | `npm run build` | 通过。 |
-| `npm test` | 通过，57 个测试文件、573 个测试。 |
+| `npm test` | 通过，57 个测试文件、574 个测试。 |
 
 工程成熟度可以从几个方面观察：
 
