@@ -18,7 +18,7 @@ import {
 import type { TerminalObservation, TerminalState } from "../src/terminal/types.js";
 import type { EnvironmentEvent, IoWaitRequest } from "../src/types/environment.js";
 import type { FimStepOutput, InternalToolCall, ModelStepContext, ModelTurn } from "../src/types/model.js";
-import type { RunEvent } from "../src/types/run.js";
+import type { RunEvent, NormalizedFimUsage } from "../src/types/run.js";
 import type { ToolRequest, ToolReviewDecision } from "../src/types/tools.js";
 
 let tmpDirs: string[] = [];
@@ -80,6 +80,19 @@ function ioWaitOutput(wait: IoWaitRequest): FimStepOutput {
     rawDecision: "io_wait",
   };
   return { thinking: turn.thinking, rawDecision: turn.rawDecision, turn };
+}
+
+function toolOutputWithUsage(
+  toolCall: InternalToolCall,
+  usage: NormalizedFimUsage,
+): FimStepOutput {
+  const turn: ModelTurn = {
+    kind: "tool_call",
+    toolCall,
+    thinking: { content: "need terminal" },
+    rawDecision: "terminal_write",
+  };
+  return { thinking: turn.thinking, rawDecision: turn.rawDecision, turn, usage };
 }
 
 function makeRun(options?: {
@@ -1993,5 +2006,180 @@ describe("RunOrchestrator", () => {
         }),
       ]),
     );
+  });
+
+  it("records model_usage_recorded after model_decision_recorded when usage exists", async () => {
+    const toolCall: InternalToolCall = {
+      id: "call-usage",
+      name: "terminal_write",
+      arguments: { expectedInputSeq: 1, text: "pwd\\n" },
+    };
+    const usage: NormalizedFimUsage = {
+      thinking: {
+        finishReasons: ["stop"],
+        continuationRounds: 0,
+        usages: [{ prompt_tokens: 200, completion_tokens: 50, total_tokens: 250 }],
+      },
+      decision: {
+        finishReasons: ["stop"],
+        continuationRounds: 0,
+        usages: [{ prompt_tokens: 300, completion_tokens: 30, total_tokens: 330 }],
+      },
+    };
+    const output = toolOutputWithUsage(toolCall, usage);
+
+    const { orchestrator, transcript } = makeRun({
+      outputs: [output],
+      modelProgress: ["trace fragment"],
+    });
+
+    await orchestrator.run();
+
+    const events = readTranscript(transcript);
+    const decisionEvent = events.find(
+      (event): event is Extract<RunEvent, { type: "model_decision_recorded" }> =>
+        event.type === "model_decision_recorded",
+    );
+    const usageEvent = events.find(
+      (event): event is Extract<RunEvent, { type: "model_usage_recorded" }> =>
+        event.type === "model_usage_recorded",
+    );
+
+    expect(usageEvent).toBeDefined();
+    expect(usageEvent!.usage).toEqual(usage);
+    expect(usageEvent!.decisionId).toBe(decisionEvent!.decision.decisionId);
+    expect(usageEvent!.stepIndex).toBe(decisionEvent!.stepIndex);
+
+    const decisionIdx = events.indexOf(decisionEvent!);
+    const usageIdx = events.indexOf(usageEvent!);
+    expect(usageIdx).toBeGreaterThan(decisionIdx);
+  });
+
+  it("does not emit model_usage_recorded when output.usage is absent", async () => {
+    const toolCall: InternalToolCall = {
+      id: "call-no-usage",
+      name: "terminal_write",
+      arguments: { expectedInputSeq: 1, text: "pwd\\n" },
+    };
+    const output = toolOutput(toolCall);
+
+    const { orchestrator, transcript } = makeRun({
+      outputs: [output],
+    });
+
+    await orchestrator.run();
+
+    const events = readTranscript(transcript);
+    expect(events.some((event) => event.type === "model_decision_recorded")).toBe(true);
+    expect(events.some((event) => event.type === "model_usage_recorded")).toBe(false);
+  });
+
+  it("model_usage_recorded correlates with decision trace fields including promptRef and traceRef", async () => {
+    const toolCall: InternalToolCall = {
+      id: "call-corr",
+      name: "terminal_write",
+      arguments: { expectedInputSeq: 1, text: "pwd\\n" },
+    };
+    const thinking = {
+      content: "need terminal with prompt",
+      raw: {
+        prompt: "raw prompt for correlation test",
+        finishReasons: ["stop"],
+        continuationRounds: 0,
+      },
+    };
+    const turn: ModelTurn = {
+      kind: "tool_call",
+      toolCall,
+      thinking,
+      rawDecision: "terminal_write",
+    };
+    const usage: NormalizedFimUsage = {
+      thinking: { finishReasons: ["stop"], continuationRounds: 0 },
+      decision: { finishReasons: ["stop"], continuationRounds: 0 },
+    };
+    const output: FimStepOutput = {
+      thinking,
+      rawDecision: turn.rawDecision,
+      turn,
+      usage,
+    };
+
+    const { orchestrator, transcript } = makeRun({
+      outputs: [output],
+      modelProgress: ["trace for correlation"],
+    });
+
+    await orchestrator.run();
+
+    const events = readTranscript(transcript);
+    const usageEvent = events.find(
+      (event): event is Extract<RunEvent, { type: "model_usage_recorded" }> =>
+        event.type === "model_usage_recorded",
+    );
+
+    expect(usageEvent).toBeDefined();
+    expect(usageEvent!.decisionId).toBe("decision-run-001-0");
+    expect(usageEvent!.promptRef).toBeDefined();
+    expect(usageEvent!.promptRef!.relativePath).toContain("debug/prompts");
+    expect(usageEvent!.traceRef).toBeDefined();
+    expect(usageEvent!.traceRef!.relativePath).toContain("debug/thinking");
+
+    const decisionEvent = events.find(
+      (event): event is Extract<RunEvent, { type: "model_decision_recorded" }> =>
+        event.type === "model_decision_recorded",
+    );
+    expect(usageEvent!.promptRef).toEqual(decisionEvent!.decision.thinking.promptRef);
+    expect(usageEvent!.traceRef).toEqual(decisionEvent!.decision.thinking.traceRef);
+  });
+
+  it("model_usage_recorded uses the same decisionId for correlation with later tool events", async () => {
+    const toolCall: InternalToolCall = {
+      id: "call-usage-corr",
+      name: "terminal_write",
+      arguments: { expectedInputSeq: 1, text: "pwd\\n" },
+    };
+    const usage: NormalizedFimUsage = {
+      thinking: { finishReasons: ["stop"], continuationRounds: 0 },
+      decision: { finishReasons: ["stop"], continuationRounds: 0 },
+    };
+    const wait: IoWaitRequest = {
+      reason: "awaiting",
+      condition: { kind: "new_user_message", channel: "default" },
+    };
+    const output = toolOutputWithUsage(toolCall, usage);
+
+    const { orchestrator, transcript } = makeRun({
+      outputs: [output, ioWaitOutput(wait)],
+      waitEvent: {
+        id: "msg-corr-wait",
+        kind: "user_message_received",
+        source: "im",
+        timestamp: "2026-05-25T12:02:00.000Z",
+        message: {
+          id: "msg-corr",
+          channel: "default",
+          role: "user",
+          text: "ok",
+          createdAt: "2026-05-25T12:02:00.000Z",
+        },
+      },
+    });
+
+    await orchestrator.run();
+
+    const events = readTranscript(transcript);
+    const usageEvent = events.find(
+      (event): event is Extract<RunEvent, { type: "model_usage_recorded" }> =>
+        event.type === "model_usage_recorded",
+    );
+    const validatedEvent = events.find(
+      (event) => event.type === "tool_call_validated",
+    );
+
+    expect(usageEvent).toBeDefined();
+    expect(validatedEvent).toBeDefined();
+    expect(usageEvent!.decisionId).toBe("decision-run-001-0");
+    expect((validatedEvent as any).decisionId).toBe("decision-run-001-0");
   });
 });

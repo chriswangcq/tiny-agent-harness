@@ -7,6 +7,7 @@ import type {
   FimStepOutput,
   InternalToolCall,
   ModelStepContext,
+  NormalizedFimUsage,
 } from "./model.js";
 import type {
   ToolRequest,
@@ -233,6 +234,15 @@ export type RunEvent =
       type: "model_decision_recorded";
       stepIndex: number;
       decision: ModelDecisionTrace;
+      timestamp: string;
+    }
+  | {
+      type: "model_usage_recorded";
+      stepIndex: number;
+      decisionId: string;
+      usage: NormalizedFimUsage;
+      promptRef?: RunArtifactRef;
+      traceRef?: RunArtifactRef;
       timestamp: string;
     }
   | {

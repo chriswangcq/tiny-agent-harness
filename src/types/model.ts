@@ -7,6 +7,7 @@ import type { IoWaitRequest } from "./environment.js";
 import type { TerminalToolInput, ToolName } from "./tools.js";
 import type { ModelProtocolDiagnostic } from "../model/dsml-decision-parser.js";
 import type { NormalizedFimUsage } from "../model/token-usage-normalizer.js";
+export type { NormalizedFimUsage };
 
 /**
  * Raw model output placeholder. Will be refined as the FIM adapter
