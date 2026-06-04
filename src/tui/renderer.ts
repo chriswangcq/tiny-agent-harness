@@ -22,6 +22,7 @@ import type {
 import { TuiInteractionState } from "./interaction-state.js";
 import {
   buildLoopFrameDetail,
+  resolveLoopDetailFrame,
   summarizeLoopFrames,
 } from "./debugger.js";
 import type {
@@ -792,7 +793,9 @@ export function buildTuiPaneModel(
     };
   }
 
-  const selectedLoopFrame = state.selectedLoopFrame(view.loop);
+  const detailFrame = resolveLoopDetailFrame(view.loop, {
+    selectedFrameId: state.selectedLoopFrameId,
+  });
   const loopLines = buildLoopFrameLines(view.loop, state, expandedFrames);
   const loop: TuiPaneModel = {
     title: loopPaneTitle(view.loop, state.pane === "loop"),
@@ -811,7 +814,7 @@ export function buildTuiPaneModel(
     width: layout.detailPaneWidth,
     height: layout.topHeight,
     contentLines: buildLoopDetailLines(
-      selectedLoopFrame,
+      detailFrame,
       Math.max(1, layout.detailPaneWidth - 2),
       Math.max(0, layout.topHeight - 2),
       options,

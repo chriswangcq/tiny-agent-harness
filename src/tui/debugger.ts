@@ -126,6 +126,18 @@ export function nextLoopFrameIndex(
   return previous ?? (input.wrap ? candidateIndexes.at(-1) : undefined);
 }
 
+export function resolveLoopDetailFrame(
+  frames: readonly LoopFrame[],
+  input: { selectedFrameId?: string } = {},
+): LoopFrame | undefined {
+  if (frames.length === 0) return undefined;
+  if (input.selectedFrameId) {
+    const selected = frames.find((frame) => frame.id === input.selectedFrameId);
+    if (selected) return selected;
+  }
+  return frames.at(-1);
+}
+
 export function buildLoopFrameDetail(frame: LoopFrame): LoopFrameDetail {
   return {
     id: frame.id,
