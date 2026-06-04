@@ -35,6 +35,7 @@ import type {
   TuiLimits,
 } from "./types.js";
 import { DEFAULT_TUI_LIMITS } from "./types.js";
+import { buildTokenUsageView } from "./token-usage-consumer.js";
 import { redactTerminalWriteDisplayText } from "./redaction.js";
 
 type ConversationProjectionItem = ConversationItem & {
@@ -56,6 +57,7 @@ export class ViewModelBuilder {
   private conversationCounter = 0;
   private seenConversationIds = new Set<string>();
   private thinkingStreams = new Map<number, string>();
+  private tokenUsageEvents: RunEvent[] = [];
   private readonly limits: TuiLimits;
 
   constructor(limits?: Partial<TuiLimits>) {
@@ -485,6 +487,9 @@ export class ViewModelBuilder {
         });
         break;
 
+      case "model_usage_recorded":
+        this.tokenUsageEvents.push(event);
+        break;
 
       case "run_finished":
         this.header.status = event.status;
@@ -576,6 +581,7 @@ export class ViewModelBuilder {
         return a.session.localeCompare(b.session);
       }),
       activeSkills: [],
+      tokenUsage: buildTokenUsageView(this.tokenUsageEvents),
     };
   }
 

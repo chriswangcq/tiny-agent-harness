@@ -1356,3 +1356,110 @@ describe("ViewModelBuilder", () => {
   });
 
 });
+
+describe("tokenUsage integration", () => {
+  it("has no tokenUsage when no model_usage_recorded events", () => {
+    const builder = new ViewModelBuilder();
+    builder.applyEvent({
+      type: "run_started",
+      runId: "r1",
+      task: "test",
+      cwd: "/tmp",
+      timestamp: NOW,
+    });
+    const view = builder.getViewModel();
+    expect(view.tokenUsage).toBeDefined();
+    expect(view.tokenUsage!.isEmpty).toBe(true);
+    expect(view.tokenUsage!.eventCount).toBe(0);
+    expect(view.tokenUsage!.combinedTotalTokens).toBe(0);
+  });
+
+  it("reflects model_usage_recorded events in tokenUsage", () => {
+    const builder = new ViewModelBuilder();
+    builder.applyEvent({
+      type: "run_started",
+      runId: "r1",
+      task: "test",
+      cwd: "/tmp",
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "model_usage_recorded",
+      stepIndex: 0,
+      decisionId: "d0",
+      usage: {
+        thinking: {
+          finishReasons: ["stop"],
+          continuationRounds: 0,
+          usages: [{ prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 }],
+        },
+        decision: {
+          finishReasons: ["stop"],
+          continuationRounds: 0,
+          usages: [{ prompt_tokens: 200, completion_tokens: 30, total_tokens: 230 }],
+        },
+      },
+      timestamp: NOW,
+    });
+
+    const view = builder.getViewModel();
+    expect(view.tokenUsage).toBeDefined();
+    expect(view.tokenUsage!.isEmpty).toBe(false);
+    expect(view.tokenUsage!.eventCount).toBe(1);
+    expect(view.tokenUsage!.stepIndexes).toEqual([0]);
+    expect(view.tokenUsage!.thinkingTotalTokens).toBe(150);
+    expect(view.tokenUsage!.decisionTotalTokens).toBe(230);
+    expect(view.tokenUsage!.combinedTotalTokens).toBe(380);
+  });
+
+  it("aggregates multiple model_usage_recorded events", () => {
+    const builder = new ViewModelBuilder();
+    builder.applyEvent({
+      type: "run_started",
+      runId: "r1",
+      task: "test",
+      cwd: "/tmp",
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "model_usage_recorded",
+      stepIndex: 0,
+      decisionId: "d0",
+      usage: {
+        thinking: {
+          finishReasons: ["stop"],
+          continuationRounds: 0,
+          usages: [{ prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 }],
+        },
+        decision: {
+          finishReasons: [],
+          continuationRounds: 0,
+        },
+      },
+      timestamp: NOW,
+    });
+    builder.applyEvent({
+      type: "model_usage_recorded",
+      stepIndex: 1,
+      decisionId: "d1",
+      usage: {
+        thinking: {
+          finishReasons: ["length"],
+          continuationRounds: 1,
+          usages: [{ prompt_tokens: 300, completion_tokens: 80, total_tokens: 380 }],
+        },
+        decision: {
+          finishReasons: [],
+          continuationRounds: 0,
+        },
+      },
+      timestamp: LATER,
+    });
+
+    const view = builder.getViewModel();
+    expect(view.tokenUsage!.eventCount).toBe(2);
+    expect(view.tokenUsage!.stepIndexes).toEqual([0, 1]);
+    expect(view.tokenUsage!.thinkingTotalTokens).toBe(530); // 150 + 380
+    expect(view.tokenUsage!.combinedTotalTokens).toBe(530);
+  });
+});
