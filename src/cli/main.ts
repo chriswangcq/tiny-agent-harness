@@ -538,6 +538,22 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Handle --state-dir before mcp subcommand (e.g. tiny-agent --state-dir /path mcp list)
+  {
+    const stateIdx = process.argv.indexOf("--state-dir");
+    const mcpIdx = process.argv.indexOf("mcp");
+    if (stateIdx !== -1 && mcpIdx !== -1 && stateIdx < mcpIdx) {
+      const stateDirVal = process.argv[stateIdx + 1];
+      // Skip --state-dir and its value, pass rest to runMcpCli
+      const mcpArgs = process.argv.slice(mcpIdx + 1);
+      // Prepend --state-dir so runMcpCli's own parser can use it
+      const fullArgs = stateDirVal ? ["--state-dir", stateDirVal, ...mcpArgs] : mcpArgs;
+      const { runMcpCli: runMcpCli2 } = await import("../mcp/cli.js");
+      process.exitCode = await runMcpCli2(fullArgs);
+      return;
+    }
+  }
+
   // --- Parse run arguments ---
   // Supported forms:
   //   tiny-agent "fix the tests"                     (legacy positional)
