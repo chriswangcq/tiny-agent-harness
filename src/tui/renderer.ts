@@ -24,7 +24,10 @@ import {
   buildLoopFrameDetail,
   summarizeLoopFrames,
 } from "./debugger.js";
-import type { RunBrowserView } from "./debugger.js";
+import type {
+  RunBrowserControlIntentDisplay,
+  RunBrowserView,
+} from "./debugger.js";
 import wcwidth from "wcwidth";
 
 const INPUT_BAR_HEIGHT = 5;
@@ -1045,8 +1048,72 @@ function buildRunBrowserFrameLines(
     }
   }
 
+  const controlIntentLines = buildRunBrowserControlIntentLines(
+    runBrowser.controlIntentDisplays ?? [],
+    safeWidth,
+  );
+  if (controlIntentLines.length > 0) {
+    lines.push("");
+    lines.push(...controlIntentLines);
+  }
+
   lines.push("");
   return lines;
+}
+
+function buildRunBrowserControlIntentLines(
+  displays: readonly RunBrowserControlIntentDisplay[],
+  width: number,
+): string[] {
+  if (displays.length === 0) return [];
+
+  const validDisplays = displays.filter((display) => display.valid);
+  if (validDisplays.length > 0) {
+    const first = validDisplays[0]!;
+    const labels = validDisplays
+      .map((display) => display.actionLabel)
+      .join("/");
+    return [
+      ...wrapDisplayText(`  ctl: ${labels}`, width),
+      ...wrapDisplayText(
+        `  target: ${first.runId} owner=${first.intent.owner}`,
+        width,
+      ),
+      ...wrapDisplayText(
+        `  review: ${first.intent.review} effect=${first.intent.effect}`,
+        width,
+      ),
+    ];
+  }
+
+  const firstError = displays.find(isRunBrowserControlIntentError);
+  if (!firstError) return [];
+  return [
+    ...wrapDisplayText("  ctl: unavailable", width),
+    ...wrapDisplayText(
+      `  why: ${formatRunBrowserControlErrorReason(firstError)}`,
+      width,
+    ),
+  ];
+}
+
+function isRunBrowserControlIntentError(
+  display: RunBrowserControlIntentDisplay,
+): display is Extract<RunBrowserControlIntentDisplay, { status: "error" }> {
+  return !display.valid;
+}
+
+function formatRunBrowserControlErrorReason(
+  display: Extract<RunBrowserControlIntentDisplay, { status: "error" }>,
+): string {
+  switch (display.errorKind) {
+    case "missing_run_id":
+      return "no target";
+    case "unknown_run_id":
+      return "unknown run";
+    case "unsafe_mutation":
+      return "intent only";
+  }
 }
 
 function buildConversationFrameLines(

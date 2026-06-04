@@ -20,6 +20,7 @@ import {
   wrapDisplayText,
 } from "../src/tui/renderer.js";
 import { TuiInteractionState } from "../src/tui/interaction-state.js";
+import type { RunBrowserControlIntentDisplay } from "../src/tui/debugger.js";
 import type { LoopFrame, SessionView, TuiViewModel } from "../src/tui/types.js";
 
 function session(
@@ -836,6 +837,142 @@ describe("buildTuiPaneModel runBrowser", () => {
     expect(text).toContain("crash in main");
     expect(text).toContain("failed");
     expect(text).toContain("run-x");
+  });
+
+  it("renders selected run control intent boundary metadata", () => {
+    const state = new TuiInteractionState();
+    const controlIntentDisplays: RunBrowserControlIntentDisplay[] = [
+      {
+        status: "valid",
+        valid: true,
+        actionLabel: "Attach",
+        action: "attach",
+        runId: "run-b",
+        index: 1,
+        intent: {
+          action: "attach",
+          runId: "run-b",
+          index: 1,
+          effect: "none",
+          owner: "runtime_cli",
+          review: "required",
+        },
+      },
+      {
+        status: "valid",
+        valid: true,
+        actionLabel: "Resume",
+        action: "resume",
+        runId: "run-b",
+        index: 1,
+        intent: {
+          action: "resume",
+          runId: "run-b",
+          index: 1,
+          effect: "none",
+          owner: "runtime_cli",
+          review: "required",
+        },
+      },
+      {
+        status: "valid",
+        valid: true,
+        actionLabel: "Control",
+        action: "control",
+        runId: "run-b",
+        index: 1,
+        intent: {
+          action: "control",
+          runId: "run-b",
+          index: 1,
+          effect: "none",
+          owner: "runtime_cli",
+          review: "required",
+        },
+      },
+    ];
+    const vm = {
+      ...view(),
+      runBrowser: {
+        rows: [
+          {
+            runId: "run-b",
+            index: 1,
+            statusDisplay: "running",
+            stepDisplay: "step 7",
+            durationDisplay: "45s",
+            taskPreview: "npx vitest",
+            cwdPreview: "/tmp",
+            isSelected: true,
+          },
+        ],
+        totalCount: 1,
+        isEmpty: false,
+        controlIntentDisplays,
+      },
+    };
+    state.syncWithView(vm.conversation, vm.loop);
+
+    const model = buildTuiPaneModel(vm, state, new Set(), {
+      width: 96,
+      height: 18,
+    });
+
+    const text = model.conversation.contentLines.join("\n");
+    expect(text).toContain("ctl: Attach/Resume/Control");
+    expect(text).toContain("target: run-b");
+    expect(text).toContain("owner=runtime_cli");
+    expect(text).toContain("review: required");
+    expect(text).toContain("effect=none");
+  });
+
+  it("wraps unavailable control intent metadata within pane width", () => {
+    const state = new TuiInteractionState();
+    const controlIntentDisplays: RunBrowserControlIntentDisplay[] = [
+      {
+        status: "error",
+        valid: false,
+        actionLabel: "Control",
+        action: "control",
+        errorKind: "missing_run_id",
+        errorMessage: "No runId or valid index provided; cannot resolve target run",
+      },
+    ];
+    const vm = {
+      ...view(),
+      runBrowser: {
+        rows: [
+          {
+            runId: "run-a",
+            index: 0,
+            statusDisplay: "running",
+            stepDisplay: "step 1",
+            durationDisplay: "1s",
+            taskPreview: "long control text",
+            cwdPreview: "/repo",
+            isSelected: false,
+          },
+        ],
+        totalCount: 1,
+        isEmpty: false,
+        controlIntentDisplays,
+      },
+    };
+    state.syncWithView(vm.conversation, vm.loop);
+
+    const model = buildTuiPaneModel(vm, state, new Set(), {
+      width: 54,
+      height: 18,
+    });
+
+    const controlLines = model.conversation.contentLines.filter((line) =>
+      line.includes("ctl:") || line.includes("why:"),
+    );
+    expect(controlLines.join("\n")).toContain("ctl: unavailable");
+    expect(controlLines.join("\n")).toContain("why: no target");
+    for (const line of controlLines) {
+      expect(wcwidth(line)).toBeLessThanOrEqual(model.conversation.width);
+    }
   });
 
   it("handles empty runBrowser compactly", () => {
