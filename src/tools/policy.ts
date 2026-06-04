@@ -65,6 +65,10 @@ const DEFAULT_MAX_WRITE_LENGTH = 32_000;
 // Destructive / dangerous rules – any single match rejects by default
 // ---------------------------------------------------------------------------
 
+// System-path pattern shared across several rules.
+// Includes common macOS and Linux protected directories.
+const SYSTEM_PATH = String.raw`\/etc\/|\/usr\/|\/bin\/|\/sbin\/|\/System\/|\/Library\/|\/boot\/|\/dev\/|\/proc\/|\/sys\/`;
+
 const DANGEROUS_TERMINAL_WRITE_RULES: Rule[] = [
   {
     code: "dangerous_recursive_delete",
@@ -90,16 +94,20 @@ const DANGEROUS_TERMINAL_WRITE_RULES: Rule[] = [
     code: "dangerous_permission_change",
     severity: "error",
     message: "Recursive broad permission change targets a root, home, or system path.",
-    pattern:
-      /\bchmod\s+-R\s+\S+\s+(?:"\/"|'\/'|\/(?:\s|$)|\/\*|~(?:\/|\s|$)|["']?\$HOME["']?(?:\/|\s|$)|\/(?:etc|usr|bin|sbin|System|Library|boot|dev|proc|sys)\b)/u,
+    pattern: new RegExp(
+      String.raw`\bchmod\s+-R\s+\S+\s+(?:"\/"|'\/'|\/(?:\s|$)|\/\*|~(?:\/|\s|$)|["']?\$HOME["']?(?:\/|\s|$)|\/(?:etc|usr|bin|sbin|System|Library|boot|dev|proc|sys)\b)`,
+      "u",
+    ),
   },
   {
-    // Pipe to shell: curl|bash, wget|sh, and process substitution variants
+    // Pipe or process substitution into a shell:
+    //   curl ... | bash        curl ... | sudo -E bash
+    //   bash <(curl ...)       source <(wget ...)
     code: "dangerous_pipe_to_shell",
     severity: "error",
     message: "Downloaded content is executed in a shell (pipe or process substitution).",
     pattern:
-      /\b(?:curl|wget)\b[^;\n|]*\|\s*(?:sudo\s+)?(?:ba)?sh\b|(?:bash|sh|source|\.)\s+<\(\s*(?:curl|wget)\b/u,
+      /\b(?:curl|wget)\b[^;\n|]*\|\s*(?:sudo(?:\s+-[A-Za-z]+\b)*\s+)?(?:ba)?sh\b|(?:bash|sh|source|\.)\s+<\(\s*(?:curl|wget)\b/u,
   },
   {
     code: "dangerous_privileged_command",
@@ -109,10 +117,12 @@ const DANGEROUS_TERMINAL_WRITE_RULES: Rule[] = [
       /\bsudo\s+(?:rm|chmod|chown|dd|mkfs|shutdown|reboot|halt|poweroff)\b/u,
   },
   {
+    // --force, -f, +f (push flag), and +refspec (e.g. git push origin +main)
     code: "dangerous_force_push",
     severity: "error",
     message: "Force push can rewrite remote history.",
-    pattern: /\bgit\s+push\b[^\n;]*(?:--force(?:-with-lease)?|[+-]f(?:\s|$))/u,
+    pattern:
+      /\bgit\s+push\b[^\n;]*(?:--force(?:-with-lease)?|[+-]f(?:\s|$)|\+[a-zA-Z][\w/.-]*)/u,
   },
   {
     code: "dangerous_fork_bomb",
@@ -128,14 +138,19 @@ const DANGEROUS_TERMINAL_WRITE_RULES: Rule[] = [
       /\b(?:cat|less|more|head|tail|sed|awk|grep|rg)\b[^\n;]*(?:~\/\.ssh\/(?:id_[\w-]+|config)|(?:^|[\s/])(?:ak\.txt|\.env(?:\.(?:local|production|development|test|staging|prod|dev))?|\.npmrc|\.netrc|\.git-credentials|id_rsa|id_ecdsa|id_ed25519|[^\s/]+\.pem|[^\s/]+\.key|[^\s/]+\.p12|credentials|secrets)(?:\s|$))/u,
   },
   {
-    // System-path writes: >, >>, tee, cp, mv, install, touch, mkdir targeting
-    // protected directories.  Deliberately avoids flagging read-only references
-    // (ls, cd, find, etc.).
+    // Write to a system directory. Two families:
+    //   a) Redirect / tee – destination is explicit and unambiguous.
+    //   b) cp / mv / install / touch / mkdir – greedy .* ensures we test the
+    //      LAST system-path token so sources like "cp /usr/bin/env ./local" are
+    //      not falsely flagged; only "cp src /etc/dst" matches.
     code: "dangerous_system_path_write",
     severity: "error",
     message: "Terminal write attempts to modify a system directory.",
-    pattern:
-      /(?:>\s*|>>\s*|\btee\s+(?:-a\s+)?|\b(?:cp|mv|install|touch|mkdir)\b[^\n;]*\s)(?:\/etc\/|\/usr\/|\/bin\/|\/sbin\/|\/System\/|\/Library\/|\/boot\/|\/dev\/|\/proc\/|\/sys\/)/u,
+    pattern: new RegExp(
+      String.raw`(?:>\s*|>>\s*|\btee\s+(?:-a\s+)?)(?:${SYSTEM_PATH})` +
+      String.raw`|\b(?:cp|mv|install|touch|mkdir)\b.*\s(?:${SYSTEM_PATH})\S*\s*[;\n]`,
+      "u",
+    ),
   },
 ];
 
