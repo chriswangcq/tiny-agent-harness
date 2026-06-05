@@ -15,12 +15,17 @@ export class TuiInteractionState {
     conversation: true,
     loop: true,
   };
+  /** True when enterInput() deferred follow re-anchor; cleared when next sync restores it. */
+  private followDeferred = false;
   selectedConversationItemId: string | undefined;
   selectedLoopFrameId: string | undefined;
 
   enterInput(): void {
     this.mode = "input";
-    this.followBottom = { conversation: true, loop: true };
+    // Defer follow-bottom re-anchor: only restore follow when new content arrives
+    // to avoid jarring snap after exiting browse mode.
+    this.followBottom = { conversation: false, loop: false };
+    this.followDeferred = true;
     this.selectedConversationItemId = undefined;
     this.selectedLoopFrameId = undefined;
   }
@@ -32,6 +37,7 @@ export class TuiInteractionState {
   ): void {
     this.mode = "browse";
     this.pane = pane;
+    this.followDeferred = false;
     if (pane === "loop") {
       this.ensureLoopSelection(frames);
     } else {
@@ -114,6 +120,7 @@ export class TuiInteractionState {
     conversation: ConversationItem[] = [],
     frames: LoopFrame[] = [],
   ): void {
+    this.followDeferred = false;
     if (pane === "conversation") {
       this.followBottom.conversation = !this.followBottom.conversation;
       if (this.followBottom.conversation && conversation.length > 0) {
@@ -131,6 +138,7 @@ export class TuiInteractionState {
   syncWithView(conversation: ConversationItem[] = [], frames: LoopFrame[] = []): void {
     this.ensureLoopSelection(frames);
     this.ensureConversationSelection(conversation);
+    this.resolveFollowDeferral(conversation, frames);
     if (this.followBottom.conversation && conversation.length > 0) {
       this.selectLastConversationItem(conversation);
     }
@@ -142,6 +150,10 @@ export class TuiInteractionState {
   // Side-specific compatibility wrappers: each handles only one side
   syncWithFrames(frames: LoopFrame[]): void {
     this.ensureLoopSelection(frames);
+    if (this.followDeferred && frames.length > 0) {
+      this.followBottom.loop = true;
+      this.followDeferred = false;
+    }
     if (this.followBottom.loop && frames.length > 0) {
       this.selectLastLoopFrame(frames);
     }
@@ -149,6 +161,10 @@ export class TuiInteractionState {
 
   syncWithConversation(conversation: ConversationItem[]): void {
     this.ensureConversationSelection(conversation);
+    if (this.followDeferred && conversation.length > 0) {
+      this.followBottom = { conversation: true, loop: true };
+      this.followDeferred = false;
+    }
     if (this.followBottom.conversation && conversation.length > 0) {
       this.selectLastConversationItem(conversation);
     }
@@ -164,6 +180,17 @@ export class TuiInteractionState {
   ): ConversationItem | undefined {
     if (!this.selectedConversationItemId) return undefined;
     return conversation.find((item) => item.id === this.selectedConversationItemId);
+  }
+
+  private resolveFollowDeferral(
+    conversation: ConversationItem[],
+    frames: LoopFrame[],
+  ): void {
+    if (!this.followDeferred) return;
+    if (conversation.length > 0 || frames.length > 0) {
+      this.followBottom = { conversation: true, loop: true };
+      this.followDeferred = false;
+    }
   }
 
   private ensureLoopSelection(frames: LoopFrame[]): void {
