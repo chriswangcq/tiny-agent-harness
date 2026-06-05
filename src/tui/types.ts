@@ -6,7 +6,7 @@
 import type { AgentRunStatus } from "../types/run.js";
 import type { ToolReviewDecision } from "../types/tools.js";
 import type { TokenUsageView } from "./token-usage-consumer.js";
-import type { RunBrowserView } from "./debugger.js";
+import type { RiskFindingSummary, RunBrowserView } from "./debugger.js";
 
 // ─── Top-level View Model ──────────────────────────────────────────
 
@@ -83,6 +83,8 @@ export type LoopFrame = {
   logPath?: string;
   transcriptEventId?: string;
   /** Present when phase is "review" and a decision has been made. */
+  /** ToolPolicy risk findings extracted from reviewDecision (populated for review frames). */
+  policyRisk?: RiskFindingSummary;
   reviewDecision?: ToolReviewDecision;
   /** Display-only control affordance marker: R=review-pending, I=interruptible, W=io-wait */
   controlAffordance?: "R" | "I" | "W";

@@ -35,7 +35,7 @@ import type {
   TuiLimits,
 } from "./types.js";
 import { DEFAULT_TUI_LIMITS } from "./types.js";
-import { buildRunBrowserView } from "./debugger.js";
+import { buildRunBrowserView, extractRiskFindings } from "./debugger.js";
 import type { RunBrowserView, RunBrowserOptions, RunIndexRow } from "./debugger.js";
 import { buildTokenUsageView } from "./token-usage-consumer.js";
 import { redactTerminalWriteDisplayText } from "./redaction.js";
@@ -292,6 +292,7 @@ export class ViewModelBuilder {
             title: decision.status === "approved" ? "approved" : "rejected",
             summary: summaryParts.filter(Boolean).join(" "),
             reviewDecision: decision,
+            policyRisk: extractRiskFindings({ reviewDecision: decision }),
             detail: formatDetail([
               ["request", event.request],
               ["decision", decision],
