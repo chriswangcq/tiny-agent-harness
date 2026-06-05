@@ -1,4 +1,5 @@
 import type { ConversationItem, LoopFrame, RunHeaderView, SessionView } from "./types.js";
+import type { ToolReviewDecision } from "../types/tools.js";
 
 export type LoopFrameQuery = {
   text?: string;
@@ -11,6 +12,20 @@ export type LoopFrameQuery = {
 export type LoopFrameDetailSection = {
   title: string;
   content: string;
+};
+
+export type LoopFrameDetailInput = {
+  id: string;
+  stepIndex: number;
+  timestamp: string;
+  phase: LoopFrame["phase"];
+  status: LoopFrame["status"];
+  title: string;
+  summary: string;
+  logPath?: string;
+  transcriptEventId?: string;
+  detail?: string;
+  reviewDecision?: ToolReviewDecision;
 };
 
 export type LoopFrameDetail = {
@@ -140,15 +155,60 @@ export function resolveLoopDetailFrame(
   return frames.at(-1);
 }
 
-export function buildLoopFrameDetail(frame: LoopFrame): LoopFrameDetail {
+export function projectLoopFrameDetail(input: LoopFrameDetailInput): LoopFrameDetail {
+  const sections: LoopFrameDetailSection[] = buildProjectionSections(input);
+
   return {
+    id: input.id,
+    stepIndex: input.stepIndex,
+    phase: input.phase,
+    status: input.status,
+    title: input.title,
+    summary: input.summary,
+    timestamp: input.timestamp,
+    ...(input.logPath ? { logPath: input.logPath } : {}),
+    ...(input.transcriptEventId
+      ? { transcriptEventId: input.transcriptEventId }
+      : {}),
+    ...(input.detail ? { rawDetail: input.detail } : {}),
+    sections,
+  };
+}
+
+function buildProjectionSections(input: LoopFrameDetailInput): LoopFrameDetailSection[] {
+  const sections: LoopFrameDetailSection[] = [];
+
+  // Project reviewDecision as a structured detail section
+  if (input.reviewDecision) {
+    sections.push({
+      title: "reviewDecision",
+      content: JSON.stringify(input.reviewDecision, null, 2),
+    });
+  }
+
+  // Append parsed raw detail as supplementary sections (backward compat)
+  if (input.detail) {
+    const parsed = parseDetailSections(input.detail);
+    for (const section of parsed) {
+      // Avoid duplicating titles already covered by structured fields
+      if (section.title !== "reviewDecision") {
+        sections.push(section);
+      }
+    }
+  }
+
+  return sections;
+}
+
+export function buildLoopFrameDetail(frame: LoopFrame): LoopFrameDetail {
+  return projectLoopFrameDetail({
     id: frame.id,
     stepIndex: frame.stepIndex,
+    timestamp: frame.timestamp,
     phase: frame.phase,
     status: frame.status,
     title: frame.title,
     summary: frame.summary,
-    timestamp: frame.timestamp,
     ...(frame.logPath ? { logPath: frame.logPath } : {}),
     ...(frame.transcriptEventId
       ? { transcriptEventId: frame.transcriptEventId }
