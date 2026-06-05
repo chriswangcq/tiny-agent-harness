@@ -325,11 +325,11 @@ P6-05 adds `src/subagent/status-projector.ts` — a pure status projector that d
 
 ### Design
 
-- **Pure function**: `projectWorkerStatus(input)` takes explicit snapshots and returns a deterministic `WorkerStatusProjection`. No `Date.now()`, `process.env`, `fs`, network, or random.
-- **Explicit inputs**: `WorkerContact`, optional `RunSnapshot`, `TranscriptSnapshot`, `ImSnapshot`, `LedgerSnapshot`, `LifecycleTemplate`, and `ProjectorConfig` (explicit `now` ISO timestamp and age thresholds).
+- **Pure function**: `projectWorkerStatus(input)` takes explicit snapshots and returns a deterministic `WorkerStatusProjection`. No `Date.now()`, `fs`, network, random, or ambient environment access.
+- **Explicit inputs**: `WorkerContact`, optional `RunSnapshot`, `ImSnapshot`, `LedgerSnapshot`, `LifecycleTemplate`, and `ProjectorConfig` (explicit `now` ISO timestamp and age thresholds).
 - **Output**: `status` classification, `reason`, per-source `evidence` with timestamps and computed age, `riskFlags`, and `projectedAt`.
 - **Status priority**: terminated > offline > done > stuck > degraded > idle > healthy > unknown.
-- **Risk flags**: `stale_heartbeat`, `missing_heartbeat`, `missing_evidence`, `stale_evidence`, `im_silence`, `ledger_stall`, `run_stall`, `no_contact`.
+- **Risk flags**: `stale_heartbeat`, `missing_heartbeat`, `missing_evidence`, `stale_evidence`, `im_silence`, `ledger_stall`, `run_stall`.
 - **"done" requires multiple signals**: run must be explicitly `finished` or ledger must show zero open problems with no risk flags. A single IM or display event cannot trigger false "done".
 - **Lifecycle templates** allow per-role heartbeat thresholds (e.g., master checks in every 10 min, coder every 1 min).
 

@@ -1,6 +1,6 @@
 // Pure worker status projector.
 // Derives worker status from explicit input snapshots.
-// No IO, no hidden clock reads, no process.env, no side effects.
+// No IO, no hidden clock reads, no ambient environment access, no side effects.
 
 import type { WorkerContact } from "./contact-registry.js";
 
