@@ -138,7 +138,7 @@ type SkillManifest = {
 
 ## CLI Commands
 
-当前实现只包含 discovery、execution、close/review、validate。没有 `skill install`
+当前实现包含 discovery、execution、close/review、validate、install。全生命周期命令均已实现。
 子命令；安装仍是把本地 skill package 放入配置的 skills root。远程安装和依赖管理
 属于后续产品面。
 
