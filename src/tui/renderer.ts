@@ -833,7 +833,7 @@ export function buildTuiPaneModel(
     title: ptyPaneTitle(ptySession, layout),
     width: layout.rightWidth,
     height: layout.bottomHeight,
-    contentLines: ptyLines,
+    contentLines: ptyLines.slice(Math.max(0, ptyLines.length - Math.max(0, layout.bottomHeight - 2))),
   };
 
   return {
