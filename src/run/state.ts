@@ -59,6 +59,10 @@ export class AgentRunState {
     }
 
     // running — check pending work in priority order
+    // Circuit breaker: if runtime is blocked from stuck detection, prevent further model calls
+    if (this.data.runtimeProgress?.stuckReason?.severity === "blocked") {
+      return { type: "stop", reason: "failed" };
+    }
     if (status === "running") {
       // 1. Pending synthetic observation to append
       if (this.data.pendingModelTurn?.kind === "invalid_output" && !this.data.pendingToolCall && !this.data.pendingToolRequest) {

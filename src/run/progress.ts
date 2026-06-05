@@ -151,6 +151,7 @@ function recordNoProgress(
       lastStepIndex: stepIndex,
       lastReportedSeverity: isRepeated ? previous.lastReportedSeverity : undefined,
     },
+    stuckReason: isRepeated ? progress?.stuckReason : undefined,
   };
 }
 
