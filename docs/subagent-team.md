@@ -288,7 +288,7 @@ tiny-agent team task cancel <taskId> [reason]
 ### Architecture notes
 
 - **Contact state**: backed by P6-01 `contact-registry.ts` pure FSM; persisted through P6-02 `directory-store.ts` project-scoped layout.
-- **Task state**: backed by `team.ts` pure FSM; currently in-memory only. Persistent task state is a P6-04 concern.
+- **Task state**: backed by `team.ts` pure FSM; currently in-memory only. Persistent task state is a future durable task-store concern.
 - **CLI service layer**: `src/subagent/team-cli.ts` — pure command parsing and handler functions.
 - **Binary entry**: `src/cli/team-entry.ts` and `src/cli/team-run.ts`.
 - **Integration**: routed through `src/cli/main.ts` as `tiny-agent team ...`.
@@ -308,7 +308,7 @@ This is a **local runtime/CLI launcher**, not a provider-native sub-agent tool. 
   3. Spawn worker process (`node dist/cli/main.js run`) via spawn port
   4. Update worker runId/currentTask via `worker_updated` event
   5. Set worker status to `active` via `worker_status_changed` event
-- Structured result: `WorkerLaunchSuccess` or `WorkerLaunchFailure` with exact failure stage (`checkout`, `spawn`, `contact_register`, `contact_update`) and evidence (branch, registeredEventId, runId, spawnResult, failedAt)
+- Structured result: `WorkerLaunchSuccess` or `WorkerLaunchFailure` with exact failure stage (`checkout`, `spawn`, `contact_register`, `contact_update`, `contact_status`) and evidence (branch, registeredEventId, runId, spawnResult, failedAt)
 - All inputs explicit: no hidden `Date`, env, filesystem, or network reads
 - Tests use fake ports only (no real git/process/clock/network)
 
