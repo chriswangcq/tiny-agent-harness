@@ -759,3 +759,36 @@ export function buildRunBrowserControlIntentDisplay(
     intent: result,
   };
 }
+
+// ─── Risk Findings ─────────────────────────────────────────────────
+
+export type RiskFindingEntry = {
+  code: string;
+  severity: "error" | "warning" | "info";
+  message: string;
+};
+
+export type RiskFindingSummary = {
+  findings: RiskFindingEntry[];
+  counts: { error: number; warning: number; info: number };
+  isEmpty: boolean;
+};
+
+export function extractRiskFindings(source: {
+  reviewDecision?: { findings?: RiskFindingEntry[] } | null;
+}): RiskFindingSummary {
+  const findings = source?.reviewDecision?.findings ?? [];
+
+  const counts = { error: 0, warning: 0, info: 0 };
+  for (const f of findings) {
+    if (f.severity === "error") counts.error++;
+    else if (f.severity === "warning") counts.warning++;
+    else counts.info++;
+  }
+
+  return {
+    findings,
+    counts,
+    isEmpty: findings.length === 0,
+  };
+}

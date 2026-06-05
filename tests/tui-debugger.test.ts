@@ -265,3 +265,76 @@ describe("TUI debugger run helpers", () => {
     ]);
   });
 });
+
+import { extractRiskFindings, type RiskFindingEntry } from "../src/tui/debugger.js";
+
+describe("extractRiskFindings", () => {
+  const errorFinding: RiskFindingEntry = {
+    code: "dangerous_recursive_delete",
+    severity: "error",
+    message: "Recursive delete targets a root path.",
+  };
+  const warningFinding: RiskFindingEntry = {
+    code: "warning_network_transfer",
+    severity: "warning",
+    message: "Network transfer command may fetch unreviewed remote content.",
+  };
+  const infoFinding: RiskFindingEntry = {
+    code: "safe_terminal_write",
+    severity: "info",
+    message: "Terminal write is allowed after policy evaluation.",
+  };
+
+  it("returns empty summary when source has no reviewDecision", () => {
+    const result = extractRiskFindings({});
+    expect(result.isEmpty).toBe(true);
+    expect(result.findings).toEqual([]);
+    expect(result.counts).toEqual({ error: 0, warning: 0, info: 0 });
+  });
+
+  it("returns empty summary when reviewDecision has no findings", () => {
+    const result = extractRiskFindings({ reviewDecision: { findings: [] } });
+    expect(result.isEmpty).toBe(true);
+    expect(result.findings).toEqual([]);
+    expect(result.counts).toEqual({ error: 0, warning: 0, info: 0 });
+  });
+
+  it("returns empty summary for null source", () => {
+    const result = extractRiskFindings(null as unknown as { reviewDecision?: { findings?: RiskFindingEntry[] } });
+    expect(result.isEmpty).toBe(true);
+  });
+
+  it("extracts single error finding", () => {
+    const result = extractRiskFindings({
+      reviewDecision: { findings: [errorFinding] },
+    });
+    expect(result.isEmpty).toBe(false);
+    expect(result.findings).toEqual([errorFinding]);
+    expect(result.counts).toEqual({ error: 1, warning: 0, info: 0 });
+  });
+
+  it("extracts mixed severity findings", () => {
+    const result = extractRiskFindings({
+      reviewDecision: {
+        findings: [errorFinding, warningFinding, infoFinding, warningFinding],
+      },
+    });
+    expect(result.isEmpty).toBe(false);
+    expect(result.findings).toHaveLength(4);
+    expect(result.counts).toEqual({ error: 1, warning: 2, info: 1 });
+  });
+
+  it("works with LoopFrame-compatible shape", () => {
+    const frameLike = {
+      reviewDecision: {
+        findings: [errorFinding],
+        status: "rejected" as const,
+        reason: "Blocked",
+        reviewer: "tool-policy",
+      },
+    };
+    const result = extractRiskFindings(frameLike);
+    expect(result.isEmpty).toBe(false);
+    expect(result.counts.error).toBe(1);
+  });
+});
