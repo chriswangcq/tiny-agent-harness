@@ -1,3 +1,4 @@
+// Display-only redaction for TUI. Must never be imported by model context, runtime state, or transcript paths.
 export type DisplayRedactionOptions = {
   terminalWritePayloadBytes?: number;
 };
