@@ -318,3 +318,28 @@ This is a **local runtime/CLI launcher**, not a provider-native sub-agent tool. 
 - Does NOT implement durable file storage — that is P6-02's responsibility
 - Does NOT implement CLI entry points — launch is invoked programmatically
 - Does NOT start real processes in tests — only fake spawn/git/contact ports
+
+## Status Projector (P6-05)
+
+P6-05 adds `src/subagent/status-projector.ts` — a pure status projector that derives worker status from explicit input snapshots. It is consumed by the master agent and TUI projection layer, not by another orchestrator.
+
+### Design
+
+- **Pure function**: `projectWorkerStatus(input)` takes explicit snapshots and returns a deterministic `WorkerStatusProjection`. No `Date.now()`, `process.env`, `fs`, network, or random.
+- **Explicit inputs**: `WorkerContact`, optional `RunSnapshot`, `TranscriptSnapshot`, `ImSnapshot`, `LedgerSnapshot`, `LifecycleTemplate`, and `ProjectorConfig` (explicit `now` ISO timestamp and age thresholds).
+- **Output**: `status` classification, `reason`, per-source `evidence` with timestamps and computed age, `riskFlags`, and `projectedAt`.
+- **Status priority**: terminated > offline > done > stuck > degraded > idle > healthy > unknown.
+- **Risk flags**: `stale_heartbeat`, `missing_heartbeat`, `missing_evidence`, `stale_evidence`, `im_silence`, `ledger_stall`, `run_stall`, `no_contact`.
+- **"done" requires multiple signals**: run must be explicitly `finished` or ledger must show zero open problems with no risk flags. A single IM or display event cannot trigger false "done".
+- **Lifecycle templates** allow per-role heartbeat thresholds (e.g., master checks in every 10 min, coder every 1 min).
+
+### Integration boundary
+
+- Consumes P6-01 `WorkerContact` type.
+- Does NOT implement IM reading, transcript reading, ledger reading, or filesystem access — those snapshots are provided as explicit inputs by the caller.
+- Does NOT determine merge readiness — that is a separate concern.
+- The projector is exported from `src/subagent/index.ts`.
+
+### Testing
+
+Tests in `tests/subagent-status-projector.test.ts` cover: healthy, idle, offline, terminated, stale heartbeat, missing evidence, IM silence, run stall, ledger stall, stuck (multiple flags), done, false done avoidance, lifecycle thresholds, age computation, purity contract, and barrel export.
