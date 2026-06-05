@@ -193,3 +193,36 @@ worker_registered → worker_updated → worker_status_changed → worker_heartb
 ### Integration boundary
 
 Do not implement durable store, CLI, worker launcher, or TUI dashboard in this module. Those belong to P6-02/P6-03/P6-04/P6-08. The contact registry provides the pure state shape and FSM that those services consume.
+
+
+## Directory Store (P6-02)
+
+P6-02 adds `src/subagent/directory-store.ts` — a durable persistence layer for the contact registry with explicit ports.
+
+### Layout boundary
+
+| Scope | Path | Purpose |
+|-------|------|---------|
+| Project-scoped | `.tiny-agent/team/contact-registry.json` | Cross-run team registry snapshot |
+| Project-scoped | `.tiny-agent/team/events.jsonl` | Team-level event log |
+| Run-scoped | `.tiny-agent/runs/<runId>/team/contact-registry.json` | Per-run team state snapshot |
+| Run-scoped | `.tiny-agent/runs/<runId>/team/events.jsonl` | Per-run team event log |
+
+Project-scoped registry persists across runs; run-scoped state stays self-contained under `runs/<runId>/` per the state-layout contract.
+
+### Explicit dependency ports
+
+- **Time**: `createTeamDirectorySnapshot(state, now)` takes explicit ISO timestamp input. No hidden `new Date()`.
+- **Filesystem**: `readTeamDirectory(fs, layout)` and `writeTeamDirectory(fs, layout, snapshot)` take an `FsPort` with `readFile`, `writeFile`, `mkdir`. The in-memory `createInMemoryFsPort()` is provided for testing. Production Node FS adapters live outside this module; consumers inject the FsPort.
+
+### Three layers
+
+1. **Path planner** — pure functions `planTeamDirectoryLayout(projectRoot)` and `planRunScopedTeamPaths(projectRoot, runId)`. No IO, no side effects.
+
+2. **Snapshot schema** — `TeamDirectorySnapshot` wrapping `ContactRegistryState` plus `schemaVersion`, `registryId`, `createdAt`, `updatedAt`. Validation via `validateTeamDirectorySnapshot()`.
+
+3. **Repository** — async `readTeamDirectory` and `writeTeamDirectory` with graceful error handling and automatic directory creation.
+
+### Integration boundary
+
+This module does NOT implement: CLI, worker launcher, TUI dashboard, file locking, or Node FS adapter. P6-03/P6-04/P6-08 consume these interfaces.
