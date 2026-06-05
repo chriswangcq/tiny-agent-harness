@@ -31,6 +31,7 @@ import type {
 } from "./debugger.js";
 import wcwidth from "wcwidth";
 
+import { buildScreenGrid, screenGridToDisplayLines } from './screen-projection.js';
 const INPUT_BAR_HEIGHT = 5;
 const INPUT_INNER_ROWS = INPUT_BAR_HEIGHT - 2;
 
@@ -820,10 +821,13 @@ export function buildTuiPaneModel(
       options,
     ),
   };
+  const ptySessionTail = ptySession?.tail ?? "";
+  const ptyRows = Math.max(1, ptySession?.screenRows ?? 24);
+  const ptyCols = Math.max(1, ptySession?.screenCols ?? 80);
+  const grid = buildScreenGrid(ptySessionTail, ptyRows, ptyCols);
+  const displayWidth = Math.max(1, layout.rightWidth - 2);
   const ptyLines = ptySession
-    ? renderPtyScreenForDisplay(ptySession, 4000, Math.max(1, layout.rightWidth - 2)).split(
-        "\n",
-      )
+    ? screenGridToDisplayLines(grid, displayWidth)
     : ["No PTY session yet"];
   const pty: TuiPaneModel = {
     title: ptyPaneTitle(ptySession, layout),
