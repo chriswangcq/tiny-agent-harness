@@ -490,6 +490,7 @@ Skill subcommands:
   close  <runId>                Close a skill run
   review-complete <runId>       Complete skill review
   validate <name>               Validate skill structure
+  install <source> [<name>]     Install a skill from local directory
 
 Environment variables:
   DEEPSEEK_API_KEY   (required) API key for DeepSeek
