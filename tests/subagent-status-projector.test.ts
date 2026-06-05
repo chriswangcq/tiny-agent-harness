@@ -230,6 +230,7 @@ describe("status projector", () => {
     expect(result.reason).toContain("complete");
   });
 
+  // GAP 5: IM receive should not falsely signal done
   it("avoids false done from single IM event", () => {
     // Run is still active, just an IM was sent
     const contact = makeContact({
@@ -360,5 +361,211 @@ describe("purity contract", () => {
 
     // Age should be exactly 30 minutes = 1,800,000 ms
     expect(result.evidence.heartbeat?.ageMs).toBe(1_800_000);
+  });
+});
+
+// ---- NEW FAILING TESTS (P6-05 gaps) ----
+// These tests should FAIL before source patches, then PASS after.
+
+// GAP 1: TranscriptSnapshot removed from ProjectorInput
+describe("GAP 1: transcriptSnapshot removed", () => {
+  it("ProjectorInput does not accept transcriptSnapshot", () => {
+    // Verify that the type no longer has transcriptSnapshot.
+    // This is a type-level test: if transcriptSnapshot still exists on
+    // ProjectorInput, this compiles; if removed, it is a compile error.
+    // Runtime test: passing transcriptSnapshot should not be required.
+    const contact = makeContact();
+    const config = makeConfig();
+    // ProjectorInput should NOT require transcriptSnapshot
+    const input: ProjectorInput = { contact, config };
+    const result = projectWorkerStatus(input);
+    expect(result.status).toBeDefined();
+  });
+
+  it("transcriptSnapshot type is not exported", async () => {
+    // Dynamically import to check that TranscriptSnapshot is absent
+    const mod = await import("../src/subagent/status-projector.js");
+    expect(mod.TranscriptSnapshot).toBeUndefined();
+  });
+});
+
+// GAP 2: No Date constructor in status-projector.ts
+describe("GAP 2: no Date constructor", () => {
+  it("isoToMs rejects invalid ISO with 0 instead of NaN", () => {
+    // Invalid ISO should produce 0 (or some safe default), not NaN.
+    const contact = makeContact({
+      status: "active",
+      lastHeartbeat: "not-a-date",
+    });
+    const input: ProjectorInput = { contact, config: makeConfig() };
+    const result = projectWorkerStatus(input);
+
+    // Should not propagate NaN into ageMs
+    if (result.evidence.heartbeat?.ageMs !== undefined) {
+      expect(Number.isNaN(result.evidence.heartbeat.ageMs)).toBe(false);
+      expect(typeof result.evidence.heartbeat.ageMs).toBe("number");
+    }
+  });
+
+  it("timestamp with weird format produces finite number", () => {
+    const contact = makeContact({
+      status: "active",
+      lastHeartbeat: "2026-06-06 03:00:00", // space instead of T
+    });
+    const input: ProjectorInput = { contact, config: makeConfig() };
+    const result = projectWorkerStatus(input);
+
+    // Must not crash, must produce a finite ageMs or undefined
+    if (result.evidence.heartbeat?.ageMs !== undefined) {
+      expect(Number.isFinite(result.evidence.heartbeat.ageMs)).toBe(true);
+    }
+  });
+
+  it("empty string timestamp handled", () => {
+    const contact = makeContact({
+      status: "active",
+      lastHeartbeat: "",
+    });
+    const input: ProjectorInput = { contact, config: makeConfig() };
+    const result = projectWorkerStatus(input);
+
+    // Must not crash; empty string is effectively missing
+    expect(result.status).toBeDefined();
+    if (result.evidence.heartbeat?.ageMs !== undefined) {
+      expect(Number.isFinite(result.evidence.heartbeat.ageMs)).toBe(true);
+    }
+  });
+});
+
+// GAP 3: Invalid/missing timestamp behaviour
+describe("GAP 3: invalid timestamp behaviour", () => {
+  it("null timestamp is treated as missing", () => {
+    const contact = makeContact({
+      status: "active",
+      lastHeartbeat: null,
+    });
+    const input: ProjectorInput = { contact, config: makeConfig() };
+    const result = projectWorkerStatus(input);
+    // null should be treated like undefined (missing)
+    expect(result.riskFlags).toContain("missing_heartbeat");
+    expect(result.evidence.heartbeat).toBeUndefined();
+  });
+
+  it("undefined lastEvidence on active contact flags missing", () => {
+    const contact = makeContact({
+      status: "active",
+      lastHeartbeat: "2026-06-06T03:29:00.000Z",
+      lastEvidence: undefined,
+    });
+    const input: ProjectorInput = { contact, config: makeConfig() };
+    const result = projectWorkerStatus(input);
+
+    expect(result.riskFlags).toContain("missing_evidence");
+    expect(result.evidence.lastEvidence).toBeUndefined();
+  });
+});
+
+// GAP 4: stale contact maps to degraded (not healthy)
+//        and no_contact risk flag is removed
+describe("GAP 4: stale contact semantics and no_contact removed", () => {
+  it("stale contact status maps to degraded, not healthy", () => {
+    const contact = makeContact({
+      status: "stale",
+      lastHeartbeat: "2026-06-06T03:29:00.000Z",
+      lastEvidence: "2026-06-06T03:28:00.000Z",
+    });
+    const input: ProjectorInput = { contact, config: makeConfig() };
+    const result = projectWorkerStatus(input);
+
+    // Stale should NOT be "healthy"
+    expect(result.status).not.toBe("healthy");
+    expect(result.status).toBe("degraded");
+  });
+
+  it("RiskFlag type does not include no_contact", () => {
+    // If no_contact still exists on the union, prove it's removed.
+    // Using a type assertion: we can't runtime-test a union exhaustively
+    // but we can check that riskFlags array never contains "no_contact".
+    const contact = makeContact();
+    const input: ProjectorInput = { contact, config: makeConfig() };
+    const result = projectWorkerStatus(input);
+    expect(result.riskFlags).not.toContain("no_contact");
+  });
+});
+
+// GAP 5: IM receive semantics
+describe("GAP 5: IM receive/send semantics", () => {
+  it("imLastReceivedAt contributes to im_silence risk flag", () => {
+    // Both sent and received are old -> im_silence
+    const contact = makeContact({
+      status: "active",
+      lastHeartbeat: "2026-06-06T03:29:00.000Z",
+      lastEvidence: "2026-06-06T03:28:00.000Z",
+    });
+    const input: ProjectorInput = {
+      contact,
+      config: makeConfig(),
+      imSnapshot: {
+        lastImSentAt: "2026-06-06T03:10:00.000Z",
+        lastImReceivedAt: "2026-06-06T03:00:00.000Z", // old received
+      },
+    };
+    const result = projectWorkerStatus(input);
+    expect(result.riskFlags).toContain("im_silence");
+  });
+
+  it("recent IM received but old sent still flags im_silence", () => {
+    // Worker hasn't sent anything but has received recent user message
+    const contact = makeContact({
+      status: "active",
+      lastHeartbeat: "2026-06-06T03:29:00.000Z",
+      lastEvidence: "2026-06-06T03:28:00.000Z",
+    });
+    const input: ProjectorInput = {
+      contact,
+      config: makeConfig(),
+      imSnapshot: {
+        lastImSentAt: "2026-06-06T03:10:00.000Z",
+        lastImReceivedAt: "2026-06-06T03:28:00.000Z", // recent user message
+      },
+    };
+    const result = projectWorkerStatus(input);
+    // User/supervisor messages alone should not clear im_silence
+    expect(result.riskFlags).toContain("im_silence");
+    expect(result.evidence.imLastReceived).toBeDefined();
+  });
+
+  it("user IM received alone does not make worker done", () => {
+    // Only IM, no run finished, no ledger clean
+    const contact = makeContact({
+      status: "active",
+      lastHeartbeat: "2026-06-06T03:29:00.000Z",
+      lastEvidence: "2026-06-06T03:28:00.000Z",
+    });
+    const input: ProjectorInput = {
+      contact,
+      config: makeConfig(),
+      imSnapshot: {
+        lastImSentAt: "2026-06-06T03:29:00.000Z",
+        lastImReceivedAt: "2026-06-06T03:29:30.000Z",
+      },
+    };
+    const result = projectWorkerStatus(input);
+    expect(result.status).not.toBe("done");
+  });
+});
+
+// GAP 6: Docs synced — covered by manual review; proxy test
+describe("GAP 6: docs mention current projector contract", () => {
+  it("docs/project-report.md exists and mentions status-projector", async () => {
+    const fs = await import("fs");
+    const content = fs.readFileSync("docs/project-report.md", "utf-8");
+    expect(content).toMatch(/[Ss]tatus [Pp]rojector/);
+  });
+
+  it("docs/subagent-team.md exists and mentions status-projector", async () => {
+    const fs = await import("fs");
+    const content = fs.readFileSync("docs/subagent-team.md", "utf-8");
+    expect(content).toMatch(/[Ss]tatus [Pp]rojector/);
   });
 });

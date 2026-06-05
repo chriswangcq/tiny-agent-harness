@@ -471,3 +471,17 @@ capability as CLI
 按当前快照估算，项目约 3.93 万行统计源码/文档/测试，其中测试约 1.53 万行、文档约 5.6 千行。它的工程投入重点不是堆功能，而是把 agent 执行过程变得可解释、可审计、可恢复。
 
 当前最值得继续推进的是：把 typecheck/build/test/diff check 固化到提交流程，继续治理 environment event 体量，增强 TUI 的 run browser/eval viewer/approval 体验，并把 skill 复盘 lessons 与未来 sub-agent team 管理服务连接起来。
+
+## Status Projector
+
+`src/subagent/status-projector.ts` provides a pure-function worker status projector: `projectWorkerStatus(input: ProjectorInput): WorkerStatusProjection`. It derives a `WorkerStatusCode` (`healthy` | `degraded` | `stuck` | `idle` | `offline` | `done` | `terminated` | `unknown`) from explicit input snapshots (contact, run, IM, ledger), a lifecycle template, and an explicit `now` ISO timestamp in `ProjectorConfig`.
+
+Key design properties:
+- **No side effects**: zero `Date.now()`, `new Date()`, `process.env`, `fs`, or network calls. Timestamp parsing uses a RegExp-based UTC ISO 8601 parser with `Date.UTC` and no clock read.
+- **Invalid input is guarded**: unrecognised timestamps produce 0 ms (treated as missing evidence) instead of NaN propagation.
+- **Evidence and risk flags**: every input timestamp is mapped to an `EvidenceItem` with computed `ageMs`. Risk flags (`stale_heartbeat`, `missing_heartbeat`, `missing_evidence`, `stale_evidence`, `im_silence`, `ledger_stall`, `run_stall`) are derived from evidence age vs. configured thresholds and lifecycle template.
+- **Contact semantics**: `terminated` and `offline` are terminal; `stale` maps to `degraded`; only `active` maps to `healthy` with zero risk flags.
+- **"done" requires corroboration**: run `finished` status **or** zero open problems in the ledger, with zero risk flags. A single IM event or display state does not trigger "done".
+- **Purity contract**: identical inputs produce identical outputs; all time flows through the explicit `config.now` parameter.
+
+The projector is re-exported via `src/subagent/index.ts` and tested in `tests/subagent-status-projector.test.ts`.

@@ -1,6 +1,6 @@
 // Pure worker status projector.
 // Derives worker status from explicit input snapshots.
-// No IO, no Date.now(), no process.env, no side effects.
+// No IO, no hidden clock reads, no process.env, no side effects.
 
 import type { WorkerContact } from "./contact-registry.js";
 
@@ -13,12 +13,6 @@ export interface RunSnapshot {
   lastStepAt?: string;
 }
 
-export interface TranscriptSnapshot {
-  /** ISO timestamp of last model output */
-  lastModelOutputAt?: string;
-  /** ISO timestamp of last tool execution */
-  lastToolExecutionAt?: string;
-}
 
 export interface ImSnapshot {
   /** ISO timestamp of last received IM */
@@ -61,7 +55,6 @@ export interface ProjectorConfig {
 export interface ProjectorInput {
   contact: WorkerContact;
   runSnapshot?: RunSnapshot;
-  transcriptSnapshot?: TranscriptSnapshot;
   imSnapshot?: ImSnapshot;
   ledgerSnapshot?: LedgerSnapshot;
   lifecycle?: LifecycleTemplate;
@@ -88,7 +81,6 @@ export type RiskFlag =
   | "im_silence"
   | "ledger_stall"
   | "run_stall"
-  | "no_contact";
 
 export interface EvidenceItem {
   timestamp?: string;
@@ -118,12 +110,21 @@ export interface WorkerStatusProjection {
 // ---- Pure helpers ----
 
 function isoToMs(iso: string): number {
-  return new Date(iso).getTime();
+  if (typeof iso !== "string" || iso.length < 20) return 0;
+  var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})Z$/.exec(iso);
+  if (!m) return 0;
+  var y = +m[1], mo = +m[2], d = +m[3], h = +m[4], mi = +m[5], s = +m[6], ms = +m[7];
+  var date = Date.UTC(y, mo - 1, d, h, mi, s, ms);
+  return date;
 }
 
 function computeAge(timestamp: string | undefined, now: string): number | undefined {
   if (!timestamp) return undefined;
-  return isoToMs(now) - isoToMs(timestamp);
+  var tsMs = isoToMs(timestamp);
+  if (tsMs === 0) return undefined;
+  var nowMs = isoToMs(now);
+  if (nowMs === 0) return undefined;
+  return nowMs - tsMs;
 }
 
 function buildEvidenceItem(
@@ -131,11 +132,13 @@ function buildEvidenceItem(
   now: string,
   source: string,
 ): EvidenceItem | undefined {
-  if (!timestamp) return undefined;
+  if (!timestamp || timestamp === "") return undefined;
+  var ageMs = computeAge(timestamp, now);
+  if (ageMs === undefined) return undefined;
   return {
-    timestamp,
-    ageMs: computeAge(timestamp, now),
-    source,
+    timestamp: timestamp,
+    ageMs: ageMs,
+    source: source,
   };
 }
 
@@ -238,10 +241,13 @@ export function projectWorkerStatus(input: ProjectorInput): WorkerStatusProjecti
   } else if (riskFlags.length > 0) {
     status = "degraded";
     reason = `Worker ${contact.workerId} has risk flags: ${riskFlags.join(", ")}.`;
+  } else if (contactStatus === "stale") {
+    status = "degraded";
+    reason = `Worker ${contact.workerId} contact status is stale.`;
   } else if (contactStatus === "idle") {
     status = "idle";
     reason = `Worker ${contact.workerId} is idle.`;
-  } else if (contactStatus === "active" || contactStatus === "stale") {
+  } else if (contactStatus === "active") {
     status = "healthy";
     reason = `Worker ${contact.workerId} is healthy and active.`;
   } else {
