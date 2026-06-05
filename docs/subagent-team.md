@@ -226,3 +226,69 @@ Project-scoped registry persists across runs; run-scoped state stays self-contai
 ### Integration boundary
 
 This module does NOT implement: CLI, worker launcher, TUI dashboard, file locking, or Node FS adapter. P6-03/P6-04/P6-08 consume these interfaces.
+
+## Team CLI (P6-03)
+
+`tiny-agent team` is a CLI surface for team task and contact management.
+All subcommands output JSON envelope (`ok`, `tool`, `version`, `cwd`).
+
+### Contact subcommands
+
+```bash
+# List all registered workers
+tiny-agent team contact list
+
+# Show worker details
+tiny-agent team contact show <workerId>
+
+# Register a new worker
+tiny-agent team contact register <workerId> <role> <workspace> <branch> <imChannel> [allowedAction...]
+
+# Update worker fields (JSON patch)
+tiny-agent team contact update <workerId> --json '{"currentTask":"Inspect issue"}'
+
+# Change worker status
+tiny-agent team contact status <workerId> <active|idle|stale|offline|terminated>
+
+# Record heartbeat (now)
+tiny-agent team contact heartbeat <workerId>
+
+# Terminate a worker
+tiny-agent team contact terminate <workerId>
+```
+
+### Task subcommands
+
+```bash
+# Create a new task
+tiny-agent team task create <taskId> <title>
+
+# List all tasks and summary
+tiny-agent team task list
+
+# Show task details
+tiny-agent team task show <taskId>
+
+# Assign task to worker (worker must be registered)
+tiny-agent team task assign <taskId> <workerId>
+
+# Start task execution
+tiny-agent team task start <taskId>
+
+# Mark task as succeeded (optional JSON output)
+tiny-agent team task succeed <taskId> [--output <json>]
+
+# Mark task as failed
+tiny-agent team task fail <taskId> <error>
+
+# Cancel a task
+tiny-agent team task cancel <taskId> [reason]
+```
+
+### Architecture notes
+
+- **Contact state**: backed by P6-01 `contact-registry.ts` pure FSM; persisted through P6-02 `directory-store.ts` project-scoped layout.
+- **Task state**: backed by `team.ts` pure FSM; currently in-memory only. Persistent task state is a P6-04 concern.
+- **CLI service layer**: `src/subagent/team-cli.ts` — pure command parsing and handler functions.
+- **Binary entry**: `src/cli/team-entry.ts` and `src/cli/team-run.ts`.
+- **Integration**: routed through `src/cli/main.ts` as `tiny-agent team ...`.
