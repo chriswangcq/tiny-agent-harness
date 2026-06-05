@@ -7,19 +7,25 @@ export type McpRegistry = {
   servers: Record<string, Omit<McpServerConfig, "name">>;
 };
 
-const DEFAULT_REGISTRY_PATH = ".tiny-agent/mcp-servers.json";
-
 export class McpRegistryStore {
   private registryPath: string;
   private lock: DirectoryLock;
 
-  constructor(registryPath?: string, stateDir?: string) {
-    this.registryPath = registryPath ?? DEFAULT_REGISTRY_PATH;
-    const locksDir = stateDir
-      ? path.join(stateDir, "locks")
-      : path.join(path.dirname(this.registryPath), "locks");
-    if (!fs.existsSync(locksDir)) { fs.mkdirSync(locksDir, { recursive: true }); }
+  constructor(stateDir: string) {
+    if (!stateDir) {
+      throw new Error("McpRegistryStore requires a stateDir");
+    }
+    this.registryPath = path.join(stateDir, "mcp-servers.json");
+    const locksDir = path.join(stateDir, "locks");
+    if (!fs.existsSync(locksDir)) {
+      fs.mkdirSync(locksDir, { recursive: true });
+    }
     this.lock = new DirectoryLock(locksDir, "mcp-registry");
+  }
+
+  /** Returns the resolved registry file path (derived from stateDir). */
+  getRegistryPath(): string {
+    return this.registryPath;
   }
 
   load(): McpRegistry {
