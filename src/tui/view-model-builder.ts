@@ -58,7 +58,7 @@ export class ViewModelBuilder {
   private frameCounter = 0;
   private conversationCounter = 0;
   private seenConversationIds = new Set<string>();
-  private thinkingStreams = new Map<number, string>();
+  private pendingReviewRequestIds = new Set<string>();  private thinkingStreams = new Map<number, string>();
   private tokenUsageEvents: RunEvent[] = [];
   private runBrowser?: RunBrowserView;
   private readonly limits: TuiLimits;
@@ -233,6 +233,7 @@ export class ViewModelBuilder {
 
       case "tool_review_requested":
         this.header.status = "waiting_for_review";
+        this.pendingReviewRequestIds.add(event.request.toolCallId);
         this.pushFrame({
           stepIndex: event.stepIndex,
           timestamp: event.timestamp,
@@ -240,6 +241,7 @@ export class ViewModelBuilder {
           status: "running",
           title: "review requested",
           summary: `tool=${event.request.toolName}`,
+          controlAffordance: "R",
           detail: formatDetail([["request", event.request]]),
         });
         break;
@@ -281,6 +283,7 @@ export class ViewModelBuilder {
             summaryParts.push(`findings[${countText}]`);
           }
 
+          this.pendingReviewRequestIds.delete(event.request.toolCallId);
           this.pushFrame({
             stepIndex: event.stepIndex,
             timestamp: event.timestamp,
@@ -402,6 +405,7 @@ export class ViewModelBuilder {
           timestamp: event.timestamp,
           phase: "io_wait",
           status: "waiting",
+          controlAffordance: "W",
           title: "waiting for IO",
           summary: event.wait.reason ?? "",
           detail: formatDetail([["wait", event.wait]]),
@@ -586,7 +590,7 @@ export class ViewModelBuilder {
         ? this.loop.slice(-this.limits.maxLoopFrames)
         : [...this.loop];
     return {
-      run: { ...this.header },
+      run: { ...this.header, pendingReview: this.pendingReviewRequestIds.size > 0 },
       conversation: conversation.map(({ order: _order, ...item }) => item),
       loop,
       sessions: [...this.sessions.values()].sort((a, b) => {

@@ -25,6 +25,8 @@ export type LoopFrameDetail = {
   transcriptEventId?: string;
   rawDetail?: string;
   sections: LoopFrameDetailSection[];
+  /** Risk/reason summary when phase is "review" and reviewDecision is present */
+  riskReason?: string;
 };
 
 export type DebuggerRunSnapshot = {
@@ -153,6 +155,9 @@ export function buildLoopFrameDetail(frame: LoopFrame): LoopFrameDetail {
       : {}),
     ...(frame.detail ? { rawDetail: frame.detail } : {}),
     sections: parseDetailSections(frame.detail),
+    ...(frame.reviewDecision
+      ? { riskReason: reviewRiskSummary(frame.reviewDecision) }
+      : {}),
   };
 }
 
@@ -227,6 +232,18 @@ export function compareRuns(
       .filter((change) => change.changed)
       .map((change) => change.field),
   };
+}
+
+function reviewRiskSummary(decision: NonNullable<LoopFrame["reviewDecision"]>): string {
+  const parts: string[] = [];
+  if (decision.reason) parts.push(decision.reason);
+  if (decision.warnings && decision.warnings.length > 0) {
+    parts.push(...decision.warnings);
+  }
+  if (decision.findings && decision.findings.length > 0) {
+    parts.push(...decision.findings.map(f => `[${f.severity}] ${f.message}`));
+  }
+  return parts.join(" | ") || decision.status;
 }
 
 function isProblemFrame(frame: LoopFrame): boolean {
