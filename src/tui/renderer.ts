@@ -968,7 +968,7 @@ export function planTuiLayout(input: TuiLayoutInput): TuiLayoutPlan {
   };
 }
 
-function planTopRightSplit(rightWidth: number): {
+export function planTopRightSplit(rightWidth: number): {
   loopPaneWidth: number;
   detailPaneWidth: number;
 } {
@@ -1881,7 +1881,7 @@ export function padBlessedLineForDisplay(line: string, width: number): string {
   return `${line}${" ".repeat(safeWidth - visibleWidth)}`;
 }
 
-function stripBlessedTags(text: string): string {
+export function stripBlessedTags(text: string): string {
   return text.replace(/\{\/?[^{}\s]+\}/g, "");
 }
 
@@ -1896,7 +1896,7 @@ function isMarkdownTableLine(text: string): boolean {
   );
 }
 
-function displayWidth(text: string): number {
+export function displayWidth(text: string): number {
   let width = 0;
   for (const cluster of graphemeClusters(text)) {
     width += clusterWidth(cluster);
@@ -2074,7 +2074,7 @@ const graphemeSegmenter = (() => {
     : undefined;
 })();
 
-function graphemeClusters(text: string): string[] {
+export function graphemeClusters(text: string): string[] {
   if (!graphemeSegmenter) return Array.from(text);
   return Array.from(graphemeSegmenter.segment(text), (segment) => segment.segment);
 }
@@ -2082,7 +2082,7 @@ function graphemeClusters(text: string): string[] {
 const emojiClusterPattern =
   /[\u{1f1e6}-\u{1f1ff}\u{20e3}\ufe0f\u200d]|\p{Extended_Pictographic}|\p{Emoji_Presentation}/u;
 
-function clusterWidth(cluster: string): number {
+export function clusterWidth(cluster: string): number {
   if (!cluster) return 0;
   if (emojiClusterPattern.test(cluster)) return 2;
   return Array.from(cluster).reduce(
