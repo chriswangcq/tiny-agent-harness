@@ -92,7 +92,7 @@ describe("TuiInteractionState", () => {
 
     expect(state.mode).toBe("input");
     expect(state.selectedLoopFrameId).toBeUndefined();
-    expect(state.followBottom).toEqual({ conversation: true, loop: true });
+    expect(state.followBottom).toEqual({ conversation: false, loop: false });
 
     state.syncWithFrames(frames);
     expect(state.selectedLoopFrameId).toBe("b");
@@ -108,7 +108,7 @@ describe("TuiInteractionState", () => {
 
     expect(state.mode).toBe("input");
     expect(state.selectedConversationItemId).toBeUndefined();
-    expect(state.followBottom).toEqual({ conversation: true, loop: true });
+    expect(state.followBottom).toEqual({ conversation: false, loop: false });
 
     state.syncWithConversation(items);
     expect(state.selectedConversationItemId).toBe("b");
@@ -181,4 +181,85 @@ describe("TuiInteractionState", () => {
     expect(state.selectedLoopFrameId).toBe("b");
   });
 
+});
+
+describe("TuiInteractionState follow deferral", () => {
+  it("enterInput defers follow-bottom re-anchor until next sync", () => {
+    const state = new TuiInteractionState();
+    const frames = [frame("a", 0), frame("b", 1), frame("c", 2)];
+    const items = [conversation("x", "msg1"), conversation("y", "msg2")];
+
+    // Start in input mode, sync to establish selections
+    state.syncWithView(items, frames);
+    expect(state.selectedLoopFrameId).toBe("c");
+    expect(state.selectedConversationItemId).toBe("y");
+
+    // Enter browse, move away from bottom
+    state.enterBrowse(frames, "loop");
+    state.moveSelection(frames, -2);
+    expect(state.selectedLoopFrameId).toBe("a");
+    expect(state.followBottom.loop).toBe(false);
+
+    // Return to input — selections cleared, followBottom NOT immediately restored
+    state.enterInput();
+    expect(state.mode).toBe("input");
+    expect(state.selectedLoopFrameId).toBeUndefined();
+    expect(state.followBottom.loop).toBe(false);
+    expect(state.followBottom.conversation).toBe(false);
+
+    // New content arrives — follow bottom should now be restored
+    state.syncWithView(items, frames);
+    expect(state.followBottom.loop).toBe(true);
+    expect(state.followBottom.conversation).toBe(true);
+    expect(state.selectedLoopFrameId).toBe("c");
+    expect(state.selectedConversationItemId).toBe("y");
+  });
+
+  it("enterInput defers conversation follow re-anchor", () => {
+    const state = new TuiInteractionState();
+    const items = [conversation("a", "first"), conversation("b", "second")];
+
+    state.syncWithConversation(items);
+    expect(state.selectedConversationItemId).toBe("b");
+
+    state.enterBrowse([], "conversation", items);
+    state.moveSelection([], -1, items);
+    expect(state.selectedConversationItemId).toBe("a");
+    expect(state.followBottom.conversation).toBe(false);
+
+    state.enterInput();
+    expect(state.followBottom.conversation).toBe(false);
+
+    state.syncWithConversation(items);
+    expect(state.followBottom.conversation).toBe(true);
+    expect(state.selectedConversationItemId).toBe("b");
+  });
+
+  it("jumpBottom in browse mode immediately restores follow", () => {
+    const state = new TuiInteractionState();
+    const frames = [frame("a", 0), frame("b", 1), frame("c", 2)];
+
+    state.enterBrowse(frames, "loop");
+    state.moveSelection(frames, -2);
+    expect(state.followBottom.loop).toBe(false);
+
+    // jumpBottom should immediately restore follow, not defer
+    state.jumpBottom(frames);
+    expect(state.followBottom.loop).toBe(true);
+  });
+
+  it("toggleFollow in input mode works immediately (not deferred)", () => {
+    const state = new TuiInteractionState();
+    const frames = [frame("a", 0)];
+
+    // After enterInput deferral, toggle should work immediately
+    state.enterInput();
+    expect(state.followBottom.loop).toBe(false);
+
+    state.toggleFollow("loop", [], frames);
+    expect(state.followBottom.loop).toBe(true);
+
+    state.toggleFollow("loop", [], frames);
+    expect(state.followBottom.loop).toBe(false);
+  });
 });
