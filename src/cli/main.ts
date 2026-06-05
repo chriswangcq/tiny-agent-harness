@@ -24,6 +24,7 @@ import { ManagedTerminalRuntime } from "../bash/managed-terminal-runtime.js";
 import { ToolCallValidator } from "../tools/validator.js";
 import { AlwaysApproveReviewer } from "../tools/reviewer.js";
 import { STATIC_TOOL_CATALOG } from "../tools/catalog.js";
+import { ENVIRONMENT_EVENT_LEVELS } from "../types/environment.js";
 import { Environment } from "../environment/environment.js";
 import { ImCliTransport } from "../im/transport.js";
 import { SkillRunStore } from "../skill/store.js";
@@ -440,6 +441,7 @@ async function waitForFirstMessage(
       const msg = result.messages[0]!;
       for (const message of result.messages) {
         environment.appendEvent({
+          level: ENVIRONMENT_EVENT_LEVELS.USER_MESSAGE,
           id: `env-im-${message.id}`,
           kind: "user_message_received",
           source: "im",
@@ -733,6 +735,7 @@ async function main(): Promise<void> {
     const createdAt = new Date().toISOString();
     environment.appendEvent({
       id: `env-task-${runId}`,
+      level: ENVIRONMENT_EVENT_LEVELS.USER_MESSAGE,
       kind: "user_message_received",
       source: "im",
       timestamp: createdAt,
@@ -755,6 +758,7 @@ async function main(): Promise<void> {
       for (const msg of result.messages) {
         environment.appendEvent({
           id: `env-im-${msg.id}`,
+          level: ENVIRONMENT_EVENT_LEVELS.USER_MESSAGE,
           kind: "user_message_received",
           source: "im",
           timestamp: msg.createdAt,
