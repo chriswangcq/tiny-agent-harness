@@ -23,6 +23,8 @@ export type ToolPolicyRuleCode =
   | "warning_global_package_install"
   | "warning_recursive_permission_change"
   | "warning_ownership_change"
+  | "dangerous_system_permission_change"
+  | "dangerous_ownership_change"
   | "warning_git_push";
 
 export type ToolPolicyFinding = {
@@ -133,6 +135,24 @@ const DANGEROUS_TERMINAL_WRITE_RULES: Rule[] = [
       "u",
     ),
   },
+  {
+    code: "dangerous_system_permission_change",
+    severity: "error",
+    message: "System path permission change (non-recursive) can alter system integrity.",
+    pattern: new RegExp(
+      String.raw`\bchmod\s+(?:-R\s+)?\S+\s+(?:${SYSTEM_PATH})\S*\s*(?:[;\n]|$)`,
+      "u",
+    ),
+  },
+  {
+    code: "dangerous_ownership_change",
+    severity: "error",
+    message: "Ownership change targeting a system path can break system integrity.",
+    pattern: new RegExp(
+      String.raw`\bchown\s+(?:-R\s+)?\S+\s+(?:"\/"|'\/'|\/(?:\s|$)|\/\*|~(?:\/|\s|$)|["']?\$HOME["']?(?:\/|\s|$)|\/(?:etc|usr|bin|sbin|System|Library|boot|dev|proc|sys)\b)`,
+      "u",
+    ),
+  },
 ];
 
 const WARNING_TERMINAL_WRITE_RULES: Rule[] = [
@@ -166,6 +186,24 @@ const WARNING_TERMINAL_WRITE_RULES: Rule[] = [
     severity: "warning",
     message: "Git push changes remote state.",
     pattern: /\bgit\s+push\b/u,
+  },
+  {
+    code: "dangerous_system_permission_change",
+    severity: "error",
+    message: "System path permission change (non-recursive) can alter system integrity.",
+    pattern: new RegExp(
+      String.raw`\bchmod\s+(?:-R\s+)?\S+\s+(?:${SYSTEM_PATH})\S*\s*(?:[;\n]|$)`,
+      "u",
+    ),
+  },
+  {
+    code: "dangerous_ownership_change",
+    severity: "error",
+    message: "Ownership change targeting a system path can break system integrity.",
+    pattern: new RegExp(
+      String.raw`\bchown\s+(?:-R\s+)?\S+\s+(?:"\/"|'\/'|\/(?:\s|$)|\/\*|~(?:\/|\s|$)|["']?\$HOME["']?(?:\/|\s|$)|\/(?:etc|usr|bin|sbin|System|Library|boot|dev|proc|sys)\b)`,
+      "u",
+    ),
   },
 ];
 

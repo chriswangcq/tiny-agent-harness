@@ -520,3 +520,83 @@ describe("evaluateToolPolicy", () => {
     expect(codes).toContain("dangerous_recursive_delete");
   });
 });
+
+
+  // ---------------------------------------------------------------------------
+  // Chmod without -R on system paths
+  // ---------------------------------------------------------------------------
+
+  it("rejects chmod (without -R) on system path", () => {
+    const decision = evaluateToolPolicy(
+      terminalWrite("chmod 777 /etc/malicious.conf\n"),
+    );
+
+    expect(decision.status).toBe("rejected");
+    const codes = decision.findings.map((f) => f.code);
+    expect(codes).toContain("dangerous_system_permission_change");
+  });
+
+  it("rejects chmod with mode on /usr/local/bin", () => {
+    const decision = evaluateToolPolicy(
+      terminalWrite("chmod 755 /usr/local/bin/bad\n"),
+    );
+
+    expect(decision.status).toBe("rejected");
+    const codes = decision.findings.map((f) => f.code);
+    expect(codes).toContain("dangerous_system_permission_change");
+  });
+
+  it("does NOT flag chmod on project-local paths", () => {
+    const decision = evaluateToolPolicy(
+      terminalWrite("chmod +x ./scripts/deploy.sh\n"),
+    );
+
+    expect(decision.status).toBe("approved");
+    const codes = decision.findings.map((f) => f.code);
+    expect(codes).not.toContain("dangerous_system_permission_change");
+  });
+
+  // ---------------------------------------------------------------------------
+  // Chown on system paths -- dangerous
+  // ---------------------------------------------------------------------------
+
+  it("rejects chown targeting system path", () => {
+    const decision = evaluateToolPolicy(
+      terminalWrite("chown nobody /etc/nginx/conf.d\n"),
+    );
+
+    expect(decision.status).toBe("rejected");
+    const codes = decision.findings.map((f) => f.code);
+    expect(codes).toContain("dangerous_ownership_change");
+  });
+
+  it("rejects chown -R on system path", () => {
+    const decision = evaluateToolPolicy(
+      terminalWrite("chown -R nobody /etc/nginx\n"),
+    );
+
+    expect(decision.status).toBe("rejected");
+    const codes = decision.findings.map((f) => f.code);
+    expect(codes).toContain("dangerous_ownership_change");
+  });
+
+  it("rejects chown -R on root/home", () => {
+    const decision = evaluateToolPolicy(
+      terminalWrite("chown -R root /\n"),
+    );
+
+    expect(decision.status).toBe("rejected");
+    const codes = decision.findings.map((f) => f.code);
+    expect(codes).toContain("dangerous_ownership_change");
+  });
+
+  it("chown on project-local path is still warning only", () => {
+    const decision = evaluateToolPolicy(
+      terminalWrite("chown wangchaoqun ./dist\n"),
+    );
+
+    expect(decision.status).toBe("approved");
+    const codes = decision.findings.map((f) => f.code);
+    expect(codes).toContain("warning_ownership_change");
+    expect(codes).not.toContain("dangerous_ownership_change");
+  });
