@@ -106,13 +106,89 @@ worker 必须：
 - 每次状态变化通过 IM / transcript 汇报：started、blocked、review_pending、done。
 - 提交前跑 typecheck/build/test，或说明 narrower gate 的理由。
 
-## Merge Rules
+## Merge Protocol
 
-- master 只从 worker branch merge，不接受未解释的工作树脏改。
-- 有冲突时 master 指导 worker rebase/resolve，或者在 master workspace 做显式 merge fix。
-- Runtime truth tickets 优先于 TUI projection tickets。
-- `runtime-environment-events`、`runtime-recovery-side-effects`、`runtime-tool-policy` 这类会改变 runtime contract 的 ticket 先合并。
-- TUI tickets 只能消费 runtime facts；如果缺 facts，回到 Runtime ticket，不在 TUI 内解析 raw noise 凑数据。
+Domain types and pure helpers live in `src/subagent/merge-protocol.ts`. They define the vocabulary and gate logic but do not perform runtime effects (git merge, test execution, branch checkout). Runtime owns truth/effects; this module owns the decision schema.
+
+### 1. Master Review Checklist
+
+Before merging a worker branch, master evaluates this structured checklist:
+
+| Gate | Hard/Warn | Description |
+|------|-----------|-------------|
+| `workerReported` | Hard | Worker has reported run status (started/blocked/review_pending/done) |
+| `runCompleted` | Hard | The agent run has reached a terminal state |
+| `typecheckPasses` | Hard | `tsc --noEmit` passes |
+| `buildPasses` | Hard | `tsc` passes on the worker branch |
+| `testsPass` | Hard | `vitest run` passes on the worker branch |
+| `noConflicts` | Hard | Worker branch has no merge conflicts with main |
+| `diffReviewable` | Hard | Diff is non-empty, not excessively large, relevant files only |
+| `noRevertOfOthers` | Hard | Worker branch does not revert or overwrite other workers' changes |
+| `rebasedOnMain` | Warn | Branch is rebased on latest main (recommended, not required) |
+| `workerRanGates` | Warn | Worker self-reported gate results before requesting review |
+| `codeReviewed` | Warn | Master has performed substantive code review of the diff |
+
+Hard gates block merge. Warnings are advisory.
+
+The pure function `evaluateMergeGates(checklist)` returns `MergeGateResult`:
+```ts
+{
+  passed: boolean;       // all hard gates passed
+  failures: string[];    // specific failure messages
+  warnings: string[];    // advisory warnings
+}
+```
+
+### 2. Merge Order
+
+Four priority classes, merged in order:
+
+| Priority | Tickets | Constraint |
+|----------|---------|------------|
+| `runtime_truth` | `runtime-environment-events`, `runtime-recovery-side-effects`, `runtime-tool-policy` | Must merge first—changes runtime contract |
+| `runtime_feature` | `runtime-decision-trace`, `runtime-stuck-detection`, `runtime-cli-capability-lifecycle`, `runtime-token-cost-artifacts` | Merges after runtime truth |
+| `tui_projection` | All `tui-*` tickets | Only reads runtime facts; never merges before runtime truth |
+| `cli_capability` | `team-*` coordination tickets | Merges last |
+
+`canMergeNow(ticket, alreadyMergedSlugs)` enforces this order. `sortByMergePriority(tickets)` produces the ordered merge queue.
+
+### 3. Conflict Policy
+
+| Policy | Value |
+|--------|-------|
+| Default resolution | `worker_rebase` — master instructs worker to rebase and resolve |
+| Fallback | After 3 unresponsive master review cycles, master may take over (`master_merge_fix`) |
+| No timeout | If `fallbackAfterCycles` is null, master waits indefinitely |
+
+### 4. Feedback Loop
+
+Master coaches workers through each review cycle:
+
+| Check | Description |
+|-------|-------------|
+| `cycleReview` | Master reviews all worker run states each cycle |
+| `coachBlocked` | Master sends short IM instructions to blocked/drifting workers |
+| `codeReview` | Master performs code review on `review_pending` branches |
+| `reportMergeResult` | Master reports merge result back to worker via IM |
+
+### 5. Gates (Master Workspace)
+
+After merging a worker branch, master runs these gates in the master workspace before pushing:
+
+```bash
+npm run typecheck   # tsc --noEmit
+npm run build       # tsc
+npm test            # vitest run
+```
+
+If any gate fails after merge, master reverts the merge and reports failure to the worker.
+
+### Relationship to Runtime/TUI Boundary
+
+- **Runtime** owns: actual git operations, branch state, test execution, npm scripts, conflict detection.
+- **TUI** may project: checklist state, merge queue, gate results, feedback loop status.
+- **Domain (`merge-protocol.ts`)** defines: types, defaults, pure evaluation/logic. It has no side effects.
+- Master agent wire-frames the above at the operational level until runtime automation exists.
 
 ## Ledger
 
