@@ -31,6 +31,8 @@ export type RunHeaderView = {
   model?: string;
   startedAt?: string;
   updatedAt?: string;
+  /** True when at least one tool_review_requested event has no matching tool_reviewed */
+  pendingReview?: boolean;
 };
 
 // ─── Conversation ──────────────────────────────────────────────────
@@ -82,6 +84,8 @@ export type LoopFrame = {
   transcriptEventId?: string;
   /** Present when phase is "review" and a decision has been made. */
   reviewDecision?: ToolReviewDecision;
+  /** Display-only control affordance marker: R=review-pending, I=interruptible, W=io-wait */
+  controlAffordance?: "R" | "I" | "W";
 };
 
 // ─── Sessions ──────────────────────────────────────────────────────

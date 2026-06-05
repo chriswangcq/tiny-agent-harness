@@ -995,12 +995,14 @@ function positiveInteger(value: number | undefined): number | undefined {
 }
 
 function renderHeaderLine(run: RunHeaderView): string {
+  const pendingTag = run.pendingReview ? " [REVIEW PENDING]" : "";
   return (
     `run=${run.runId} ` +
     `status=${run.status} ` +
     `step=${run.stepIndex} ` +
     `cwd=${run.cwd}` +
-    (run.model ? ` model=${run.model}` : "")
+    (run.model ? ` model=${run.model}` : "") +
+    pendingTag
   );
 }
 
