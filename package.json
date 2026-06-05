@@ -9,7 +9,8 @@
     "im": "dist/cli/im-entry.js",
     "skill": "dist/cli/skill-entry.js",
     "codeq": "dist/code-intel/cli.js",
-    "mcp": "dist/cli/mcp-entry.js"
+    "mcp": "dist/cli/mcp-entry.js",
+    "team": "dist/cli/team-entry.js"
   },
   "scripts": {
     "build": "tsc",
