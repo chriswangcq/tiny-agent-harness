@@ -197,4 +197,64 @@ describe("stripManagedShellScreenNoise", () => {
     expect(second.output).toBe("> user blockquote should stay\n");
     expect(second.state.pendingPromptKind).toBeNull();
   });
+
+  it("holds partial __ prefix before TAH_CONT__ is fully received", () => {
+    const first = stripManagedShellScreenNoise("__");
+    expect(first.output).toBe("");
+    expect(first.pending).toBe("__");
+
+    const second = stripManagedShellScreenNoise(
+      "TAH_CONT__ nonce=n reason=unknown seq=1\r\n> ",
+      first.state,
+    );
+    expect(second.output).toBe("");
+    expect(second.pending).toBe("");
+    expect(second.state.pendingPromptKind).toBe("continuation");
+  });
+
+  it("does not leak TAH_CONT__ when chunk splits at __ boundary with shell prompt prefix", () => {
+    const first = stripManagedShellScreenNoise("> __");
+    expect(first.output).toBe("");
+    expect(first.pending).toBe("> __");
+
+    const second = stripManagedShellScreenNoise(
+      "TAH_CONT__ nonce=n reason=unknown seq=1\r\n> ",
+      first.state,
+    );
+    expect(second.output).toBe("");
+    expect(second.pending).toBe("");
+  });
+
+  it("preserves heredoc content that resembles markers after continuation prompt", () => {
+    // Simulate continuation prompt followed by a line that looks like a noise marker
+    const first = stripManagedShellScreenNoise(
+      "__TAH_CONT__ nonce=n reason=unknown seq=1\r\n> ",
+    );
+    expect(first.state.pendingPromptKind).toBe("continuation");
+
+    // "export PS1=user payload" under continuation should have > stripped but content preserved
+    const second = stripManagedShellScreenNoise(
+      "export PS1=user payload\r\n",
+      first.state,
+    );
+    // After stripping continuation chrome, the line should be preserved without the __TAH_CONT__
+    expect(second.output).toBe("export PS1=user payload\r\n");
+    expect(second.pending).toBe("");
+  });
+
+  it("does not falsely classify > __NOT_TAH__ as a managed marker prefix", () => {
+    // Under continuation, "> __NOT_TAH__" should have > stripped but content preserved
+    const first = stripManagedShellScreenNoise(
+      "__TAH_CONT__ nonce=n reason=unknown seq=1\r\n> ",
+    );
+    expect(first.state.pendingPromptKind).toBe("continuation");
+
+    const second = stripManagedShellScreenNoise(
+      "__NOT_TAH__\r\n",
+      first.state,
+    );
+    // After stripping continuation chrome, content is untouched
+    expect(second.output).toContain("__NOT_TAH__");
+    expect(second.pending).toBe("");
+  });
 });

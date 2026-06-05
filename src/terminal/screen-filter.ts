@@ -48,7 +48,19 @@ export function stripManagedShellScreenNoise(
 
     const noise = classifyManagedShellNoiseLine(currentLine);
     if (noise.kind === "noise") {
-      pendingPromptKind = noise.nextPromptKind !== undefined ? noise.nextPromptKind : pendingPromptKind;
+      // When we are already under a continuation prompt, only
+      // __TAH_PROMPT__ / __TAH_CONT__ transitions change state.
+      // Other noise markers (export PS1=, etc.) may appear as
+      // user content inside a heredoc and must be preserved.
+      if (pendingPromptKind !== null && noise.nextPromptKind === undefined) {
+        // Generic noise under continuation -> treat as content.
+        output += stripManagedShellPromptChrome(
+          currentLine,
+          pendingPromptKind,
+        );
+      } else {
+        pendingPromptKind = noise.nextPromptKind !== undefined ? noise.nextPromptKind : pendingPromptKind;
+      }
     } else if (pendingPromptKind !== null) {
       output += stripManagedShellPromptChrome(
         currentLine,
@@ -114,12 +126,48 @@ function markerCandidate(line: string): string {
   }
 
   const markerIndex = normalized.indexOf("__TAH_");
-  if (markerIndex <= 0) {
+  if (markerIndex > 0) {
+    const prefix = normalized.slice(0, markerIndex);
+    return isShellPromptPrefix(prefix) ? normalized.slice(markerIndex) : normalized;
+  }
+
+  // markerIndex is -1 or 0.  If -1, the marker was not found.
+  // Check for partial marker fragments that follow a shell prompt prefix,
+  // e.g. "> __" when the next chunk delivers "TAH_CONT__ nonce=...".
+  if (markerIndex === -1) {
+    const suffix = stripShellPromptPrefix(normalized);
+    if (
+      suffix !== null &&
+      suffix.length > 0 &&
+      NOISE_MARKERS.some((marker) => marker.startsWith(suffix))
+    ) {
+      return suffix;
+    }
     return normalized;
   }
 
-  const prefix = normalized.slice(0, markerIndex);
-  return isShellPromptPrefix(prefix) ? normalized.slice(markerIndex) : normalized;
+  // markerIndex === 0: the marker is at position 0 but not a recognised prefix
+  return normalized;
+}
+
+/**
+ * If `value` starts with a recognised shell prompt prefix,
+ * return the remainder; otherwise return null.
+ */
+function stripShellPromptPrefix(value: string): string | null {
+  // continuation: "> " or ">"
+  const contMatch = value.match(/^>\s*/u);
+  if (contMatch && contMatch[0] && contMatch[0].length > 0) {
+    return value.slice(contMatch[0].length);
+  }
+
+  // primary prompt: "[user@host:path]$ " etc.
+  const primaryMatch = value.match(/^\[[^\]]+\][>$#%]?\s*/u);
+  if (primaryMatch && primaryMatch[0] && primaryMatch[0].length > 0) {
+    return value.slice(primaryMatch[0].length);
+  }
+
+  return null;
 }
 
 function isShellPromptPrefix(prefix: string): boolean {

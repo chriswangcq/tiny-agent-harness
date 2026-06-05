@@ -55,7 +55,7 @@ describe("ManagedTerminalRuntime real PTY pacing", () => {
       }
 
       expect(observation.screen.text).toContain(text.trim());
-      expect(observation.screen.text).toContain("__PROMPT_CHROME_DONE__");
+      expect(observation.screen.text.replace(/\n/g, "")).toContain("__PROMPT_CHROME_DONE__");
       expect(observation.screen.text).not.toContain("**之> 前**");
       expect(observation.screen.text).not.toContain("> 这 9 个失败");
       expect(observation.screen.text).not.toContain("__TAH_CONT__");
