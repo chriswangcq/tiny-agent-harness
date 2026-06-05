@@ -2,11 +2,13 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ImCliTransport } from "../im/transport.js";
+import { failureEnvelope, successEnvelope } from "./envelope.js";
 
 type StdinSource = AsyncIterable<string | Buffer | Uint8Array>;
 
 function die(message: string, errorCode = "IM_ERROR"): never {
-  process.stderr.write(JSON.stringify({ ok: false, errorCode, error: message }) + "\n");
+  const env = failureEnvelope({ tool: "im", errorCode, error: message });
+  process.stderr.write(JSON.stringify(env) + "\n");
   process.exit(1);
 }
 
@@ -38,7 +40,12 @@ function hasFlag(argv: string[], name: string): boolean {
 
 function output(data: unknown, json: boolean): void {
   if (json) {
-    process.stdout.write(JSON.stringify(data) + "\n");
+    const raw = data as Record<string, unknown>;
+    const isError = raw.ok === false;
+    const envelope = isError
+      ? failureEnvelope({ tool: "im", errorCode: (raw.errorCode as string) ?? "IM_ERROR", error: String(raw.error ?? "unknown error") })
+      : successEnvelope({ tool: "im", extra: { ...raw } });
+    process.stdout.write(JSON.stringify(envelope) + "\n");
   } else {
     const lines = flatten(data);
     for (const line of lines) {

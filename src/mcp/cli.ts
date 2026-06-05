@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { failureEnvelope, successEnvelope } from "../cli/envelope.js";
 import { McpJsonRpcClient } from "./client.js";
 import { ProcessMcpTransport } from "./process-transport.js";
 import { McpRegistryStore } from "./registry.js";
@@ -97,7 +98,12 @@ function extractCallJsonArgs(remaining: string[]): Record<string, unknown> {
 
 function writeStdout(deps: McpCliDeps, data: unknown, jsonMode: boolean): void {
   if (jsonMode) {
-    deps.stdout.write(JSON.stringify(data) + "\n");
+    const raw = data as Record<string, unknown>;
+    const isError = raw.ok === false;
+    const envelope = isError
+      ? failureEnvelope({ tool: "mcp", errorCode: "MCP_ERROR", error: String(raw.error ?? "unknown error") })
+      : successEnvelope({ tool: "mcp", extra: { ...raw } });
+    deps.stdout.write(JSON.stringify(envelope) + "\n");
   } else {
     const obj = data as Record<string, unknown>;
     for (const [k, v] of Object.entries(obj)) {
@@ -108,8 +114,9 @@ function writeStdout(deps: McpCliDeps, data: unknown, jsonMode: boolean): void {
   }
 }
 
-function writeStderrError(deps: McpCliDeps, message: string): void {
-  deps.stderr.write(JSON.stringify({ ok: false, error: message }) + "\n");
+function writeStderrError(deps: McpCliDeps, message: string, errorCode = "MCP_ERROR"): void {
+  const env = failureEnvelope({ tool: "mcp", errorCode, error: message });
+  deps.stderr.write(JSON.stringify(env) + "\n");
 }
 
 function resolveStateDir(deps: McpCliDeps, override?: string): string {

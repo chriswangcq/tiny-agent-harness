@@ -1,12 +1,14 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
+import { failureEnvelope, successEnvelope } from "./envelope.js";
 import { SkillCli } from "../skill/cli.js";
 import { SkillRunStore } from "../skill/store.js";
 import { SkillDiscovery } from "../skill/discovery.js";
 import type { EnvironmentPort, EnvironmentEvent } from "../types/environment.js";
 
 function die(message: string): never {
-  process.stderr.write(JSON.stringify({ ok: false, error: message }) + "\n");
+  const env = failureEnvelope({ tool: "skill", errorCode: "SKILL_ERROR", error: message });
+  process.stderr.write(JSON.stringify(env) + "\n");
   process.exit(1);
 }
 
@@ -71,7 +73,12 @@ function buildSkillCli(stateDir: string): SkillCli {
 
 function output(data: unknown, json: boolean): void {
   if (json) {
-    process.stdout.write(JSON.stringify(data) + "\n");
+    const raw = data as Record<string, unknown>;
+    const isError = raw.ok === false;
+    const envelope = isError
+      ? failureEnvelope({ tool: "skill", errorCode: "SKILL_ERROR", error: String(raw.error ?? "unknown error") })
+      : successEnvelope({ tool: "skill", extra: { ...raw } });
+    process.stdout.write(JSON.stringify(envelope) + "\n");
   } else {
     process.stdout.write(formatHuman(data) + "\n");
   }
