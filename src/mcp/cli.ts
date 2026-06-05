@@ -38,6 +38,7 @@ function parseOutputMode(argv: string[]): {
 
   return { cleanArgv: argv, jsonMode: false };
 }
+
 /** Extract --state-dir <dir> from argv before -- separator.
  *  Returns the overridden state dir (if any) and cleaned argv.
  *  After --, everything is server args; --state-dir there is NOT consumed. */
@@ -143,8 +144,7 @@ Commands:
   }
 
   const stateDir = resolveStateDir(deps, stateDirOverride);
-  const registryPath = path.join(stateDir, "mcp-servers.json");
-  const registry = new McpRegistryStore(registryPath, stateDir);
+  const registry = new McpRegistryStore(stateDir);
   const remaining = finalArgv;
 
   switch (cmd) {
