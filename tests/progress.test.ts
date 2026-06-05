@@ -293,3 +293,240 @@ describe("stuck reason detection", () => {
     expect(reason).toBeUndefined();
   });
 });
+
+describe("no-progress accumulation", () => {
+  it("recordObservationProgress accumulates on repeated recoverable observations", () => {
+    // First recoverable obs starts no-progress at count 1
+    const r1 = recordObservationProgress(
+      undefined,
+      makeRecoverableObs("model_output", "err"),
+      1,
+    );
+    expect(r1?.noProgress).toBeDefined();
+    expect(r1?.noProgress?.consecutiveCount).toBe(1);
+    expect(r1?.noProgress?.pattern).toBe("repeated_model_output");
+    expect(r1?.noProgress?.sinceStepIndex).toBe(1);
+
+    // Second recoverable obs with same signature increments count
+    const r2 = recordObservationProgress(
+      r1,
+      makeRecoverableObs("model_output", "err"),
+      2,
+    );
+    expect(r2?.noProgress?.consecutiveCount).toBe(2);
+    expect(r2?.noProgress?.sinceStepIndex).toBe(1); // unchanged
+    expect(r2?.noProgress?.lastStepIndex).toBe(2);
+  });
+
+  it("recordObservationProgress resets consecutive count on signature change", () => {
+    // Start with model_output no-progress at count 3
+    const progress: RuntimeProgressState = {
+      noProgress: {
+        signature: '{"kind":"model_output","message":"err"}',
+        pattern: "repeated_model_output",
+        signal: { kind: "model_output", message: "err" },
+        consecutiveCount: 3,
+        sinceStepIndex: 1,
+        lastStepIndex: 3,
+      },
+    };
+
+    // Different kind resets count
+    const result = recordObservationProgress(
+      progress,
+      makeRecoverableObs("tool_validation", "bad tool"),
+      4,
+    );
+    expect(result?.noProgress?.consecutiveCount).toBe(1);
+    expect(result?.noProgress?.pattern).toBe("repeated_tool_validation");
+    expect(result?.noProgress?.sinceStepIndex).toBe(4);
+  });
+
+  it("recordToolObservationProgress accumulates on repeated errors", () => {
+    const r1 = recordToolObservationProgress(
+      undefined,
+      makeToolRequest(),
+      makeRejectedTerminalObs(),
+      1,
+    );
+    expect(r1?.noProgress).toBeDefined();
+    expect(r1?.noProgress?.consecutiveCount).toBe(1);
+    expect(r1?.noProgress?.pattern).toBe("repeated_tool_error");
+
+    // Same error again
+    const r2 = recordToolObservationProgress(
+      r1,
+      makeToolRequest(),
+      makeRejectedTerminalObs(),
+      2,
+    );
+    expect(r2?.noProgress?.consecutiveCount).toBe(2);
+  });
+
+  it("recordIoWaitProgress accumulates on repeated session events", () => {
+    const r1 = recordIoWaitProgress(
+      undefined,
+      makeIoWaitRequest(),
+      makeSessionEvent(),
+      1,
+    );
+    expect(r1?.noProgress).toBeDefined();
+    expect(r1?.noProgress?.consecutiveCount).toBe(1);
+    expect(r1?.noProgress?.pattern).toBe("repeated_io_wait");
+
+    // Same session event again
+    const r2 = recordIoWaitProgress(
+      r1,
+      makeIoWaitRequest(),
+      makeSessionEvent(),
+      2,
+    );
+    expect(r2?.noProgress?.consecutiveCount).toBe(2);
+  });
+});
+
+describe("markRuntimeStuckReported edge cases", () => {
+  it("does not re-escalate when reported at same severity", () => {
+    const reason = buildStuckReason("warn");
+    const progress: RuntimeProgressState = {
+      noProgress: {
+        signature: reason.signature,
+        pattern: reason.pattern,
+        signal: reason.signal,
+        consecutiveCount: 4,
+        sinceStepIndex: 1,
+        lastStepIndex: 4,
+        lastReportedSeverity: "warn",
+      },
+      stuckReason: reason,
+    };
+
+    // Report again with same severity
+    const warnReason2 = buildStuckReason("warn");
+    const result = markRuntimeStuckReported(progress, warnReason2);
+
+    // stuckReason should still be the original warn reason
+    expect(result.stuckReason).toBeDefined();
+    expect(result.stuckReason?.severity).toBe("warn");
+    // lastReportedSeverity should remain "warn"
+    expect(result.noProgress?.lastReportedSeverity).toBe("warn");
+  });
+
+  it("clears stuckReason when noProgress signature changes", () => {
+    const oldReason = buildStuckReason("warn");
+    const progress: RuntimeProgressState = {
+      noProgress: {
+        signature: oldReason.signature,
+        pattern: oldReason.pattern,
+        signal: oldReason.signal,
+        consecutiveCount: 4,
+        sinceStepIndex: 1,
+        lastStepIndex: 4,
+        lastReportedSeverity: "warn",
+      },
+      stuckReason: oldReason,
+    };
+
+    // New reason with different signature
+    const newReason: RuntimeStuckReason = {
+      code: "repeated_no_progress",
+      severity: "warn",
+      pattern: "repeated_tool_error",
+      message: "different stuck reason",
+      signal: { kind: "tool_error", toolName: "x", request: "x", result: "rejected" },
+      signature: "different-signature",
+      consecutiveCount: 5,
+      threshold: RUNTIME_NO_PROGRESS_WARN_THRESHOLD,
+      warnThreshold: RUNTIME_NO_PROGRESS_WARN_THRESHOLD,
+      blockThreshold: RUNTIME_NO_PROGRESS_BLOCK_THRESHOLD,
+      sinceStepIndex: 2,
+      lastStepIndex: 5,
+    };
+
+    const result = markRuntimeStuckReported(progress, newReason);
+
+    // stuckReason should be cleared because the noProgress signature
+    // doesn't match the new reason's signature
+    expect(result.stuckReason).toEqual(newReason);
+    // noProgress should be unchanged (signature doesn't match)
+    expect(result.noProgress).toBe(progress.noProgress);
+  });
+
+  it("upgrades severity from warn to blocked", () => {
+    const warnReason = buildStuckReason("warn");
+    const progress: RuntimeProgressState = {
+      noProgress: {
+        signature: warnReason.signature,
+        pattern: warnReason.pattern,
+        signal: warnReason.signal,
+        consecutiveCount: 5,
+        sinceStepIndex: 1,
+        lastStepIndex: 5,
+        lastReportedSeverity: "warn",
+      },
+      stuckReason: warnReason,
+    };
+
+    const blockReason = buildStuckReason("blocked");
+    const result = markRuntimeStuckReported(progress, blockReason);
+
+    expect(result.stuckReason).toEqual(blockReason);
+    expect(result.noProgress?.lastReportedSeverity).toBe("blocked");
+  });
+});
+
+describe("progress edge cases", () => {
+  it("undefined progress returns undefined for non-recoverable", () => {
+    const result = recordObservationProgress(
+      undefined,
+      makeNonRecoverableObs("model_output", "ok"),
+      1,
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("non-recoverable observation clears accumulated no-progress", () => {
+    const progress: RuntimeProgressState = {
+      noProgress: {
+        signature: '{"kind":"model_output","message":"err"}',
+        pattern: "repeated_model_output",
+        signal: { kind: "model_output", message: "err" },
+        consecutiveCount: 4,
+        sinceStepIndex: 1,
+        lastStepIndex: 4,
+        lastReportedSeverity: "warn",
+      },
+      stuckReason: buildStuckReason("warn"),
+    };
+
+    const result = recordObservationProgress(
+      progress,
+      makeNonRecoverableObs("model_output", "ok"),
+      5,
+    );
+    expect(result?.noProgress).toBeUndefined();
+    expect(result?.stuckReason).toBeUndefined();
+  });
+
+  it("non-terminal tool observation clears no-progress", () => {
+    const progress: RuntimeProgressState = {
+      noProgress: {
+        signature: "tool-sig",
+        pattern: "repeated_tool_error",
+        signal: { kind: "tool_error", toolName: "x", request: "x", result: "rejected" },
+        consecutiveCount: 3,
+        sinceStepIndex: 1,
+        lastStepIndex: 3,
+      },
+    };
+
+    // A non-terminal-like observation (e.g., session_list result)
+    const result = recordToolObservationProgress(
+      progress,
+      makeToolRequest(),
+      { sessions: [{ id: "s1", cwd: "/tmp" }] } as unknown as ToolObservation,
+      4,
+    );
+    expect(result?.noProgress).toBeUndefined();
+  });
+});

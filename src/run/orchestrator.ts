@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { RunError, RunEvent, RuntimeStuckReason } from "../types/run.js";
+import type { RunError, RunEvent, RuntimeProgressState, RuntimeStuckReason } from "../types/run.js";
 import type { ModelDecisionTrace, RunArtifactRef } from "../types/run.js";
 import type { NormalizedFimUsage } from "../types/model.js";
 import type {
@@ -157,10 +157,11 @@ export class RunOrchestrator {
           await this.compactModelContextIfNeeded();
 
           const activeSkillRuns = this.ports.listActiveSkillRuns();
-          const transientReminders =
-            activeSkillRuns.length > 0
-              ? [renderActiveSkillReminder(activeSkillRuns)]
-              : [];
+          const runtimeHealthReminder = renderRuntimeHealthReminder(this.state.data.runtimeProgress);
+          const transientReminders = [
+            ...(activeSkillRuns.length > 0 ? [renderActiveSkillReminder(activeSkillRuns)] : []),
+            ...(runtimeHealthReminder ? [runtimeHealthReminder] : []),
+          ];
           const { messages } = this.ports.modelContext.prepareModelTurn({
             transientReminders,
           });
@@ -748,6 +749,22 @@ function renderActiveSkillReminder(runs: ActiveSkillRunSummary[]): string {
     lines.push(line);
   }
   return lines.join("\n");
+}
+
+function renderRuntimeHealthReminder(
+  progress: RuntimeProgressState | undefined,
+): string | undefined {
+  const reason = progress?.stuckReason;
+  if (!reason || reason.severity !== "warn") return undefined;
+  const parts = [
+    `Runtime health warning: stuck detected`,
+    `pattern=${reason.pattern}`,
+    `message="${reason.message}"`,
+    `consecutive=${reason.consecutiveCount}`,
+    `sinceStep=${reason.sinceStepIndex}`,
+    `lastStep=${reason.lastStepIndex}`,
+  ];
+  return parts.join(" | ");
 }
 
 function buildDecisionId(runId: string, stepIndex: number): string {
