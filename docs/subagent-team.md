@@ -144,3 +144,52 @@ CLI / MCP / cloud queue / local worker process
 - 自动任务拆分/调度策略
 
 当前最准确的说法是：项目已经有 sub-agent team 的状态机基础设施，还没有实际 sub-agent execution service。
+
+## Contact Registry Domain
+
+P6-01 added `src/subagent/contact-registry.ts` — a pure domain module for team contact / personnel directory. This is durable runtime truth, not TUI state.
+
+### WorkerContact
+
+Each worker record includes:
+- `workerId` — unique identity
+- `role` — coder, reviewer, master, etc.
+- `workspace` — filesystem path
+- `branch` — git branch
+- `runId` — current agent run id
+- `imChannel` — IM channel for communication
+- `ledgerId` — child ledger id
+- `ticket` — { id, title, status }
+- `currentTask` — human-readable task description
+- `status` — WorkerContactStatus: active | idle | stale | offline | terminated
+- `lastHeartbeat` — ISO timestamp
+- `lastEvidence` — ISO timestamp of last work output
+- `allowedActions` — set of allowed action categories
+
+### Events
+
+```
+worker_registered → worker_updated → worker_status_changed → worker_heartbeat → worker_terminated
+```
+
+### Pure helpers
+
+- `createContactRegistryState(registryId)` — init
+- `applyContactRegistryEvent(state, event)` — pure FSM reducer with duplicate detection and invalid transition rejection
+- `summarizeContactRegistry(state)` — summary with status/role counts and active workers
+- `lookupWorker(state, workerId)` — direct lookup
+- `listWorkersByRole(state, role)` / `listWorkersByStatus(state, status)` — filtered queries
+
+### Valid transitions
+
+| From | To |
+| --- | --- |
+| active | idle, stale, offline, terminated |
+| idle | active, stale, offline, terminated |
+| stale | active, idle, offline, terminated |
+| offline | active, idle, stale, terminated |
+| terminated | (none) |
+
+### Integration boundary
+
+Do not implement durable store, CLI, worker launcher, or TUI dashboard in this module. Those belong to P6-02/P6-03/P6-04/P6-08. The contact registry provides the pure state shape and FSM that those services consume.
