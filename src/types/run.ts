@@ -63,6 +63,9 @@ export interface AgentRunStateData {
 
   pendingObservation?: AgentObservation;
 
+  /** Current model decision id propagated through the review pipeline. */
+  currentDecisionId?: string;
+
 
   runtimeProgress?: RuntimeProgressState;
 
@@ -321,7 +324,7 @@ export type RunEvent =
   | {
       type: "tool_reviewed";
       stepIndex: number;
-      decisionId?: string;
+      decisionId: string;
       request: ToolRequest;
       decision: ToolReviewDecision;
       timestamp: string;

@@ -43,6 +43,8 @@ export type ToolPolicyDecision = {
   reason: string;
   findings: ToolPolicyFinding[];
   warnings: string[];
+  /** Risk reasons derived from findings for audit correlation. */
+  riskReasons: { code: ToolPolicyRuleCode; severity: ToolPolicySeverity; description: string }[];
 };
 
 type Rule = {
@@ -223,7 +225,7 @@ export function evaluateToolPolicy(
         code: "safe_terminal_key",
         severity: "info",
         message: "Terminal key input is constrained to the current session key allowlist.",
-      },
+      } as ToolPolicyFinding,
     ]);
   }
 
@@ -232,7 +234,7 @@ export function evaluateToolPolicy(
       code: "safe_session_tool",
       severity: "info",
       message: "Session and read-only terminal tools are allowed by default.",
-    },
+    } as ToolPolicyFinding,
   ]);
 }
 
@@ -258,6 +260,11 @@ function evaluateTerminalWrite(
       reason: `Rejected by tool policy: terminal write text is overlong (${text.length} > ${maxLen} chars).`,
       findings: allFindings,
       warnings: allWarnings,
+      riskReasons: allFindings.map((f) => ({
+        code: f.code as ToolPolicyRuleCode,
+        severity: f.severity,
+        description: f.message,
+      })),
     };
   }
 
@@ -268,6 +275,11 @@ function evaluateTerminalWrite(
       reason: `Rejected by tool policy: ${dangerousFindings[0]?.message}`,
       findings,
       warnings: warningFindings.map((f) => f.message),
+      riskReasons: findings.map((f) => ({
+        code: f.code as ToolPolicyRuleCode,
+        severity: f.severity,
+        description: f.message,
+      })),
     };
   }
 
@@ -299,6 +311,11 @@ function evaluateTerminalWrite(
         : "Approved by tool policy.",
     findings,
     warnings,
+    riskReasons: findings.map((f) => ({
+      code: f.code as ToolPolicyRuleCode,
+      severity: f.severity,
+      description: f.message,
+    })),
   };
 }
 
@@ -316,5 +333,15 @@ function approved(
   reason: string,
   findings: ToolPolicyFinding[] = [],
 ): ToolPolicyDecision {
-  return { status: "approved", reason, findings, warnings: [] };
+  return {
+    status: "approved",
+    reason,
+    findings,
+    warnings: [],
+    riskReasons: findings.map((f) => ({
+      code: f.code as ToolPolicyRuleCode,
+      severity: f.severity,
+      description: f.message,
+    })),
+  };
 }

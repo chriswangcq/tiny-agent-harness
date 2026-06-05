@@ -229,6 +229,7 @@ describe("AgentRunState transitions", () => {
     state = state.apply({
       type: "tool_reviewed",
       stepIndex: 0,
+      decisionId: "test-decision-1",
       request: makeTerminalRequest(),
       decision: makeApproval(),
       timestamp: NOW,
@@ -470,6 +471,7 @@ describe("AgentRunState transitions", () => {
     const approved = s.apply({
       type: "tool_reviewed",
       stepIndex: 0,
+      decisionId: "test-decision-1",
       request: makeTerminalRequest(),
       decision: makeApproval(),
       timestamp: NOW,
@@ -506,6 +508,7 @@ describe("AgentRunState transitions", () => {
     const rejected = s.apply({
       type: "tool_reviewed",
       stepIndex: 0,
+      decisionId: "test-decision-1",
       request: makeTerminalRequest(),
       decision: makeRejection(),
       timestamp: NOW,
@@ -541,6 +544,7 @@ describe("AgentRunState transitions", () => {
     s = s.apply({
       type: "tool_reviewed",
       stepIndex: 0,
+      decisionId: "test-decision-1",
       request: makeTerminalRequest(),
       decision: makeApproval(),
       timestamp: NOW,
@@ -582,6 +586,7 @@ describe("AgentRunState transitions", () => {
     s = s.apply({
       type: "tool_reviewed",
       stepIndex: 0,
+      decisionId: "test-decision-1",
       request: makeTerminalRequest(),
       decision: makeApproval(),
       timestamp: NOW,
@@ -683,6 +688,7 @@ describe("AgentRunState illegal transitions", () => {
     s = s.apply({
       type: "tool_reviewed",
       stepIndex: 0,
+      decisionId: "test-decision-1",
       request: makeTerminalRequest(),
       decision: makeApproval(),
       timestamp: NOW,
@@ -804,6 +810,7 @@ describe("AgentRunState.nextEffect()", () => {
     s = s.apply({
       type: "tool_reviewed",
       stepIndex: 0,
+      decisionId: "test-decision-1",
       request: makeTerminalRequest(),
       decision: makeApproval(),
       timestamp: NOW,
@@ -848,6 +855,7 @@ describe("AgentRunState.nextEffect()", () => {
     s = s.apply({
       type: "tool_reviewed",
       stepIndex: 0,
+      decisionId: "test-decision-1",
       request: makeTerminalRequest(),
       decision: makeRejection(),
       timestamp: NOW,

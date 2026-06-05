@@ -500,6 +500,7 @@ describe("RunOrchestrator", () => {
     waitingToolState = waitingToolState.apply({
       type: "tool_reviewed",
       stepIndex: 0,
+      decisionId: "test-decision-1",
       request: {
         kind: "terminal_tool",
         toolName: "terminal_write",
