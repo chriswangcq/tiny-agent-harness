@@ -201,7 +201,7 @@ function buildProjectionSections(input: LoopFrameDetailInput): LoopFrameDetailSe
 }
 
 export function buildLoopFrameDetail(frame: LoopFrame): LoopFrameDetail {
-  return projectLoopFrameDetail({
+  const detail = projectLoopFrameDetail({
     id: frame.id,
     stepIndex: frame.stepIndex,
     timestamp: frame.timestamp,
@@ -213,8 +213,14 @@ export function buildLoopFrameDetail(frame: LoopFrame): LoopFrameDetail {
     ...(frame.transcriptEventId
       ? { transcriptEventId: frame.transcriptEventId }
       : {}),
-    ...(frame.detail ? { rawDetail: frame.detail } : {}),
-    sections: parseDetailSections(frame.detail),
+    ...(frame.detail ? { detail: frame.detail } : {}),
+    ...(frame.reviewDecision
+      ? { reviewDecision: frame.reviewDecision }
+      : {}),
+  });
+
+  return {
+    ...detail,
     ...(frame.reviewDecision
       ? { riskReason: reviewRiskSummary(frame.reviewDecision) }
       : {}),
