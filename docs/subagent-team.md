@@ -288,7 +288,33 @@ tiny-agent team task cancel <taskId> [reason]
 ### Architecture notes
 
 - **Contact state**: backed by P6-01 `contact-registry.ts` pure FSM; persisted through P6-02 `directory-store.ts` project-scoped layout.
-- **Task state**: backed by `team.ts` pure FSM; currently in-memory only. Persistent task state is a P6-04 concern.
+- **Task state**: backed by `team.ts` pure FSM; currently in-memory only. Persistent task state is a future durable task-store concern.
 - **CLI service layer**: `src/subagent/team-cli.ts` — pure command parsing and handler functions.
 - **Binary entry**: `src/cli/team-entry.ts` and `src/cli/team-run.ts`.
 - **Integration**: routed through `src/cli/main.ts` as `tiny-agent team ...`.
+
+
+## Local Worker Launcher (P6-04)
+
+P6-04 adds `src/subagent/local-worker-launcher.ts` — a local worker launcher domain with explicit ports.
+
+This is a **local runtime/CLI launcher**, not a provider-native sub-agent tool. It provides:
+
+- Pure planning functions: `planRunScopedWorkerPaths`, `planWorkerLaunch`, `buildSpawnCommand`
+- Explicit effect ports: `SpawnPort`, `GitPort`, `Clock`, `IdGenerator`, `ContactStorePort`
+- An async `launchLocalWorker(plan, effects)` orchestrator that executes launch steps:
+  1. Register worker contact via `worker_registered` event (idempotent)
+  2. Checkout target branch via git port
+  3. Spawn worker process (`node dist/cli/main.js run`) via spawn port
+  4. Update worker runId/currentTask via `worker_updated` event
+  5. Set worker status to `active` via `worker_status_changed` event
+- Structured result: `WorkerLaunchSuccess` or `WorkerLaunchFailure` with exact failure stage (`checkout`, `spawn`, `contact_register`, `contact_update`, `contact_status`) and evidence (branch, registeredEventId, runId, spawnResult, failedAt)
+- All inputs explicit: no hidden `Date`, env, filesystem, or network reads
+- Tests use fake ports only (no real git/process/clock/network)
+
+### Integration boundary
+
+- Consumes P6-01 `contact-registry` types and FSM
+- Does NOT implement durable file storage — that is P6-02's responsibility
+- Does NOT implement CLI entry points — launch is invoked programmatically
+- Does NOT start real processes in tests — only fake spawn/git/contact ports
