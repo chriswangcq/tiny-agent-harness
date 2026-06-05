@@ -30,6 +30,7 @@ export class ToolPolicyReviewer {
       reason: decision.reason,
       reviewer: "tool-policy",
       ...(decision.warnings.length > 0 ? { warnings: decision.warnings } : {}),
+      ...(decision.riskReasons.length > 0 ? { riskReasons: decision.riskReasons } : {}),
     };
   }
 }

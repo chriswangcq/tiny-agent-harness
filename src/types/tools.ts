@@ -85,6 +85,12 @@ export type ToolReviewDecision = {
     severity: "info" | "warning" | "error";
     message: string;
   }[];
+  /** Structured risk reasons derived from findings for audit correlation. */
+  riskReasons?: {
+    code: string;
+    severity: "info" | "warning" | "error";
+    description: string;
+  }[];
 };
 
 // ─── Tool Result ────────────────────────────────────────────────────
