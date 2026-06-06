@@ -333,6 +333,14 @@ export async function appendLifecycleEvent(
 ): Promise<AppendLifecycleResult> {
   // Ensure supervisor directory exists
   await ports.fs.mkdir(paths.supervisorDir);
+  // Validate the event before appending
+  const validation = validateLifecycleEvent(event);
+  if (!validation.valid) {
+    return {
+      status: "error",
+      message: `Invalid lifecycle event: ${validation.errors.join("; ")}`,
+    };
+  }
 
   // Check for duplicate event ID by reading existing events
   // and optionally loading the snapshot for cross-restart idempotency

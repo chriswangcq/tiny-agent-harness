@@ -256,6 +256,25 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
     const result = await appendLifecycleEvent(ports, paths, event2);
     expect(result.status).toBe("duplicate");
   });
+  it("rejects invalid events and does not write them to JSONL", async () => {
+    // An event missing payload - should fail validation
+    const invalidEvent = {
+      eventId: "evt-bad",
+      type: "unknown_type",
+      timestamp: "2024-01-01T00:00:00.000Z",
+      payload: {},
+    } as SupervisorLifecycleEvent;
+
+    const result = await appendLifecycleEvent(ports, paths, invalidEvent);
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.message).toContain("Invalid");
+    }
+
+    // Verify the invalid event was NOT written to the file
+    const readResult = await readAllLifecycleEvents(ports, paths);
+    expect(readResult.validEvents).toHaveLength(0);
+  });
 
   it("reads valid events alongside malformed lines", async () => {
     const event = createSupervisorLifecycleEvent(
