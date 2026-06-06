@@ -131,12 +131,12 @@ export function createSupervisorLifecycleEvent(
   eventId: string,
   type: SupervisorLifecycleEventType,
   payload: Record<string, unknown>,
-  now?: string,
+  now: string,
 ): SupervisorLifecycleEvent {
   return {
     eventId,
     type,
-    timestamp: now ?? new Date().toISOString(),
+    timestamp: now,
     payload,
   };
 }
@@ -224,7 +224,7 @@ export function createSupervisorSnapshot(
 // ---------------------------------------------------------------------------
 
 /** Explicit filesystem port for reading and writing supervisor state. */
-export type FsPort = {
+export type SupervisorFsPort = {
   readFile: (path: string) => Promise<string>;
   writeFile: (path: string, data: string) => Promise<void>;
   mkdir: (path: string) => Promise<void>;
@@ -238,7 +238,7 @@ export type ClockPort = {
 
 /** Combined ports needed by the supervisor store. */
 export type SupervisorPorts = {
-  fs: FsPort;
+  fs: SupervisorFsPort;
   clock: ClockPort;
 };
 
@@ -256,7 +256,7 @@ export function createInMemorySupervisorPorts(
   const files = new Map<string, string>();
   const dirs = new Set<string>();
 
-  const fs: FsPort = {
+  const fs: SupervisorFsPort = {
     async readFile(path: string): Promise<string> {
       const content = files.get(path);
       if (content === undefined) {

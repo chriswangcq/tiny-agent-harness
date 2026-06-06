@@ -8,7 +8,7 @@ import {
   readAllLifecycleEvents,
   validateLifecycleEvent,
   createInMemorySupervisorPorts,
-} from "../src/supervisor/supervisor-store.js";
+} from "../src/subagent/supervisor-store.js";
 import type {
   SupervisorLifecycleEvent,
   SupervisorLifecycleEventType,
@@ -16,7 +16,7 @@ import type {
   SupervisorPorts,
   SupervisorSnapshot,
   ReadLifecycleResult,
-} from "../src/supervisor/supervisor-store.js";
+} from "../src/subagent/supervisor-store.js";
 
 // ---------------------------------------------------------------------------
 // Path planner tests
@@ -72,7 +72,7 @@ describe("createSupervisorLifecycleEvent", () => {
       workspace: "/home/w1",
       branch: "main",
       imChannel: "ch1",
-    });
+    }, "2024-01-01T00:00:00.000Z");
     expect(event.eventId).toBe("evt-001");
     expect(event.type).toBe("worker_registered");
     expect(event.timestamp).toBeDefined();
@@ -84,6 +84,7 @@ describe("createSupervisorLifecycleEvent", () => {
       "evt-002",
       "worker_status_changed",
       { workerId: "w1", status: "active", previousStatus: "idle" },
+      "2024-01-01T00:00:00.000Z",
     );
     expect(event.type).toBe("worker_status_changed");
   });
@@ -91,7 +92,7 @@ describe("createSupervisorLifecycleEvent", () => {
   it("creates a worker_heartbeat event", () => {
     const event = createSupervisorLifecycleEvent("evt-003", "worker_heartbeat", {
       workerId: "w1",
-    });
+    }, "2024-01-01T00:00:00.000Z");
     expect(event.type).toBe("worker_heartbeat");
   });
 
@@ -100,6 +101,7 @@ describe("createSupervisorLifecycleEvent", () => {
       "evt-004",
       "worker_terminated",
       { workerId: "w1", reason: "completed" },
+      "2024-01-01T00:00:00.000Z",
     );
     expect(event.type).toBe("worker_terminated");
   });
@@ -109,7 +111,7 @@ describe("validateLifecycleEvent", () => {
   it("accepts a valid event", () => {
     const event = createSupervisorLifecycleEvent("evt-001", "worker_heartbeat", {
       workerId: "w1",
-    });
+    }, "2024-01-01T00:00:00.000Z");
     const result = validateLifecycleEvent(event);
     expect(result.valid).toBe(true);
     expect(result.errors).toHaveLength(0);
