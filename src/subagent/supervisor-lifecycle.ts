@@ -385,7 +385,7 @@ export function isGracePeriodActive(
   state: LifecycleResult,
   config: LifecycleConfig,
 ): boolean {
-  if (!state.evidence.ageMs) return false;
+  if (state.evidence.ageMs === undefined) return false;
   return state.state === "grace_period" && state.evidence.ageMs <= config.gracePeriodMs;
 }
 

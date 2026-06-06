@@ -9,12 +9,10 @@ import {
   type LifecycleInput,
   type LifecycleConfig,
   type LeaseRecord,
-  type HeartbeatRecord,
   type ProcessTableEntry,
   type WorkerLifecycleState,
   type HeartbeatInterpretation,
   type LeaseEvaluation,
-  type ReaperAction,
   type LifecycleAuditReason,
 } from "../src/subagent/supervisor-lifecycle.js";
 import * as barrel from "../src/subagent/index.js";
@@ -200,6 +198,18 @@ describe("isGracePeriodActive", () => {
     const config = makeConfig();
     const state = computeLifecycleState(input, config);
     expect(isGracePeriodActive(state, config)).toBe(false);
+  });
+
+  it("returns true when shutdownRequestedAt equals now (age 0)", () => {
+    const input = makeInput({
+      shutdownRequestedAt: NOW, // age 0
+    });
+    const config = makeConfig();
+    const state = computeLifecycleState(input, config);
+    // ageMs is 0, should be <= gracePeriodMs, and state should be grace_period
+    expect(state.state).toBe("grace_period");
+    expect(state.evidence.ageMs).toBe(0);
+    expect(isGracePeriodActive(state, config)).toBe(true);
   });
 });
 
