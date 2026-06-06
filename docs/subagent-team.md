@@ -144,7 +144,6 @@ CLI / MCP / cloud queue / local worker process
 - 自动任务拆分/调度策略
 
 当前最准确的说法是：项目已经有 sub-agent team 的状态机基础设施，还没有实际 sub-agent execution service。
-
 ## Contact Registry Domain
 
 P6-01 added `src/subagent/contact-registry.ts` — a pure domain module for team contact / personnel directory. This is durable runtime truth, not TUI state.
@@ -343,3 +342,54 @@ P6-05 adds `src/subagent/status-projector.ts` — a pure status projector that d
 ### Testing
 
 Tests in `tests/subagent-status-projector.test.ts` cover: healthy, idle, offline, terminated, stale heartbeat, missing evidence, IM silence, run stall, ledger stall, stuck (multiple flags), done, false done avoidance, lifecycle thresholds, age computation, purity contract, and barrel export.
+
+## Worker Handoff Evidence Contract
+
+`src/subagent/worker-handoff-evidence.ts` defines the typed schema, parser, validator, and normalizer for worker handoff evidence that every coder/QA final report must include.
+
+### Evidence Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `childLedgerId` | `string` | Yes | Unique child ledger identifier |
+| `childLedgerStatus` | `"open" \| "closed" \| "missing"` | Yes | Ledger status; must be "closed" |
+| `commit` | `string \| null` | Yes | Git commit hash |
+| `branch` | `string` | Yes | Git branch |
+| `workspace` | `string` | Yes | Absolute workspace path |
+| `changedFiles` | `string[]` | Yes | Files changed/added/removed |
+| `commands` | `string[]` | No | Commands executed as gates |
+| `gates` | `Record<string, GateResult>` | Yes | Per-gate PASS/FAIL/NOT_RUN |
+| `overallResult` | `"PASS" \| "FAIL"` | Yes | Overall handoff verdict |
+| `residualRisk` | `string` | Yes | Human-readable risk assessment |
+| `mergeRecommendation` | `"approve" \| "reject" \| "needs_review"` | Yes | QA merge recommendation |
+| `timestamp` | `string` | No | ISO-8601 timestamp |
+| `reviewer` | `string` | No | Reviewer identifier |
+
+### Required Gates
+
+Every handoff must report: `typecheck`, `build`, `test`.
+
+### Pure Functions
+
+- `normalizeWorkerHandoffEvidence(input)` — Normalize from text or partial object
+- `parseHandoffText(text)` — Parse free-form IM/outbox/report text
+- `validateHandoffEvidence(evidence)` — Validate against required contract
+- `deriveGatesFromEvidence(evidence)` — Bridge to `MasterReviewChecklist` gates
+- `summarizeHandoffEvidence(evidence)` — Human-readable summary for IM/TUI
+
+### Final IM Format
+
+When sending a final report via IM, use `--text-stdin` with a file redirect or safe heredoc:
+
+```bash
+node dist/cli/main.js im send \
+  --channel <channel> \
+  --kind status \
+  --text-stdin < /path/to/report.txt
+```
+
+For long reports, prefer file redirection over inline text to avoid shell escaping issues.
+
+### Bridge to Merge Protocol
+
+`deriveGatesFromEvidence()` converts handoff evidence into a subset of `MasterReviewChecklist` gates (`workerReported`, `runCompleted`, `typecheckPasses`, `buildPasses`, `testsPass`, `workerRanGates`), which can be merged into the master's checklist before merge gate evaluation.
