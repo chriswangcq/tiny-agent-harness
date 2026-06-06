@@ -52,3 +52,20 @@ export type {
   TuiLimits,
   TuiRenderer,
 } from "./types.js";
+
+// Team dashboard view model
+export {
+  buildTeamDashboardViewModel,
+  redactDashboardDisplay,
+} from "./team-dashboard-view-model.js";
+export type {
+  TeamDashboardInput,
+  TeamDashboardRun,
+  TeamDashboardViewModel,
+  TeamDashboardSection,
+  TeamDashboardSectionKind,
+  TeamDashboardRow,
+  TeamDashboardSelection,
+  TeamDashboardFailureSummary,
+  DashboardRowStatus,
+} from "./team-dashboard-view-model.js";
