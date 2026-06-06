@@ -2,9 +2,10 @@
 
 本文记录一次手动 agent team 试运行方案：把后续优化点拆成独立 ticket，每个 ticket 使用独立 workspace、agent run 和 git branch，由 master agent 持续辅导 worker，并负责 review / merge。
 
+See [subagent-team-operating-guide.md](subagent-team-operating-guide.md) for the authoritative operating guide. This document records trial plans and details.
 ## Boundary
 
-当前 `src/subagent` 仍是纯 FSM/domain，不是完整 worker runtime。这个 trial 是操作层实验：
+P6-01 到 P6-06 已合入 contact registry、directory store、team CLI 和 local worker launcher。这个文档记录 trial 操作层方案和当前状态：
 
 - Runtime owns truth and effects: run state、transcript、environment events、PTY session、io_wait、tool review、model loop、recovery、CLI capability execution。
 - TUI owns projection and user control gestures: transcript display、loop/debug detail、PTY screen projection、risk/review display、user message entry、control request entry。
