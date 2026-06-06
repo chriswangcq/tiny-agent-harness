@@ -6,5 +6,5 @@ export * from "./local-worker-launcher.js";
 export * from "./status-projector.js";
 export * from "./worker-handoff-evidence.js";
 export * from "./master-merge-queue-adapter.js";
-
 export * from "./supervisor-store.js";
+export * from "./supervisor-lifecycle.js";
