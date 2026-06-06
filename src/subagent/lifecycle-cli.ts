@@ -425,8 +425,8 @@ function handleReaper(
   try {
     workers = JSON.parse(workersJson);
     if (!Array.isArray(workers)) throw new Error("not array");
-  // Validate worker shape
-  for (const w of workers) {
+    // Validate worker shape
+    for (const w of workers) {
     if (typeof w.workerId !== "string" || typeof w.status !== "string" || 
         typeof w.role !== "string" || typeof w.workspace !== "string" || 
         typeof w.branch !== "string" || typeof w.imChannel !== "string" || 
@@ -453,7 +453,9 @@ function handleReaper(
   const shouldExecute = mode === "execute" && executeFlag;
 
   const now = ports.nowIso();
-  const config: LifecycleConfig = { ...buildLifecycleConfig(now), heartbeatMaxAgeMs: thresholdMs };  // Compute lifecycle state and reaper decisions for all workers using domain functions
+  const config: LifecycleConfig = { ...buildLifecycleConfig(now), heartbeatMaxAgeMs: thresholdMs };
+
+  // Compute lifecycle state and reaper decisions for all workers using domain functions
   const staleDecisions: Array<{
     workerId: string;
     contactStatus: string;
