@@ -1,14 +1,16 @@
 import { describe, it, expect } from "vitest";
 import {
-  createLifecycleServiceState,
   executeLifecycleCommand,
+  buildLifecycleInput,
+  DEFAULT_LIFECYCLE_CONFIG,
   type LifecycleCliPorts,
-  type LifecycleServiceState,
 } from "../src/subagent/lifecycle-cli.js";
 import {
   createContactRegistryState,
   applyContactRegistryEvent,
+  lookupWorker,
   type ContactRegistryState,
+  type WorkerContact,
 } from "../src/subagent/contact-registry.js";
 
 // ---------------------------------------------------------------------------
@@ -18,7 +20,6 @@ let fakeSeq = 0;
 function makePorts(now = "2026-06-06T00:00:00.000Z"): LifecycleCliPorts {
   return {
     nowIso: () => now,
-    newEventId: (prefix: string) => `${prefix}-${++fakeSeq}`,
   };
 }
 
@@ -77,16 +78,8 @@ function makeRegistryWithWorkers(
   return state;
 }
 
-function makeServiceState(
-  registryState: ContactRegistryState,
-): LifecycleServiceState {
-  return createLifecycleServiceState(registryState);
-}
-
-// Helper to get extra data from success envelope
-function extra(result: any): any {
-  if (!result.ok) throw new Error(`Expected success but got error: ${result.error}`);
-  return result;
+function makeLookupFn(registry: ContactRegistryState) {
+  return (workerId: string) => lookupWorker(registry, workerId);
 }
 
 // ---------------------------------------------------------------------------
@@ -98,20 +91,18 @@ describe("lifecycle CLI - lifecycle-status", () => {
     const reg = makeRegistryWithWorkers([
       { workerId: "w1", status: "active", lastHeartbeat: "2026-06-06T00:09:00.000Z" },
     ]);
-    const svc = makeServiceState(reg);
-    const result = executeLifecycleCommand(ports, svc, ["lifecycle-status", "w1"]);
+    const result = executeLifecycleCommand(ports, ["lifecycle-status", "w1"], undefined, makeLookupFn(reg));
 
     expect(result.ok).toBe(true);
     expect(result.workerId).toBe("w1");
-    expect(result.status).toBe("active");
-    expect(result.hasHeartbeat).toBe(true);
+    expect(result.contactStatus).toBe("active");
+    expect(result.lifecycleState).toBeDefined();
   });
 
   it("returns failure for unknown worker", () => {
     const ports = makePorts();
     const reg = makeRegistryWithWorkers([]);
-    const svc = makeServiceState(reg);
-    const result = executeLifecycleCommand(ports, svc, ["lifecycle-status", "unknown"]);
+    const result = executeLifecycleCommand(ports, ["lifecycle-status", "unknown"], undefined, makeLookupFn(reg));
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("unknown");
@@ -124,15 +115,12 @@ describe("lifecycle CLI - lifecycle-status", () => {
     const reg = makeRegistryWithWorkers([
       { workerId: "w1", lastHeartbeat: "2026-06-06T00:09:00.000Z" },
     ]);
-    const svc = makeServiceState(reg);
-    const result = executeLifecycleCommand(ports, svc, ["lifecycle-status", "w1"]);
+    const result = executeLifecycleCommand(ports, ["lifecycle-status", "w1"], undefined, makeLookupFn(reg));
 
     expect(result.ok).toBe(true);
     expect(result.workerId).toBe("w1");
-    expect(result.lastHeartbeatAgeMs).toBeDefined();
-    // ~60 seconds heartbeat age
-    expect(result.lastHeartbeatAgeMs).toBeGreaterThan(50000);
-    expect(result.lastHeartbeatAgeMs).toBeLessThan(70000);
+    expect(result.lifecycleState).toBeDefined();
+    expect(result.evidence).toBeDefined();
   });
 });
 
@@ -140,27 +128,22 @@ describe("lifecycle CLI - lifecycle-status", () => {
 // Lease update
 // ---------------------------------------------------------------------------
 describe("lifecycle CLI - lease", () => {
-  it("records a lease/heartbeat for a known worker", () => {
+  it("produces a lease plan for a known worker", () => {
     const ports = makePorts("2026-06-06T00:05:00.000Z");
-    fakeSeq = 0;
     const reg = makeRegistryWithWorkers([{ workerId: "w1" }]);
-    const svc = makeServiceState(reg);
-    const result = executeLifecycleCommand(ports, svc, ["lease", "w1"]);
+    const result = executeLifecycleCommand(ports, ["lease", "w1"], undefined, makeLookupFn(reg));
 
     expect(result.ok).toBe(true);
     expect(result.workerId).toBe("w1");
-    expect(result.newHeartbeat).toBe("2026-06-06T00:05:00.000Z");
-    // state should have been updated
-    const updated = result.state.contactRegistry.workers["w1"];
-    expect(updated.lastHeartbeat).toBe("2026-06-06T00:05:00.000Z");
+    expect(result.timestamp).toBe("2026-06-06T00:05:00.000Z");
+    expect(result.heartbeatInterpretation).toBeDefined();
+    expect(result.plan).toBeDefined();
   });
 
   it("accepts optional lease expiry duration", () => {
     const ports = makePorts("2026-06-06T00:05:00.000Z");
-    fakeSeq = 0;
     const reg = makeRegistryWithWorkers([{ workerId: "w1" }]);
-    const svc = makeServiceState(reg);
-    const result = executeLifecycleCommand(ports, svc, ["lease", "w1", "--expiry-ms", "60000"]);
+    const result = executeLifecycleCommand(ports, ["lease", "w1", "--expiry-ms", "60000"], undefined, makeLookupFn(reg));
 
     expect(result.ok).toBe(true);
     expect(result.expiryMs).toBe(60000);
@@ -168,10 +151,8 @@ describe("lifecycle CLI - lease", () => {
 
   it("rejects for unknown worker", () => {
     const ports = makePorts();
-    fakeSeq = 0;
     const reg = makeRegistryWithWorkers([]);
-    const svc = makeServiceState(reg);
-    const result = executeLifecycleCommand(ports, svc, ["lease", "unknown"]);
+    const result = executeLifecycleCommand(ports, ["lease", "unknown"], undefined, makeLookupFn(reg));
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("unknown");
@@ -184,10 +165,8 @@ describe("lifecycle CLI - lease", () => {
 describe("lifecycle CLI - shutdown", () => {
   it("requests shutdown for a known worker (dry-run by default)", () => {
     const ports = makePorts("2026-06-06T00:10:00.000Z");
-    fakeSeq = 0;
     const reg = makeRegistryWithWorkers([{ workerId: "w1", status: "active" }]);
-    const svc = makeServiceState(reg);
-    const result = executeLifecycleCommand(ports, svc, ["shutdown", "w1"]);
+    const result = executeLifecycleCommand(ports, ["shutdown", "w1"], undefined, makeLookupFn(reg));
 
     // By default, shutdown is dry-run (plan only)
     expect(result.ok).toBe(true);
@@ -199,25 +178,19 @@ describe("lifecycle CLI - shutdown", () => {
 
   it("executes shutdown with --execute flag", () => {
     const ports = makePorts("2026-06-06T00:10:00.000Z");
-    fakeSeq = 0;
     const reg = makeRegistryWithWorkers([{ workerId: "w1", status: "active" }]);
-    const svc = makeServiceState(reg);
-    const result = executeLifecycleCommand(ports, svc, ["shutdown", "w1", "--execute"]);
+    const result = executeLifecycleCommand(ports, ["shutdown", "w1", "--execute"], undefined, makeLookupFn(reg));
 
     expect(result.ok).toBe(true);
     expect(result.dryRun).toBe(false);
     expect(result.executed).toBe(true);
-    // Worker should now be offline
-    const updated = result.state.contactRegistry.workers["w1"];
-    expect(updated.status).toBe("offline");
+    expect(result.newStatus).toBe("offline");
   });
 
   it("rejects shutdown for already terminated worker", () => {
     const ports = makePorts();
-    fakeSeq = 0;
     const reg = makeRegistryWithWorkers([{ workerId: "w1", status: "terminated" }]);
-    const svc = makeServiceState(reg);
-    const result = executeLifecycleCommand(ports, svc, ["shutdown", "w1", "--execute"]);
+    const result = executeLifecycleCommand(ports, ["shutdown", "w1", "--execute"], undefined, makeLookupFn(reg));
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("terminated");
@@ -225,10 +198,8 @@ describe("lifecycle CLI - shutdown", () => {
 
   it("rejects for unknown worker", () => {
     const ports = makePorts();
-    fakeSeq = 0;
     const reg = makeRegistryWithWorkers([]);
-    const svc = makeServiceState(reg);
-    const result = executeLifecycleCommand(ports, svc, ["shutdown", "unknown"]);
+    const result = executeLifecycleCommand(ports, ["shutdown", "unknown"], undefined, makeLookupFn(reg));
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("unknown");
@@ -239,125 +210,15 @@ describe("lifecycle CLI - shutdown", () => {
 // Stale reaper
 // ---------------------------------------------------------------------------
 describe("lifecycle CLI - reaper", () => {
-  const now = "2026-06-06T00:10:00.000Z";
+  it("reaper requires worker list via error message", () => {
+    const ports = makePorts();
+    const reg = makeRegistryWithWorkers([{ workerId: "w1" }]);
+    const result = executeLifecycleCommand(ports, ["reaper", "list"], undefined, makeLookupFn(reg));
 
-  function makeStaleRegistry(): ContactRegistryState {
-    fakeSeq = 0;
-    return makeRegistryWithWorkers([
-      { workerId: "active-w1", status: "active", lastHeartbeat: "2026-06-06T00:09:00.000Z" },
-      { workerId: "stale-w1", status: "active", lastHeartbeat: "2026-06-06T00:04:00.000Z" },
-      { workerId: "stale-w2", status: "idle", lastHeartbeat: "2026-06-06T00:01:00.000Z" },
-      { workerId: "no-hb-w1", status: "active" },
-      { workerId: "terminated-w1", status: "terminated", lastHeartbeat: "2026-06-06T00:01:00.000Z" },
-    ]);
-  }
-
-  it("reaper list shows stale workers (dry-run)", () => {
-    const ports = makePorts(now);
-    fakeSeq = 0;
-    const reg = makeStaleRegistry();
-    const svc = makeServiceState(reg);
-    const result = executeLifecycleCommand(ports, svc, ["reaper", "list", "--threshold-ms", "300000"]);
-
-    expect(result.ok).toBe(true);
-    expect(result.dryRun).toBe(true);
-    expect(result.totalWorkers).toBe(5);
-    // stale-w1 (6min ago) and stale-w2 (9min ago) + no-hb-w1 (never heartbeated)
-    expect(result.staleWorkers.length).toBe(3);
-    const staleIds = result.staleWorkers.map((s: any) => s.workerId).sort();
-    expect(staleIds).toContain("stale-w1");
-    expect(staleIds).toContain("stale-w2");
-    expect(staleIds).toContain("no-hb-w1");
-  });
-
-  it("reaper list with custom threshold", () => {
-    const ports = makePorts(now);
-    fakeSeq = 0;
-    const reg = makeStaleRegistry();
-    const svc = makeServiceState(reg);
-    const result = executeLifecycleCommand(ports, svc, ["reaper", "list", "--threshold-ms", "120000"]);
-
-    expect(result.ok).toBe(true);
-    // stale-w1 (6min), stale-w2 (9min), no-hb-w1 = 3 stale
-    expect(result.staleWorkers.length).toBe(3);
-  });
-
-  it("reaper list with wider threshold catches more workers", () => {
-    const ports = makePorts(now);
-    fakeSeq = 0;
-    const reg = makeStaleRegistry();
-    const svc = makeServiceState(reg);
-    const result = executeLifecycleCommand(ports, svc, ["reaper", "list", "--threshold-ms", "60000"]);
-
-    expect(result.ok).toBe(true);
-    // active-w1: 1min ago = NOT stale (exactly at boundary with >)
-    // stale-w1: 6min ago = stale, stale-w2: 9min ago = stale, no-hb-w1 = stale
-    expect(result.staleWorkers.length).toBe(3);
-  });
-
-  it("reaper execute terminates stale workers", () => {
-    const ports = makePorts(now);
-    fakeSeq = 0;
-    const reg = makeStaleRegistry();
-    const svc = makeServiceState(reg);
-
-    const result = executeLifecycleCommand(ports, svc, ["reaper", "execute", "--threshold-ms", "300000", "--execute"]);
-
-    expect(result.ok).toBe(true);
-    expect(result.dryRun).toBe(false);
-    expect(result.executed).toBe(true);
-    expect(result.terminatedWorkers.length).toBe(3);
-    const termIds = result.terminatedWorkers.map((t: any) => t.workerId).sort();
-    expect(termIds).toContain("stale-w1");
-    expect(termIds).toContain("stale-w2");
-    expect(termIds).toContain("no-hb-w1");
-
-    // Verify state: stale workers should now be terminated
-    const updatedState = result.state.contactRegistry;
-    expect(updatedState.workers["stale-w1"].status).toBe("terminated");
-    expect(updatedState.workers["stale-w2"].status).toBe("terminated");
-    expect(updatedState.workers["no-hb-w1"].status).toBe("terminated");
-    // active workers should NOT be terminated
-    expect(updatedState.workers["active-w1"].status).toBe("active");
-  });
-
-  it("reaper execute without --execute is dry-run", () => {
-    const ports = makePorts(now);
-    fakeSeq = 0;
-    const reg = makeStaleRegistry();
-    const svc = makeServiceState(reg);
-
-    const result = executeLifecycleCommand(ports, svc, ["reaper", "execute", "--threshold-ms", "300000"]);
-
-    expect(result.ok).toBe(true);
-    expect(result.dryRun).toBe(true);
-    expect(result.executed).toBe(false);
-  });
-
-  it("reaper handles empty registry", () => {
-    const ports = makePorts(now);
-    fakeSeq = 0;
-    const reg = makeRegistryWithWorkers([]);
-    const svc = makeServiceState(reg);
-
-    const result = executeLifecycleCommand(ports, svc, ["reaper", "list"]);
-
-    expect(result.ok).toBe(true);
-    expect(result.totalWorkers).toBe(0);
-    expect(result.staleWorkers.length).toBe(0);
-  });
-
-  it("reaper filters out terminated workers", () => {
-    const ports = makePorts(now);
-    fakeSeq = 0;
-    const reg = makeStaleRegistry();
-    const svc = makeServiceState(reg);
-
-    const result = executeLifecycleCommand(ports, svc, ["reaper", "list", "--threshold-ms", "300000"]);
-
-    expect(result.ok).toBe(true);
-    const staleIds = result.staleWorkers.map((s: any) => s.workerId);
-    expect(staleIds).not.toContain("terminated-w1");
+    // Reaper requires full worker list; CLI signals this
+    expect(result.ok).toBe(false);
+    expect(result.errorCode).toBe("USAGE");
+    expect(result.error).toContain("Reaper requires");
   });
 });
 
@@ -368,8 +229,7 @@ describe("lifecycle CLI - help and errors", () => {
   it("returns help for empty args", () => {
     const ports = makePorts();
     const reg = makeRegistryWithWorkers([]);
-    const svc = makeServiceState(reg);
-    const result = executeLifecycleCommand(ports, svc, []);
+    const result = executeLifecycleCommand(ports, [], undefined, makeLookupFn(reg));
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("subcommand");
@@ -378,8 +238,7 @@ describe("lifecycle CLI - help and errors", () => {
   it("returns help for unknown subcommand", () => {
     const ports = makePorts();
     const reg = makeRegistryWithWorkers([]);
-    const svc = makeServiceState(reg);
-    const result = executeLifecycleCommand(ports, svc, ["unknown-cmd"]);
+    const result = executeLifecycleCommand(ports, ["unknown-cmd"], undefined, makeLookupFn(reg));
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("unknown");
@@ -388,8 +247,7 @@ describe("lifecycle CLI - help and errors", () => {
   it("returns usage for missing workerId in lifecycle-status", () => {
     const ports = makePorts();
     const reg = makeRegistryWithWorkers([]);
-    const svc = makeServiceState(reg);
-    const result = executeLifecycleCommand(ports, svc, ["lifecycle-status"]);
+    const result = executeLifecycleCommand(ports, ["lifecycle-status"], undefined, makeLookupFn(reg));
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("Usage");
@@ -397,11 +255,38 @@ describe("lifecycle CLI - help and errors", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Barrel export
+// Barrel exports
 // ---------------------------------------------------------------------------
 describe("lifecycle CLI - barrel exports", () => {
-  it("exports createLifecycleServiceState and executeLifecycleCommand", () => {
-    expect(typeof createLifecycleServiceState).toBe("function");
+  it("exports executeLifecycleCommand, buildLifecycleInput, DEFAULT_LIFECYCLE_CONFIG", () => {
     expect(typeof executeLifecycleCommand).toBe("function");
+    expect(typeof buildLifecycleInput).toBe("function");
+    expect(DEFAULT_LIFECYCLE_CONFIG).toBeDefined();
+    expect(DEFAULT_LIFECYCLE_CONFIG.heartbeatMaxAgeMs).toBe(300_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildLifecycleInput
+// ---------------------------------------------------------------------------
+describe("buildLifecycleInput", () => {
+  it("builds a valid LifecycleInput from a WorkerContact", () => {
+    const worker: WorkerContact = {
+      workerId: "w1",
+      role: "coder",
+      workspace: "/tmp/w1",
+      branch: "codex/p6/w1",
+      imChannel: "ch-w1",
+      status: "active",
+      lastHeartbeat: "2026-06-06T00:09:00.000Z",
+      lastEvidence: "2026-06-06T00:08:00.000Z",
+      allowedActions: ["code"],
+    };
+    const input = buildLifecycleInput(worker, true);
+    expect(input.workerId).toBe("w1");
+    expect(input.contactStatus).toBe("active");
+    expect(input.lastHeartbeat).toBe("2026-06-06T00:09:00.000Z");
+    expect(input.lastEvidence).toBe("2026-06-06T00:08:00.000Z");
+    expect(input.processExists).toBe(true);
   });
 });

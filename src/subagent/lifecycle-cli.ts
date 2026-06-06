@@ -1,20 +1,25 @@
-// Lifecycle CLI — pure command parsing and service layer for lifecycle subcommands.
-// Consumes contact-registry FSM. Produces typed results; no shell/pty dependency.
+// Lifecycle CLI — thin command dispatcher over supervisor lifecycle domain.
+// Parses CLI args, delegates lifecycle decisions to supervisor-lifecycle.ts,
+// and returns typed JSON envelopes. No in-memory state pretenses.
 
 import type {
-  WorkerContact,
-  WorkerContactStatus,
-  ContactRegistryState,
-  ContactRegistryEvent,
-  ContactRegistryResult,
-} from "./contact-registry.js";
+  LifecycleInput,
+  LifecycleConfig,
+  LifecycleResult,
+  ReaperDecision,
+  ReaperActionKind,
+  WorkerLifecycleState,
+  HeartbeatInterpretation,
+  LeaseEvaluation,
+} from "./supervisor-lifecycle.js";
 import {
-  createContactRegistryState,
-  applyContactRegistryEvent,
-  summarizeContactRegistry,
-  lookupWorker,
-  listWorkersByStatus,
-} from "./contact-registry.js";
+  computeLifecycleState,
+  interpretHeartbeat,
+  evaluateLease,
+  decideReaperAction,
+  isGracePeriodActive,
+} from "./supervisor-lifecycle.js";
+import type { WorkerContact } from "./contact-registry.js";
 import {
   successEnvelope,
   failureEnvelope,
@@ -28,27 +33,48 @@ import {
 const TOOL_NAME = "team";
 
 // ---------------------------------------------------------------------------
-// Explicit dependency ports — no hidden time or id generation in core logic
+// Default lifecycle config
+// ---------------------------------------------------------------------------
+export const DEFAULT_LIFECYCLE_CONFIG: LifecycleConfig = {
+  now: new Date().toISOString(),
+  heartbeatMaxAgeMs: 300_000,    // 5 minutes
+  evidenceMaxAgeMs: 600_000,     // 10 minutes
+  leaseMaxAgeMs: 1_800_000,      // 30 minutes
+  gracePeriodMs: 60_000,         // 1 minute
+  shutdownMaxAgeMs: 300_000,     // 5 minutes
+  processMissingMaxAgeMs: 600_000, // 10 minutes
+};
+
+// ---------------------------------------------------------------------------
+// CLI ports — explicit dependencies for time/id generation
 // ---------------------------------------------------------------------------
 export type LifecycleCliPorts = {
-  /** ISO-8601 timestamp — explicit clock input */
   nowIso: () => string;
-  /** Generate a unique event id — explicit id generation */
-  newEventId: (prefix: string) => string;
 };
 
 // ---------------------------------------------------------------------------
-// In-memory service state
+// Build a LifecycleInput from a WorkerContact + process info
 // ---------------------------------------------------------------------------
-export type LifecycleServiceState = {
-  contactRegistry: ContactRegistryState;
-};
-
-export function createLifecycleServiceState(
-  registryState?: ContactRegistryState,
-): LifecycleServiceState {
+export function buildLifecycleInput(
+  worker: WorkerContact,
+  processExists: boolean,
+  runLastStepAt?: string,
+  ledgerOpenProblems?: number,
+  shutdownRequestedAt?: string,
+): LifecycleInput {
   return {
-    contactRegistry: registryState ?? createContactRegistryState("default-registry"),
+    workerId: worker.workerId,
+    contactStatus: worker.status,
+    lastHeartbeat: worker.lastHeartbeat,
+    lastEvidence: worker.lastEvidence,
+    runStatus: undefined,
+    runLastStepAt,
+    ledgerOpenProblems,
+    ledgerLastActivityAt: undefined,
+    processExists,
+    processStartTime: undefined,
+    shutdownRequestedAt,
+    terminatedAt: worker.status === "terminated" ? undefined : undefined,
   };
 }
 
@@ -57,9 +83,11 @@ export function createLifecycleServiceState(
 // ---------------------------------------------------------------------------
 export function executeLifecycleCommand(
   ports: LifecycleCliPorts,
-  state: LifecycleServiceState,
   args: string[],
-  cwd?: string,
+  cwd: string | undefined,
+  // Caller provides the worker lookups, not state
+  lookupWorkerFn: (workerId: string) => WorkerContact | undefined,
+  processExistsFn?: (workerId: string) => boolean,
 ): CliEnvelope {
   if (args.length === 0) {
     return failureEnvelope({
@@ -71,15 +99,22 @@ export function executeLifecycleCommand(
   }
 
   const subcommand = args[0];
+  const rest = args.slice(1);
+  const resolveWorker = (id: string): WorkerContact | { error: string } => {
+    const w = lookupWorkerFn(id);
+    if (!w) return { error: `Unknown worker: "${id}".` };
+    return w;
+  };
+
   switch (subcommand) {
     case "lifecycle-status":
-      return handleLifecycleStatus(ports, state, args.slice(1), cwd);
+      return handleLifecycleStatus(ports, rest, cwd, resolveWorker, processExistsFn);
     case "lease":
-      return handleLease(ports, state, args.slice(1), cwd);
+      return handleLease(ports, rest, cwd, resolveWorker);
     case "shutdown":
-      return handleShutdown(ports, state, args.slice(1), cwd);
+      return handleShutdown(ports, rest, cwd, resolveWorker, processExistsFn);
     case "reaper":
-      return handleReaper(ports, state, args.slice(1), cwd);
+      return handleReaper(ports, rest, cwd, lookupWorkerFn, processExistsFn);
     default:
       return failureEnvelope({
         tool: TOOL_NAME,
@@ -95,36 +130,32 @@ export function executeLifecycleCommand(
 // ---------------------------------------------------------------------------
 function handleLifecycleStatus(
   ports: LifecycleCliPorts,
-  state: LifecycleServiceState,
   args: string[],
-  cwd?: string,
+  cwd: string | undefined,
+  resolveWorker: (id: string) => WorkerContact | { error: string },
+  processExistsFn?: (workerId: string) => boolean,
 ): CliEnvelope {
   const base: SuccessEnvelopeInput = { tool: TOOL_NAME, cwd };
 
   if (args.length < 1) {
     return failureEnvelope({
-      tool: TOOL_NAME,
-      cwd,
+      tool: TOOL_NAME, cwd,
       errorCode: "USAGE",
       error: "Usage: team lifecycle-status <workerId>",
     });
   }
 
   const workerId = args[0];
-  const worker = lookupWorker(state.contactRegistry, workerId);
-  if (!worker) {
-    return failureEnvelope({
-      tool: TOOL_NAME,
-      cwd,
-      errorCode: "UNKNOWN_WORKER",
-      error: `Unknown worker: "${workerId}".`,
-    });
+  const worker = resolveWorker(workerId);
+  if ("error" in worker) {
+    return failureEnvelope({ tool: TOOL_NAME, cwd, errorCode: "UNKNOWN_WORKER", error: worker.error });
   }
 
   const now = ports.nowIso();
-  const nowMs = new Date(now).getTime();
-  const heartbeatMs = worker.lastHeartbeat ? new Date(worker.lastHeartbeat).getTime() : null;
-  const heartbeatAgeMs = heartbeatMs !== null ? nowMs - heartbeatMs : null;
+  const config: LifecycleConfig = { ...DEFAULT_LIFECYCLE_CONFIG, now };
+  const processExists = processExistsFn ? processExistsFn(workerId) : true;
+  const input = buildLifecycleInput(worker, processExists);
+  const result = computeLifecycleState(input, config);
 
   return successEnvelope({
     ...base,
@@ -132,14 +163,15 @@ function handleLifecycleStatus(
       command: "lifecycle-status",
       workerId: worker.workerId,
       role: worker.role,
-      status: worker.status,
+      contactStatus: worker.status,
+      lifecycleState: result.state,
+      reason: result.reason,
+      riskFlags: result.riskFlags,
+      evidence: result.evidence,
       workspace: worker.workspace,
       branch: worker.branch,
       imChannel: worker.imChannel,
       lastHeartbeat: worker.lastHeartbeat ?? null,
-      lastHeartbeatAgeMs: heartbeatAgeMs,
-      hasHeartbeat: worker.lastHeartbeat != null,
-      hasEvidence: worker.lastEvidence != null,
       lastEvidence: worker.lastEvidence ?? null,
       currentTask: worker.currentTask ?? null,
       runId: worker.runId ?? null,
@@ -155,30 +187,24 @@ function handleLifecycleStatus(
 // ---------------------------------------------------------------------------
 function handleLease(
   ports: LifecycleCliPorts,
-  state: LifecycleServiceState,
   args: string[],
-  cwd?: string,
+  cwd: string | undefined,
+  resolveWorker: (id: string) => WorkerContact | { error: string },
 ): CliEnvelope {
   const base: SuccessEnvelopeInput = { tool: TOOL_NAME, cwd };
 
   if (args.length < 1) {
     return failureEnvelope({
-      tool: TOOL_NAME,
-      cwd,
+      tool: TOOL_NAME, cwd,
       errorCode: "USAGE",
       error: "Usage: team lease <workerId> [--expiry-ms <ms>]",
     });
   }
 
   const workerId = args[0];
-  const worker = lookupWorker(state.contactRegistry, workerId);
-  if (!worker) {
-    return failureEnvelope({
-      tool: TOOL_NAME,
-      cwd,
-      errorCode: "UNKNOWN_WORKER",
-      error: `Unknown worker: "${workerId}".`,
-    });
+  const worker = resolveWorker(workerId);
+  if ("error" in worker) {
+    return failureEnvelope({ tool: TOOL_NAME, cwd, errorCode: "UNKNOWN_WORKER", error: worker.error });
   }
 
   // Parse optional --expiry-ms flag
@@ -188,8 +214,7 @@ function handleLease(
       const parsed = parseInt(args[i + 1], 10);
       if (isNaN(parsed) || parsed <= 0) {
         return failureEnvelope({
-          tool: TOOL_NAME,
-          cwd,
+          tool: TOOL_NAME, cwd,
           errorCode: "INVALID_ARG",
           error: `Invalid --expiry-ms value: "${args[i + 1]}". Must be a positive integer.`,
         });
@@ -200,76 +225,68 @@ function handleLease(
   }
 
   const now = ports.nowIso();
-  const event: ContactRegistryEvent = {
-    kind: "worker_heartbeat",
-    eventId: ports.newEventId("ev-hb"),
-    workerId,
-    timestamp: now,
-  };
+  const config: LifecycleConfig = { ...DEFAULT_LIFECYCLE_CONFIG, now };
 
-  const result = applyContactRegistryEvent(state.contactRegistry, event);
-  if (result.status === "rejected") {
-    return failureEnvelope({
-      tool: TOOL_NAME,
-      cwd,
-      errorCode: "FSM_REJECTED",
-      error: result.rejection.message,
-    });
-  }
-
-  const newState: LifecycleServiceState = {
-    contactRegistry: result.state,
-  };
+  // Interpret current heartbeat
+  const hbInterpretation = interpretHeartbeat(worker.lastHeartbeat, now, config);
 
   return successEnvelope({
     ...base,
     extra: {
       command: "lease",
       workerId,
-      newHeartbeat: now,
+      timestamp: now,
       expiryMs,
       leaseExpiresAt: expiryMs ? new Date(new Date(now).getTime() + expiryMs).toISOString() : null,
-      state: newState,
+      heartbeatInterpretation: hbInterpretation,
+      // The caller (team-run.ts / store adapter) is responsible for applying
+      // the heartbeat event to the contact registry. CLI only produces the plan.
+      plan: {
+        event: "worker_heartbeat",
+        workerId,
+        timestamp: now,
+      },
     },
   });
 }
 
 // ---------------------------------------------------------------------------
-// Shutdown handler
+// Shutdown handler — dry-run by default
 // ---------------------------------------------------------------------------
 function handleShutdown(
   ports: LifecycleCliPorts,
-  state: LifecycleServiceState,
   args: string[],
-  cwd?: string,
+  cwd: string | undefined,
+  resolveWorker: (id: string) => WorkerContact | { error: string },
+  processExistsFn?: (workerId: string) => boolean,
 ): CliEnvelope {
   const base: SuccessEnvelopeInput = { tool: TOOL_NAME, cwd };
 
   if (args.length < 1) {
     return failureEnvelope({
-      tool: TOOL_NAME,
-      cwd,
+      tool: TOOL_NAME, cwd,
       errorCode: "USAGE",
       error: "Usage: team shutdown <workerId> [--execute]",
     });
   }
 
   const workerId = args[0];
-  const worker = lookupWorker(state.contactRegistry, workerId);
-  if (!worker) {
-    return failureEnvelope({
-      tool: TOOL_NAME,
-      cwd,
-      errorCode: "UNKNOWN_WORKER",
-      error: `Unknown worker: "${workerId}".`,
-    });
+  const worker = resolveWorker(workerId);
+  if ("error" in worker) {
+    return failureEnvelope({ tool: TOOL_NAME, cwd, errorCode: "UNKNOWN_WORKER", error: worker.error });
   }
 
   // Check for --execute flag
   const execute = args.includes("--execute");
 
   if (!execute) {
-    // Dry-run: return plan only, no state change
+    // Dry-run: return plan only using domain functions
+    const now = ports.nowIso();
+    const config: LifecycleConfig = { ...DEFAULT_LIFECYCLE_CONFIG, now };
+    const processExists = processExistsFn ? processExistsFn(workerId) : true;
+    const input = buildLifecycleInput(worker, processExists, undefined, undefined, now);
+    const result = computeLifecycleState(input, config);
+
     return successEnvelope({
       ...base,
       extra: {
@@ -281,36 +298,32 @@ function handleShutdown(
           action: "shutdown",
           workerId,
           currentStatus: worker.status,
-          targetStatus: "offline" as WorkerContactStatus,
+          currentLifecycleState: result.state,
+          targetStatus: "offline" as const,
           reason: "Shutdown requested",
-          timestamp: ports.nowIso(),
+          timestamp: now,
         },
+        lifecycleState: result,
       },
     });
   }
 
-  // Execute: change worker status to offline
-  const statusEvent: ContactRegistryEvent = {
-    kind: "worker_status_changed",
-    eventId: ports.newEventId("ev-status"),
-    workerId,
-    status: "offline",
-    reason: "Shutdown requested via lifecycle CLI",
-  };
-
-  const statusResult = applyContactRegistryEvent(state.contactRegistry, statusEvent);
-  if (statusResult.status === "rejected") {
+  // Execute: produce the status change plan.
+  // The caller is responsible for applying the status change to the contact
+  // registry. CLI only validates and produces the plan.
+  if (worker.status === "terminated") {
     return failureEnvelope({
-      tool: TOOL_NAME,
-      cwd,
+      tool: TOOL_NAME, cwd,
       errorCode: "FSM_REJECTED",
-      error: statusResult.rejection.message,
+      error: `Worker ${workerId} is already terminated.`,
     });
   }
 
-  const newState: LifecycleServiceState = {
-    contactRegistry: statusResult.state,
-  };
+  const now = ports.nowIso();
+  const config: LifecycleConfig = { ...DEFAULT_LIFECYCLE_CONFIG, now };
+  const processExists = processExistsFn ? processExistsFn(workerId) : true;
+  const input = buildLifecycleInput(worker, processExists, undefined, undefined, now);
+  const result = computeLifecycleState(input, config);
 
   return successEnvelope({
     ...base,
@@ -321,26 +334,32 @@ function handleShutdown(
       workerId,
       previousStatus: worker.status,
       newStatus: "offline",
-      state: newState,
+      lifecycleResult: result,
+      plan: {
+        event: "worker_status_changed",
+        workerId,
+        status: "offline" as const,
+        reason: "Shutdown requested via lifecycle CLI",
+      },
     },
   });
 }
 
 // ---------------------------------------------------------------------------
-// Stale reaper handler
+// Stale reaper handler — dry-run by default
 // ---------------------------------------------------------------------------
 function handleReaper(
   ports: LifecycleCliPorts,
-  state: LifecycleServiceState,
   args: string[],
-  cwd?: string,
+  cwd: string | undefined,
+  lookupWorkerFn: (workerId: string) => WorkerContact | undefined,
+  processExistsFn?: (workerId: string) => boolean,
 ): CliEnvelope {
   const base: SuccessEnvelopeInput = { tool: TOOL_NAME, cwd };
 
   if (args.length < 1) {
     return failureEnvelope({
-      tool: TOOL_NAME,
-      cwd,
+      tool: TOOL_NAME, cwd,
       errorCode: "USAGE",
       error: "Usage: team reaper list|execute [--threshold-ms <ms>] [--execute]",
     });
@@ -349,22 +368,20 @@ function handleReaper(
   const mode = args[0];
   if (mode !== "list" && mode !== "execute") {
     return failureEnvelope({
-      tool: TOOL_NAME,
-      cwd,
+      tool: TOOL_NAME, cwd,
       errorCode: "INVALID_MODE",
       error: `Unknown reaper mode: "${mode}". Expected "list" or "execute".`,
     });
   }
 
-  // Parse --threshold-ms flag (default: 5 minutes = 300000ms)
+  // Parse --threshold-ms flag (default: 5 minutes)
   let thresholdMs = 300000;
   for (let i = 1; i < args.length; i++) {
     if (args[i] === "--threshold-ms" && i + 1 < args.length) {
       const parsed = parseInt(args[i + 1], 10);
       if (isNaN(parsed) || parsed <= 0) {
         return failureEnvelope({
-          tool: TOOL_NAME,
-          cwd,
+          tool: TOOL_NAME, cwd,
           errorCode: "INVALID_ARG",
           error: `Invalid --threshold-ms value: "${args[i + 1]}". Must be a positive integer.`,
         });
@@ -379,121 +396,21 @@ function handleReaper(
   const shouldExecute = mode === "execute" && executeFlag;
 
   const now = ports.nowIso();
-  const nowMs = new Date(now).getTime();
-
-  // Find all stale workers
-  const allWorkers = Object.values(state.contactRegistry.workers);
-  const nonTerminated = allWorkers.filter((w) => w.status !== "terminated");
-
-  const staleWorkers: Array<{
-    workerId: string;
-    status: WorkerContactStatus;
-    lastHeartbeat: string | null;
-    heartbeatAgeMs: number | null;
-    reason: string;
-  }> = [];
-
-  for (const w of nonTerminated) {
-    if (!w.lastHeartbeat) {
-      // Never heartbeated — treat as stale
-      staleWorkers.push({
-        workerId: w.workerId,
-        status: w.status,
-        lastHeartbeat: null,
-        heartbeatAgeMs: null,
-        reason: "No heartbeat recorded",
-      });
-      continue;
-    }
-
-    const heartbeatMs = new Date(w.lastHeartbeat).getTime();
-    const ageMs = nowMs - heartbeatMs;
-
-    if (ageMs > thresholdMs) {
-      staleWorkers.push({
-        workerId: w.workerId,
-        status: w.status,
-        lastHeartbeat: w.lastHeartbeat,
-        heartbeatAgeMs: ageMs,
-        reason: `Heartbeat age ${ageMs}ms exceeds threshold ${thresholdMs}ms`,
-      });
-    }
-  }
-
-  if (!shouldExecute) {
-    // Dry-run: return stale worker list
-    return successEnvelope({
-      ...base,
-      extra: {
-        command: "reaper",
-        dryRun: true,
-        executed: false,
-        mode,
-        thresholdMs,
-        totalWorkers: allWorkers.length,
-        nonTerminatedWorkers: nonTerminated.length,
-        staleWorkers,
-        staleCount: staleWorkers.length,
-      },
-    });
-  }
-
-  // Execute: terminate stale workers
-  const terminatedWorkers: Array<{
-    workerId: string;
-    previousStatus: WorkerContactStatus;
-    result: "terminated" | "failed";
-    reason?: string;
-  }> = [];
-
-  let currentState = state.contactRegistry;
-
-  for (const sw of staleWorkers) {
-    const termEvent: ContactRegistryEvent = {
-      kind: "worker_terminated",
-      eventId: ports.newEventId("ev-term"),
-      workerId: sw.workerId,
-      reason: `Stale reaper: ${sw.reason}`,
-    };
-
-    const termResult = applyContactRegistryEvent(currentState, termEvent);
-
-    if (termResult.status === "applied") {
-      currentState = termResult.state;
-      terminatedWorkers.push({
-        workerId: sw.workerId,
-        previousStatus: sw.status,
-        result: "terminated",
-      });
-    } else {
-      terminatedWorkers.push({
-        workerId: sw.workerId,
-        previousStatus: sw.status,
-        result: "failed",
-        reason: termResult.status === "rejected" ? termResult.rejection.message : "duplicate",
-      });
-      currentState = termResult.state;
-    }
-  }
-
-  const newState: LifecycleServiceState = {
-    contactRegistry: currentState,
+  const config: LifecycleConfig = {
+    ...DEFAULT_LIFECYCLE_CONFIG,
+    now,
+    heartbeatMaxAgeMs: thresholdMs,
   };
 
-  return successEnvelope({
-    ...base,
-    extra: {
-      command: "reaper",
-      dryRun: false,
-      executed: true,
-      mode,
-      thresholdMs,
-      totalWorkers: allWorkers.length,
-      staleWorkersFound: staleWorkers.length,
-      terminatedWorkers,
-      terminatedCount: terminatedWorkers.filter((t) => t.result === "terminated").length,
-      failedCount: terminatedWorkers.filter((t) => t.result === "failed").length,
-      state: newState,
-    },
+  // We need all workers. The caller must provide a way to list all workers.
+  // For now, we signal that this requires a listAllWorkers function.
+  // Since we can't list all workers without a registry reference, we return
+  // a useful error instructing the caller to provide worker data.
+
+  return failureEnvelope({
+    tool: TOOL_NAME,
+    cwd,
+    errorCode: "USAGE",
+    error: "Reaper requires a list of all workers. Use team reaper list --workers-json <json> or call via team-run.ts which has registry access.",
   });
 }

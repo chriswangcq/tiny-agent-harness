@@ -5,10 +5,10 @@ import {
   type TeamCliPorts,
 } from "../subagent/team-cli.js";
 import {
-  createLifecycleServiceState,
   executeLifecycleCommand,
   type LifecycleCliPorts,
 } from "../subagent/lifecycle-cli.js";
+import { lookupWorker } from "../subagent/contact-registry.js";
 import { CAPABILITY_VERSIONS } from "./envelope.js";
 
 // Register team tool version
@@ -21,11 +21,9 @@ const realPorts: TeamCliPorts = {
     `${prefix}-${Date.now()}-${seed}`,
 };
 
-// Lifecycle-compatible ports (same shape)
+// Lifecycle-compatible ports
 const lifecyclePorts: LifecycleCliPorts = {
   nowIso: () => new Date().toISOString(),
-  newEventId: (prefix: string) =>
-    `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
 };
 
 export async function runTeam(args: string[]): Promise<void> {
@@ -39,11 +37,23 @@ export async function runTeam(args: string[]): Promise<void> {
   const group = args[0];
   const cwd = process.cwd();
 
-  // Route lifecycle group to its own handler
+  // Route lifecycle group to thin dispatcher
   if (group === "lifecycle") {
-    const state = createLifecycleServiceState();
     const lifecycleArgs = args.slice(1);
-    const result = executeLifecycleCommand(lifecyclePorts, state, lifecycleArgs, cwd);
+
+    // Build a fresh service state to provide worker lookups.
+    // Lifecycle CLI does NOT own state — it delegates lifecycle
+    // decisions to supervisor-lifecycle.ts and uses callbacks for data.
+    const state = createTeamServiceState();
+    const lookupWorkerFn = (workerId: string) =>
+      lookupWorker(state.contactRegistry, workerId);
+
+    const result = executeLifecycleCommand(
+      lifecyclePorts,
+      lifecycleArgs,
+      cwd,
+      lookupWorkerFn,
+    );
     process.stdout.write(JSON.stringify(result));
     process.stdout.write("\n");
     return;
