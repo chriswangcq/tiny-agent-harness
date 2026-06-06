@@ -125,27 +125,31 @@ CLI / MCP / cloud queue / local worker process
 
 已实现：
 
-- 纯 reducer
+- 纯 reducer (team FSM, contact registry FSM)
 - 合并协议纯域 (merge-protocol)：master review checklist、merge order、conflict policy、feedback loop、gate evaluation
 - duplicate event no-op
 - invalid transition rejection
 - worker offline 时释放/失败 active task
 - summary helpers
 - root barrel export
+- Contact Registry (P6-01) — worker contact FSM
+- Directory Store (P6-02) — durable persistence with explicit ports
+- Team CLI (P6-03) — `tiny-agent team contact` and `tiny-agent team task` subcommands
+- Local Worker Launcher (P6-04) — local worker spawn with explicit effects
+- Status Projector (P6-05) — pure worker status derivation from snapshots
+- Worker Handoff Evidence Contract (P6-06) — typed handoff schema and gate derivation
 - 单元测试覆盖 happy path、failure、cancel、duplicate、invalid assignment、offline 和 summary
 
 未实现：
 
-- worker process runtime
-- sub-agent CLI
 - cloud queue
 - MCP wrapper
-- TUI sub-agent dashboard
+- TUI sub-agent dashboard (P6-08 pending)
 - 自动任务拆分/调度策略
 
-当前最准确的说法是：项目已经有 sub-agent team 的状态机基础设施，还没有实际 sub-agent execution service。
-## Contact Registry Domain
+当前状态：P6-01 到 P6-06 已合入，提供完整的 contact registry、directory store、team CLI、local worker launcher、status projector 和 worker handoff evidence contract。P6-07/P6-08/P6-09 仍在进行或等待中。
 
+See [subagent-team-operating-guide.md](subagent-team-operating-guide.md) for usage and operating instructions.
 P6-01 added `src/subagent/contact-registry.ts` — a pure domain module for team contact / personnel directory. This is durable runtime truth, not TUI state.
 
 ### WorkerContact

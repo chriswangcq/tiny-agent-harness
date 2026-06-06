@@ -72,3 +72,5 @@
 - 改 `.tiny-agent/` 文件布局或锁策略：同步 [State Layout](state-layout.md) 和 [State Storage And File Locking](state-storage-locking.md)。
 - 改 TUI projection 或数据源：同步 [TUI](tui.md)。
 - 改 MCP/sub-agent/replay：同步 [MCP CLI](mcp-cli.md)、[Sub-agent Team Domain](subagent-team.md)、[Recovery And Replay](recovery-replay.md)。
+
+- [Subagent Team Operating Guide](subagent-team-operating-guide.md) — How to use, dispatch, merge, and QA the sub-agent team runtime.
