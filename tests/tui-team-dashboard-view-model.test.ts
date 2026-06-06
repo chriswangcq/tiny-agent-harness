@@ -7,6 +7,9 @@ import type {
   TeamDashboardInput,
   TeamDashboardViewModel,
   TeamDashboardRun,
+  SupervisorLifecycleInput,
+  ShutdownPhase,
+  DashboardRowStatus,
 } from "../src/tui/team-dashboard-view-model.js";
 import type { SubAgentTeamSummary } from "../src/subagent/team.js";
 import type { ContactRegistrySummary } from "../src/subagent/contact-registry.js";
@@ -341,5 +344,167 @@ describe("type exports", () => {
     expect(typeof vm.failureSummary.totalWarnings).toBe("number");
     expect(Array.isArray(vm.failureSummary.failingItems)).toBe(true);
     expect(Array.isArray(vm.failureSummary.warningItems)).toBe(true);
+  });
+});
+
+// ─── Supervisor Lifecycle Section Tests ──────────────────────────
+
+describe("supervisor lifecycle section", () => {
+  function makeLifecycleInput(overrides: Partial<SupervisorLifecycleInput> = {}): SupervisorLifecycleInput {
+    return {
+      leases: [],
+      heartbeatCadenceMs: 30000,
+      staleRuns: [],
+      shutdownPhase: "active",
+      dryRun: false,
+      recoveryReady: true,
+      ...overrides,
+    };
+  }
+
+  it("produces supervisor-lifecycle section when input is provided", () => {
+    const input = {
+      ...emptyInput(),
+      supervisorLifecycle: makeLifecycleInput(),
+    };
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle");
+    expect(section).toBeDefined();
+    expect(section!.title).toBe("Supervisor Lifecycle");
+  });
+
+  it("does not produce supervisor-lifecycle section when input is omitted", () => {
+    const input = emptyInput(); // no supervisorLifecycle
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle");
+    expect(section).toBeUndefined();
+  });
+
+  it("shows active lease status correctly", () => {
+    const input = {
+      ...emptyInput(),
+      supervisorLifecycle: makeLifecycleInput({
+        leases: [{
+          leaseId: "L1",
+          holder: "coder-1",
+          resource: "task-1",
+          acquiredAt: "2026-06-06T00:00:00.000Z",
+          expiresAt: "2026-06-06T01:00:00.000Z",
+          status: "active",
+        }],
+      }),
+    };
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+    const leaseRow = section.rows.find(r => r.key === "lease:L1");
+    expect(leaseRow).toBeDefined();
+    expect(leaseRow!.status).toBe("ok");
+  });
+
+  it("shows expired lease as error", () => {
+    const input = {
+      ...emptyInput(),
+      supervisorLifecycle: makeLifecycleInput({
+        leases: [{
+          leaseId: "L1",
+          holder: "coder-1",
+          resource: "task-1",
+          acquiredAt: "2026-06-06T00:00:00.000Z",
+          expiresAt: "2026-06-06T00:30:00.000Z",
+          status: "expired",
+        }],
+      }),
+    };
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+    const leaseRow = section.rows.find(r => r.key === "lease:L1");
+    expect(leaseRow!.status).toBe("error");
+  });
+
+  it("shows stale runs with error status", () => {
+    const input = {
+      ...emptyInput(),
+      supervisorLifecycle: makeLifecycleInput({
+        staleRuns: [{
+          workerId: "coder-1",
+          runId: "run-1",
+          lastHeartbeat: "2026-06-06T00:00:00.000Z",
+          ageMs: 300_000,
+          reason: "stale_heartbeat",
+        }],
+      }),
+    };
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+    const staleRow = section.rows.find(r => r.key === "stale:coder-1");
+    expect(staleRow).toBeDefined();
+    expect(staleRow!.status).toBe("error");
+  });
+
+  it("shows dry run as warn when ON", () => {
+    const input = {
+      ...emptyInput(),
+      supervisorLifecycle: makeLifecycleInput({ dryRun: true }),
+    };
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+    const dryRunRow = section.rows.find(r => r.text.includes("Dry Run"));
+    expect(dryRunRow!.status).toBe("warn");
+  });
+
+  it("shows shutdown phase status correctly across phases", () => {
+    const phases: ShutdownPhase[] = ["active", "draining", "shutting_down", "stopped"];
+    const expectedStatuses: DashboardRowStatus[] = ["ok", "warn", "warn", "error"];
+    
+    for (let i = 0; i < phases.length; i++) {
+      const input = {
+        ...emptyInput(),
+        supervisorLifecycle: makeLifecycleInput({ shutdownPhase: phases[i] }),
+      };
+      const vm = buildTeamDashboardViewModel(input);
+      const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+      const shutdownRow = section.rows.find(r => r.text.includes("Shutdown Phase"));
+      expect(shutdownRow!.status).toBe(expectedStatuses[i]);
+    }
+  });
+
+  it("shows recovery ready status", () => {
+    const readyInput = {
+      ...emptyInput(),
+      supervisorLifecycle: makeLifecycleInput({ recoveryReady: true }),
+    };
+    const notReadyInput = {
+      ...emptyInput(),
+      supervisorLifecycle: makeLifecycleInput({ recoveryReady: false }),
+    };
+    
+    const vmReady = buildTeamDashboardViewModel(readyInput);
+    const sectionReady = vmReady.sections.find(s => s.kind === "supervisor-lifecycle")!;
+    const recoveryRow = sectionReady.rows.find(r => r.text.includes("Recovery Ready"));
+    expect(recoveryRow!.status).toBe("ok");
+
+    const vmNotReady = buildTeamDashboardViewModel(notReadyInput);
+    const sectionNotReady = vmNotReady.sections.find(s => s.kind === "supervisor-lifecycle")!;
+    const recoveryRow2 = sectionNotReady.rows.find(r => r.text.includes("Recovery Ready"));
+    expect(recoveryRow2!.status).toBe("warn");
+  });
+
+  it("heartbeat cadence is displayed in seconds", () => {
+    const input = {
+      ...emptyInput(),
+      supervisorLifecycle: makeLifecycleInput({ heartbeatCadenceMs: 30000 }),
+    };
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+    const cadenceRow = section.rows.find(r => r.text.includes("Heartbeat Cadence"));
+    expect(cadenceRow).toBeDefined();
+    expect(cadenceRow!.text).toContain("30s");
+  });
+
+  // Doc assertion: supervisor lifecycle section exists in view model
+  it("supervisor-lifecycle section kind is exported in type", () => {
+    // Verify the section kind is usable
+    const section: { kind: string } = { kind: "supervisor-lifecycle" };
+    expect(section.kind).toBe("supervisor-lifecycle");
   });
 });

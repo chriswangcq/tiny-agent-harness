@@ -446,3 +446,48 @@ Tests in `tests/subagent-master-merge-queue-adapter.test.ts` cover:
 - `computeMergeReadiness` for ready and blocked workers.
 - `computeMergeQueue` for sort order, ready/blocked separation, empty input, per-worker checklist output.
 - Purity contract: deterministic output for same inputs.
+
+## Supervisor Lifecycle (P6-08 TUI/Docs)
+
+P6-08 adds supervisor lifecycle projections and TUI dashboard integration:
+
+### Leases
+
+Supervisor manages leases for worker resources. A lease binds a holder (worker or supervisor) to a resource for a time window.
+
+```
+SupervisorLease {
+  leaseId: string
+  holder: string (workerId or supervisorId)
+  resource: string (taskId, runId, or resource key)
+  acquiredAt: ISO timestamp
+  expiresAt: ISO timestamp
+  renewedAt?: ISO timestamp
+  status: "active" | "expired" | "released"
+}
+```
+
+### Heartbeat Cadence
+
+Workers send heartbeats at a configured interval (`heartbeatCadenceMs`). The status projector uses `expectedHeartbeatIntervalMs` from the lifecycle template or falls back to `heartbeatMaxAgeMs` from projector config to detect stale heartbeats.
+
+### Stale-Run Reaper
+
+`identifyStaleWorkers(input: StaleRunReaperInput)` is a pure function that scans worker contacts to identify workers with missing or stale heartbeats based on heartbeat timestamp and evidence age. It does not accept or process run snapshots — run-based stale detection requires explicit worker/run association provided by the caller. In dry-run mode, stale entries are computed but `reapable` is empty. When not dry-run, `reapable` lists workers that should be reaped.
+
+### Unified Shutdown
+
+`deriveUnifiedShutdown(workers, runs, phase, now)` projects the supervisor shutdown state across four phases:
+
+- **active**: Normal operation, no shutdown in progress.
+- **draining**: Accepting no new work, existing workers completing.
+- **shutting_down**: Workers are being terminated.
+- **stopped**: All workers terminated or offline.
+
+### Dry-Run Behavior
+
+All lifecycle projections support dry-run semantics. `dryRun: true` in `StaleRunReaperInput` or the dashboard `SupervisorLifecycleInput` computes and displays projections without emitting actions. The TUI dashboard shows a `Dry Run: ON` warning status.
+
+### Safe Recovery
+
+Recovery readiness (`recoveryReady: boolean`) is exposed in the supervisor lifecycle dashboard section. When true, the supervisor has sufficient durable state (contact registry, run snapshots, ledger state) to recover worker state after a supervisor restart.
