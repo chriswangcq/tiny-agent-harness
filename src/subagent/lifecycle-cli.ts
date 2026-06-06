@@ -427,18 +427,18 @@ function handleReaper(
     if (!Array.isArray(workers)) throw new Error("not array");
     // Validate worker shape
     for (const w of workers) {
-    if (typeof w.workerId !== "string" || typeof w.status !== "string" || 
-        typeof w.role !== "string" || typeof w.workspace !== "string" || 
-        typeof w.branch !== "string" || typeof w.imChannel !== "string" || 
-        !Array.isArray((w as any).allowedActions)) {
-      return failureEnvelope({
-        tool: TOOL_NAME,
-        cwd,
-        errorCode: "INVALID_ARG",
-        error: "Invalid --workers-json: each entry must have string workerId, status, role, workspace, branch, imChannel, and array allowedActions.",
-      });
+      if (typeof w.workerId !== "string" || typeof w.status !== "string" ||
+          typeof w.role !== "string" || typeof w.workspace !== "string" ||
+          typeof w.branch !== "string" || typeof w.imChannel !== "string" ||
+          !Array.isArray((w as any).allowedActions)) {
+        return failureEnvelope({
+          tool: TOOL_NAME,
+          cwd,
+          errorCode: "INVALID_ARG",
+          error: "Invalid --workers-json: each entry must have string workerId, status, role, workspace, branch, imChannel, and array allowedActions.",
+        });
+      }
     }
-  }
   } catch {
     return failureEnvelope({
       tool: TOOL_NAME,
