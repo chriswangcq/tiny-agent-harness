@@ -661,6 +661,44 @@ describe("identifyStaleWorkers", () => {
     });
     expect(result.totalStale).toBe(0);
   });
+  // Threshold boundary tests
+  it("heartbeat exactly at threshold is not stale", () => {
+    // 2 min ago = threshold (120_000 ms)
+    const worker = makeWorker({
+      lastHeartbeat: "2026-06-06T03:28:00.000Z",
+    });
+    const result = identifyStaleWorkers({
+      workers: [worker],
+      config: freshConfig,
+    });
+    expect(result.totalStale).toBe(0);
+  });
+
+  it("heartbeat 1 ms above threshold is stale", () => {
+    // 2 min + 1 ms ago
+    const worker = makeWorker({
+      lastHeartbeat: "2026-06-06T03:27:59.999Z",
+    });
+    const result = identifyStaleWorkers({
+      workers: [worker],
+      config: freshConfig,
+    });
+    expect(result.totalStale).toBe(1);
+    expect(result.staleEntries[0].reason).toBe("stale_heartbeat");
+  });
+
+  it("heartbeat at 10 min is stale with custom threshold", () => {
+    const worker = makeWorker({
+      lastHeartbeat: "2026-06-06T03:20:00.000Z", // 10 min ago
+    });
+    const result = identifyStaleWorkers({
+      workers: [worker],
+      config: freshConfig,
+      staleThresholdMs: 300_000, // 5 min threshold
+    });
+    expect(result.totalStale).toBe(1);
+    expect(result.staleEntries[0].reason).toBe("stale_heartbeat");
+  });
 });
 
 describe("deriveUnifiedShutdown", () => {

@@ -359,7 +359,12 @@ export function identifyStaleWorkers(
       const age = computeAge(worker.lastHeartbeat, now);
       if (age !== undefined) {
         ageMs = age;
-        reason = age > threshold ? "stale_heartbeat" : "stale_heartbeat";
+        if (age > threshold) {
+          reason = "stale_heartbeat";
+        } else {
+          // Fresh heartbeat — not stale, skip this worker
+          continue;
+        }
       } else {
         reason = "missing_heartbeat";
       }
@@ -370,12 +375,6 @@ export function identifyStaleWorkers(
         const age = computeAge(worker.lastEvidence, now);
         if (age !== undefined) ageMs = age;
       }
-    }
-
-
-    if (reason === "stale_heartbeat" && ageMs <= threshold) {
-      // Not actually stale - skip
-      continue;
     }
 
 
