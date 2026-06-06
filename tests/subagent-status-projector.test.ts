@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   projectWorkerStatus,
+  identifyStaleWorkers,
+  deriveUnifiedShutdown,
   type ProjectorInput,
   type WorkerStatusProjection,
   type WorkerStatusCode,
@@ -567,5 +569,173 @@ describe("GAP 6: docs mention current projector contract", () => {
     const fs = await import("fs");
     const content = fs.readFileSync("docs/subagent-team.md", "utf-8");
     expect(content).toMatch(/[Ss]tatus [Pp]rojector/);
+  });
+});
+
+// ─── Supervisor Lifecycle Projection Tests ──────────────────────
+
+describe("identifyStaleWorkers", () => {
+
+  const makeWorker = (overrides: Record<string, unknown> = {}) => ({
+    workerId: "w1",
+    role: "coder",
+    workspace: "/ws/p6",
+    branch: "codex/p6/01",
+    imChannel: "p6-01",
+    allowedActions: ["read", "write"],
+    status: "active",
+    lastHeartbeat: "2026-06-06T03:25:00.000Z",
+    lastEvidence: "2026-06-06T03:28:00.000Z",
+    ...overrides,
+  });
+
+  const freshConfig = {
+    now: "2026-06-06T03:30:00.000Z",
+    heartbeatMaxAgeMs: 120_000, // 2 min
+    evidenceMaxAgeMs: 300_000,
+    imSilenceMaxAgeMs: 600_000,
+    ledgerStallMaxAgeMs: 600_000,
+    runStallMaxAgeMs: 600_000,
+  };
+
+  it("identifies worker with missing heartbeat", () => {
+    const worker = makeWorker({ lastHeartbeat: undefined, lastEvidence: undefined });
+    const result = identifyStaleWorkers({
+      workers: [worker],
+      runs: [],
+      config: freshConfig,
+    });
+    expect(result.totalStale).toBe(1);
+    expect(result.staleEntries[0].reason).toBe("missing_heartbeat");
+  });
+
+  it("identifies worker with stale heartbeat", () => {
+    const worker = makeWorker({
+      lastHeartbeat: "2026-06-06T03:20:00.000Z", // 10 min ago
+    });
+    const result = identifyStaleWorkers({
+      workers: [worker],
+      runs: [],
+      config: { ...freshConfig, heartbeatMaxAgeMs: 120_000 },
+    });
+    expect(result.totalStale).toBe(1);
+    expect(result.staleEntries[0].reason).toBe("stale_heartbeat");
+  });
+
+  it("skips terminated workers", () => {
+    const worker = makeWorker({ status: "terminated", lastHeartbeat: undefined });
+    const result = identifyStaleWorkers({
+      workers: [worker],
+      runs: [],
+      config: freshConfig,
+    });
+    expect(result.totalStale).toBe(0);
+  });
+
+  it("dryRun returns staleEntries but empty reapable", () => {
+    const worker = makeWorker({ lastHeartbeat: undefined });
+    const result = identifyStaleWorkers({
+      workers: [worker],
+      runs: [],
+      config: freshConfig,
+      dryRun: true,
+    });
+    expect(result.totalStale).toBe(1);
+    expect(result.reapable).toEqual([]);
+    expect(result.dryRun).toBe(true);
+  });
+
+  it("when not dryRun, reapable includes stale entries", () => {
+    const worker = makeWorker({ lastHeartbeat: undefined });
+    const result = identifyStaleWorkers({
+      workers: [worker],
+      runs: [],
+      config: freshConfig,
+      dryRun: false,
+    });
+    expect(result.reapable.length).toBe(1);
+  });
+
+  it("fresh heartbeat is not stale", () => {
+    const worker = makeWorker({
+      lastHeartbeat: "2026-06-06T03:29:30.000Z", // 30s ago
+    });
+    const result = identifyStaleWorkers({
+      workers: [worker],
+      runs: [],
+      config: freshConfig,
+    });
+    expect(result.totalStale).toBe(0);
+  });
+});
+
+describe("deriveUnifiedShutdown", () => {
+
+  const makeWorker = (overrides: Record<string, unknown> = {}) => ({
+    workerId: "w1",
+    role: "coder",
+    workspace: "/ws/p6",
+    branch: "codex/p6/01",
+    imChannel: "p6-01",
+    allowedActions: ["read", "write"],
+    status: "active",
+    lastHeartbeat: "2026-06-06T03:25:00.000Z",
+    lastEvidence: "2026-06-06T03:28:00.000Z",
+    ...overrides,
+  });
+
+  const now = "2026-06-06T03:30:00.000Z";
+
+  it("active phase shows active workers and no draining", () => {
+    const workers = [makeWorker(), makeWorker({ workerId: "w2" })];
+    const result = deriveUnifiedShutdown(workers, [], "active", now);
+    expect(result.phase).toBe("active");
+    expect(result.activeWorkers).toBe(2);
+    expect(result.drainingWorkers).toBe(0);
+  });
+
+  it("draining phase counts offline workers", () => {
+    const workers = [
+      makeWorker(),
+      makeWorker({ workerId: "w2", status: "offline" }),
+    ];
+    const result = deriveUnifiedShutdown(workers, [], "draining", now);
+    expect(result.phase).toBe("draining");
+    expect(result.drainingWorkers).toBe(1);
+  });
+
+  it("shutting_down phase reflects remaining active workers", () => {
+    const workers = [
+      makeWorker(),
+      makeWorker({ workerId: "w2", status: "terminated" }),
+    ];
+    const result = deriveUnifiedShutdown(workers, [], "shutting_down", now);
+    expect(result.phase).toBe("shutting_down");
+    expect(result.activeWorkers).toBe(1);
+  });
+
+  it("stopped phase shows all workers offline/terminated", () => {
+    const workers = [
+      makeWorker({ status: "terminated" }),
+      makeWorker({ workerId: "w2", status: "offline" }),
+    ];
+    const result = deriveUnifiedShutdown(workers, [], "stopped", now);
+    expect(result.phase).toBe("stopped");
+    expect(result.activeWorkers).toBe(0);
+    expect(result.drainingWorkers).toBe(2);
+  });
+
+  it("counts pending (running) tasks", () => {
+    const result = deriveUnifiedShutdown(
+      [makeWorker()],
+      [
+        { status: "running", lastStepAt: now },
+        { status: "waiting_for_model", lastStepAt: now },
+        { status: "finished", lastStepAt: now },
+      ],
+      "active",
+      now,
+    );
+    expect(result.pendingTasks).toBe(2);
   });
 });

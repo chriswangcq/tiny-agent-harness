@@ -29,6 +29,7 @@ export type TeamDashboardInput = {
   mergeChecklist: MasterReviewChecklist | null;
   /** Optional human-readable QA summary text */
   qaSummary?: string;
+  supervisorLifecycle?: SupervisorLifecycleInput;
 };
 
 // ─── Output Types ─────────────────────────────────────────────────
@@ -47,7 +48,8 @@ export type TeamDashboardSectionKind =
   | "contact-roster"
   | "active-tasks"
   | "run-status"
-  | "merge-qa";
+  | "merge-qa"
+  | "supervisor-lifecycle";
 
 export type TeamDashboardSection = {
   kind: TeamDashboardSectionKind;
@@ -417,6 +419,12 @@ export function buildTeamDashboardViewModel(
   sections.push(buildActiveTasksSection(input.teamSummary));
   sections.push(buildRunStatusSection(input.runSummaries));
 
+  if (input.supervisorLifecycle) {
+    sections.push(
+      buildSupervisorLifecycleSection(input.supervisorLifecycle),
+    );
+  }
+
   if (input.mergeChecklist) {
     sections.push(
       buildMergeQaSection(input.mergeChecklist, input.qaSummary),
@@ -437,3 +445,112 @@ export function buildTeamDashboardViewModel(
     failureSummary,
   };
 }
+
+// ─── Supervisor Lifecycle Input Types ────────────────────────────
+
+export interface SupervisorLeaseItem {
+  leaseId: string;
+  holder: string;
+  resource: string;
+  acquiredAt: string;
+  expiresAt: string;
+  renewedAt?: string;
+  status: "active" | "expired" | "released";
+}
+
+export interface StaleRunItem {
+  workerId: string;
+  runId?: string;
+  lastHeartbeat?: string;
+  ageMs: number;
+  reason: string;
+}
+
+export type ShutdownPhase = "active" | "draining" | "shutting_down" | "stopped";
+
+export interface SupervisorLifecycleInput {
+  leases: SupervisorLeaseItem[];
+  heartbeatCadenceMs: number;
+  staleRuns: StaleRunItem[];
+  shutdownPhase: ShutdownPhase;
+  dryRun: boolean;
+  recoveryReady: boolean;
+}
+
+// ─── Supervisor Lifecycle Section Builder ─────────────────────────
+
+function buildSupervisorLifecycleSection(
+  input: SupervisorLifecycleInput,
+): TeamDashboardSection {
+  const rows: TeamDashboardRow[] = [];
+
+  // Leases section
+  rows.push({ text: `Leases (${input.leases.length}):`, status: "info" });
+  for (const lease of input.leases) {
+    const leaseStatus: DashboardRowStatus =
+      lease.status === "active" ? "ok" :
+      lease.status === "expired" ? "error" : "warn";
+    rows.push({
+      text: `  ${lease.leaseId}: ${lease.holder}/${lease.resource} [${lease.status}]`,
+      status: leaseStatus,
+      key: `lease:${lease.leaseId}`,
+    });
+  }
+  if (input.leases.length === 0) {
+    rows.push({ text: "  No active leases", status: "info" });
+  }
+
+  // Heartbeat cadence
+  const cadenceSec = (input.heartbeatCadenceMs / 1000).toFixed(0);
+  rows.push({ text: `Heartbeat Cadence: ${cadenceSec}s`, status: "info" });
+
+  // Stale runs
+  rows.push({
+    text: `Stale Runs: ${input.staleRuns.length}`,
+    status: input.staleRuns.length > 0 ? "warn" : "ok",
+  });
+  for (const stale of input.staleRuns) {
+    const ageSec = (stale.ageMs / 1000).toFixed(0);
+    rows.push({
+      text: `  ${stale.workerId}: ${stale.reason} (${ageSec}s old)`,
+      status: "error",
+      key: `stale:${stale.workerId}`,
+    });
+  }
+
+  // Dry run flag
+  rows.push({
+    text: `Dry Run: ${input.dryRun ? "ON" : "OFF"}`,
+    status: input.dryRun ? "warn" : "info",
+  });
+
+  // Shutdown phase
+  const shutdownStatus: DashboardRowStatus =
+    input.shutdownPhase === "active" ? "ok" :
+    input.shutdownPhase === "stopped" ? "error" :
+    "warn";
+  rows.push({
+    text: `Shutdown Phase: ${input.shutdownPhase}`,
+    status: shutdownStatus,
+  });
+
+  // Recovery readiness
+  rows.push({
+    text: `Recovery Ready: ${input.recoveryReady ? "YES" : "NO"}`,
+    status: input.recoveryReady ? "ok" : "warn",
+  });
+
+  return {
+    kind: "supervisor-lifecycle",
+    title: "Supervisor Lifecycle",
+    rows,
+    selectable: true,
+  };
+}
+
+// ─── Dashboard Section Kind Extension ────────────────────────────
+
+// Re-export the extended TeamDashboardSectionKind
+export type TeamDashboardSectionKindExtended =
+  | TeamDashboardSectionKind
+  | "supervisor-lifecycle";

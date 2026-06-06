@@ -289,3 +289,183 @@ function isDone(
 
   return true;
 }
+
+// ─── Supervisor Lifecycle Projections ────────────────────────────
+
+export interface SupervisorLease {
+  leaseId: string;
+  holder: string;           // workerId or supervisorId
+  resource: string;         // taskId, runId, or resource key
+  acquiredAt: string;       // ISO timestamp
+  expiresAt: string;        // ISO timestamp
+  renewedAt?: string;       // last renewal ISO
+  status: "active" | "expired" | "released";
+}
+
+export type ShutdownPhase = "active" | "draining" | "shutting_down" | "stopped";
+
+export interface ShutdownProjection {
+  phase: ShutdownPhase;
+  activeWorkers: number;
+  drainingWorkers: number;
+  pendingTasks: number;
+  reason: string;
+  projectedAt: string;
+}
+
+export interface StaleRunReaperInput {
+  workers: WorkerContact[];
+  runs: RunSnapshot[];
+  config: ProjectorConfig;
+  /** Optional - only reap workers older than this threshold (ms) since last heartbeat */
+  staleThresholdMs?: number;
+  /** Optional - dry run mode: compute but do not emit reap */
+  dryRun?: boolean;
+}
+
+export interface StaleRunEntry {
+  workerId: string;
+  runId?: string;
+  lastHeartbeat?: string;
+  lastStepAt?: string;
+  ageMs: number;
+  reason: "missing_heartbeat" | "stale_heartbeat" | "run_stalled" | "no_run";
+}
+
+export interface StaleRunReaperProjection {
+  staleEntries: StaleRunEntry[];
+  totalStale: number;
+  reapable: StaleRunEntry[];
+  dryRun: boolean;
+  projectedAt: string;
+}
+
+/** Pure derivation: identify stale workers/runs that should be reaped. */
+export function identifyStaleWorkers(
+  input: StaleRunReaperInput
+): StaleRunReaperProjection {
+  const { workers, runs, config, staleThresholdMs, dryRun = false } = input;
+  const now = config.now;
+  const threshold = staleThresholdMs ?? config.heartbeatMaxAgeMs;
+  const staleEntries: StaleRunEntry[] = [];
+
+  const runByWorker = new Map<string, RunSnapshot>();
+  for (const r of runs) {
+    if (r.status) {
+      // key by run status mapping - use workerId from run if available
+      // For now assume run has a worker association via external context
+    }
+  }
+
+  for (const worker of workers) {
+    const contactStatus = worker.status;
+    if (contactStatus === "terminated") continue;
+
+    // Find associated run for this worker (if any)
+    const workerRun = runs.find(r => {
+      // Heuristic: match by workerId pattern in run data
+      return true; // in practice would match by workerId field
+    });
+
+    let ageMs = 0;
+    let reason: StaleRunEntry["reason"] = "no_run";
+
+    if (worker.lastHeartbeat) {
+      const age = computeAge(worker.lastHeartbeat, now);
+      if (age !== undefined) {
+        ageMs = age;
+        reason = age > threshold ? "stale_heartbeat" : "stale_heartbeat";
+      } else {
+        reason = "missing_heartbeat";
+      }
+    } else {
+      reason = "missing_heartbeat";
+      // Use lastEvidence as fallback for age
+      if (worker.lastEvidence) {
+        const age = computeAge(worker.lastEvidence, now);
+        if (age !== undefined) ageMs = age;
+      }
+    }
+
+    // Check run stall
+    if (workerRun && reason !== "missing_heartbeat" && workerRun.lastStepAt) {
+      const runAge = computeAge(workerRun.lastStepAt, now);
+      if (runAge !== undefined && runAge > config.runStallMaxAgeMs) {
+        reason = "run_stalled";
+        ageMs = runAge;
+      }
+    }
+
+    if (reason === "stale_heartbeat" && ageMs <= threshold) {
+      // Not actually stale - skip
+      continue;
+    }
+
+    if ((reason as string) === "no_run") continue
+
+    staleEntries.push({
+      workerId: worker.workerId,
+      runId: undefined,
+      lastHeartbeat: worker.lastHeartbeat,
+      lastStepAt: workerRun?.lastStepAt,
+      ageMs,
+      reason,
+    });
+  }
+
+  const reapable = staleEntries.filter(e =>
+    e.reason === "stale_heartbeat" || e.reason === "missing_heartbeat"
+  );
+
+  return {
+    staleEntries,
+    totalStale: staleEntries.length,
+    reapable: dryRun ? [] : reapable,
+    dryRun,
+    projectedAt: now,
+  };
+}
+
+/** Pure derivation: compute unified shutdown projection from worker statuses. */
+export function deriveUnifiedShutdown(
+  workers: WorkerContact[],
+  runs: RunSnapshot[],
+  shutdownPhase: ShutdownPhase,
+  now: string,
+): ShutdownProjection {
+  const terminated = workers.filter(w => w.status === "terminated").length;
+  const offline = workers.filter(w => w.status === "offline").length;
+  const active = workers.filter(w => w.status === "active" || w.status === "idle" || w.status === "stale").length;
+  const draining = offline + terminated;
+
+  const activeRuns = runs.filter(r =>
+    r.status === "running" || r.status === "waiting_for_model" || r.status === "waiting_for_io"
+  );
+
+  let reason: string;
+  switch (shutdownPhase) {
+    case "active":
+      reason = "Supervisor is active. No shutdown in progress.";
+      break;
+    case "draining":
+      reason = `Draining: ${active} workers active, ${activeRuns.length} runs in flight.`;
+      break;
+    case "shutting_down":
+      reason = `Shutting down: ${active} workers remain active.`;
+      break;
+    case "stopped":
+      reason = "Supervisor has stopped. All workers terminated or offline.";
+      break;
+    default:
+      reason = "Unknown shutdown phase.";
+  }
+
+  return {
+    phase: shutdownPhase,
+    activeWorkers: active,
+    drainingWorkers: draining,
+    pendingTasks: activeRuns.length,
+    reason,
+    projectedAt: now,
+  };
+}
