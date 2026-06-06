@@ -45,6 +45,8 @@ export interface MergeQueueTicket {
 /** Aggregate input for a single worker in the merge queue. */
 export interface WorkerMergeInput {
   contact: WorkerContact;
+  /** Optional ticket slug that links this worker to a MergeQueueTicket for priority ordering. */
+  ticketSlug?: string;
   handoffEvidence?: WorkerHandoffEvidence;
   branchSnapshot?: BranchSnapshot;
 }
@@ -66,7 +68,7 @@ export interface MergeQueueResult {
   workerResults: WorkerMergeReadiness[];
   /** Ticket slugs in recommended merge order. */
   mergeOrder: string[];
-  /** Workers that are ready to merge, in priority order. */
+  /** Workers that are ready to merge, sorted by merge priority (same order as mergeOrder). */
   readyWorkers: string[];
   /** Workers that are NOT ready, with reasons. */
   blockedWorkers: string[];
@@ -143,6 +145,8 @@ export function computeMergeReadiness(
  * Compute merge readiness for all workers.
  *
  * Pure function. Returns per-worker results plus sorted merge order.
+ * readyWorkers are sorted by merge priority when workers provide
+ * a ticketSlug that maps to a MergeQueueTicket.
  */
 export function computeMergeQueue(
   workers: WorkerMergeInput[],
@@ -154,17 +158,44 @@ export function computeMergeQueue(
   const mergeOrder = sortByMergePriority(tickets);
 
   // Determine ready/blocked workers
-  const readyWorkers: string[] = [];
-  const blockedWorkers: string[] = [];
+  const readyWorkerIds = new Set<string>();
+  const blocked: string[] = [];
+
+  // Map workerId -> ticketSlug from the workers array
+  const workerToTicket = new Map<string, string>();
+  for (const w of workers) {
+    if (w.ticketSlug) {
+      workerToTicket.set(w.contact.workerId, w.ticketSlug);
+    }
+  }
 
   for (const result of workerResults) {
     if (result.ready) {
-      readyWorkers.push(result.workerId);
+      readyWorkerIds.add(result.workerId);
     } else {
       const reasons = result.gateResult.failures.join("; ");
-      blockedWorkers.push(`${result.workerId} (${reasons})`);
+      blocked.push(`${result.workerId} (${reasons})`);
     }
   }
+
+  // Sort ready workers by merge priority.
+  // Workers with a known ticketSlug are sorted according to their ticket's
+  // position in mergeOrder. Workers without a ticketSlug are placed at the end
+  // in stable (insertion) order.
+  const mergeOrderIndex = new Map<string, number>();
+  mergeOrder.forEach((slug, idx) => mergeOrderIndex.set(slug, idx));
+
+  const readyWorkers = workers
+    .filter((w) => readyWorkerIds.has(w.contact.workerId))
+    .map((w) => {
+      const ticketSlug = w.ticketSlug;
+      const orderIdx = ticketSlug ? (mergeOrderIndex.get(ticketSlug) ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER;
+      return { workerId: w.contact.workerId, orderIdx };
+    })
+    .sort((a, b) => a.orderIdx - b.orderIdx)
+    .map((w) => w.workerId);
+
+  const blockedWorkers = blocked;
 
   return {
     workerResults,

@@ -232,6 +232,7 @@ describe("master merge queue adapter — computeMergeQueue", () => {
     const tickets = makeTickets();
     const readyWorker: WorkerMergeInput = {
       contact: makeContact({ workerId: "ready-1" }),
+      ticketSlug: "runtime-tool-policy",
       handoffEvidence: makeHandoffEvidence(),
       branchSnapshot: {
         noConflicts: true,
@@ -300,5 +301,257 @@ describe("master merge queue adapter — purity contract", () => {
     const r1 = computeMergeReadiness(input);
     const r2 = computeMergeReadiness(input);
     expect(r1).toEqual(r2);
+  });
+});
+
+// --- Edge hardening tests ---
+
+describe("master merge queue adapter — edge hardening", () => {
+  it("warning-only gates do not block merge readiness (rebasedOnMain)", () => {
+    const input: WorkerMergeInput = {
+      contact: makeContact({ workerId: "warn-worker" }),
+      handoffEvidence: makeHandoffEvidence(),
+      branchSnapshot: {
+        noConflicts: true,
+        rebasedOnMain: false, // warning only!
+        diffReviewable: true,
+        noRevertOfOthers: true,
+        codeReviewed: true,
+      },
+    };
+    const result = computeMergeReadiness(input);
+    expect(result.ready).toBe(true);
+    expect(result.gateResult.passed).toBe(true);
+    expect(result.gateResult.warnings.length).toBeGreaterThan(0);
+    expect(result.gateResult.warnings).toContain(
+      "Branch is not rebased on latest main (recommended)",
+    );
+  });
+
+  it("warning-only: workerRanGates does not block", () => {
+    const input: WorkerMergeInput = {
+      contact: makeContact({ workerId: "no-self-gates" }),
+      handoffEvidence: makeHandoffEvidence({ gates: {} }),
+      branchSnapshot: {
+        noConflicts: true,
+        rebasedOnMain: true,
+        diffReviewable: true,
+        noRevertOfOthers: true,
+        codeReviewed: true,
+      },
+    };
+    const result = computeMergeReadiness(input);
+    // workerRanGates is a warning, not a hard block
+    // Other hard gates pass because evidence has closed ledger
+    expect(result.gateResult.failures).not.toContain(
+      "Worker did not self-report gate results (master verified independently)",
+    );
+  });
+
+  it("warning-only: codeReviewed does not block", () => {
+    const input: WorkerMergeInput = {
+      contact: makeContact({ workerId: "no-code-review" }),
+      handoffEvidence: makeHandoffEvidence(),
+      branchSnapshot: {
+        noConflicts: true,
+        rebasedOnMain: true,
+        diffReviewable: true,
+        noRevertOfOthers: true,
+        codeReviewed: false, // warning only!
+      },
+    };
+    const result = computeMergeReadiness(input);
+    expect(result.ready).toBe(true);
+    expect(result.gateResult.passed).toBe(true);
+    expect(result.gateResult.warnings).toContain(
+      "Master has not performed substantive code review of the diff",
+    );
+  });
+
+  it("missing handoff evidence causes blocked worker", () => {
+    const input: WorkerMergeInput = {
+      contact: makeContact({ workerId: "no-handoff" }),
+      branchSnapshot: {
+        noConflicts: true,
+        rebasedOnMain: true,
+        diffReviewable: true,
+        noRevertOfOthers: true,
+        codeReviewed: true,
+      },
+    };
+    const result = computeMergeReadiness(input);
+    expect(result.ready).toBe(false);
+    expect(result.gateResult.passed).toBe(false);
+    expect(result.gateResult.failures).toContain(
+      "Worker has not reported run status",
+    );
+  });
+
+  it("missing branch snapshot causes blocked worker", () => {
+    const input: WorkerMergeInput = {
+      contact: makeContact({ workerId: "no-branch" }),
+      handoffEvidence: makeHandoffEvidence(),
+    };
+    const result = computeMergeReadiness(input);
+    expect(result.ready).toBe(false);
+    expect(result.gateResult.passed).toBe(false);
+    expect(result.gateResult.failures).toContain(
+      "Branch has unresolved merge conflicts with main",
+    );
+  });
+
+  it("blocked worker reason is readable (contains workerId and failure)", () => {
+    const tickets = makeTickets();
+    const blockedWorker: WorkerMergeInput = {
+      contact: makeContact({ workerId: "readable-blocked" }),
+    };
+    const result = computeMergeQueue([blockedWorker], tickets);
+    expect(result.blockedWorkers.length).toBe(1);
+    const reason = result.blockedWorkers[0];
+    expect(reason).toContain("readable-blocked");
+    expect(reason).toContain("Worker has not reported run status");
+    // Reason uses "; " separator between multiple failures
+    expect(reason).toContain(" (");
+    expect(reason).toContain(")");
+  });
+
+  it("blocked worker with multiple failures lists all in reason", () => {
+    const tickets = makeTickets();
+    const blockedWorker: WorkerMergeInput = {
+      contact: makeContact({ workerId: "multi-fail" }),
+      handoffEvidence: makeHandoffEvidence({
+        childLedgerStatus: "open",
+        gates: { typecheck: "FAIL", build: "NOT_RUN", test: "NOT_RUN" },
+      }),
+    };
+    const result = computeMergeQueue([blockedWorker], tickets);
+    expect(result.blockedWorkers.length).toBe(1);
+    const reason = result.blockedWorkers[0];
+    expect(reason).toContain("multi-fail");
+    // Should contain multiple failures separated by "; "
+    expect(reason.split("; ").length).toBeGreaterThan(1);
+  });
+
+  it("default branch snapshot is independent per call", () => {
+    const snap1 = createDefaultBranchSnapshot();
+    const snap2 = createDefaultBranchSnapshot();
+    expect(snap1).not.toBe(snap2); // different objects
+    expect(snap1).toEqual(snap2); // same content
+
+    // Mutating one does not affect the other
+    snap1.noConflicts = true;
+    expect(snap2.noConflicts).toBe(false);
+  });
+
+  it("computeMergeQueue readyWorkers without ticketSlug go to end (unmapped)", () => {
+    const tickets = makeTickets();
+    const worker1: WorkerMergeInput = {
+      contact: makeContact({ workerId: "second-ready" }),
+      handoffEvidence: makeHandoffEvidence(),
+      branchSnapshot: {
+        noConflicts: true,
+        rebasedOnMain: true,
+        diffReviewable: true,
+        noRevertOfOthers: true,
+        codeReviewed: true,
+      },
+    };
+    const worker2: WorkerMergeInput = {
+      contact: makeContact({ workerId: "first-ready" }),
+      handoffEvidence: makeHandoffEvidence(),
+      branchSnapshot: {
+        noConflicts: true,
+        rebasedOnMain: true,
+        diffReviewable: true,
+        noRevertOfOthers: true,
+        codeReviewed: true,
+      },
+    };
+    const result = computeMergeQueue([worker1, worker2], tickets);
+    // Without ticketSlug, both have no priority mapping -> both go to end in insertion order
+    expect(result.readyWorkers).toEqual(["second-ready", "first-ready"]);
+  });
+
+  
+  it("computeMergeQueue readyWorkers sorted by ticket priority when ticketSlug provided", () => {
+    const tickets: MergeQueueTicket[] = [
+      { slug: "tui-ticket", priority: "tui_projection" as MergePriority },
+      { slug: "runtime-ticket", priority: "runtime_truth" as MergePriority },
+    ];
+    const lowPriorityWorker: WorkerMergeInput = {
+      contact: makeContact({ workerId: "low-prio" }),
+      ticketSlug: "tui-ticket",
+      handoffEvidence: makeHandoffEvidence(),
+      branchSnapshot: {
+        noConflicts: true,
+        rebasedOnMain: true,
+        diffReviewable: true,
+        noRevertOfOthers: true,
+        codeReviewed: true,
+      },
+    };
+    const highPriorityWorker: WorkerMergeInput = {
+      contact: makeContact({ workerId: "high-prio" }),
+      ticketSlug: "runtime-ticket",
+      handoffEvidence: makeHandoffEvidence(),
+      branchSnapshot: {
+        noConflicts: true,
+        rebasedOnMain: true,
+        diffReviewable: true,
+        noRevertOfOthers: true,
+        codeReviewed: true,
+      },
+    };
+    // Workers are in insertion order: low-prio first
+    const result = computeMergeQueue([lowPriorityWorker, highPriorityWorker], tickets);
+    // But readyWorkers should be sorted by priority: runtime_truth before tui_projection
+    expect(result.readyWorkers).toEqual(["high-prio", "low-prio"]);
+  });
+
+  it("computeMergeQueue mixes priority-mapped and unmapped ready workers", () => {
+    const tickets: MergeQueueTicket[] = [
+      { slug: "mapped-tkt", priority: "runtime_truth" as MergePriority },
+    ];
+    const mappedWorker: WorkerMergeInput = {
+      contact: makeContact({ workerId: "mapped" }),
+      ticketSlug: "mapped-tkt",
+      handoffEvidence: makeHandoffEvidence(),
+      branchSnapshot: {
+        noConflicts: true,
+        rebasedOnMain: true,
+        diffReviewable: true,
+        noRevertOfOthers: true,
+        codeReviewed: true,
+      },
+    };
+    const unmappedWorker: WorkerMergeInput = {
+      contact: makeContact({ workerId: "unmapped" }),
+      handoffEvidence: makeHandoffEvidence(),
+      branchSnapshot: {
+        noConflicts: true,
+        rebasedOnMain: true,
+        diffReviewable: true,
+        noRevertOfOthers: true,
+        codeReviewed: true,
+      },
+    };
+    // unmapped first in insertion order
+    const result = computeMergeQueue([unmappedWorker, mappedWorker], tickets);
+    // mapped worker has known priority -> should come before unmapped
+    expect(result.readyWorkers).toEqual(["mapped", "unmapped"]);
+  });
+
+  it("canMergeNow is re-exported from the adapter", async () => {
+    // Dynamic import to verify the re-export works
+    const mod = await import("../src/subagent/master-merge-queue-adapter.js");
+    expect(mod.canMergeNow).toBeDefined();
+    expect(typeof mod.canMergeNow).toBe("function");
+
+    // Quick functional smoke test of the re-exported function
+    const r = mod.canMergeNow(
+      { slug: "runtime-tool-policy", priority: "runtime_truth" },
+      [],
+    );
+    expect(r.allowed).toBe(true);
   });
 });
