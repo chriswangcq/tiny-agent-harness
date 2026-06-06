@@ -393,3 +393,52 @@ For long reports, prefer file redirection over inline text to avoid shell escapi
 ### Bridge to Merge Protocol
 
 `deriveGatesFromEvidence()` converts handoff evidence into a subset of `MasterReviewChecklist` gates (`workerReported`, `runCompleted`, `typecheckPasses`, `buildPasses`, `testsPass`, `workerRanGates`), which can be merged into the master's checklist before merge gate evaluation.
+
+## Master Merge Queue Adapter (P6-07)
+
+P6-07 adds `src/subagent/master-merge-queue-adapter.ts` — a pure adapter that converts explicit worker/contact/branch/gate snapshots into `MasterReviewChecklist` and merge readiness / queue results.
+
+### Design
+
+- **Pure adapter**: takes explicit input snapshots (`WorkerContact`, `WorkerHandoffEvidence`, `BranchSnapshot`, `MergeQueueTicket`) and returns structured output. No `Date.now()`, `process.env`, `fs`, network, `git`, or process execution.
+- **Reuses merge-protocol.ts**: evaluates gates via `evaluateMergeGates()`, sorts merge priority via `sortByMergePriority()`, and checks merge eligibility via `canMergeNow()`. No gate logic is duplicated.
+- **Explicit inputs**: all data is provided as function arguments; the adapter does not read state from the environment.
+
+### Input types
+
+| Type | Description |
+|------|-------------|
+| `BranchSnapshot` | Branch state: `noConflicts`, `rebasedOnMain`, `diffReviewable`, `noRevertOfOthers`, `codeReviewed`. |
+| `MergeQueueTicket` | Ticket with `slug` and `priority` for merge ordering. |
+| `WorkerMergeInput` | Per-worker aggregate: `contact`, optional `handoffEvidence`, optional `branchSnapshot`. |
+
+### Output types
+
+| Type | Description |
+|------|-------------|
+| `WorkerMergeReadiness` | Per-worker: `checklist`, `gateResult`, `ready` flag. |
+| `MergeQueueResult` | Aggregate: `workerResults`, `mergeOrder` (sorted ticket slugs), `readyWorkers`, `blockedWorkers` (with reasons). |
+
+### Pure functions
+
+- `buildChecklist(handoffEvidence?, branchSnapshot?)` — builds `MasterReviewChecklist` by merging `EvidenceDerivedGates` from `deriveGatesFromEvidence()` with explicit `BranchSnapshot` gates.
+- `computeMergeReadiness(input)` — evaluates merge gates for a single worker.
+- `computeMergeQueue(workers, tickets)` — computes per-worker readiness and merge order.
+- `createDefaultBranchSnapshot()` — returns all-false default branch snapshot.
+- Re-exports `canMergeNow` from `merge-protocol.ts`.
+
+### Integration boundary
+
+- Consumes P6-01 `WorkerContact` type.
+- Consumes P6-01 `worker-handoff-evidence` types and `deriveGatesFromEvidence()`.
+- Consumes P6-01 `merge-protocol` domain functions.
+- Does NOT implement: runtime git checks, real typecheck/build/test execution, IM reporting, durable persistence.
+
+### Testing
+
+Tests in `tests/subagent-master-merge-queue-adapter.test.ts` cover:
+- `createDefaultBranchSnapshot` returns all false.
+- `buildChecklist` with no inputs, handoff evidence, branch snapshot, and both.
+- `computeMergeReadiness` for ready and blocked workers.
+- `computeMergeQueue` for sort order, ready/blocked separation, empty input, per-worker checklist output.
+- Purity contract: deterministic output for same inputs.
