@@ -35,8 +35,7 @@ const TOOL_NAME = "team";
 // ---------------------------------------------------------------------------
 // Default lifecycle config
 // ---------------------------------------------------------------------------
-export const DEFAULT_LIFECYCLE_CONFIG: LifecycleConfig = {
-  now: new Date().toISOString(),
+export const DEFAULT_LIFECYCLE_THRESHOLDS: Omit<LifecycleConfig, "now"> = {
   heartbeatMaxAgeMs: 300_000,    // 5 minutes
   evidenceMaxAgeMs: 600_000,     // 10 minutes
   leaseMaxAgeMs: 1_800_000,      // 30 minutes
@@ -46,6 +45,19 @@ export const DEFAULT_LIFECYCLE_CONFIG: LifecycleConfig = {
 };
 
 // ---------------------------------------------------------------------------
+// buildLifecycleConfig — explicit now factory, no ambient time capture
+// ---------------------------------------------------------------------------
+export function buildLifecycleConfig(now: string): LifecycleConfig {
+  return {
+    now,
+    heartbeatMaxAgeMs: DEFAULT_LIFECYCLE_THRESHOLDS.heartbeatMaxAgeMs,
+    evidenceMaxAgeMs: DEFAULT_LIFECYCLE_THRESHOLDS.evidenceMaxAgeMs,
+    leaseMaxAgeMs: DEFAULT_LIFECYCLE_THRESHOLDS.leaseMaxAgeMs,
+    gracePeriodMs: DEFAULT_LIFECYCLE_THRESHOLDS.gracePeriodMs,
+    shutdownMaxAgeMs: DEFAULT_LIFECYCLE_THRESHOLDS.shutdownMaxAgeMs,
+    processMissingMaxAgeMs: DEFAULT_LIFECYCLE_THRESHOLDS.processMissingMaxAgeMs,
+  };
+}
 // CLI ports — explicit dependencies for time/id generation
 // ---------------------------------------------------------------------------
 export type LifecycleCliPorts = {
@@ -152,7 +164,7 @@ function handleLifecycleStatus(
   }
 
   const now = ports.nowIso();
-  const config: LifecycleConfig = { ...DEFAULT_LIFECYCLE_CONFIG, now };
+  const config: LifecycleConfig = buildLifecycleConfig(now);
   const processExists = processExistsFn ? processExistsFn(workerId) : true;
   const input = buildLifecycleInput(worker, processExists);
   const result = computeLifecycleState(input, config);
@@ -225,7 +237,7 @@ function handleLease(
   }
 
   const now = ports.nowIso();
-  const config: LifecycleConfig = { ...DEFAULT_LIFECYCLE_CONFIG, now };
+  const config: LifecycleConfig = buildLifecycleConfig(now);
 
   // Interpret current heartbeat
   const hbInterpretation = interpretHeartbeat(worker.lastHeartbeat, now, config);
@@ -282,7 +294,7 @@ function handleShutdown(
   if (!execute) {
     // Dry-run: return plan only using domain functions
     const now = ports.nowIso();
-    const config: LifecycleConfig = { ...DEFAULT_LIFECYCLE_CONFIG, now };
+    const config: LifecycleConfig = buildLifecycleConfig(now);
     const processExists = processExistsFn ? processExistsFn(workerId) : true;
     const input = buildLifecycleInput(worker, processExists, undefined, undefined, now);
     const result = computeLifecycleState(input, config);
@@ -320,7 +332,7 @@ function handleShutdown(
   }
 
   const now = ports.nowIso();
-  const config: LifecycleConfig = { ...DEFAULT_LIFECYCLE_CONFIG, now };
+  const config: LifecycleConfig = buildLifecycleConfig(now);
   const processExists = processExistsFn ? processExistsFn(workerId) : true;
   const input = buildLifecycleInput(worker, processExists, undefined, undefined, now);
   const result = computeLifecycleState(input, config);
@@ -391,26 +403,130 @@ function handleReaper(
     }
   }
 
+  // Parse --workers-json flag (required)
+  let workersJson: string | null = null;
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] === "--workers-json" && i + 1 < args.length) {
+      workersJson = args[i + 1];
+      break;
+    }
+  }
+
+  if (!workersJson) {
+    return failureEnvelope({
+      tool: TOOL_NAME,
+      cwd,
+      errorCode: "MISSING_ARG",
+      error: "Usage: team reaper list|execute --workers-json <json> [--threshold-ms <ms>] [--execute]",
+    });
+  }
+
+  let workers: WorkerContact[];
+  try {
+    workers = JSON.parse(workersJson);
+    if (!Array.isArray(workers)) throw new Error("not array");
+  // Validate worker shape
+  for (const w of workers) {
+    if (typeof w.workerId !== "string" || typeof w.status !== "string" || 
+        typeof w.role !== "string" || typeof w.workspace !== "string" || 
+        typeof w.branch !== "string" || typeof w.imChannel !== "string" || 
+        !Array.isArray((w as any).allowedActions)) {
+      return failureEnvelope({
+        tool: TOOL_NAME,
+        cwd,
+        errorCode: "INVALID_ARG",
+        error: "Invalid --workers-json: each entry must have string workerId, status, role, workspace, branch, imChannel, and array allowedActions.",
+      });
+    }
+  }
+  } catch {
+    return failureEnvelope({
+      tool: TOOL_NAME,
+      cwd,
+      errorCode: "INVALID_ARG",
+      error: "Invalid --workers-json: must be a JSON array of WorkerContact objects.",
+    });
+  }
+
   // Check for --execute flag
   const executeFlag = args.includes("--execute");
   const shouldExecute = mode === "execute" && executeFlag;
 
   const now = ports.nowIso();
-  const config: LifecycleConfig = {
-    ...DEFAULT_LIFECYCLE_CONFIG,
-    now,
-    heartbeatMaxAgeMs: thresholdMs,
-  };
+  const config: LifecycleConfig = { ...buildLifecycleConfig(now), heartbeatMaxAgeMs: thresholdMs };  // Compute lifecycle state and reaper decisions for all workers using domain functions
+  const staleDecisions: Array<{
+    workerId: string;
+    contactStatus: string;
+    lifecycleState: string;
+    reaperAction: string;
+    reaperReason: string;
+    lastHeartbeat: string | null;
+    heartbeatAgeMs: number | null;
+  }> = [];
 
-  // We need all workers. The caller must provide a way to list all workers.
-  // For now, we signal that this requires a listAllWorkers function.
-  // Since we can't list all workers without a registry reference, we return
-  // a useful error instructing the caller to provide worker data.
+  for (const w of workers) {
+    const processExists = processExistsFn ? processExistsFn(w.workerId) : true;
+    const input = buildLifecycleInput(w, processExists);
+    const lifecycle = computeLifecycleState(input, config);
+    const decision = decideReaperAction(input, lifecycle, config);
 
-  return failureEnvelope({
-    tool: TOOL_NAME,
-    cwd,
-    errorCode: "USAGE",
-    error: "Reaper requires a list of all workers. Use team reaper list --workers-json <json> or call via team-run.ts which has registry access.",
+    if (decision.action !== "none") {
+      const hbAge = w.lastHeartbeat
+        ? new Date(now).getTime() - new Date(w.lastHeartbeat).getTime()
+        : null;
+
+      staleDecisions.push({
+        workerId: w.workerId,
+        contactStatus: w.status,
+        lifecycleState: lifecycle.state,
+        reaperAction: decision.action,
+        reaperReason: decision.reason,
+        lastHeartbeat: w.lastHeartbeat ?? null,
+        heartbeatAgeMs: hbAge,
+      });
+    }
+  }
+
+  if (!shouldExecute) {
+    return successEnvelope({
+      ...base,
+      extra: {
+        command: "reaper",
+        dryRun: true,
+        executed: false,
+        mode,
+        thresholdMs,
+        totalWorkers: workers.length,
+        staleCount: staleDecisions.length,
+        staleWorkers: staleDecisions,
+      },
+    });
+  }
+
+  // Execute: produce termination plans for each stale worker
+  const terminationPlans = staleDecisions.map((d) => ({
+    workerId: d.workerId,
+    action: d.reaperAction,
+    reason: d.reaperReason,
+    plan: d.reaperAction === "terminate"
+      ? { event: "worker_terminated", workerId: d.workerId, reason: d.reaperReason }
+      : d.reaperAction === "reassign"
+      ? { event: "worker_reassign", workerId: d.workerId, reason: d.reaperReason }
+      : { event: "worker_warn", workerId: d.workerId, reason: d.reaperReason },
+  }));
+
+  return successEnvelope({
+    ...base,
+    extra: {
+      command: "reaper",
+      dryRun: false,
+      executed: true,
+      mode,
+      thresholdMs,
+      totalWorkers: workers.length,
+      staleCount: staleDecisions.length,
+      terminationPlans,
+    },
   });
 }
+

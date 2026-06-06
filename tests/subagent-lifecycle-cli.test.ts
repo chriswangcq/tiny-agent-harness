@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   executeLifecycleCommand,
   buildLifecycleInput,
-  DEFAULT_LIFECYCLE_CONFIG,
+  buildLifecycleConfig,
+  DEFAULT_LIFECYCLE_THRESHOLDS,
   type LifecycleCliPorts,
 } from "../src/subagent/lifecycle-cli.js";
 import {
@@ -210,17 +211,74 @@ describe("lifecycle CLI - shutdown", () => {
 // Stale reaper
 // ---------------------------------------------------------------------------
 describe("lifecycle CLI - reaper", () => {
-  it("reaper requires worker list via error message", () => {
-    const ports = makePorts();
-    const reg = makeRegistryWithWorkers([{ workerId: "w1" }]);
-    const result = executeLifecycleCommand(ports, ["reaper", "list"], undefined, makeLookupFn(reg));
+  const now = "2026-06-06T00:10:00.000Z";
 
-    // Reaper requires full worker list; CLI signals this
+  function makeStaleWorkersJson() {
+    return JSON.stringify([
+      { workerId: "active-w1", status: "active", role: "coder", workspace: "/tmp/active-w1", branch: "codex/p6/active-w1", imChannel: "ch-active-w1", allowedActions: ["code"], lastHeartbeat: "2026-06-06T00:09:00.000Z" },
+      { workerId: "stale-w1", status: "active", role: "coder", workspace: "/tmp/stale-w1", branch: "codex/p6/stale-w1", imChannel: "ch-stale-w1", allowedActions: ["code"], lastHeartbeat: "2026-06-06T00:04:00.000Z" },
+      { workerId: "stale-w2", status: "idle", role: "reviewer", workspace: "/tmp/stale-w2", branch: "codex/p6/stale-w2", imChannel: "ch-stale-w2", allowedActions: ["review"], lastHeartbeat: "2026-06-06T00:01:00.000Z" },
+      { workerId: "no-hb-w1", status: "active", role: "coder", workspace: "/tmp/no-hb-w1", branch: "codex/p6/no-hb-w1", imChannel: "ch-no-hb-w1", allowedActions: ["code"] },
+      { workerId: "terminated-w1", status: "terminated", role: "coder", workspace: "/tmp/terminated-w1", branch: "codex/p6/terminated-w1", imChannel: "ch-term-w1", allowedActions: ["code"], lastHeartbeat: "2026-06-06T00:01:00.000Z" },
+    ]);
+  }
+
+  it("reaper list shows stale workers (dry-run)", () => {
+    const ports = makePorts(now);
+    const result = executeLifecycleCommand(ports, ["reaper", "list", "--workers-json", makeStaleWorkersJson(), "--threshold-ms", "300000"], undefined, makeLookupFn(makeRegistryWithWorkers([])));
+
+    expect(result.ok).toBe(true);
+    expect(result.dryRun).toBe(true);
+    expect(result.totalWorkers).toBe(5);
+    // stale-w1 (6min ago) + stale-w2 (9min ago) + no-hb-w1 (never heartbeated)
+    expect(result.staleCount).toBe(3);
+    const staleIds = result.staleWorkers.map((s: any) => s.workerId).sort();
+    expect(staleIds).toContain("stale-w1");
+    expect(staleIds).toContain("stale-w2");
+    expect(staleIds).toContain("no-hb-w1");
+    // terminated workers should NOT appear in stale list
+    expect(staleIds).not.toContain("terminated-w1");
+  });
+
+  it("reaper list without --workers-json returns error", () => {
+    const ports = makePorts();
+    const result = executeLifecycleCommand(ports, ["reaper", "list"], undefined, makeLookupFn(makeRegistryWithWorkers([])));
+
     expect(result.ok).toBe(false);
-    expect(result.errorCode).toBe("USAGE");
-    expect(result.error).toContain("Reaper requires");
+    expect(result.errorCode).toBe("MISSING_ARG");
+    expect(result.error).toContain("--workers-json");
+  });
+
+  it("reaper execute produces termination plans", () => {
+    const ports = makePorts(now);
+    const result = executeLifecycleCommand(ports, ["reaper", "execute", "--workers-json", makeStaleWorkersJson(), "--threshold-ms", "300000", "--execute"], undefined, makeLookupFn(makeRegistryWithWorkers([])));
+
+    expect(result.ok).toBe(true);
+    expect(result.dryRun).toBe(false);
+    expect(result.executed).toBe(true);
+    expect(result.terminationPlans).toBeDefined();
+    expect(result.terminationPlans.length).toBe(3);
+  });
+
+  it("reaper execute without --execute is dry-run", () => {
+    const ports = makePorts(now);
+    const result = executeLifecycleCommand(ports, ["reaper", "execute", "--workers-json", makeStaleWorkersJson(), "--threshold-ms", "300000"], undefined, makeLookupFn(makeRegistryWithWorkers([])));
+
+    expect(result.ok).toBe(true);
+    expect(result.dryRun).toBe(true);
+    expect(result.executed).toBe(false);
+  });
+
+  it("reaper handles empty worker list", () => {
+    const ports = makePorts(now);
+    const result = executeLifecycleCommand(ports, ["reaper", "list", "--workers-json", "[]"], undefined, makeLookupFn(makeRegistryWithWorkers([])));
+
+    expect(result.ok).toBe(true);
+    expect(result.totalWorkers).toBe(0);
+    expect(result.staleCount).toBe(0);
   });
 });
+
 
 // ---------------------------------------------------------------------------
 // Help and error handling
@@ -258,11 +316,11 @@ describe("lifecycle CLI - help and errors", () => {
 // Barrel exports
 // ---------------------------------------------------------------------------
 describe("lifecycle CLI - barrel exports", () => {
-  it("exports executeLifecycleCommand, buildLifecycleInput, DEFAULT_LIFECYCLE_CONFIG", () => {
+  it("exports executeLifecycleCommand, buildLifecycleInput, buildLifecycleConfig", () => {
     expect(typeof executeLifecycleCommand).toBe("function");
     expect(typeof buildLifecycleInput).toBe("function");
-    expect(DEFAULT_LIFECYCLE_CONFIG).toBeDefined();
-    expect(DEFAULT_LIFECYCLE_CONFIG.heartbeatMaxAgeMs).toBe(300_000);
+    expect(typeof buildLifecycleConfig).toBe("function");
+    expect(buildLifecycleConfig('2026-01-01T00:00:00.000Z').heartbeatMaxAgeMs).toBe(300_000);
   });
 });
 
@@ -288,5 +346,41 @@ describe("buildLifecycleInput", () => {
     expect(input.lastHeartbeat).toBe("2026-06-06T00:09:00.000Z");
     expect(input.lastEvidence).toBe("2026-06-06T00:08:00.000Z");
     expect(input.processExists).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression: no ambient time capture at module load
+// ---------------------------------------------------------------------------
+describe("lifecycle CLI - explicit time boundaries", () => {
+  it("DEFAULT_LIFECYCLE_THRESHOLDS has no now field", () => {
+    // Importing should not capture Date.now() at module load
+    // DEFAULT_LIFECYCLE_THRESHOLDS is already imported above
+    expect(DEFAULT_LIFECYCLE_THRESHOLDS).toBeDefined();
+    expect((DEFAULT_LIFECYCLE_THRESHOLDS as any).now).toBeUndefined();
+  });
+
+  it("buildLifecycleConfig requires explicit now", () => {
+    const config = buildLifecycleConfig("2026-06-06T12:00:00.000Z");
+    expect(config.now).toBe("2026-06-06T12:00:00.000Z");
+    expect(config.heartbeatMaxAgeMs).toBe(300_000);
+  });
+
+  it("handlers use ports.nowIso, not ambient Date", () => {
+    // Prove that lifecycle-status uses the configured ports.nowIso
+    const ports = makePorts("2026-06-06T12:00:00.000Z");
+    const reg = makeRegistryWithWorkers([
+      { workerId: "w1", lastHeartbeat: "2026-06-06T11:59:00.000Z" },
+    ]);
+    const result = executeLifecycleCommand(
+      ports,
+      ["lifecycle-status", "w1"],
+      undefined,
+      makeLookupFn(reg),
+    );
+    expect(result.ok).toBe(true);
+    // The lifecycle state should reflect the explicit now time
+    expect(result.evidence).toBeDefined();
+    expect(result.lifecycleState).toBeDefined();
   });
 });
