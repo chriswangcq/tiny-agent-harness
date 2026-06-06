@@ -1,0 +1,345 @@
+import { describe, it, expect } from "vitest";
+import {
+  buildTeamDashboardViewModel,
+  redactDashboardDisplay,
+} from "../src/tui/team-dashboard-view-model.js";
+import type {
+  TeamDashboardInput,
+  TeamDashboardViewModel,
+  TeamDashboardRun,
+} from "../src/tui/team-dashboard-view-model.js";
+import type { SubAgentTeamSummary } from "../src/subagent/team.js";
+import type { ContactRegistrySummary } from "../src/subagent/contact-registry.js";
+import type { MasterReviewChecklist } from "../src/subagent/merge-protocol.js";
+
+// ─── Helpers ──────────────────────────────────────────────────────
+
+function emptyTeamSummary(): SubAgentTeamSummary {
+  return {
+    teamId: "test-team",
+    totalTasks: 0,
+    totalWorkers: 0,
+    tasksByStatus: {},
+    workersByStatus: {},
+    activeAssignments: [],
+  };
+}
+
+function emptyContactSummary(): ContactRegistrySummary {
+  return {
+    totalWorkers: 0,
+    workersByStatus: {},
+    activeWorkers: [],
+  };
+}
+
+function emptyInput(): TeamDashboardInput {
+  return {
+    teamSummary: emptyTeamSummary(),
+    contactRegistrySummary: emptyContactSummary(),
+    runSummaries: [],
+    mergeChecklist: null,
+  };
+}
+
+// ─── Tests: buildTeamDashboardViewModel ───────────────────────────
+
+describe("buildTeamDashboardViewModel", () => {
+  it("returns a valid view model for empty input", () => {
+    const vm = buildTeamDashboardViewModel(emptyInput());
+    expect(vm).toBeDefined();
+    expect(vm.title).toBe("Team Dashboard");
+    expect(vm.sections.length).toBeGreaterThanOrEqual(4);
+    expect(vm.rows.length).toBeGreaterThan(0);
+    expect(vm.selection).toEqual({ sectionIndex: 0, rowIndex: 0 });
+    expect(vm.statusCounts).toBeDefined();
+    expect(vm.failureSummary).toBeDefined();
+  });
+
+  it("has correct section kinds for empty input", () => {
+    const vm = buildTeamDashboardViewModel(emptyInput());
+    const kinds = vm.sections.map((s) => s.kind);
+    expect(kinds).toContain("team-overview");
+    expect(kinds).toContain("contact-roster");
+    expect(kinds).toContain("active-tasks");
+    expect(kinds).toContain("run-status");
+  });
+
+  it("includes team overview data", () => {
+    const input = emptyInput();
+    input.teamSummary = {
+      teamId: "team-alpha",
+      totalTasks: 5,
+      totalWorkers: 3,
+      tasksByStatus: { succeeded: 3, running: 1, queued: 1 },
+      workersByStatus: { active: 2, idle: 1 },
+      activeAssignments: [],
+    };
+
+    const vm = buildTeamDashboardViewModel(input);
+    const overview = vm.sections.find((s) => s.kind === "team-overview")!;
+    expect(overview).toBeDefined();
+    const texts = overview.rows.map((r) => r.text);
+    expect(texts.some((t) => t.includes("team-alpha"))).toBe(true);
+    expect(texts.some((t) => t.includes("Total Tasks: 5"))).toBe(true);
+    expect(texts.some((t) => t.includes("Total Workers: 3"))).toBe(true);
+  });
+
+  it("includes contact roster data with active workers", () => {
+    const input = emptyInput();
+    input.contactRegistrySummary = {
+      totalWorkers: 3,
+      workersByStatus: { active: 2, idle: 1 },
+      activeWorkers: [
+        { workerId: "w1", role: "coder" },
+        { workerId: "w2", role: "reviewer" },
+      ],
+    } as ContactRegistrySummary;
+
+    const vm = buildTeamDashboardViewModel(input);
+    const roster = vm.sections.find((s) => s.kind === "contact-roster")!;
+    expect(roster).toBeDefined();
+    const texts = roster.rows.map((r) => r.text);
+    expect(texts.some((t) => t.includes("Total Contacts: 3"))).toBe(true);
+    expect(texts.some((t) => t.includes("w1") && t.includes("coder"))).toBe(true);
+    expect(texts.some((t) => t.includes("w2") && t.includes("reviewer"))).toBe(true);
+  });
+
+  it("includes run status data", () => {
+    const runs: TeamDashboardRun[] = [
+      { runId: "r1", workerId: "w1", status: "running" },
+      { runId: "r2", workerId: "w2", status: "finished", branch: "main" },
+      { runId: "r3", workerId: "w3", status: "failed", error: "test failure" },
+    ];
+
+    const input = emptyInput();
+    input.runSummaries = runs;
+
+    const vm = buildTeamDashboardViewModel(input);
+    const runSection = vm.sections.find((s) => s.kind === "run-status")!;
+    expect(runSection).toBeDefined();
+    const texts = runSection.rows.map((r) => r.text);
+    expect(texts.some((t) => t.includes("Total Runs: 3"))).toBe(true);
+    expect(texts.some((t) => t.includes("w1: running"))).toBe(true);
+    expect(texts.some((t) => t.includes("w2: finished") && t.includes("[main]"))).toBe(true);
+    expect(texts.some((t) => t.includes("w3: failed") && t.includes("test failure"))).toBe(true);
+  });
+
+  it("includes merge QA section when mergeChecklist provided", () => {
+    const input = emptyInput();
+    input.mergeChecklist = {
+      workerReported: true,
+      runCompleted: true,
+      typecheckPasses: true,
+      buildPasses: true,
+      testsPass: false,
+      noConflicts: true,
+      rebasedOnMain: true,
+      diffReviewable: true,
+      noRevertOfOthers: true,
+      workerRanGates: true,
+      codeReviewed: false,
+    } as MasterReviewChecklist;
+    input.qaSummary = "Some tests failing";
+
+    const vm = buildTeamDashboardViewModel(input);
+    const mergeSection = vm.sections.find((s) => s.kind === "merge-qa")!;
+    expect(mergeSection).toBeDefined();
+    const texts = mergeSection.rows.map((r) => r.text);
+    expect(texts.some((t) => t.includes("QA: Some tests failing"))).toBe(true);
+    expect(texts.some((t) => t.includes("typecheckPasses: PASS"))).toBe(true);
+    expect(texts.some((t) => t.includes("testsPass: FAIL"))).toBe(true);
+    expect(texts.some((t) => t.includes("Overall: FAIL"))).toBe(true);
+  });
+
+  it("does not include merge QA section when mergeChecklist is null", () => {
+    const vm = buildTeamDashboardViewModel(emptyInput());
+    expect(vm.sections.find((s) => s.kind === "merge-qa")).toBeUndefined();
+  });
+
+  it("aggregates status counts correctly", () => {
+    const input = emptyInput();
+    input.mergeChecklist = {
+      gates: { typecheck: "PASS", build: "FAIL" },
+      overallResult: "FAIL",
+    } as MasterReviewChecklist;
+
+    const vm = buildTeamDashboardViewModel(input);
+    expect(vm.statusCounts.info).toBeGreaterThan(0);
+    expect(vm.statusCounts.error).toBeGreaterThan(0);
+    expect(Object.keys(vm.statusCounts).length).toBeGreaterThan(0);
+  });
+
+  it("builds failure summary with failing items", () => {
+    const input = emptyInput();
+    input.mergeChecklist = {
+      gates: { typecheck: "PASS", build: "FAIL", test: "FAIL" },
+      overallResult: "FAIL",
+    } as MasterReviewChecklist;
+
+    const vm = buildTeamDashboardViewModel(input);
+    expect(vm.failureSummary.totalFailures).toBeGreaterThan(0);
+    expect(vm.failureSummary.failingItems.length).toBeGreaterThan(0);
+    expect(vm.failureSummary.failingItems.some((item) => item.includes("FAIL"))).toBe(true);
+  });
+
+  it("has zero failures for clean input", () => {
+    const vm = buildTeamDashboardViewModel(emptyInput());
+    expect(vm.failureSummary.totalFailures).toBe(0);
+    expect(vm.failureSummary.failingItems).toEqual([]);
+  });
+
+  it("flattened rows include section headers", () => {
+    const vm = buildTeamDashboardViewModel(emptyInput());
+    const headerRows = vm.rows.filter((r) => r.key?.startsWith("section:"));
+    expect(headerRows.length).toBeGreaterThanOrEqual(4);
+    for (const row of headerRows) {
+      expect(row.text.startsWith("──")).toBe(true);
+    }
+  });
+
+  it("each section is selectable", () => {
+    const vm = buildTeamDashboardViewModel(emptyInput());
+    for (const section of vm.sections) {
+      expect(section.selectable).toBe(true);
+    }
+  });
+
+  it("active tasks section handles empty assignments", () => {
+    const vm = buildTeamDashboardViewModel(emptyInput());
+    const taskSection = vm.sections.find((s) => s.kind === "active-tasks")!;
+    expect(taskSection.rows.some((r) => r.text.includes("No active assignments"))).toBe(true);
+  });
+
+  it("active tasks section shows assignments", () => {
+    const input = emptyInput();
+    input.teamSummary = {
+      ...emptyTeamSummary(),
+      activeAssignments: [
+        { taskId: "t1", workerId: "w1" },
+        { taskId: "t2", workerId: "w2" },
+      ],
+    } as SubAgentTeamSummary;
+
+    const vm = buildTeamDashboardViewModel(input);
+    const taskSection = vm.sections.find((s) => s.kind === "active-tasks")!;
+    const texts = taskSection.rows.map((r) => r.text);
+    expect(texts.some((t) => t.includes("Active Assignments: 2"))).toBe(true);
+    expect(texts.some((t) => t.includes("t1") && t.includes("w1"))).toBe(true);
+  });
+});
+
+// ─── Tests: redactDashboardDisplay ────────────────────────────────
+
+describe("redactDashboardDisplay", () => {
+  it("returns same text when no patterns match", () => {
+    const input = "Hello, world!";
+    expect(redactDashboardDisplay(input)).toBe(input);
+  });
+
+  it("redacts API key patterns", () => {
+    expect(redactDashboardDisplay("sk-1234567890abcdef")).toBe("[REDACTED]");
+    expect(redactDashboardDisplay("token=abc123def456")).toBe("[REDACTED]");
+    expect(redactDashboardDisplay("key_secret_value_123")).toBe("[REDACTED]");
+  });
+
+  it("redacts Bearer tokens", () => {
+    expect(redactDashboardDisplay("Authorization: Bearer abcdef123456")).toContain("[REDACTED]");
+  });
+
+  it("redacts long hex strings (32+ chars)", () => {
+    const hex32 = "a".repeat(32);
+    expect(redactDashboardDisplay(hex32)).toBe("[REDACTED]");
+  });
+
+  it("does not redact short hex strings (< 32 chars)", () => {
+    const hex16 = "a".repeat(16);
+    expect(redactDashboardDisplay(hex16)).toBe(hex16);
+  });
+
+  it("does not mutate original input", () => {
+    const original = "sk-test-key-12345";
+    const copy = original.slice();
+    redactDashboardDisplay(original);
+    expect(original).toBe(copy);
+  });
+
+  it("handles empty string", () => {
+    expect(redactDashboardDisplay("")).toBe("");
+  });
+});
+
+// ─── Tests: purity contract ───────────────────────────────────────
+
+describe("purity contract", () => {
+  it("buildTeamDashboardViewModel is a function", () => {
+    expect(typeof buildTeamDashboardViewModel).toBe("function");
+  });
+
+  it("returns same output for same input", () => {
+    const input = emptyInput();
+    const vm1 = buildTeamDashboardViewModel(input);
+    const vm2 = buildTeamDashboardViewModel(input);
+    expect(vm1).toEqual(vm2);
+  });
+
+  it("does not throw for any valid input shape", () => {
+    expect(() => buildTeamDashboardViewModel(emptyInput())).not.toThrow();
+
+    const populated: TeamDashboardInput = {
+      teamSummary: {
+        teamId: "test",
+        totalTasks: 5,
+        totalWorkers: 3,
+        tasksByStatus: { succeeded: 5 },
+        workersByStatus: { active: 3 },
+        activeAssignments: [],
+      },
+      contactRegistrySummary: {
+        totalWorkers: 3,
+        workersByStatus: { active: 3 },
+        activeWorkers: [],
+      },
+      runSummaries: [
+        { runId: "r1", workerId: "w1", status: "finished" },
+      ],
+      mergeChecklist: {
+        workerReported: true,
+        runCompleted: true,
+        typecheckPasses: true,
+        buildPasses: true,
+        testsPass: true,
+        noConflicts: true,
+        rebasedOnMain: true,
+        diffReviewable: true,
+        noRevertOfOthers: true,
+        workerRanGates: true,
+        codeReviewed: true,
+      } as MasterReviewChecklist,
+      qaSummary: "All good",
+    };
+    expect(() => buildTeamDashboardViewModel(populated)).not.toThrow();
+  });
+});
+
+// ─── Tests: type exports ──────────────────────────────────────────
+
+describe("type exports", () => {
+  it("TeamDashboardViewModel has required fields", () => {
+    const vm: TeamDashboardViewModel = buildTeamDashboardViewModel(emptyInput());
+    expect(vm.title).toBeDefined();
+    expect(vm.sections).toBeDefined();
+    expect(vm.rows).toBeDefined();
+    expect(vm.selection).toBeDefined();
+    expect(vm.statusCounts).toBeDefined();
+    expect(vm.failureSummary).toBeDefined();
+  });
+
+  it("failureSummary has correct shape", () => {
+    const vm = buildTeamDashboardViewModel(emptyInput());
+    expect(typeof vm.failureSummary.totalFailures).toBe("number");
+    expect(typeof vm.failureSummary.totalWarnings).toBe("number");
+    expect(Array.isArray(vm.failureSummary.failingItems)).toBe(true);
+    expect(Array.isArray(vm.failureSummary.warningItems)).toBe(true);
+  });
+});

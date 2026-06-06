@@ -738,3 +738,30 @@ type TuiLimits = {
 - mouse support
 - theme config
 - split-pane resizing
+
+## Team Dashboard View Model
+
+The `src/tui/team-dashboard-view-model.ts` module provides a pure-function
+`buildTeamDashboardViewModel()` that projects subagent team domain data into
+structured rows/sections/selection suitable for TUI rendering.
+
+### Boundary
+
+This is strictly an **observer/control surface** — NOT a second orchestrator.
+It does not:
+- Start workers
+- Bypass review
+- Change runtime PTY rows/cols
+- Read files, environment, network, or Date
+
+### Inputs (explicit, typed)
+
+- `TeamDashboardInput` with `SubAgentTeamSummary`, `ContactRegistrySummary`,
+  `TeamDashboardRun[]`, optional `MasterReviewChecklist`, optional QA summary
+
+### Outputs
+
+- `TeamDashboardViewModel` with sections, rows, selection tracking,
+  status counts, and failure summary
+- `redactDashboardDisplay()` for display-only redaction (must not
+  pollute runtime prompt/model context)
