@@ -547,10 +547,3 @@ function buildSupervisorLifecycleSection(
     selectable: true,
   };
 }
-
-// ─── Dashboard Section Kind Extension ────────────────────────────
-
-// Re-export the extended TeamDashboardSectionKind
-export type TeamDashboardSectionKindExtended =
-  | TeamDashboardSectionKind
-  | "supervisor-lifecycle";
