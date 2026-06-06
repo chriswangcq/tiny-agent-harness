@@ -602,7 +602,6 @@ describe("identifyStaleWorkers", () => {
     const worker = makeWorker({ lastHeartbeat: undefined, lastEvidence: undefined });
     const result = identifyStaleWorkers({
       workers: [worker],
-      runs: [],
       config: freshConfig,
     });
     expect(result.totalStale).toBe(1);
@@ -615,7 +614,6 @@ describe("identifyStaleWorkers", () => {
     });
     const result = identifyStaleWorkers({
       workers: [worker],
-      runs: [],
       config: { ...freshConfig, heartbeatMaxAgeMs: 120_000 },
     });
     expect(result.totalStale).toBe(1);
@@ -626,7 +624,6 @@ describe("identifyStaleWorkers", () => {
     const worker = makeWorker({ status: "terminated", lastHeartbeat: undefined });
     const result = identifyStaleWorkers({
       workers: [worker],
-      runs: [],
       config: freshConfig,
     });
     expect(result.totalStale).toBe(0);
@@ -636,7 +633,6 @@ describe("identifyStaleWorkers", () => {
     const worker = makeWorker({ lastHeartbeat: undefined });
     const result = identifyStaleWorkers({
       workers: [worker],
-      runs: [],
       config: freshConfig,
       dryRun: true,
     });
@@ -649,7 +645,6 @@ describe("identifyStaleWorkers", () => {
     const worker = makeWorker({ lastHeartbeat: undefined });
     const result = identifyStaleWorkers({
       workers: [worker],
-      runs: [],
       config: freshConfig,
       dryRun: false,
     });
@@ -662,7 +657,6 @@ describe("identifyStaleWorkers", () => {
     });
     const result = identifyStaleWorkers({
       workers: [worker],
-      runs: [],
       config: freshConfig,
     });
     expect(result.totalStale).toBe(0);

@@ -315,7 +315,6 @@ export interface ShutdownProjection {
 
 export interface StaleRunReaperInput {
   workers: WorkerContact[];
-  runs: RunSnapshot[];
   config: ProjectorConfig;
   /** Optional - only reap workers older than this threshold (ms) since last heartbeat */
   staleThresholdMs?: number;
@@ -325,11 +324,9 @@ export interface StaleRunReaperInput {
 
 export interface StaleRunEntry {
   workerId: string;
-  runId?: string;
   lastHeartbeat?: string;
-  lastStepAt?: string;
   ageMs: number;
-  reason: "missing_heartbeat" | "stale_heartbeat" | "run_stalled" | "no_run";
+  reason: "missing_heartbeat" | "stale_heartbeat";
 }
 
 export interface StaleRunReaperProjection {
@@ -340,35 +337,23 @@ export interface StaleRunReaperProjection {
   projectedAt: string;
 }
 
-/** Pure derivation: identify stale workers/runs that should be reaped. */
+/** Pure derivation: identify stale workers based on heartbeat and evidence age. */
 export function identifyStaleWorkers(
   input: StaleRunReaperInput
 ): StaleRunReaperProjection {
-  const { workers, runs, config, staleThresholdMs, dryRun = false } = input;
+  const { workers, config, staleThresholdMs, dryRun = false } = input;
   const now = config.now;
   const threshold = staleThresholdMs ?? config.heartbeatMaxAgeMs;
   const staleEntries: StaleRunEntry[] = [];
 
-  const runByWorker = new Map<string, RunSnapshot>();
-  for (const r of runs) {
-    if (r.status) {
-      // key by run status mapping - use workerId from run if available
-      // For now assume run has a worker association via external context
-    }
-  }
 
   for (const worker of workers) {
     const contactStatus = worker.status;
     if (contactStatus === "terminated") continue;
 
-    // Find associated run for this worker (if any)
-    const workerRun = runs.find(r => {
-      // Heuristic: match by workerId pattern in run data
-      return true; // in practice would match by workerId field
-    });
 
     let ageMs = 0;
-    let reason: StaleRunEntry["reason"] = "no_run";
+    let reason: StaleRunEntry["reason"] = "missing_heartbeat";
 
     if (worker.lastHeartbeat) {
       const age = computeAge(worker.lastHeartbeat, now);
@@ -387,27 +372,16 @@ export function identifyStaleWorkers(
       }
     }
 
-    // Check run stall
-    if (workerRun && reason !== "missing_heartbeat" && workerRun.lastStepAt) {
-      const runAge = computeAge(workerRun.lastStepAt, now);
-      if (runAge !== undefined && runAge > config.runStallMaxAgeMs) {
-        reason = "run_stalled";
-        ageMs = runAge;
-      }
-    }
 
     if (reason === "stale_heartbeat" && ageMs <= threshold) {
       // Not actually stale - skip
       continue;
     }
 
-    if ((reason as string) === "no_run") continue
 
     staleEntries.push({
       workerId: worker.workerId,
-      runId: undefined,
       lastHeartbeat: worker.lastHeartbeat,
-      lastStepAt: workerRun?.lastStepAt,
       ageMs,
       reason,
     });

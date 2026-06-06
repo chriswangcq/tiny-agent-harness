@@ -473,7 +473,7 @@ Workers send heartbeats at a configured interval (`heartbeatCadenceMs`). The sta
 
 ### Stale-Run Reaper
 
-`identifyStaleWorkers(input: StaleRunReaperInput)` is a pure function that scans worker contacts and run snapshots to identify workers with missing/stale heartbeats or stalled runs. In dry-run mode, stale entries are computed but `reapable` is empty. When not dry-run, `reapable` lists workers that should be reaped.
+`identifyStaleWorkers(input: StaleRunReaperInput)` is a pure function that scans worker contacts to identify workers with missing or stale heartbeats based on heartbeat timestamp and evidence age. It does not accept or process run snapshots — run-based stale detection requires explicit worker/run association provided by the caller. In dry-run mode, stale entries are computed but `reapable` is empty. When not dry-run, `reapable` lists workers that should be reaped.
 
 ### Unified Shutdown
 
