@@ -11,6 +11,7 @@ import type {
   ShutdownPhase,
   DashboardRowStatus,
   AuditEvent,
+  LifecycleAuditEventItem,
 } from "../src/tui/team-dashboard-view-model.js";
 import type { SubAgentTeamSummary } from "../src/subagent/team.js";
 import type { ContactRegistrySummary } from "../src/subagent/contact-registry.js";
@@ -635,6 +636,125 @@ describe("supervisor lifecycle section", () => {
     const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
     const auditRow = section.rows.find(r => r.text.includes("Last Audit"));
     expect(auditRow).toBeUndefined();
+  });
+
+  it("shows worker lifecycle audit trail for heartbeat lease reaper and shutdown events", () => {
+    const events: LifecycleAuditEventItem[] = [
+      {
+        eventId: "evt-heartbeat",
+        timestamp: "2026-06-07T00:00:00.000Z",
+        kind: "heartbeat_recorded",
+        workerId: "coder-1",
+        summary: "heartbeat sequence 42",
+      },
+      {
+        eventId: "evt-lease",
+        timestamp: "2026-06-07T00:01:00.000Z",
+        kind: "lease_renewed",
+        workerId: "coder-1",
+        leaseId: "worker-lease-coder-1",
+        resource: "worker:coder-1",
+        summary: "lease renewed until 00:06",
+      },
+      {
+        eventId: "evt-reaper",
+        timestamp: "2026-06-07T00:02:00.000Z",
+        kind: "reaper_planned",
+        workerId: "coder-1",
+        action: "shutdown",
+        reason: "stale_heartbeat",
+      },
+      {
+        eventId: "evt-shutdown-requested",
+        timestamp: "2026-06-07T00:03:00.000Z",
+        kind: "shutdown_requested",
+        workerId: "coder-1",
+        reason: "reaper execute stale_heartbeat",
+      },
+      {
+        eventId: "evt-shutdown-failed",
+        timestamp: "2026-06-07T00:04:00.000Z",
+        kind: "shutdown_failed",
+        workerId: "coder-1",
+        reason: "process already exited",
+      },
+    ];
+    const input = emptyInput();
+    input.supervisorLifecycle = makeLifecycleInput({ auditEvents: events });
+
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+
+    expect(section.rows.find(r => r.key === "lifecycle-event:evt-heartbeat")).toMatchObject({
+      status: "ok",
+    });
+    expect(section.rows.find(r => r.key === "lifecycle-event:evt-lease")).toMatchObject({
+      status: "ok",
+    });
+    expect(section.rows.find(r => r.key === "lifecycle-event:evt-reaper")).toMatchObject({
+      status: "warn",
+    });
+    expect(section.rows.find(r => r.key === "lifecycle-event:evt-shutdown-requested")).toMatchObject({
+      status: "warn",
+    });
+    expect(section.rows.find(r => r.key === "lifecycle-event:evt-shutdown-failed")).toMatchObject({
+      status: "error",
+    });
+    expect(section.rows.map(r => r.text).join("\n")).toContain("coder-1");
+    expect(section.rows.map(r => r.text).join("\n")).toContain("stale_heartbeat");
+  });
+
+  it("shows lifecycle audit events newest first", () => {
+    const input = emptyInput();
+    input.supervisorLifecycle = makeLifecycleInput({
+      auditEvents: [
+        {
+          eventId: "old",
+          timestamp: "2026-06-07T00:00:00.000Z",
+          kind: "heartbeat_recorded",
+          workerId: "coder-1",
+        },
+        {
+          eventId: "new",
+          timestamp: "2026-06-07T00:05:00.000Z",
+          kind: "shutdown_completed",
+          workerId: "coder-1",
+        },
+      ],
+    });
+
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+    const eventRows = section.rows.filter(r => r.key?.startsWith("lifecycle-event:"));
+
+    expect(eventRows.map(r => r.key)).toEqual([
+      "lifecycle-event:new",
+      "lifecycle-event:old",
+    ]);
+  });
+
+  it("redacts and clips lifecycle audit reason text for display safety", () => {
+    const input = emptyInput();
+    input.supervisorLifecycle = makeLifecycleInput({
+      auditEvents: [
+        {
+          eventId: "secret-reason",
+          timestamp: "2026-06-07T00:00:00.000Z",
+          kind: "shutdown_failed",
+          workerId: "coder-1",
+          reason: `failed with token=abc123def456 ${"x".repeat(200)}`,
+        },
+      ],
+    });
+
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+    const row = section.rows.find(r => r.key === "lifecycle-event:secret-reason")!;
+
+    expect(row.text).toContain("[REDACTED]");
+    expect(row.text).not.toContain("abc123def456");
+    expect(row.text.length).toBeLessThanOrEqual(140);
+    expect(row.text.endsWith("...")).toBe(true);
   });
 
 });

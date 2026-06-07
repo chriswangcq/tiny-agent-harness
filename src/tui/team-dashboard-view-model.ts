@@ -36,6 +36,8 @@ export type TeamDashboardInput = {
 
 export type DashboardRowStatus = "ok" | "warn" | "error" | "info" | "pending";
 
+const MAX_DASHBOARD_ROW_TEXT_LENGTH = 140;
+
 export type TeamDashboardRow = {
   text: string;
   status: DashboardRowStatus;
@@ -105,6 +107,12 @@ export function redactDashboardDisplay(text: string): string {
     result = result.replace(pattern, replacement);
   }
   return result;
+}
+
+function safeDashboardText(text: string): string {
+  const redacted = redactDashboardDisplay(text);
+  if (redacted.length <= MAX_DASHBOARD_ROW_TEXT_LENGTH) return redacted;
+  return `${redacted.slice(0, MAX_DASHBOARD_ROW_TEXT_LENGTH - 3)}...`;
 }
 
 // ─── Status Helpers ───────────────────────────────────────────────
@@ -478,6 +486,19 @@ export interface AuditEvent {
   summary: string;
 }
 
+export interface LifecycleAuditEventItem {
+  eventId: string;
+  timestamp: string;
+  kind: string;
+  workerId?: string;
+  runId?: string;
+  leaseId?: string;
+  resource?: string;
+  action?: string;
+  reason?: string;
+  summary?: string;
+}
+
 export interface SupervisorLifecycleInput {
   leases: SupervisorLeaseItem[];
   heartbeatCadenceMs: number;
@@ -489,6 +510,8 @@ export interface SupervisorLifecycleInput {
   shutdownReason?: string;
   /** Most recent audit event from the supervisor. */
   lastAuditEvent?: AuditEvent;
+  /** Worker-scoped durable lifecycle event projection for display only. */
+  auditEvents?: LifecycleAuditEventItem[];
 }
 
 // ─── Supervisor Lifecycle Section Builder ─────────────────────────
@@ -582,9 +605,20 @@ function buildSupervisorLifecycleSection(
   // Last audit event
   if (input.lastAuditEvent) {
     rows.push({
-      text: `Last Audit: ${input.lastAuditEvent.kind} (${input.lastAuditEvent.summary})`,
+      text: safeDashboardText(
+        `Last Audit: ${input.lastAuditEvent.kind} (${input.lastAuditEvent.summary})`,
+      ),
       status: "info",
     });
+  }
+
+  const auditRows = buildLifecycleAuditRows(input.auditEvents ?? []);
+  if (auditRows.length > 0) {
+    rows.push({
+      text: `Lifecycle Audit Events: ${auditRows.length}`,
+      status: "info",
+    });
+    rows.push(...auditRows);
   }
 
   return {
@@ -593,4 +627,59 @@ function buildSupervisorLifecycleSection(
     rows,
     selectable: true,
   };
+}
+
+function buildLifecycleAuditRows(
+  events: LifecycleAuditEventItem[],
+): TeamDashboardRow[] {
+  return [...events]
+    .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+    .map((event) => ({
+      text: buildLifecycleAuditText(event),
+      status: lifecycleAuditStatus(event.kind),
+      key: `lifecycle-event:${event.eventId}`,
+    }));
+}
+
+function buildLifecycleAuditText(event: LifecycleAuditEventItem): string {
+  const actor = event.workerId ?? "supervisor";
+  const parts = [
+    `  ${event.timestamp} ${actor}: ${event.kind}`,
+  ];
+
+  const details: string[] = [];
+  if (event.runId) details.push(`run=${event.runId}`);
+  if (event.leaseId) details.push(`lease=${event.leaseId}`);
+  if (event.resource) details.push(`resource=${event.resource}`);
+  if (event.action) details.push(`action=${event.action}`);
+  if (event.reason) details.push(`reason=${event.reason}`);
+  if (event.summary) details.push(event.summary);
+
+  if (details.length > 0) {
+    parts.push(` ${details.join(" ")}`);
+  }
+
+  return safeDashboardText(parts.join(""));
+}
+
+function lifecycleAuditStatus(kind: string): DashboardRowStatus {
+  switch (kind) {
+    case "heartbeat_recorded":
+    case "worker_heartbeat":
+    case "lease_acquired":
+    case "lease_renewed":
+    case "shutdown_completed":
+      return "ok";
+    case "lease_expired":
+    case "shutdown_failed":
+      return "error";
+    case "reaper_planned":
+    case "reaper_executed":
+    case "reaper_skipped":
+    case "shutdown_requested":
+    case "shutdown_draining":
+      return "warn";
+    default:
+      return "info";
+  }
 }
