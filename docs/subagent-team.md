@@ -491,3 +491,27 @@ All lifecycle projections support dry-run semantics. `dryRun: true` in `StaleRun
 ### Safe Recovery
 
 Recovery readiness (`recoveryReady: boolean`) is exposed in the supervisor lifecycle dashboard section. When true, the supervisor has sufficient durable state (contact registry, run snapshots, ledger state) to recover worker state after a supervisor restart.
+
+## Run-Scoped Lifecycle Adapter (P6-09)
+
+P6-09 wires `team lifecycle ...` to real run-scoped runtime state instead of a fresh in-memory contact registry.
+
+Active state paths:
+
+- Team contact snapshot: `.tiny-agent/runs/<runId>/team/contact-registry.json`
+- Supervisor audit events: `.tiny-agent/runs/<runId>/supervisor/lifecycle-events.jsonl`
+- Worker process state: `.tiny-agent/runs/<runId>/workers/<workerId>/state.json` written by the local worker launcher after spawn succeeds, then read by lifecycle shutdown/reaper execute.
+
+Run selection:
+
+- Prefer passing `--run <runId>` from supervisors and scripts so audit actions are explicit.
+- `--run latest` or an omitted `--run` resolves to the latest `run-*` directory under `.tiny-agent/runs` using the adapter's run listing port.
+
+Command behavior:
+
+- `team lifecycle lease <workerId> --run <runId>` records `heartbeat_recorded`, acquires or renews a `worker-lease`, and updates the run-scoped contact registry heartbeat.
+- `team lifecycle reaper --run <runId>` is dry-run by default. It enumerates stale workers from the run-scoped snapshot and returns planned actions without process effects.
+- `team lifecycle reaper --run <runId> --execute` reads each stale worker process state, calls the injected process shutdown port, and appends `reaper_planned`, `shutdown_requested`, `shutdown_completed` or `shutdown_failed`, and `reaper_executed`.
+- `team lifecycle shutdown <workerId> --run <runId> --execute` performs the same explicit process boundary for one worker. Missing worker PID is a structured `SHUTDOWN_FAILED` result and is recorded in supervisor audit events.
+
+The adapter reuses `createRuntimeAdapter` for lifecycle decisions and existing supervisor/directory stores for persistence. The old in-memory `--workers-json` lifecycle dispatcher was removed; normal operator paths use the run-scoped adapter through `team lifecycle`.
