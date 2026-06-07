@@ -26,6 +26,7 @@ import {
   type CliEnvelope,
   type SuccessEnvelopeInput,
 } from "../cli/envelope.js";
+import type { SupervisorLifecycleEvent } from "./supervisor-store.js";
 
 // ---------------------------------------------------------------------------
 // Tool name for JSON envelope
@@ -65,6 +66,15 @@ export type LifecycleCliPorts = {
 };
 
 // ---------------------------------------------------------------------------
+// Execute ports — optional synchronous effect boundary for tests
+// ---------------------------------------------------------------------------
+export type ExecuteLifecyclePorts = {
+  processExists?: (workerId: string) => boolean;
+  shutdownWorker?: (workerId: string, reason?: string) => void;
+  appendLifecycleEvent?: (event: SupervisorLifecycleEvent) => { status: string; message?: string };
+};
+
+// ---------------------------------------------------------------------------
 // Build a LifecycleInput from a WorkerContact + process info
 // ---------------------------------------------------------------------------
 export function buildLifecycleInput(
@@ -100,6 +110,7 @@ export function executeLifecycleCommand(
   // Caller provides the worker lookups, not state
   lookupWorkerFn: (workerId: string) => WorkerContact | undefined,
   processExistsFn?: (workerId: string) => boolean,
+  executePorts?: ExecuteLifecyclePorts,
 ): CliEnvelope {
   if (args.length === 0) {
     return failureEnvelope({
@@ -120,13 +131,13 @@ export function executeLifecycleCommand(
 
   switch (subcommand) {
     case "lifecycle-status":
-      return handleLifecycleStatus(ports, rest, cwd, resolveWorker, processExistsFn);
+      return handleLifecycleStatus(ports, rest, cwd, resolveWorker, processExistsFn, executePorts);
     case "lease":
-      return handleLease(ports, rest, cwd, resolveWorker);
+      return handleLease(ports, rest, cwd, resolveWorker, executePorts);
     case "shutdown":
-      return handleShutdown(ports, rest, cwd, resolveWorker, processExistsFn);
+      return handleShutdown(ports, rest, cwd, resolveWorker, processExistsFn, executePorts);
     case "reaper":
-      return handleReaper(ports, rest, cwd, lookupWorkerFn, processExistsFn);
+      return handleReaper(ports, rest, cwd, lookupWorkerFn, processExistsFn, executePorts);
     default:
       return failureEnvelope({
         tool: TOOL_NAME,
@@ -146,6 +157,7 @@ function handleLifecycleStatus(
   cwd: string | undefined,
   resolveWorker: (id: string) => WorkerContact | { error: string },
   processExistsFn?: (workerId: string) => boolean,
+  executePorts?: ExecuteLifecyclePorts,
 ): CliEnvelope {
   const base: SuccessEnvelopeInput = { tool: TOOL_NAME, cwd };
 
@@ -165,7 +177,11 @@ function handleLifecycleStatus(
 
   const now = ports.nowIso();
   const config: LifecycleConfig = buildLifecycleConfig(now);
-  const processExists = processExistsFn ? processExistsFn(workerId) : true;
+  const processExists = executePorts?.processExists
+    ? executePorts.processExists(workerId)
+    : processExistsFn
+      ? processExistsFn(workerId)
+      : true;
   const input = buildLifecycleInput(worker, processExists);
   const result = computeLifecycleState(input, config);
 
@@ -202,6 +218,7 @@ function handleLease(
   args: string[],
   cwd: string | undefined,
   resolveWorker: (id: string) => WorkerContact | { error: string },
+  executePorts?: ExecuteLifecyclePorts,
 ): CliEnvelope {
   const base: SuccessEnvelopeInput = { tool: TOOL_NAME, cwd };
 
@@ -242,6 +259,18 @@ function handleLease(
   // Interpret current heartbeat
   const hbInterpretation = interpretHeartbeat(worker.lastHeartbeat, now, config);
 
+  // When executePorts are provided, actually append the lifecycle event
+  let appendResult: { status: string; message?: string } | undefined;
+  if (executePorts?.appendLifecycleEvent) {
+    const ev: SupervisorLifecycleEvent = {
+      eventId: `ev-lease-${workerId}-${now}`,
+      type: "heartbeat_recorded",
+      timestamp: now,
+      payload: { workerId, timestamp: now },
+    };
+    appendResult = executePorts.appendLifecycleEvent(ev);
+  }
+
   return successEnvelope({
     ...base,
     extra: {
@@ -251,6 +280,7 @@ function handleLease(
       expiryMs,
       leaseExpiresAt: expiryMs ? new Date(new Date(now).getTime() + expiryMs).toISOString() : null,
       heartbeatInterpretation: hbInterpretation,
+      appendResult,
       // The caller (team-run.ts / store adapter) is responsible for applying
       // the heartbeat event to the contact registry. CLI only produces the plan.
       plan: {
@@ -271,6 +301,7 @@ function handleShutdown(
   cwd: string | undefined,
   resolveWorker: (id: string) => WorkerContact | { error: string },
   processExistsFn?: (workerId: string) => boolean,
+  executePorts?: ExecuteLifecyclePorts,
 ): CliEnvelope {
   const base: SuccessEnvelopeInput = { tool: TOOL_NAME, cwd };
 
@@ -337,6 +368,44 @@ function handleShutdown(
   const input = buildLifecycleInput(worker, processExists, undefined, undefined, now);
   const result = computeLifecycleState(input, config);
 
+  // Call shutdownWorker and append lifecycle events when executePorts provided
+  let shutdownResult: { status: string; message?: string } | undefined;
+  if (executePorts?.shutdownWorker) {
+    try {
+      executePorts.shutdownWorker(workerId, "Shutdown requested via lifecycle CLI");
+      shutdownResult = { status: "completed" };
+    } catch (e: unknown) {
+      shutdownResult = { status: "failed", message: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  const appended: Array<{ type: string; status: string; message?: string }> = [];
+  if (executePorts?.appendLifecycleEvent) {
+    const reqEv: SupervisorLifecycleEvent = {
+      eventId: `ev-shutdown-req-${workerId}-${now}`,
+      type: "shutdown_requested",
+      timestamp: now,
+      payload: { phase: "shutdown", requestedBy: "lifecycle-cli", reason: "Shutdown requested via lifecycle CLI" },
+    };
+    const reqResult = executePorts.appendLifecycleEvent(reqEv);
+    appended.push({ type: "shutdown_requested", ...reqResult });
+
+    // The completed event type depends on whether BOTH shutdownWorker and the completed append succeed
+    const shutdownOk = !shutdownResult || shutdownResult.status === "completed";
+    const completeType = (shutdownOk && reqResult.status === "appended") ? "shutdown_completed" : "shutdown_failed";
+    const compEv: SupervisorLifecycleEvent = {
+      eventId: `ev-shutdown-comp-${workerId}-${now}`,
+      type: completeType,
+      timestamp: now,
+      payload: completeType === "shutdown_completed"
+        ? { totalWorkersTerminated: 1 }
+        : { reason: shutdownResult?.message || reqResult.message || "shutdown failed" },
+    };
+    const compResult = executePorts.appendLifecycleEvent(compEv);
+    const compEntryType = compResult.status === "appended" ? completeType : "shutdown_failed";
+    appended.push({ type: compEntryType, ...compResult });
+  }
+
   return successEnvelope({
     ...base,
     extra: {
@@ -347,6 +416,8 @@ function handleShutdown(
       previousStatus: worker.status,
       newStatus: "offline",
       lifecycleResult: result,
+      shutdownResult,
+      appended,
       plan: {
         event: "worker_status_changed",
         workerId,
@@ -366,6 +437,7 @@ function handleReaper(
   cwd: string | undefined,
   lookupWorkerFn: (workerId: string) => WorkerContact | undefined,
   processExistsFn?: (workerId: string) => boolean,
+  executePorts?: ExecuteLifecyclePorts,
 ): CliEnvelope {
   const base: SuccessEnvelopeInput = { tool: TOOL_NAME, cwd };
 
@@ -506,16 +578,52 @@ function handleReaper(
   }
 
   // Execute: produce termination plans for each stale worker
+  // Use only supported supervisor-store event types.
+  // Never emit worker_reassign or worker_warn as supervisor events.
   const terminationPlans = staleDecisions.map((d) => ({
     workerId: d.workerId,
     action: d.reaperAction,
     reason: d.reaperReason,
-    plan: d.reaperAction === "terminate"
-      ? { event: "worker_terminated", workerId: d.workerId, reason: d.reaperReason }
-      : d.reaperAction === "reassign"
-      ? { event: "worker_reassign", workerId: d.workerId, reason: d.reaperReason }
-      : { event: "worker_warn", workerId: d.workerId, reason: d.reaperReason },
+    plan: {
+      event: "reaper_executed",
+      workerId: d.workerId,
+      action: d.reaperAction,
+      reason: d.reaperReason,
+    },
   }));
+
+  // Append lifecycle events when executePorts provided
+  const appended: Array<{ type: string; status: string; message?: string }> = [];
+  if (executePorts?.appendLifecycleEvent) {
+    for (const d of staleDecisions) {
+      // First: reaper_planned with candidateWorkerId
+      const plannedEv: SupervisorLifecycleEvent = {
+        eventId: `ev-reaper-planned-${d.workerId}-${now}`,
+        type: "reaper_planned",
+        timestamp: now,
+        payload: {
+          candidateWorkerId: d.workerId,
+          reason: d.reaperReason,
+          plannedAction: d.reaperAction,
+        },
+      };
+      const plannedResult = executePorts.appendLifecycleEvent(plannedEv);
+      appended.push({ type: "reaper_planned", ...plannedResult });
+
+      // Second: reaper_executed or reaper_skipped
+      const actionType = plannedResult.status === "appended" ? "reaper_executed" : "reaper_skipped";
+      const actionEv: SupervisorLifecycleEvent = {
+        eventId: `ev-reaper-action-${d.workerId}-${now}`,
+        type: actionType,
+        timestamp: now,
+        payload: actionType === "reaper_executed"
+          ? { workerId: d.workerId, action: d.reaperAction, reason: d.reaperReason }
+          : { candidateWorkerId: d.workerId, reason: plannedResult.message || "reaper_planned append failed" },
+      };
+      const actionResult = executePorts.appendLifecycleEvent(actionEv);
+      appended.push({ type: actionType, ...actionResult });
+    }
+  }
 
   return successEnvelope({
     ...base,
@@ -528,6 +636,7 @@ function handleReaper(
       totalWorkers: workers.length,
       staleCount: staleDecisions.length,
       terminationPlans,
+      appended: appended.length > 0 ? appended : undefined,
     },
   });
 }
