@@ -8,3 +8,4 @@ export * from "./worker-handoff-evidence.js";
 export * from "./master-merge-queue-adapter.js";
 export * from "./supervisor-store.js";
 export * from "./supervisor-lifecycle.js";
+export * from "./supervisor-planner.js";
