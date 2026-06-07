@@ -103,6 +103,24 @@ export type ContactStorePort = {
   apply: (event: ContactRegistryEvent) => Promise<ContactRegistryResult>;
 };
 
+/** Durable process state written for reaper/shutdown lookup. */
+export type WorkerProcessState = {
+  workerId: string;
+  runId: string;
+  pid: number;
+  spawnedPid: number;
+  status: "running";
+  startedAt: string;
+  command: string;
+  args: string[];
+  cwd: string;
+};
+
+/** Worker state writer port — explicit durable state effect. */
+export type WorkerStatePort = {
+  write: (filePath: string, state: WorkerProcessState) => Promise<void>;
+};
+
 /** All effect ports needed to execute a worker launch. */
 export type WorkerLaunchEffects = {
   spawn: SpawnPort;
@@ -110,6 +128,7 @@ export type WorkerLaunchEffects = {
   clock: Clock;
   ids: IdGenerator;
   contacts: ContactStorePort;
+  workerState: WorkerStatePort;
 };
 
 /** A spawn command ready for execution by a SpawnPort. */
@@ -238,6 +257,7 @@ export function buildSpawnCommand(
 export type LaunchFailureStage =
   | "checkout"
   | "spawn"
+  | "worker_state"
   | "contact_register"
   | "contact_update"
   | "contact_status";
@@ -408,7 +428,36 @@ export async function launchLocalWorker(
     };
   }
 
-  // Step 4: Update worker with runId
+  // Step 4: Persist process state for reaper/shutdown lookup.
+  try {
+    await effects.workerState.write(plan.paths.runWorkerStateFile, {
+      workerId: plan.workerId,
+      runId: plan.runId,
+      pid: spawnResult.pid,
+      spawnedPid: spawnResult.pid,
+      status: "running",
+      startedAt: effects.clock.nowISO(),
+      command: plan.spawnCommand.command,
+      args: plan.spawnCommand.args,
+      cwd: plan.workspace,
+    });
+  } catch (err) {
+    return {
+      kind: "launch_failure",
+      workerId: plan.workerId,
+      stage: "worker_state",
+      error: `Worker state write failed: ${formatError(err)}`,
+      evidence: {
+        branch: plan.branch,
+        registeredEventId: registerEventId,
+        runId: plan.runId,
+        spawnResult,
+        failedAt: effects.clock.nowISO(),
+      },
+    };
+  }
+
+  // Step 5: Update worker with runId
   const updateEventId = effects.ids.newId();
   const updateEvent: ContactRegistryEvent = {
     kind: "worker_updated",
@@ -453,7 +502,7 @@ export async function launchLocalWorker(
     };
   }
 
-  // Step 5: Set worker status to active
+  // Step 6: Set worker status to active
   const statusEventId = effects.ids.newId();
   const statusEvent: ContactRegistryEvent = {
     kind: "worker_status_changed",

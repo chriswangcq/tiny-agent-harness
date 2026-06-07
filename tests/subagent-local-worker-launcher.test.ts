@@ -14,6 +14,8 @@ import {
   type Clock,
   type IdGenerator,
   type ContactStorePort,
+  type WorkerProcessState,
+  type WorkerStatePort,
   type WorkerLaunchEffects,
   type WorkerLaunchResult,
 } from "../src/subagent/local-worker-launcher.js";
@@ -79,6 +81,16 @@ function fakeContactStorePort(
         state = result.state;
       }
       return result;
+    },
+  };
+}
+
+function fakeWorkerStatePort(
+  writes: Array<{ path: string; state: WorkerProcessState }> = [],
+): WorkerStatePort {
+  return {
+    write: async (filePath, state) => {
+      writes.push({ path: filePath, state });
     },
   };
 }
@@ -303,12 +315,14 @@ describe("port type shapes", () => {
       clock: fakeClock("2026-01-01T00:00:00.000Z"),
       ids: fakeIdGenerator("test"),
       contacts: fakeContactStorePort(),
+      workerState: fakeWorkerStatePort(),
     };
     expect(effects.spawn).toBeDefined();
     expect(effects.git).toBeDefined();
     expect(effects.clock).toBeDefined();
     expect(effects.ids).toBeDefined();
     expect(effects.contacts).toBeDefined();
+    expect(effects.workerState).toBeDefined();
   });
 });
 
@@ -343,12 +357,14 @@ const buildEffects = (overrides?: Partial<{
   spawnExitCode: number;
   gitSuccess: boolean;
   clockISO: string;
+  workerStateWrites: Array<{ path: string; state: WorkerProcessState }>;
 }>): WorkerLaunchEffects => ({
   spawn: fakeSpawnPort(overrides?.spawnExitCode ?? 0),
   git: fakeGitPort(overrides?.gitSuccess ?? true),
   clock: fakeClock(overrides?.clockISO ?? "2026-06-05T15:00:00.000Z"),
   ids: fakeIdGenerator("test"),
   contacts: fakeContactStorePort(),
+  workerState: fakeWorkerStatePort(overrides?.workerStateWrites),
 });
 
 describe("launchLocalWorker", () => {
@@ -365,6 +381,53 @@ describe("launchLocalWorker", () => {
       expect(result.spawnedPid).toBe(12345);
       expect(result.contact.workerId).toBe("coder-1");
       expect(result.contact.status).toBe("active");
+    }
+  });
+
+  it("writes run-scoped worker process state after spawn succeeds", async () => {
+    const plan = buildLaunchPlan();
+    const workerStateWrites: Array<{ path: string; state: WorkerProcessState }> = [];
+    const effects = buildEffects({ workerStateWrites });
+
+    const result = await launchLocalWorker(plan, effects);
+
+    expect(result.kind).toBe("launch_success");
+    expect(workerStateWrites).toEqual([
+      {
+        path: plan.paths.runWorkerStateFile,
+        state: {
+          workerId: "coder-1",
+          runId: "run-001",
+          pid: 12345,
+          spawnedPid: 12345,
+          status: "running",
+          startedAt: "2026-06-05T15:00:01.000Z",
+          command: "node",
+          args: plan.spawnCommand.args,
+          cwd: "/home/workspace",
+        },
+      },
+    ]);
+  });
+
+  it("fails at worker_state stage when process state cannot be written", async () => {
+    const plan = buildLaunchPlan();
+    const effects = {
+      ...buildEffects(),
+      workerState: {
+        write: async () => {
+          throw new Error("state write refused");
+        },
+      },
+    };
+
+    const result = await launchLocalWorker(plan, effects);
+
+    expect(result.kind).toBe("launch_failure");
+    if (result.kind === "launch_failure") {
+      expect(result.stage).toBe("worker_state");
+      expect(result.error).toContain("state write refused");
+      expect(result.evidence.spawnResult?.pid).toBe(12345);
     }
   });
 
