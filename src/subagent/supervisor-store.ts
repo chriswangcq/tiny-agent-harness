@@ -9,8 +9,15 @@
 // Path planner — pure functions
 // ---------------------------------------------------------------------------
 
-/** Default supervisor directory relative to project root. */
+/**
+ * Project-scoped supervisor directory.
+ * NON-ACTIVE — do not use for new code.
+ * Prefer planRunScopedSupervisorPaths which scopes state under a run.
+ */
 export const DEFAULT_SUPERVISOR_DIR = ".tiny-agent/supervisor";
+
+/** Run-scoped supervisor directory pattern. */
+export const RUN_SCOPED_SUPERVISOR_DIR = ".tiny-agent/runs";
 
 /** Paths for supervisor state under a project root. */
 export type SupervisorPaths = {
@@ -24,10 +31,7 @@ export type SupervisorPaths = {
  * Throws on any `..` path component that would escape the root.
  */
 function validateProjectRoot(projectRoot: string): void {
-  // Normalize: strip trailing slashes
   const normalized = projectRoot.replace(/\/+$/, "");
-  
-  // Split into segments and check for ".."
   const segments = normalized.split("/");
   for (const segment of segments) {
     if (segment === "..") {
@@ -37,8 +41,6 @@ function validateProjectRoot(projectRoot: string): void {
       );
     }
   }
-  
-  // Also check for encoded traversal attempts
   if (normalized.includes("%2e%2e") || normalized.includes("..%2F") || normalized.includes("%2F..")) {
     throw new Error(
       `Path traversal detected in project root: "${projectRoot}". ` +
@@ -48,16 +50,57 @@ function validateProjectRoot(projectRoot: string): void {
 }
 
 /**
- * Compute supervisor store paths from a project root.
+ * Validate that a run ID does not contain path-traversal or separator segments.
+ */
+function validateRunId(runId: string): void {
+  if (!runId || typeof runId !== "string") {
+    throw new Error(`Invalid runId: must be a non-empty string`);
+  }
+  if (runId.includes("..") || runId.includes("/")) {
+    throw new Error(
+      `Path traversal detected in runId: "${runId}". ` +
+      `The runId must not contain ".." or "/" segments.`
+    );
+  }
+  if (runId.includes("%2e%2e") || runId.includes("%2F")) {
+    throw new Error(
+      `Path traversal detected in runId: "${runId}". ` +
+      `URL-encoded path traversal patterns are not allowed.`
+    );
+  }
+}
+
+/**
+ * Compute project-scoped supervisor store paths (NON-ACTIVE).
+ * Prefer planRunScopedSupervisorPaths for new code.
  * Pure — no IO, no side effects.
  * Throws on path traversal attempts.
  */
 export function planSupervisorPaths(projectRoot: string): SupervisorPaths {
   validateProjectRoot(projectRoot);
-  
-  const root = projectRoot.replace(/\/+$/, ""); // strip trailing slashes
+  const root = projectRoot.replace(/\/+$/, "");
   const supervisorDir = `${root}/${DEFAULT_SUPERVISOR_DIR}`;
-  
+  return {
+    supervisorDir,
+    eventsFile: `${supervisorDir}/lifecycle-events.jsonl`,
+    snapshotFile: `${supervisorDir}/snapshot.json`,
+  };
+}
+
+/**
+ * Compute run-scoped supervisor store paths (ACTIVE).
+ * Active path is under .tiny-agent/runs/<runId>/supervisor.
+ * Pure — no IO, no side effects.
+ * Throws on path traversal attempts in either projectRoot or runId.
+ */
+export function planRunScopedSupervisorPaths(
+  projectRoot: string,
+  runId: string,
+): SupervisorPaths {
+  validateProjectRoot(projectRoot);
+  validateRunId(runId);
+  const root = projectRoot.replace(/\/+$/, "");
+  const supervisorDir = `${root}/${RUN_SCOPED_SUPERVISOR_DIR}/${runId}/supervisor`;
   return {
     supervisorDir,
     eventsFile: `${supervisorDir}/lifecycle-events.jsonl`,
@@ -71,13 +114,32 @@ export function planSupervisorPaths(projectRoot: string): SupervisorPaths {
 
 /** Known supervisor lifecycle event types. */
 export type SupervisorLifecycleEventType =
+  // Worker registration and status
   | "worker_registered"
   | "worker_status_changed"
   | "worker_heartbeat"
-  | "worker_terminated";
+  | "worker_terminated"
+  // Leases — full resource-binding lifecycle
+  | "lease_requested"
+  | "lease_acquired"
+  | "lease_renewed"
+  | "lease_released"
+  | "lease_expired"
+  // Heartbeat — structured cadence recording
+  | "heartbeat_recorded"
+  // Shutdown — supervisor shutdown with intent/result/failure
+  | "shutdown_requested"
+  | "shutdown_draining"
+  | "shutdown_completed"
+  | "shutdown_failed"
+  // Reaper — explicit planned/executed/skipped audit trail
+  | "reaper_planned"
+  | "reaper_executed"
+  | "reaper_skipped";
 
-/** Payload for each event type. */
+/** Payload for each event type (documentation only — runtime uses Record<string, unknown>). */
 export type SupervisorLifecycleEventPayload =
+  // worker_registered
   | {
       workerId: string;
       role: string;
@@ -85,17 +147,85 @@ export type SupervisorLifecycleEventPayload =
       branch: string;
       imChannel: string;
     }
+  // worker_status_changed
   | {
       workerId: string;
       status: string;
       previousStatus?: string;
     }
+  // worker_heartbeat
+  | { workerId: string }
+  // worker_terminated
+  | { workerId: string; reason?: string }
+  // lease_requested
   | {
       workerId: string;
+      leaseId: string;
+      resource: string;
+      requestedAt: string;
     }
+  // lease_acquired
   | {
       workerId: string;
+      leaseId: string;
+      resource: string;
+      acquiredAt: string;
+      expiresAt: string;
+    }
+  // lease_renewed
+  | {
+      workerId: string;
+      leaseId: string;
+      renewedAt: string;
+      newExpiresAt: string;
+    }
+  // lease_released
+  | {
+      workerId: string;
+      leaseId: string;
+      releasedAt: string;
+    }
+  // lease_expired
+  | {
+      workerId: string;
+      leaseId: string;
+      expiredAt: string;
+    }
+  // heartbeat_recorded
+  | {
+      workerId: string;
+      sequence: number;
+      cadenceMs: number;
+    }
+  // shutdown_requested
+  | {
+      phase: string;
+      requestedBy: string;
       reason?: string;
+    }
+  // shutdown_draining
+  | { remainingWorkers: number }
+  // shutdown_completed
+  | { totalWorkersTerminated: number }
+  // shutdown_failed
+  | { reason: string }
+  // reaper_planned
+  | {
+      candidateWorkerId: string;
+      reason: string;
+      plannedAction: string;
+    }
+  // reaper_executed
+  | {
+      workerId: string;
+      action: string;
+      reason: string;
+      affectedLeases?: string[];
+    }
+  // reaper_skipped
+  | {
+      candidateWorkerId: string;
+      reason: string;
     };
 
 /** A supervisor lifecycle event with idempotency key. */
@@ -121,6 +251,19 @@ const VALID_EVENT_TYPES: ReadonlySet<string> = new Set([
   "worker_status_changed",
   "worker_heartbeat",
   "worker_terminated",
+  "lease_requested",
+  "lease_acquired",
+  "lease_renewed",
+  "lease_released",
+  "lease_expired",
+  "heartbeat_recorded",
+  "shutdown_requested",
+  "shutdown_draining",
+  "shutdown_completed",
+  "shutdown_failed",
+  "reaper_planned",
+  "reaper_executed",
+  "reaper_skipped",
 ]);
 
 /**
@@ -172,9 +315,28 @@ export function validateLifecycleEvent(
     errors.push("Missing or invalid payload");
   } else {
     const payload = e.payload as Record<string, unknown>;
-    // Every event must have a workerId in its payload
-    if (typeof payload.workerId !== "string" || payload.workerId.length === 0) {
-      errors.push("payload.workerId is missing or not a string");
+    const eventType = e.type as string;
+    
+    // Supervisor-level events that don't require workerId
+    const isSupervisorEvent = 
+      eventType === "shutdown_requested" ||
+      eventType === "shutdown_draining" ||
+      eventType === "shutdown_completed" ||
+      eventType === "shutdown_failed";
+    
+    // Reaper planned/skipped use candidateWorkerId instead of workerId
+    const isReaperPlanEvent =
+      eventType === "reaper_planned" ||
+      eventType === "reaper_skipped";
+    
+    if (isReaperPlanEvent) {
+      if (typeof payload.candidateWorkerId !== "string" || payload.candidateWorkerId.length === 0) {
+        errors.push("payload.candidateWorkerId is missing or not a string");
+      }
+    } else if (!isSupervisorEvent) {
+      if (typeof payload.workerId !== "string" || payload.workerId.length === 0) {
+        errors.push("payload.workerId is missing or not a string");
+      }
     }
   }
 
@@ -279,7 +441,6 @@ export function createInMemorySupervisorPorts(
 
     async mkdir(path: string): Promise<void> {
       dirs.add(path);
-      // Also ensure parent directories are tracked
       const parts = path.split("/");
       for (let i = 1; i < parts.length; i++) {
         dirs.add(parts.slice(0, i + 1).join("/"));
@@ -331,9 +492,7 @@ export async function appendLifecycleEvent(
   event: SupervisorLifecycleEvent,
   options?: AppendOptions,
 ): Promise<AppendLifecycleResult> {
-  // Ensure supervisor directory exists
   await ports.fs.mkdir(paths.supervisorDir);
-  // Validate the event before appending
   const validation = validateLifecycleEvent(event);
   if (!validation.valid) {
     return {
@@ -342,8 +501,6 @@ export async function appendLifecycleEvent(
     };
   }
 
-  // Check for duplicate event ID by reading existing events
-  // and optionally loading the snapshot for cross-restart idempotency
   const seenIds = new Set<string>();
 
   if (options?.loadSnapshot) {
@@ -362,7 +519,6 @@ export async function appendLifecycleEvent(
     }
   }
 
-  // Also read existing events to check for duplicates in the JSONL
   try {
     if (await ports.fs.exists(paths.eventsFile)) {
       const raw = await ports.fs.readFile(paths.eventsFile);
@@ -388,7 +544,6 @@ export async function appendLifecycleEvent(
     return { status: "duplicate" };
   }
 
-  // Read existing content
   let existingContent = "";
   try {
     existingContent = await ports.fs.readFile(paths.eventsFile);
@@ -396,7 +551,6 @@ export async function appendLifecycleEvent(
     // File doesn't exist yet — start fresh
   }
 
-  // Append the new event as a JSONL line
   const line = JSON.stringify(event) + "\n";
   await ports.fs.writeFile(paths.eventsFile, existingContent + line);
 
@@ -419,7 +573,6 @@ export async function readAllLifecycleEvents(
   try {
     raw = await ports.fs.readFile(paths.eventsFile);
   } catch {
-    // File not found — no events
     return { validEvents, parseErrors };
   }
 
