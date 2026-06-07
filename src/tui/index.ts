@@ -17,6 +17,11 @@ export {
 export { BlessedRenderer } from "./renderer.js";
 export { TuiController } from "./controller.js";
 export { SessionLogTailReader } from "./session-log-tail.js";
+export {
+  RunLifecycleAuditReader,
+  projectLifecycleAuditEvents,
+  readRunLifecycleAuditProjection,
+} from "./lifecycle-audit-projection.js";
 export { DEFAULT_TUI_LIMITS } from "./types.js";
 export type {
   DebuggerRunSnapshot,
@@ -39,6 +44,12 @@ export type {
   RunComparisonChange,
   RunIndexRow,
 } from "./debugger.js";
+export type {
+  LifecycleAuditProjectionResult,
+  LifecycleAuditProjectionState,
+  ReadRunLifecycleAuditProjectionInput,
+  RunLifecycleAuditReaderOptions,
+} from "./lifecycle-audit-projection.js";
 export type {
   TuiViewModel,
   RunHeaderView,
@@ -68,4 +79,5 @@ export type {
   TeamDashboardSelection,
   TeamDashboardFailureSummary,
   DashboardRowStatus,
+  LifecycleAuditEventItem,
 } from "./team-dashboard-view-model.js";
