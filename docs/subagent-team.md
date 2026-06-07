@@ -492,6 +492,17 @@ All lifecycle projections support dry-run semantics. `dryRun: true` in `StaleRun
 
 Recovery readiness (`recoveryReady: boolean`) is exposed in the supervisor lifecycle dashboard section. When true, the supervisor has sufficient durable state (contact registry, run snapshots, ledger state) to recover worker state after a supervisor restart.
 
+### Lifecycle Audit Visibility
+
+The team dashboard can display a worker-scoped lifecycle audit projection for heartbeat, lease, reaper, and shutdown events:
+
+- `heartbeat_recorded` and `worker_heartbeat` show the latest liveness facts for a worker.
+- `lease_acquired`, `lease_renewed`, and `lease_expired` show the lease chain for worker resources.
+- `reaper_planned`, `reaper_executed`, and `reaper_skipped` show stale-worker cleanup intent and outcome.
+- `shutdown_requested`, `shutdown_draining`, `shutdown_completed`, and `shutdown_failed` show shutdown intent, progress, and failure reasons.
+
+The TUI view model consumes these as display projections (`auditEvents`) and renders stable row keys, severity, bounded text, and display-only redaction. It does not read lifecycle JSONL directly, decide whether a worker is stale, or execute reaper/shutdown effects.
+
 ## Run-Scoped Lifecycle Adapter (P6-09)
 
 P6-09 wires `team lifecycle ...` to real run-scoped runtime state instead of a fresh in-memory contact registry.
