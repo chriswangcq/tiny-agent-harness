@@ -10,6 +10,7 @@ import type {
   SupervisorLifecycleInput,
   ShutdownPhase,
   DashboardRowStatus,
+  AuditEvent,
 } from "../src/tui/team-dashboard-view-model.js";
 import type { SubAgentTeamSummary } from "../src/subagent/team.js";
 import type { ContactRegistrySummary } from "../src/subagent/contact-registry.js";
@@ -507,4 +508,133 @@ describe("supervisor lifecycle section", () => {
     const section: { kind: string } = { kind: "supervisor-lifecycle" };
     expect(section.kind).toBe("supervisor-lifecycle");
   });
+
+  it("shows lease freshness when lastRenewedAgoMs is provided", () => {
+    const input = emptyInput();
+    input.supervisorLifecycle = makeLifecycleInput({
+      leases: [{
+        leaseId: "L1",
+        holder: "supervisor",
+        resource: "run-lock",
+        acquiredAt: "2026-06-07T00:00:00.000Z",
+        expiresAt: "2026-06-07T01:00:00.000Z",
+        status: "active",
+        lastRenewedAgoMs: 5000,
+      }],
+    });
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+    const freshnessRow = section.rows.find(r => r.text.includes("renewed"));
+    expect(freshnessRow).toBeDefined();
+    expect(freshnessRow!.status).toBe("ok");
+    expect(freshnessRow!.text).toContain("5s ago");
+  });
+
+  it("shows stale lease freshness as warn when lastRenewedAgoMs is large", () => {
+    const input = emptyInput();
+    input.supervisorLifecycle = makeLifecycleInput({
+      leases: [{
+        leaseId: "L1",
+        holder: "supervisor",
+        resource: "run-lock",
+        acquiredAt: "2026-06-07T00:00:00.000Z",
+        expiresAt: "2026-06-07T01:00:00.000Z",
+        status: "active",
+        lastRenewedAgoMs: 120000,
+      }],
+    });
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+    const freshnessRow = section.rows.find(r => r.text.includes("renewed"));
+    expect(freshnessRow).toBeDefined();
+    expect(freshnessRow!.status).toBe("warn");
+  });
+
+  it("shows reaper pending row when stale run has reaperPending true", () => {
+    const input = emptyInput();
+    input.supervisorLifecycle = makeLifecycleInput({
+      staleRuns: [{
+        workerId: "coder-1",
+        lastHeartbeat: "2026-06-06T00:00:00.000Z",
+        ageMs: 60000,
+        reason: "stale_heartbeat",
+        reaperPending: true,
+      }],
+    });
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+    const reaperRow = section.rows.find(r => r.text.includes("Reaper pending"));
+    expect(reaperRow).toBeDefined();
+    expect(reaperRow!.status).toBe("warn");
+  });
+
+  it("does not show reaper pending row when reaperPending is false", () => {
+    const input = emptyInput();
+    input.supervisorLifecycle = makeLifecycleInput({
+      staleRuns: [{
+        workerId: "coder-1",
+        lastHeartbeat: "2026-06-06T00:00:00.000Z",
+        ageMs: 60000,
+        reason: "stale_heartbeat",
+        reaperPending: false,
+      }],
+    });
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+    const reaperRow = section.rows.find(r => r.text.includes("Reaper pending"));
+    expect(reaperRow).toBeUndefined();
+  });
+
+  it("shows shutdown reason when provided", () => {
+    const input = emptyInput();
+    input.supervisorLifecycle = makeLifecycleInput({
+      shutdownPhase: "draining",
+      shutdownReason: "SIGTERM received from orchestrator",
+    });
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+    const reasonRow = section.rows.find(r => r.text.includes("Shutdown Reason"));
+    expect(reasonRow).toBeDefined();
+    expect(reasonRow!.text).toContain("SIGTERM received from orchestrator");
+    expect(reasonRow!.status).toBe("warn");
+  });
+
+  it("does not show shutdown reason row when reason is absent", () => {
+    const input = emptyInput();
+    input.supervisorLifecycle = makeLifecycleInput({
+      shutdownPhase: "draining",
+    });
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+    const reasonRow = section.rows.find(r => r.text.includes("Shutdown Reason"));
+    expect(reasonRow).toBeUndefined();
+  });
+
+  it("shows last audit event when provided", () => {
+    const input = emptyInput();
+    input.supervisorLifecycle = makeLifecycleInput({
+      lastAuditEvent: {
+        timestamp: "2026-06-07T00:30:00.000Z",
+        kind: "lease_renewed",
+        summary: "Lease L1 renewed by supervisor",
+      },
+    });
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+    const auditRow = section.rows.find(r => r.text.includes("Last Audit"));
+    expect(auditRow).toBeDefined();
+    expect(auditRow!.text).toContain("lease_renewed");
+    expect(auditRow!.text).toContain("Lease L1 renewed by supervisor");
+    expect(auditRow!.status).toBe("info");
+  });
+
+  it("does not show last audit event row when absent", () => {
+    const input = emptyInput();
+    input.supervisorLifecycle = makeLifecycleInput({});
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+    const auditRow = section.rows.find(r => r.text.includes("Last Audit"));
+    expect(auditRow).toBeUndefined();
+  });
+
 });

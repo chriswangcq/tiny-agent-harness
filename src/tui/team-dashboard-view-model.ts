@@ -456,6 +456,8 @@ export interface SupervisorLeaseItem {
   expiresAt: string;
   renewedAt?: string;
   status: "active" | "expired" | "released";
+  /** Milliseconds since last renewal. Omitted if never renewed. */
+  lastRenewedAgoMs?: number;
 }
 
 export interface StaleRunItem {
@@ -464,9 +466,17 @@ export interface StaleRunItem {
   lastHeartbeat?: string;
   ageMs: number;
   reason: string;
+  /** True when a reaper action is queued for this stale run. */
+  reaperPending?: boolean;
 }
 
 export type ShutdownPhase = "active" | "draining" | "shutting_down" | "stopped";
+
+export interface AuditEvent {
+  timestamp: string;
+  kind: string;
+  summary: string;
+}
 
 export interface SupervisorLifecycleInput {
   leases: SupervisorLeaseItem[];
@@ -475,6 +485,10 @@ export interface SupervisorLifecycleInput {
   shutdownPhase: ShutdownPhase;
   dryRun: boolean;
   recoveryReady: boolean;
+  /** Human-readable reason for current/last shutdown. */
+  shutdownReason?: string;
+  /** Most recent audit event from the supervisor. */
+  lastAuditEvent?: AuditEvent;
 }
 
 // ─── Supervisor Lifecycle Section Builder ─────────────────────────
@@ -495,6 +509,18 @@ function buildSupervisorLifecycleSection(
       status: leaseStatus,
       key: `lease:${lease.leaseId}`,
     });
+    // Lease freshness
+    if (lease.lastRenewedAgoMs !== undefined) {
+      const freshnessSec = (lease.lastRenewedAgoMs / 1000).toFixed(0);
+      const freshnessStatus: DashboardRowStatus =
+        lease.lastRenewedAgoMs < 60000 ? "ok" :
+        lease.lastRenewedAgoMs < 300000 ? "warn" : "error";
+      rows.push({
+        text: `    renewed ${freshnessSec}s ago`,
+        status: freshnessStatus,
+        key: `lease-freshness:${lease.leaseId}`,
+      });
+    }
   }
   if (input.leases.length === 0) {
     rows.push({ text: "  No active leases", status: "info" });
@@ -516,6 +542,13 @@ function buildSupervisorLifecycleSection(
       status: "error",
       key: `stale:${stale.workerId}`,
     });
+    if (stale.reaperPending) {
+      rows.push({
+        text: `    Reaper pending`,
+        status: "warn",
+        key: `reaper:${stale.workerId}`,
+      });
+    }
   }
 
   // Dry run flag
@@ -533,12 +566,26 @@ function buildSupervisorLifecycleSection(
     text: `Shutdown Phase: ${input.shutdownPhase}`,
     status: shutdownStatus,
   });
+  if (input.shutdownReason) {
+    rows.push({
+      text: `Shutdown Reason: ${input.shutdownReason}`,
+      status: shutdownStatus,
+    });
+  }
 
   // Recovery readiness
   rows.push({
     text: `Recovery Ready: ${input.recoveryReady ? "YES" : "NO"}`,
     status: input.recoveryReady ? "ok" : "warn",
   });
+
+  // Last audit event
+  if (input.lastAuditEvent) {
+    rows.push({
+      text: `Last Audit: ${input.lastAuditEvent.kind} (${input.lastAuditEvent.summary})`,
+      status: "info",
+    });
+  }
 
   return {
     kind: "supervisor-lifecycle",

@@ -757,7 +757,8 @@ It does not:
 ### Inputs (explicit, typed)
 
 - `TeamDashboardInput` with `SubAgentTeamSummary`, `ContactRegistrySummary`,
-  `TeamDashboardRun[]`, optional `MasterReviewChecklist`, optional QA summary
+  `TeamDashboardRun[]`, optional `MasterReviewChecklist`, optional QA summary,
+  optional `SupervisorLifecycleInput`
 
 ### Outputs
 
@@ -765,3 +766,27 @@ It does not:
   status counts, and failure summary
 - `redactDashboardDisplay()` for display-only redaction (must not
   pollute runtime prompt/model context)
+
+### Supervisor Lifecycle Visibility
+
+The optional `supervisor-lifecycle` section (`section kind: "supervisor-lifecycle"`)
+projects supervisor operational state through the `SupervisorLifecycleInput`:
+
+- **Leases** (`SupervisorLeaseItem[]`): leaseId, holder, resource, acquiredAt,
+  expiresAt, renewedAt, status (active/expired/released), and
+  `lastRenewedAgoMs` for freshness display (ok when <60s, warn when <300s,
+  error otherwise).
+- **Heartbeat cadence** (`heartbeatCadenceMs`): displayed in seconds.
+- **Stale runs** (`StaleRunItem[]`): workerId, runId, lastHeartbeat, ageMs,
+  reason, and `reaperPending` boolean (shows "Reaper pending" warn row when true).
+- **Shutdown phase** (`ShutdownPhase`): active/draining/shutting_down/stopped,
+  with optional `shutdownReason` string (displayed as warn row).
+- **Dry run flag** (`dryRun`): displayed as info or warn.
+- **Recovery readiness** (`recoveryReady`): boolean displayed as ok/warn.
+- **Last audit event** (`AuditEvent`): timestamp, kind, summary; displayed as
+  info row when present.
+
+All fields are pure projections — callers pre-compute freshness, reaper flags,
+reasons, and audit summaries. The view-model performs no fs/process/screen/Date
+reads.
+
