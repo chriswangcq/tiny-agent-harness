@@ -491,3 +491,80 @@ All lifecycle projections support dry-run semantics. `dryRun: true` in `StaleRun
 ### Safe Recovery
 
 Recovery readiness (`recoveryReady: boolean`) is exposed in the supervisor lifecycle dashboard section. When true, the supervisor has sufficient durable state (contact registry, run snapshots, ledger state) to recover worker state after a supervisor restart.
+
+## Operational Lifecycle CLI (P6-08 CLI Surface)
+
+`tiny-agent team lifecycle` provides a CLI surface for the supervisor lifecycle domain. All mutation subcommands default to **dry-run**; the `--execute` flag is required to apply changes.
+
+### Subcommands
+
+| Subcommand | Purpose | Mutation | Dry-Run Default |
+|---|---|---|---|
+| `lifecycle-status <workerId>` | Read-only lifecycle state query | No | N/A |
+| `lease <workerId> [--expiry-ms <ms>]` | Record heartbeat and lease check | Read-only (plan only) | N/A |
+| `shutdown <workerId> [--execute]` | Plan or execute worker shutdown | Yes | **Yes** |
+| `reaper list\|execute --workers-json <json> [--threshold-ms <ms>] [--execute]` | Scan or execute stale worker reaping | Yes | **Yes** |
+
+### Dry-Run vs Execute
+
+- **Dry-run** (default): Returns a plan with `dryRun: true, executed: false`. No state changes are applied.
+- **Execute**: Requires `--execute`. Returns `dryRun: false, executed: true` with applied event records.
+- **Reaper** requires both `mode: execute` AND `--execute` to apply changes; `list` is always dry-run.
+
+### Lifecycle States
+
+Workers transition through these states as heartbeat and evidence age:
+
+```
+healthy → stale → expired → grace_period → shutdown → terminated
+```
+
+- `healthy`: Heartbeat within configured `heartbeatMaxAgeMs` (default 5 min)
+- `stale`: Heartbeat older than `heartbeatMaxAgeMs` but within 2× threshold
+- `expired`: Heartbeat older than 2× `heartbeatMaxAgeMs`
+- `grace_period`: Shutdown requested, within grace period
+- `shutdown`: Beyond grace period, ready for forced termination
+- `terminated`: Worker explicitly terminated
+- `missing_process`: Worker contact exists but process is not running
+
+State transitions are computed by `computeLifecycleState()` in `src/subagent/supervisor-lifecycle.ts` — a pure function with explicit time input.
+
+### Event Audit Trail
+
+All lifecycle operations append events to `runs/<runId>/supervisor/lifecycle-events.jsonl`. Each event has:
+
+- `eventId`: Unique idempotency key
+- `type`: One of 17 known event types (see below)
+- `timestamp`: ISO 8601
+- `payload`: Type-specific data
+
+**Event Types**: `worker_registered`, `worker_status_changed`, `worker_heartbeat`, `worker_terminated`, `lease_requested`, `lease_acquired`, `lease_renewed`, `lease_released`, `lease_expired`, `heartbeat_recorded`, `shutdown_requested`, `shutdown_draining`, `shutdown_completed`, `shutdown_failed`, `reaper_planned`, `reaper_executed`, `reaper_skipped`.
+
+Duplicate `eventId` values are rejected (idempotent append).
+
+### Run-Scoped Storage
+
+Supervisor lifecycle state is **run-scoped** under `.tiny-agent/runs/<runId>/supervisor/`:
+
+```
+runs/<runId>/supervisor/
+  lifecycle-events.jsonl   # append-only event ledger
+  snapshot.json             # latest supervisor state snapshot
+```
+
+The project-scoped `.tiny-agent/supervisor/` path is **NON-ACTIVE** (legacy). New code must use `planRunScopedSupervisorPaths()` from `src/subagent/supervisor-store.ts`.
+
+### `--workers-json` Flag
+
+> ⚠️ **Low-level / internal compatibility.** This flag accepts a raw JSON array of `WorkerContact` objects. The target architecture replaces this with adapter-driven enumeration from run-scoped team/supervisor state. The flag is preserved for testing and internal tooling but should NOT be the default operator path.
+
+### Code Boundaries
+
+| Module | Role | Side Effects |
+|---|---|---|
+| `supervisor-lifecycle.ts` | Pure domain: state computation, heartbeat interpretation, lease evaluation, reaper decisions | None |
+| `supervisor-planner.ts` | Pure planner: computes planned actions from worker snapshots | None (always sets `dryRun:true`) |
+| `supervisor-store.ts` | Durable store: path planning, event append/read, snapshot management | Through `FsPort` and `ClockPort` only |
+| `lifecycle-cli.ts` | CLI dispatcher: parses args, delegates to lifecycle domain | Through `LifecycleCliPorts` and `ExecuteLifecyclePorts` |
+
+All time reads go through explicit clock ports (`nowIso()` or `ClockPort.now()`). No module uses `new Date()` or `Date.now()` internally.
