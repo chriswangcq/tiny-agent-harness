@@ -790,3 +790,19 @@ All fields are pure projections — callers pre-compute freshness, reaper flags,
 reasons, and audit summaries. The view-model performs no fs/process/screen/Date
 reads.
 
+### Run-Scoped Lifecycle Audit Projection
+
+`src/tui/lifecycle-audit-projection.ts` provides the adapter from durable
+run-scoped lifecycle state to the dashboard's `auditEvents` projection:
+
+- `projectLifecycleAuditEvents(events)` maps typed `SupervisorLifecycleEvent[]`
+  into `LifecycleAuditEventItem[]`.
+- `readRunLifecycleAuditProjection({ runDir, previousState })` tails
+  `<runDir>/supervisor/lifecycle-events.jsonl` by byte offset and accumulates a
+  bounded `state.auditEvents` list.
+- `RunLifecycleAuditReader` keeps the offset state across TUI poll cycles.
+
+The reader validates lifecycle events and reports malformed/invalid JSONL lines
+without blocking valid events. It does not decide stale workers or execute
+reaper/shutdown actions; callers pass `reader.read().state.auditEvents` into
+`SupervisorLifecycleInput.auditEvents`.

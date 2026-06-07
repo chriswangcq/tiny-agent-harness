@@ -503,6 +503,8 @@ The team dashboard can display a worker-scoped lifecycle audit projection for he
 
 The TUI view model consumes these as display projections (`auditEvents`) and renders stable row keys, severity, bounded text, and display-only redaction. It does not read lifecycle JSONL directly, decide whether a worker is stale, or execute reaper/shutdown effects.
 
+The adapter from durable runtime state to display projection is `RunLifecycleAuditReader` in `src/tui/lifecycle-audit-projection.ts`. It tails `.tiny-agent/runs/<runId>/supervisor/lifecycle-events.jsonl` by byte offset, validates supervisor lifecycle events, and returns `state.auditEvents` that can be passed directly into `SupervisorLifecycleInput.auditEvents`. The reader is a TUI boundary adapter; the pure `projectLifecycleAuditEvents()` function handles only typed event-to-display mapping.
+
 ## Run-Scoped Lifecycle Adapter (P6-09)
 
 P6-09 wires `team lifecycle ...` to real run-scoped runtime state instead of a fresh in-memory contact registry.
