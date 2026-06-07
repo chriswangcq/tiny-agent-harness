@@ -46,7 +46,11 @@
 │               └── step-XXXX-thinking.trace.txt
 │       │
 │       └── mcp-servers.json        # 可选：本 run 的 MCP server registry
-│
+│       │
+│       ├── supervisor/             # 本 run 的 supervisor 生命周期存储
+│       │   ├── lifecycle-events.jsonl
+│       │   └── snapshot.json
+││
 ├── launcher/                       # 启动器日志
 │   └── ui-<ts>.log
 │

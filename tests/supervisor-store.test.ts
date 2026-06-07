@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   planSupervisorPaths,
+  planRunScopedSupervisorPaths,
   createSupervisorLifecycleEvent,
   createSupervisorSnapshot,
   SUPERVISOR_SNAPSHOT_VERSION,
@@ -60,6 +61,55 @@ describe("planSupervisorPaths", () => {
   });
 });
 
+describe("planRunScopedSupervisorPaths", () => {
+  it("returns paths under .tiny-agent/runs/<runId>/supervisor", () => {
+    const paths = planRunScopedSupervisorPaths("/home/user/project", "run-001");
+    expect(paths.supervisorDir).toBe(
+      "/home/user/project/.tiny-agent/runs/run-001/supervisor",
+    );
+    expect(paths.eventsFile).toBe(
+      "/home/user/project/.tiny-agent/runs/run-001/supervisor/lifecycle-events.jsonl",
+    );
+    expect(paths.snapshotFile).toBe(
+      "/home/user/project/.tiny-agent/runs/run-001/supervisor/snapshot.json",
+    );
+  });
+
+  it("strips trailing slashes from project root", () => {
+    const paths = planRunScopedSupervisorPaths("/home/user/project/", "run-001");
+    expect(paths.supervisorDir).toBe(
+      "/home/user/project/.tiny-agent/runs/run-001/supervisor",
+    );
+  });
+
+  it("rejects project roots containing .. that would escape", () => {
+    expect(() =>
+      planRunScopedSupervisorPaths("/home/user/../escape", "run-001"),
+    ).toThrow(/path traversal/i);
+  });
+
+  it("rejects runId containing ..", () => {
+    expect(() =>
+      planRunScopedSupervisorPaths("/home/user/project", "../escape"),
+    ).toThrow(/path traversal/i);
+  });
+
+  it("rejects runId with path separators", () => {
+    expect(() =>
+      planRunScopedSupervisorPaths("/home/user/project", "run/../escape"),
+    ).toThrow(/path traversal/i);
+  });
+
+  it("allows normal paths and runIds", () => {
+    expect(() =>
+      planRunScopedSupervisorPaths("/home/user/project", "run-001"),
+    ).not.toThrow();
+    expect(() =>
+      planRunScopedSupervisorPaths("/home/user/project", "run-1780792696584"),
+    ).not.toThrow();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Event creation and validation tests
 // ---------------------------------------------------------------------------
@@ -105,16 +155,221 @@ describe("createSupervisorLifecycleEvent", () => {
     );
     expect(event.type).toBe("worker_terminated");
   });
+
+  // ---- Lease events ----
+  it("creates a lease_requested event", () => {
+    const event = createSupervisorLifecycleEvent("evt-005", "lease_requested", {
+      workerId: "w1",
+      leaseId: "lease-001",
+      resource: "task-001",
+      requestedAt: "2024-01-01T00:00:00.000Z",
+    }, "2024-01-01T00:00:00.000Z");
+    expect(event.type).toBe("lease_requested");
+  });
+
+  it("creates a lease_acquired event", () => {
+    const event = createSupervisorLifecycleEvent("evt-010", "lease_acquired", {
+      workerId: "w1",
+      leaseId: "lease-001",
+      resource: "task-001",
+      acquiredAt: "2024-01-01T00:00:00.000Z",
+      expiresAt: "2024-01-01T01:00:00.000Z",
+    }, "2024-01-01T00:00:00.000Z");
+    expect(event.type).toBe("lease_acquired");
+  });
+
+  it("creates a lease_renewed event", () => {
+    const event = createSupervisorLifecycleEvent("evt-011", "lease_renewed", {
+      workerId: "w1",
+      leaseId: "lease-001",
+      renewedAt: "2024-01-01T00:30:00.000Z",
+      newExpiresAt: "2024-01-01T01:30:00.000Z",
+    }, "2024-01-01T00:30:00.000Z");
+    expect(event.type).toBe("lease_renewed");
+  });
+
+  it("creates a lease_released event", () => {
+    const event = createSupervisorLifecycleEvent("evt-012", "lease_released", {
+      workerId: "w1",
+      leaseId: "lease-001",
+      releasedAt: "2024-01-01T00:45:00.000Z",
+    }, "2024-01-01T00:45:00.000Z");
+    expect(event.type).toBe("lease_released");
+  });
+
+  it("creates a lease_expired event", () => {
+    const event = createSupervisorLifecycleEvent("evt-013", "lease_expired", {
+      workerId: "w1",
+      leaseId: "lease-001",
+      expiredAt: "2024-01-01T01:00:00.000Z",
+    }, "2024-01-01T01:00:00.000Z");
+    expect(event.type).toBe("lease_expired");
+  });
+
+  // ---- Heartbeat ----
+  it("creates a heartbeat_recorded event", () => {
+    const event = createSupervisorLifecycleEvent("evt-020", "heartbeat_recorded", {
+      workerId: "w1",
+      sequence: 5,
+      cadenceMs: 60000,
+    }, "2024-01-01T00:05:00.000Z");
+    expect(event.type).toBe("heartbeat_recorded");
+  });
+
+  // ---- Shutdown ----
+  it("creates a shutdown_requested event", () => {
+    const event = createSupervisorLifecycleEvent("evt-030", "shutdown_requested", {
+      phase: "draining",
+      requestedBy: "master",
+      reason: "maintenance window",
+    }, "2024-01-01T00:00:00.000Z");
+    expect(event.type).toBe("shutdown_requested");
+  });
+
+  it("creates a shutdown_draining event", () => {
+    const event = createSupervisorLifecycleEvent("evt-031", "shutdown_draining", {
+      remainingWorkers: 3,
+    }, "2024-01-01T00:01:00.000Z");
+    expect(event.type).toBe("shutdown_draining");
+  });
+
+  it("creates a shutdown_completed event", () => {
+    const event = createSupervisorLifecycleEvent("evt-032", "shutdown_completed", {
+      totalWorkersTerminated: 5,
+    }, "2024-01-01T00:05:00.000Z");
+    expect(event.type).toBe("shutdown_completed");
+  });
+
+  it("creates a shutdown_failed event", () => {
+    const event = createSupervisorLifecycleEvent("evt-033", "shutdown_failed", {
+      reason: "workers did not drain in time",
+    }, "2024-01-01T00:10:00.000Z");
+    expect(event.type).toBe("shutdown_failed");
+  });
+
+  // ---- Reaper ----
+  it("creates a reaper_planned event", () => {
+    const event = createSupervisorLifecycleEvent("evt-040", "reaper_planned", {
+      candidateWorkerId: "w1",
+      reason: "stale heartbeat > 5min",
+      plannedAction: "terminate",
+    }, "2024-01-01T00:10:00.000Z");
+    expect(event.type).toBe("reaper_planned");
+  });
+
+  it("creates a reaper_executed event", () => {
+    const event = createSupervisorLifecycleEvent("evt-041", "reaper_executed", {
+      workerId: "w1",
+      action: "terminate",
+      reason: "stale heartbeat > 5min",
+      affectedLeases: ["lease-001", "lease-002"],
+    }, "2024-01-01T00:10:00.000Z");
+    expect(event.type).toBe("reaper_executed");
+  });
+
+  it("creates a reaper_skipped event", () => {
+    const event = createSupervisorLifecycleEvent("evt-042", "reaper_skipped", {
+      candidateWorkerId: "w2",
+      reason: "recent heartbeat, not stale",
+    }, "2024-01-01T00:10:00.000Z");
+    expect(event.type).toBe("reaper_skipped");
+  });
 });
 
 describe("validateLifecycleEvent", () => {
-  it("accepts a valid event", () => {
+  it("accepts a valid existing event", () => {
     const event = createSupervisorLifecycleEvent("evt-001", "worker_heartbeat", {
       workerId: "w1",
     }, "2024-01-01T00:00:00.000Z");
     const result = validateLifecycleEvent(event);
     expect(result.valid).toBe(true);
     expect(result.errors).toHaveLength(0);
+  });
+
+  it("accepts a lease_acquired event", () => {
+    const event = createSupervisorLifecycleEvent("evt-010", "lease_acquired", {
+      workerId: "w1",
+      leaseId: "lease-001",
+      resource: "task-001",
+      acquiredAt: "2024-01-01T00:00:00.000Z",
+      expiresAt: "2024-01-01T01:00:00.000Z",
+    }, "2024-01-01T00:00:00.000Z");
+    const result = validateLifecycleEvent(event);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it("accepts a heartbeat_recorded event", () => {
+    const event = createSupervisorLifecycleEvent("evt-020", "heartbeat_recorded", {
+      workerId: "w1",
+      sequence: 5,
+      cadenceMs: 60000,
+    }, "2024-01-01T00:05:00.000Z");
+    const result = validateLifecycleEvent(event);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it("accepts a shutdown_requested event (no workerId)", () => {
+    const event = createSupervisorLifecycleEvent("evt-030", "shutdown_requested", {
+      phase: "draining",
+      requestedBy: "master",
+    }, "2024-01-01T00:00:00.000Z");
+    const result = validateLifecycleEvent(event);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it("accepts a shutdown_failed event (no workerId)", () => {
+    const event = createSupervisorLifecycleEvent("evt-033", "shutdown_failed", {
+      reason: "workers did not drain",
+    }, "2024-01-01T00:10:00.000Z");
+    const result = validateLifecycleEvent(event);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it("accepts a reaper_planned event (candidateWorkerId)", () => {
+    const event = createSupervisorLifecycleEvent("evt-040", "reaper_planned", {
+      candidateWorkerId: "w1",
+      reason: "stale",
+      plannedAction: "warn",
+    }, "2024-01-01T00:10:00.000Z");
+    const result = validateLifecycleEvent(event);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it("accepts a reaper_executed event (workerId)", () => {
+    const event = createSupervisorLifecycleEvent("evt-041", "reaper_executed", {
+      workerId: "w1",
+      action: "terminate",
+      reason: "stale heartbeat",
+    }, "2024-01-01T00:10:00.000Z");
+    const result = validateLifecycleEvent(event);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it("accepts a reaper_skipped event (candidateWorkerId)", () => {
+    const event = createSupervisorLifecycleEvent("evt-042", "reaper_skipped", {
+      candidateWorkerId: "w2",
+      reason: "not stale",
+    }, "2024-01-01T00:10:00.000Z");
+    const result = validateLifecycleEvent(event);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it("rejects reaper_planned without candidateWorkerId", () => {
+    const result = validateLifecycleEvent({
+      eventId: "evt-040",
+      type: "reaper_planned",
+      timestamp: "2024-01-01T00:00:00.000Z",
+      payload: { reason: "stale" },
+    });
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => /candidateWorkerId/i.test(e))).toBe(true);
   });
 
   it("rejects null", () => {
@@ -173,11 +428,13 @@ describe("validateLifecycleEvent", () => {
 describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
   let ports: SupervisorPorts;
   let paths: SupervisorPaths;
+  let runPaths: SupervisorPaths;
   let clockNow: string;
 
   beforeEach(() => {
     ports = createInMemorySupervisorPorts();
     paths = planSupervisorPaths("/test/project");
+    runPaths = planRunScopedSupervisorPaths("/test/project", "run-001");
     clockNow = "2024-06-01T12:00:00.000Z";
   });
 
@@ -188,11 +445,7 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
       { workerId: "w1" },
       clockNow,
     );
-    const appendResult = await appendLifecycleEvent(
-      ports,
-      paths,
-      event,
-    );
+    const appendResult = await appendLifecycleEvent(ports, paths, event);
     expect(appendResult.status).toBe("appended");
 
     const readResult = await readAllLifecycleEvents(ports, paths);
@@ -256,8 +509,8 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
     const result = await appendLifecycleEvent(ports, paths, event2);
     expect(result.status).toBe("duplicate");
   });
+
   it("rejects invalid events and does not write them to JSONL", async () => {
-    // An event missing payload - should fail validation
     const invalidEvent = {
       eventId: "evt-bad",
       type: "unknown_type",
@@ -271,7 +524,6 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
       expect(result.message).toContain("Invalid");
     }
 
-    // Verify the invalid event was NOT written to the file
     const readResult = await readAllLifecycleEvents(ports, paths);
     expect(readResult.validEvents).toHaveLength(0);
   });
@@ -285,7 +537,6 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
     );
     await appendLifecycleEvent(ports, paths, event);
 
-    // Write a malformed line directly into the file
     const eventsPath = paths.eventsFile;
     await ports.fs.writeFile(
       eventsPath,
@@ -307,11 +558,9 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
     );
     await appendLifecycleEvent(ports, paths, event);
 
-    // Add empty lines
     const eventsPath = paths.eventsFile;
     await ports.fs.writeFile(
       eventsPath,
-      // Use the current content (appendLifecycleEvent writes valid JSONL)
       (await ports.fs.readFile(eventsPath)) + "\n\n",
     );
 
@@ -329,7 +578,6 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
     );
     await appendLifecycleEvent(ports, paths, event);
 
-    // Write a line that parses as JSON but fails validation
     const eventsPath = paths.eventsFile;
     await ports.fs.writeFile(
       eventsPath,
@@ -343,7 +591,6 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
   });
 
   it("preserves idempotency across restarts by tracking event IDs in snapshot", async () => {
-    // Append an event
     const event = createSupervisorLifecycleEvent(
       "evt-001",
       "worker_heartbeat",
@@ -352,22 +599,16 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
     );
     await appendLifecycleEvent(ports, paths, event);
 
-    // Simulate a restart: create new ports (but same in-memory store)
-    // Since in-memory store persists across port creation, we need to
-    // verify that duplicate rejection works via snapshot replay.
-    // The snapshot tracks seen event IDs.
     const snapshot = createSupervisorSnapshot(
       { eventIds: ["evt-001"] },
       clockNow,
     );
 
-    // Write the snapshot
     await ports.fs.writeFile(
       paths.snapshotFile,
       JSON.stringify(snapshot),
     );
 
-    // Attempt append again - should be duplicate
     const event2 = createSupervisorLifecycleEvent(
       "evt-001",
       "worker_heartbeat",
@@ -375,7 +616,6 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
       clockNow,
     );
 
-    // Load snapshot first to seed seen event IDs
     const appendResult = await appendLifecycleEvent(
       ports,
       paths,
@@ -389,6 +629,138 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
     const readResult = await readAllLifecycleEvents(ports, paths);
     expect(readResult.validEvents).toHaveLength(0);
     expect(readResult.parseErrors).toHaveLength(0);
+  });
+
+  // ---- Run-scoped append/read tests ----
+  it("appends and reads from run-scoped paths", async () => {
+    const event = createSupervisorLifecycleEvent(
+      "evt-r001",
+      "lease_acquired",
+      {
+        workerId: "w1",
+        leaseId: "lease-001",
+        resource: "task-001",
+        acquiredAt: clockNow,
+        expiresAt: "2024-06-01T13:00:00.000Z",
+      },
+      clockNow,
+    );
+    const appendResult = await appendLifecycleEvent(ports, runPaths, event);
+    expect(appendResult.status).toBe("appended");
+
+    const readResult = await readAllLifecycleEvents(ports, runPaths);
+    expect(readResult.validEvents).toHaveLength(1);
+    expect(readResult.validEvents[0].type).toBe("lease_acquired");
+    expect(readResult.parseErrors).toHaveLength(0);
+  });
+
+  it("isolates run-scoped from project-scoped stores", async () => {
+    const projectEvent = createSupervisorLifecycleEvent(
+      "evt-001",
+      "worker_heartbeat",
+      { workerId: "w1" },
+      clockNow,
+    );
+    await appendLifecycleEvent(ports, paths, projectEvent);
+
+    const runEvent = createSupervisorLifecycleEvent(
+      "evt-r001",
+      "lease_acquired",
+      {
+        workerId: "w1",
+        leaseId: "lease-001",
+        resource: "task-001",
+        acquiredAt: clockNow,
+        expiresAt: "2024-06-01T13:00:00.000Z",
+      },
+      clockNow,
+    );
+    await appendLifecycleEvent(ports, runPaths, runEvent);
+
+    const projectRead = await readAllLifecycleEvents(ports, paths);
+    expect(projectRead.validEvents).toHaveLength(1);
+    expect(projectRead.validEvents[0].type).toBe("worker_heartbeat");
+
+    const runRead = await readAllLifecycleEvents(ports, runPaths);
+    expect(runRead.validEvents).toHaveLength(1);
+    expect(runRead.validEvents[0].type).toBe("lease_acquired");
+  });
+
+  it("round-trips all new event types through append and read", async () => {
+    const events: SupervisorLifecycleEvent[] = [
+      // Leases
+      createSupervisorLifecycleEvent("evt-005", "lease_requested", {
+        workerId: "w1", leaseId: "l1", resource: "t1",
+        requestedAt: clockNow,
+      }, clockNow),
+      createSupervisorLifecycleEvent("evt-010", "lease_acquired", {
+        workerId: "w1", leaseId: "l1", resource: "t1",
+        acquiredAt: clockNow, expiresAt: "2024-06-01T13:00:00.000Z",
+      }, clockNow),
+      createSupervisorLifecycleEvent("evt-011", "lease_renewed", {
+        workerId: "w1", leaseId: "l1",
+        renewedAt: clockNow, newExpiresAt: "2024-06-01T14:00:00.000Z",
+      }, clockNow),
+      createSupervisorLifecycleEvent("evt-012", "lease_released", {
+        workerId: "w1", leaseId: "l1", releasedAt: clockNow,
+      }, clockNow),
+      createSupervisorLifecycleEvent("evt-013", "lease_expired", {
+        workerId: "w1", leaseId: "l1", expiredAt: clockNow,
+      }, clockNow),
+      // Heartbeat
+      createSupervisorLifecycleEvent("evt-020", "heartbeat_recorded", {
+        workerId: "w1", sequence: 1, cadenceMs: 60000,
+      }, clockNow),
+      // Shutdown (supervisor-level, no workerId)
+      createSupervisorLifecycleEvent("evt-030", "shutdown_requested", {
+        phase: "draining", requestedBy: "master",
+      }, clockNow),
+      createSupervisorLifecycleEvent("evt-031", "shutdown_draining", {
+        remainingWorkers: 3,
+      }, clockNow),
+      createSupervisorLifecycleEvent("evt-032", "shutdown_completed", {
+        totalWorkersTerminated: 5,
+      }, clockNow),
+      createSupervisorLifecycleEvent("evt-033", "shutdown_failed", {
+        reason: "workers did not drain",
+      }, clockNow),
+      // Reaper
+      createSupervisorLifecycleEvent("evt-040", "reaper_planned", {
+        candidateWorkerId: "w1", reason: "stale", plannedAction: "terminate",
+      }, clockNow),
+      createSupervisorLifecycleEvent("evt-041", "reaper_executed", {
+        workerId: "w1", action: "terminate", reason: "stale",
+      }, clockNow),
+      createSupervisorLifecycleEvent("evt-042", "reaper_skipped", {
+        candidateWorkerId: "w2", reason: "not stale",
+      }, clockNow),
+    ];
+
+    for (const event of events) {
+      const result = await appendLifecycleEvent(ports, runPaths, event);
+      expect(result.status).toBe("appended");
+    }
+
+    const readResult = await readAllLifecycleEvents(ports, runPaths);
+    expect(readResult.validEvents).toHaveLength(13);
+    expect(readResult.parseErrors).toHaveLength(0);
+
+    const types = readResult.validEvents.map((e) => e.type);
+    expect(types).toEqual([
+      "lease_requested",
+      "lease_acquired",
+      "lease_renewed",
+      "lease_released",
+      "lease_expired",
+      "heartbeat_recorded",
+      "shutdown_requested",
+      "shutdown_draining",
+      "shutdown_completed",
+      "shutdown_failed",
+      "reaper_planned",
+      "reaper_executed",
+      "reaper_skipped",
+    ]);
   });
 });
 
