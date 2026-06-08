@@ -87,10 +87,14 @@ function fakeContactStorePort(
 
 function fakeWorkerStatePort(
   writes: Array<{ path: string; state: WorkerProcessState }> = [],
+  storedState?: WorkerProcessState,
 ): WorkerStatePort {
+  let current = storedState;
   return {
+    read: async (_filePath) => current,
     write: async (filePath, state) => {
       writes.push({ path: filePath, state });
+      current = state;
     },
   };
 }
@@ -632,4 +636,102 @@ describe("launchLocalWorker", () => {
       expect(result.contact.runId).toBe("run-001");
     }
   });
+  it("worker state includes terminal status fields in WorkerProcessState type", () => {
+    // Verify the type allows terminal states
+    const running: WorkerProcessState = {
+      workerId: "w1",
+      runId: "r1",
+      pid: 123,
+      spawnedPid: 123,
+      status: "running",
+      startedAt: "2026-01-01T00:00:00Z",
+      command: "node",
+      args: ["test.js"],
+      cwd: "/tmp",
+    };
+    expect(running.status).toBe("running");
+    expect(running.endedAt).toBeUndefined();
+    expect(running.exitCode).toBeUndefined();
+    expect(running.exitSignal).toBeUndefined();
+
+    const exited: WorkerProcessState = {
+      workerId: "w1",
+      runId: "r1",
+      pid: 123,
+      spawnedPid: 123,
+      status: "exited",
+      startedAt: "2026-01-01T00:00:00Z",
+      endedAt: "2026-01-01T01:00:00Z",
+      exitCode: 0,
+      command: "node",
+      args: ["test.js"],
+      cwd: "/tmp",
+    };
+    expect(exited.status).toBe("exited");
+    expect(exited.endedAt).toBe("2026-01-01T01:00:00Z");
+    expect(exited.exitCode).toBe(0);
+
+    const terminated: WorkerProcessState = {
+      workerId: "w1",
+      runId: "r1",
+      pid: 123,
+      spawnedPid: 123,
+      status: "terminated",
+      startedAt: "2026-01-01T00:00:00Z",
+      endedAt: "2026-01-01T02:00:00Z",
+      exitSignal: "SIGTERM",
+      command: "node",
+      args: ["test.js"],
+      cwd: "/tmp",
+    };
+    expect(terminated.status).toBe("terminated");
+    expect(terminated.endedAt).toBe("2026-01-01T02:00:00Z");
+    expect(terminated.exitSignal).toBe("SIGTERM");
+  });
+
+  it("workerStatePort supports read for durable state updates", async () => {
+    const initial: WorkerProcessState = {
+      workerId: "w1",
+      runId: "r1",
+      pid: 123,
+      spawnedPid: 123,
+      status: "running",
+      startedAt: "2026-01-01T00:00:00Z",
+      command: "node",
+      args: ["test.js"],
+      cwd: "/tmp",
+    };
+    const writes: Array<{ path: string; state: WorkerProcessState }> = [];
+    const port = fakeWorkerStatePort(writes, initial);
+
+    // Read back initial state
+    const read1 = await port.read("/state.json");
+    expect(read1).toEqual(initial);
+
+    // Write terminal state
+    const exited: WorkerProcessState = {
+      ...initial,
+      status: "exited",
+      endedAt: "2026-01-01T01:00:00Z",
+      exitCode: 0,
+    };
+    await port.write("/state.json", exited);
+    const read2 = await port.read("/state.json");
+    expect(read2).toEqual(exited);
+    expect(writes.length).toBe(1);
+
+    // Write terminated state
+    const terminated: WorkerProcessState = {
+      ...initial,
+      status: "terminated",
+      endedAt: "2026-01-01T02:00:00Z",
+      exitSignal: "SIGTERM",
+    };
+    await port.write("/state.json", terminated);
+    const read3 = await port.read("/state.json");
+    expect(read3).toEqual(terminated);
+    expect(writes.length).toBe(2);
+  });
+
+
 });
