@@ -64,6 +64,8 @@ export interface TeamSnapshot {
   supervisorEvents: SupervisorLifecycleEvent[];
   createdAt: string;
   runId: string;
+  /** Per-worker process existence. If absent for a worker, defaults to true. */
+  processExistence?: Record<string, boolean>;
 }
 
 export interface LeaseFacts {
@@ -456,7 +458,7 @@ export function createRuntimeAdapter(
     const workerFacts: WorkerFacts[] = [];
 
     for (const w of allWorkers) {
-      const input = buildLifecycleInput(w, true);
+      const input = buildLifecycleInput(w, snapshot.processExistence?.[w.workerId] ?? true);
       const lifecycle = computeLifecycleState(input, config);
       const hbInterpretation = interpretHeartbeat(w.lastHeartbeat, now, config);
       const reaperDecision = decideReaperAction(input, lifecycle, config);
@@ -511,7 +513,7 @@ export function createRuntimeAdapter(
     for (const w of allWorkers) {
       if (w.status === "terminated") continue;
 
-      const input = buildLifecycleInput(w, true);
+      const input = buildLifecycleInput(w, snapshot.processExistence?.[w.workerId] ?? true);
       const lifecycle = computeLifecycleState(input, config);
       const decision = decideReaperAction(input, lifecycle, config);
 
