@@ -87,14 +87,10 @@ function fakeContactStorePort(
 
 function fakeWorkerStatePort(
   writes: Array<{ path: string; state: WorkerProcessState }> = [],
-  storedState?: WorkerProcessState,
 ): WorkerStatePort {
-  let current = storedState;
   return {
-    read: async (_filePath) => current,
     write: async (filePath, state) => {
       writes.push({ path: filePath, state });
-      current = state;
     },
   };
 }
@@ -498,7 +494,6 @@ describe("launchLocalWorker", () => {
     }
   });
 
-
   it("fails at contact_register stage when worker_registered is rejected", async () => {
     const plan = buildLaunchPlan();
     const effects = {
@@ -586,7 +581,6 @@ describe("launchLocalWorker", () => {
       expect(result.evidence.spawnResult).toBeDefined();
     }
   });
-
 
   it("fails at contact_status stage when status change is rejected", async () => {
     const plan = buildLaunchPlan();
@@ -688,50 +682,5 @@ describe("launchLocalWorker", () => {
     expect(terminated.endedAt).toBe("2026-01-01T02:00:00Z");
     expect(terminated.exitSignal).toBe("SIGTERM");
   });
-
-  it("workerStatePort supports read for durable state updates", async () => {
-    const initial: WorkerProcessState = {
-      workerId: "w1",
-      runId: "r1",
-      pid: 123,
-      spawnedPid: 123,
-      status: "running",
-      startedAt: "2026-01-01T00:00:00Z",
-      command: "node",
-      args: ["test.js"],
-      cwd: "/tmp",
-    };
-    const writes: Array<{ path: string; state: WorkerProcessState }> = [];
-    const port = fakeWorkerStatePort(writes, initial);
-
-    // Read back initial state
-    const read1 = await port.read("/state.json");
-    expect(read1).toEqual(initial);
-
-    // Write terminal state
-    const exited: WorkerProcessState = {
-      ...initial,
-      status: "exited",
-      endedAt: "2026-01-01T01:00:00Z",
-      exitCode: 0,
-    };
-    await port.write("/state.json", exited);
-    const read2 = await port.read("/state.json");
-    expect(read2).toEqual(exited);
-    expect(writes.length).toBe(1);
-
-    // Write terminated state
-    const terminated: WorkerProcessState = {
-      ...initial,
-      status: "terminated",
-      endedAt: "2026-01-01T02:00:00Z",
-      exitSignal: "SIGTERM",
-    };
-    await port.write("/state.json", terminated);
-    const read3 = await port.read("/state.json");
-    expect(read3).toEqual(terminated);
-    expect(writes.length).toBe(2);
-  });
-
 
 });

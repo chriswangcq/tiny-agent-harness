@@ -122,9 +122,8 @@ export type WorkerProcessState = {
   cwd: string;
 };
 
-/** Worker state port — explicit durable state read/write. */
+/** Worker state port — explicit durable state write. */
 export type WorkerStatePort = {
-  read: (filePath: string) => Promise<WorkerProcessState | undefined>;
   write: (filePath: string, state: WorkerProcessState) => Promise<void>;
 };
 
