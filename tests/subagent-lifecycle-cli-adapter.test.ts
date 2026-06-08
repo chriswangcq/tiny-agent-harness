@@ -382,4 +382,203 @@ describe("lifecycle CLI adapter", () => {
     expect(result.errorCode).toBe("USAGE");
     expect(result.error).toContain("Missing value for --run");
   });
+
+  it("lifecycle-status surfaces missing_process via processExistence false for terminal-state worker", async () => {
+    const projectRoot = await makeProject();
+    await writeRunRegistry(projectRoot, "run-1", [
+      makeWorker({ workerId: "term", lastHeartbeat: "2026-06-07T11:00:00.000Z" }),
+    ]);
+    // Write terminal worker state
+    await writeWorkerState(projectRoot, "run-1", "term", {
+      pid: 99999,
+      status: "exited",
+      endedAt: "2026-06-07T11:00:00.000Z",
+    });
+
+    const result = await executeLifecycleAdapterCommand(
+      makePorts(),
+      ["lifecycle-status", "term", "--run", "run-1"],
+      { projectRoot, cwd: projectRoot },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.command).toBe("lifecycle-status");
+    expect(result.fact.lifecycleState).toBe("missing_process");
+    expect(result.fact.riskFlags).toContain("missing_process");
+  });
+
+  it("lifecycle-status surfaces missing_process via injected checkProcessExists returning false", async () => {
+    const projectRoot = await makeProject();
+    await writeRunRegistry(projectRoot, "run-1", [
+      makeWorker({ workerId: "gone", lastHeartbeat: "2026-06-07T11:00:00.000Z" }),
+    ]);
+    await writeWorkerState(projectRoot, "run-1", "gone", {
+      pid: 12345,
+      status: "running",
+    });
+
+    let checkCalled: Array<{ pid: number; workerId: string }> = [];
+    const ports = createLifecycleCliAdapterPorts({
+      fs: fsPort,
+      nowIso: () => NOW,
+      newEventId: (prefix: string, seed: string) => `${prefix}-${seed}-gone`,
+      shutdownProcess: async () => {},
+      listRunIds: async () => ["run-1"],
+      checkProcessExists: async (input: { pid: number; workerId: string }) => {
+        checkCalled.push({ pid: input.pid, workerId: input.workerId });
+        return false;
+      },
+    });
+
+    const result = await executeLifecycleAdapterCommand(
+      ports,
+      ["lifecycle-status", "gone", "--run", "run-1"],
+      { projectRoot, cwd: projectRoot },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(checkCalled).toEqual([{ pid: 12345, workerId: "gone" }]);
+    expect(result.fact.lifecycleState).toBe("missing_process");
+    expect(result.fact.riskFlags).toContain("missing_process");
+  });
+
+  it("reaper dry-run lists missing_process workers from terminal-state worker", async () => {
+    const projectRoot = await makeProject();
+    const shutdownCalls: Array<{ pid: number; workerId: string }> = [];
+    await writeRunRegistry(projectRoot, "run-1", [
+      makeWorker({ workerId: "fresh", lastHeartbeat: LATER }),
+      makeWorker({ workerId: "gone", lastHeartbeat: "2026-06-07T11:00:00.000Z" }),
+    ]);
+    // Write terminal state for the stale worker
+    await writeWorkerState(projectRoot, "run-1", "gone", {
+      pid: 12345,
+      status: "exited",
+      endedAt: "2026-06-07T11:30:00.000Z",
+    });
+
+    const result = await executeLifecycleAdapterCommand(
+      makePorts(shutdownCalls),
+      ["reaper", "--run", "run-1"],
+      { projectRoot, cwd: projectRoot },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.command).toBe("reaper");
+    expect(result.envelope.dryRun).toBe(true);
+    expect(result.envelope.executed).toBe(false);
+    // The gone worker is both stale and missing_process
+    expect(result.envelope.staleCount).toBeGreaterThanOrEqual(1);
+    const goneAction = result.envelope.plannedActions?.find(
+      (a: { workerId: string }) => a.workerId === "gone"
+    );
+    expect(goneAction).toBeDefined();
+    expect(goneAction.action).toBe("terminate");
+    expect(shutdownCalls).toEqual([]);
+  });
+
+  it("reaper dry-run lists missing_process workers from injected checkProcessExists returning false", async () => {
+    const projectRoot = await makeProject();
+    const shutdownCalls: Array<{ pid: number; workerId: string }> = [];
+    await writeRunRegistry(projectRoot, "run-1", [
+      makeWorker({ workerId: "gone", lastHeartbeat: "2026-06-07T11:00:00.000Z" }),
+    ]);
+    await writeWorkerState(projectRoot, "run-1", "gone", {
+      pid: 12345,
+      status: "running",
+    });
+
+    let checkCalled: Array<{ pid: number; workerId: string }> = [];
+    const ports = createLifecycleCliAdapterPorts({
+      fs: fsPort,
+      nowIso: () => NOW,
+      newEventId: (prefix: string, seed: string) => `${prefix}-${seed}-gone-reaper`,
+      shutdownProcess: async (pid: number, workerId: string) => {
+        shutdownCalls.push({ pid, workerId });
+      },
+      listRunIds: async () => ["run-1"],
+      checkProcessExists: async (input: { pid: number; workerId: string }) => {
+        checkCalled.push({ pid: input.pid, workerId: input.workerId });
+        return false;
+      },
+    });
+
+    const result = await executeLifecycleAdapterCommand(
+      ports,
+      ["reaper", "--run", "run-1"],
+      { projectRoot, cwd: projectRoot },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.command).toBe("reaper");
+    expect(checkCalled).toEqual([{ pid: 12345, workerId: "gone" }]);
+    expect(result.envelope.dryRun).toBe(true);
+    const goneAction = result.envelope.plannedActions?.find(
+      (a: { workerId: string }) => a.workerId === "gone"
+    );
+    expect(goneAction).toBeDefined();
+    expect(goneAction.action).toBe("terminate");
+    expect(shutdownCalls).toEqual([]);
+  });
+
+  it("lifecycle-status uses default true when worker has running pid but no checkProcessExists port", async () => {
+    const projectRoot = await makeProject();
+    await writeRunRegistry(projectRoot, "run-1", [
+      makeWorker({ workerId: "ok", lastHeartbeat: LATER }),
+    ]);
+    await writeWorkerState(projectRoot, "run-1", "ok", {
+      pid: 12345,
+      status: "running",
+    });
+
+    const result = await executeLifecycleAdapterCommand(
+      makePorts(),
+      ["lifecycle-status", "ok", "--run", "run-1"],
+      { projectRoot, cwd: projectRoot },
+    );
+
+    expect(result.ok).toBe(true);
+    // Without checkProcessExists, process is assumed to exist
+    expect(result.fact.lifecycleState).toBe("healthy");
+    expect(result.fact.riskFlags).not.toContain("missing_process");
+  });
+
+  it("default checkProcessExists returns true for EPERM (process exists but cannot signal)", async () => {
+    const projectRoot = await makeProject();
+    await writeRunRegistry(projectRoot, "run-1", [
+      makeWorker({ workerId: "eperm", lastHeartbeat: "2026-06-07T11:00:00.000Z" }),
+    ]);
+    await writeWorkerState(projectRoot, "run-1", "eperm", {
+      pid: 99999,
+      status: "running",
+    });
+
+    // Inject a checker that simulates EPERM
+    let checkCalled: Array<{ pid: number; workerId: string }> = [];
+    const ports = createLifecycleCliAdapterPorts({
+      fs: fsPort,
+      nowIso: () => NOW,
+      newEventId: (prefix: string, seed: string) => `${prefix}-${seed}-eperm`,
+      shutdownProcess: async () => {},
+      listRunIds: async () => ["run-1"],
+      checkProcessExists: async (input: { pid: number; workerId: string }) => {
+        checkCalled.push({ pid: input.pid, workerId: input.workerId });
+        // Simulate EPERM: process exists but we cannot signal it
+        const err = new Error("EPERM: operation not permitted") as Error & { code: string };
+        err.code = "EPERM";
+        throw err;
+      },
+    });
+
+    const result = await executeLifecycleAdapterCommand(
+      ports,
+      ["lifecycle-status", "eperm", "--run", "run-1"],
+      { projectRoot, cwd: projectRoot },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(checkCalled).toEqual([{ pid: 99999, workerId: "eperm" }]);
+    // EPERM means process exists, so lifecycle should be healthy or stale, NOT missing_process
+    expect(result.fact.lifecycleState).not.toBe("missing_process");
+    expect(result.fact.riskFlags).not.toContain("missing_process");
+  });
 });

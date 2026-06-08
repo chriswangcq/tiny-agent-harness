@@ -59,6 +59,12 @@ export type LifecycleCliAdapterPorts = {
     workerId: string,
     reason?: string,
   ) => Promise<void>;
+  checkProcessExists?: (input: {
+    projectRoot: string;
+    runId: string;
+    workerId: string;
+    pid: number;
+  }) => Promise<boolean>;
 };
 
 export type ExecuteLifecycleAdapterOptions = {
@@ -283,6 +289,31 @@ export function createNodeLifecycleCliAdapterPorts(): LifecycleCliAdapterPorts {
         .sort();
     },
     shutdownProcess: defaultShutdownProcess,
+    checkProcessExists: async ({ pid }) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (err: unknown) {
+        if (
+          err &&
+          typeof err === "object" &&
+          "code" in err &&
+          (err as { code?: string }).code === "ESRCH"
+        ) {
+          return false;
+        }
+        if (
+          err &&
+          typeof err === "object" &&
+          "code" in err &&
+          (err as { code?: string }).code === "EPERM"
+        ) {
+          // EPERM: process exists but caller lacks permission to signal
+          return true;
+        }
+        throw err;
+      }
+    },
   });
 }
 
@@ -507,6 +538,20 @@ async function loadLifecycleContext(
     runId,
   };
 
+  // Populate per-worker process existence from run-scoped worker state files.
+  const processExistence: Record<string, boolean> = {};
+  for (const [workerId, worker] of Object.entries(teamSnapshot.registry.workers)) {
+    processExistence[workerId] = await resolveProcessExistence(
+      ports,
+      projectRoot,
+      runId,
+      workerId,
+    );
+  }
+  if (Object.keys(processExistence).length > 0) {
+    snapshot.processExistence = processExistence;
+  }
+
   return {
     registry: teamSnapshot.registry,
     supervisorEvents: events.validEvents,
@@ -569,6 +614,77 @@ function createRuntimePorts(
     },
   };
 }
+
+/**
+ * Resolve process existence for a worker by reading its run-scoped state file.
+ *
+ * Terminal state (exited/terminated) => false.
+ * Missing/unparseable state or missing pid => true (backward compatible default).
+ * Running state with pid => use injected checkProcessExists if provided, else true.
+ */
+async function resolveProcessExistence(
+  ports: LifecycleCliAdapterPorts,
+  projectRoot: string,
+  runId: string,
+  workerId: string,
+): Promise<boolean> {
+  const workerPaths = planRunScopedWorkerPaths(projectRoot, runId, workerId);
+  let raw: string;
+  try {
+    raw = await ports.fs.readFile(workerPaths.runWorkerStateFile);
+  } catch {
+    // Missing state file => default true
+    return true;
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    // Unparseable state => default true
+    return true;
+  }
+
+  const status = typeof parsed.status === "string" ? parsed.status : undefined;
+  if (status === "exited" || status === "terminated") {
+    return false;
+  }
+
+  const pid = parsed.pid ?? parsed.spawnedPid;
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) {
+    // No valid pid => default true
+    return true;
+  }
+
+  if (ports.checkProcessExists) {
+    try {
+      return await ports.checkProcessExists({ projectRoot, runId, workerId, pid });
+    } catch (err: unknown) {
+      if (
+        err &&
+        typeof err === "object" &&
+        "code" in err &&
+        (err as { code?: string }).code === "ESRCH"
+      ) {
+        return false;
+      }
+      if (
+        err &&
+        typeof err === "object" &&
+        "code" in err &&
+        (err as { code?: string }).code === "EPERM"
+      ) {
+        // EPERM: process exists, return true
+        return true;
+      }
+      throw err;
+    }
+  }
+
+  // No checker port available => default true
+  return true;
+}
+
 
 async function readWorkerPidFromState(
   fs: LifecycleAdapterFsPort,
