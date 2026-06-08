@@ -302,7 +302,15 @@ export function createNodeLifecycleCliAdapterPorts(): LifecycleCliAdapterPorts {
         ) {
           return false;
         }
-        // EPERM means exists but no permission to signal
+        if (
+          err &&
+          typeof err === "object" &&
+          "code" in err &&
+          (err as { code?: string }).code === "EPERM"
+        ) {
+          // EPERM: process exists but caller lacks permission to signal
+          return true;
+        }
         throw err;
       }
     },
@@ -649,7 +657,28 @@ async function resolveProcessExistence(
   }
 
   if (ports.checkProcessExists) {
-    return ports.checkProcessExists({ projectRoot, runId, workerId, pid });
+    try {
+      return await ports.checkProcessExists({ projectRoot, runId, workerId, pid });
+    } catch (err: unknown) {
+      if (
+        err &&
+        typeof err === "object" &&
+        "code" in err &&
+        (err as { code?: string }).code === "ESRCH"
+      ) {
+        return false;
+      }
+      if (
+        err &&
+        typeof err === "object" &&
+        "code" in err &&
+        (err as { code?: string }).code === "EPERM"
+      ) {
+        // EPERM: process exists, return true
+        return true;
+      }
+      throw err;
+    }
   }
 
   // No checker port available => default true

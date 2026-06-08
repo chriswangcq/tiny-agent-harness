@@ -541,4 +541,44 @@ describe("lifecycle CLI adapter", () => {
     expect(result.fact.lifecycleState).toBe("healthy");
     expect(result.fact.riskFlags).not.toContain("missing_process");
   });
+
+  it("default checkProcessExists returns true for EPERM (process exists but cannot signal)", async () => {
+    const projectRoot = await makeProject();
+    await writeRunRegistry(projectRoot, "run-1", [
+      makeWorker({ workerId: "eperm", lastHeartbeat: "2026-06-07T11:00:00.000Z" }),
+    ]);
+    await writeWorkerState(projectRoot, "run-1", "eperm", {
+      pid: 99999,
+      status: "running",
+    });
+
+    // Inject a checker that simulates EPERM
+    let checkCalled: Array<{ pid: number; workerId: string }> = [];
+    const ports = createLifecycleCliAdapterPorts({
+      fs: fsPort,
+      nowIso: () => NOW,
+      newEventId: (prefix: string, seed: string) => `${prefix}-${seed}-eperm`,
+      shutdownProcess: async () => {},
+      listRunIds: async () => ["run-1"],
+      checkProcessExists: async (input: { pid: number; workerId: string }) => {
+        checkCalled.push({ pid: input.pid, workerId: input.workerId });
+        // Simulate EPERM: process exists but we cannot signal it
+        const err = new Error("EPERM: operation not permitted") as Error & { code: string };
+        err.code = "EPERM";
+        throw err;
+      },
+    });
+
+    const result = await executeLifecycleAdapterCommand(
+      ports,
+      ["lifecycle-status", "eperm", "--run", "run-1"],
+      { projectRoot, cwd: projectRoot },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(checkCalled).toEqual([{ pid: 99999, workerId: "eperm" }]);
+    // EPERM means process exists, so lifecycle should be healthy or stale, NOT missing_process
+    expect(result.fact.lifecycleState).not.toBe("missing_process");
+    expect(result.fact.riskFlags).not.toContain("missing_process");
+  });
 });
