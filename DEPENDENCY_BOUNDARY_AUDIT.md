@@ -64,7 +64,7 @@
 
 ## 4. Managed Bash Session env copy (Low)
 
-**File**: `src/bash/managed-session.ts:240`
+**File**: `src/bash/managed-session.ts:238`
 
 **Current violation**:
 - `for (const [key, value] of Object.entries(process.env))` — full opaque env copy
