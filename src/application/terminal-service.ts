@@ -155,14 +155,9 @@ export class TerminalService {
     const session = request.session ?? (await this.ports.sessions.getCurrent());
     const restarted = await this.ports.pty.restart(session, { cwd: request.cwd });
     await this.ports.sessions.save(restarted);
-    return this.okObservation(
-      session,
-      session,
-      restarted.terminal,
-      request,
-      "ok",
-      emptyScreen(session, restarted.outputLog?.ref),
-    );
+    return this.readParseSaveObserve(session, restarted, request, {
+      inputAccepted: false,
+    });
   }
 
   private async handleTerminate(
