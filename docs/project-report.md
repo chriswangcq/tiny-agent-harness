@@ -276,6 +276,37 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 这个边界让未来 “subagent team 管理服务” 可以先复用可测状态机，再在外层接进 MCP、云端队列或本地 CLI。
 
+
+### 4.13 Subagent Lifecycle Runtime 与可观察性
+
+`src/subagent` 在纯状态域之外，还提供了 supervisor lifecycle 存储、lifecycle runtime adapter、status projector、worker 进程状态和 TUI lifecycle audit projection。
+
+#### Supervisor store
+
+`src/subagent/supervisor-store.ts` 定义 supervisor lifecycle 事件类型（`worker_registered`、`worker_status_changed`、`worker_heartbeat`、`worker_terminated`、`lease_*`、`heartbeat_recorded`、`shutdown_*`、`reaper_*`）和 run-scoped 路径规划。事件按 append-only JSONL 写入 `.tiny-agent/runs/<runId>/supervisor/lifecycle-events.jsonl`，snapshot 写入 `supervisor/snapshot.json`。
+
+#### Lifecycle runtime adapter
+
+`src/subagent/lifecycle-runtime-adapter.ts` 是纯 adapter，接收显式 `TeamSnapshot`（含 `processExistence?: Record<string, boolean>`）和注入 port（时钟、事件追加、进程 shutdown、contact event），提供 `recordHeartbeat`、`enumerateWorkers`、`runReaper`、`requestShutdown`。它内部调用 `supervisor-lifecycle.ts` 的纯决策函数（`interpretHeartbeat`、`evaluateLease`、`computeLifecycleState`、`decideReaperAction`）来推导 `WorkerLifecycleState`（healthy / stale / expired / grace_period / shutdown / terminated / missing_process / unknown）。
+
+**Process existence 是 adapter-boundary snapshot input。** `TeamSnapshot.processExistence` 是 `Record<string, boolean>`，由外层（worker launcher spawn 后写入 `workers/<workerId>/state.json`，或 CLI adapter 在 reaper/shutdown 执行前读取 OS process table）注入 adapter。Lifecycle 决策层不自己读 `/proc` 或调用 `process.kill`——它只消费注入的 boolean snapshot 并推导 `missing_process` 状态。
+
+#### Status projector
+
+`src/subagent/status-projector.ts` 是纯函数 `projectWorkerStatus(input)`，从显式输入 snapshot（`WorkerContact`、可选的 `RunSnapshot`、`ImSnapshot`、`LedgerSnapshot`、`LifecycleTemplate` 和显式 `now` ISO timestamp）推导 `WorkerStatusCode`（healthy / degraded / stuck / idle / offline / done / terminated / unknown）。输出包含 risk flags（`stale_heartbeat`、`missing_evidence`、`im_silence`、`ledger_stall`、`run_stall`），供 master agent 和 TUI 消费。
+
+#### Worker 进程状态
+
+`src/subagent/local-worker-launcher.ts` 的 `planRunScopedWorkerPaths` 定义 run-scoped worker 目录：`.tiny-agent/runs/<runId>/workers/<workerId>/`，包含 `state.json`（worker 运行状态）和 `output.log`（worker 输出日志）。Process existence 在 spawn 成功后由 launcher 写入，后续被 lifecycle adapter 读取为 `TeamSnapshot.processExistence`。`src/subagent/supervisor-lifecycle.ts` 的 `ProcessTableEntry`（pid / workerId / startTime / exists）是 lifecycle 决策层可见的进程快照契约。
+
+#### TUI lifecycle audit projection（display projection）
+
+`src/tui/lifecycle-audit-projection.ts` 的 `RunLifecycleAuditReader` 以 byte offset 方式 tail `.tiny-agent/runs/<runId>/supervisor/lifecycle-events.jsonl`，校验 supervisor lifecycle 事件，返回 `state.auditEvents`。纯函数 `projectLifecycleAuditEvents()` 负责 typed event-to-display mapping，产出 TUI view model 可用的 `auditEvents`。
+
+**这是 display projection chain，不是 orchestrator**：audit reader 从 durable lifecycle-events.jsonl 读取事实，纯 projection 函数将事件映射为显示行（severity / row key / bounded text），TUI renderer 渲染。整条链不拥有 agent 状态，不参与模型决策，也不直接改写 supervisor lifecycle 事件。
+
+
+
 ## 5. 代码工作量统计
 
 当前源码口径统计约为：

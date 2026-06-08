@@ -50,6 +50,11 @@
 │       ├── supervisor/             # 本 run 的 supervisor 生命周期存储
 │       │   ├── lifecycle-events.jsonl
 │       │   └── snapshot.json
+│       │
+│       ├── workers/               # 本 run 的 worker 进程状态
+│       │   └── <workerId>/
+│       │       ├── state.json
+│       │       └── output.log
 ││
 ├── launcher/                       # 启动器日志
 │   └── ui-<ts>.log
@@ -144,6 +149,7 @@ TUI 启动器的 stdout/stderr 日志，用于排查 UI 启动问题。不属于
 | Skill runs | `.tiny-agent/runs/<runId>/skill-runs/` |
 | Model context snapshot | `.tiny-agent/runs/<runId>/session.json` |
 | Debug prompt/trace artifacts | `.tiny-agent/runs/<runId>/debug/` |
+| Worker process state | `.tiny-agent/runs/<runId>/workers/<workerId>/state.json` |
 
 仍保持项目级：
 

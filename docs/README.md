@@ -53,6 +53,13 @@
         <skillRunId>/
           state.json
           execution.txt
+      supervisor/
+        lifecycle-events.jsonl
+        snapshot.json
+      workers/
+        <workerId>/
+          state.json
+          output.log
       debug/
         prompts/
           step-0000-thinking.prompt.txt
@@ -60,7 +67,7 @@
           step-0000-thinking.trace.txt
 ```
 
-`state.json` 是最新 run snapshot；`transcript.jsonl` 是 append-only audit ledger；`session.json` 保存 `ModelContextSession` snapshot 以支持 resume；`im/`、`environment/`、`skill-runs/` 都是 run-scoped；`debug/prompts/` 和 `debug/thinking/` 保存不适合直接进入 transcript/model-context 的调试 payload；`runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log` 保存完整 raw PTY 输出。模型看到的 `screen.text` 是一屏 semantic viewport，raw log 通过 `screen.logRef.path` 追溯。
+`state.json` 是最新 run snapshot；`transcript.jsonl` 是 append-only audit ledger；`session.json` 保存 `ModelContextSession` snapshot 以支持 resume；`im/`、`environment/`、`skill-runs/`、`supervisor/`、`workers/` 都是 run-scoped；`debug/prompts/` 和 `debug/thinking/` 保存不适合直接进入 transcript/model-context 的调试 payload；`runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log` 保存完整 raw PTY 输出。模型看到的 `screen.text` 是一屏 semantic viewport，raw log 通过 `screen.logRef.path` 追溯。
 
 ## Keeping Docs Current
 
