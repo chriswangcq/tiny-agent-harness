@@ -285,6 +285,34 @@ describe("lifecycle-runtime-adapter - enumerateWorkers", () => {
     expect(w1.leaseFacts?.leaseStatus).toBe("valid");
     expect(w1.leaseFacts?.leaseId).toBe("lease-w1-1");
   });
+
+  it("propagates processExistence=false from snapshot to lifecycle input", async () => {
+    const { ports } = makeFakePorts();
+    const adapter = createRuntimeAdapter(ports);
+    const snapshot = makeTeamSnapshot([
+      { workerId: "w-missing", status: "active", lastHeartbeat: "2026-06-07T11:45:00.000Z" },
+      { workerId: "w-alive", status: "active", lastHeartbeat: "2026-06-07T11:59:00.000Z" },
+    ]);
+    // Set process existence via snapshot, not worker contact
+    snapshot.processExistence = {
+      "w-missing": false,
+      "w-alive": true,
+    };
+
+    const facts = await adapter.enumerateWorkers(snapshot, {
+      now: NOW,
+      staleThresholdMs: 300000,
+    });
+
+    expect(facts.totalWorkers).toBe(2);
+    const missing = facts.workers.find((w) => w.workerId === "w-missing");
+    const alive = facts.workers.find((w) => w.workerId === "w-alive");
+    expect(missing).toBeDefined();
+    expect(alive).toBeDefined();
+    // missing_process lifecycle should have risk flags indicating process is missing
+    expect(missing!.riskFlags).toContain("missing_process");
+    expect(alive!.riskFlags).not.toContain("missing_process");
+  });
 });
 
 // ---------------------------------------------------------------------------
