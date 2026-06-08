@@ -498,23 +498,6 @@ export interface LifecycleAuditEventItem {
   reason?: string;
   summary?: string;
 }
-export type WorkerLifecycleChainState = {
-  workerId: string;
-  /** Sorted chronological event kinds observed for this worker */
-  stages: string[];
-  /** Whether this worker reached shutdown_completed */
-  shutdownCompleted: boolean;
-  /** Whether this worker reached shutdown_failed */
-  shutdownFailed: boolean;
-  /** Whether a missing_process or stale_heartbeat trigger was observed */
-  triggerKind?: string;
-  /** Last diagnostic reason from the chain */
-  reason?: string;
-  /** Earliest observed timestamp */
-  firstSeen?: string;
-  /** Latest observed timestamp */
-  lastSeen?: string;
-};
 
 
 export interface SupervisorLifecycleInput {
@@ -726,7 +709,8 @@ function buildWorkerLifecycleChainRows(
   // Group events by workerId
   const byWorker = new Map<string, LifecycleAuditEventItem[]>();
   for (const event of events) {
-    const wid = event.workerId ?? "supervisor";
+    if (!event.workerId) continue; // skip non-worker events for chain projection
+    const wid = event.workerId;
     let list = byWorker.get(wid);
     if (!list) {
       list = [];

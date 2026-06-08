@@ -865,4 +865,33 @@ describe("supervisor lifecycle section", () => {
   });
 
 
+
+  it("does not create lifecycle-chain row for audit events without workerId", () => {
+    // Supervisor-level events without workerId should NOT appear in chain rows
+    const events: LifecycleAuditEventItem[] = [
+      {
+        eventId: "evt-supervisor",
+        timestamp: "2026-06-07T00:00:00.000Z",
+        kind: "shutdown_requested",
+        // no workerId - supervisor-level event
+        reason: "operator requested shutdown",
+      },
+    ];
+
+    const input = emptyInput();
+    input.supervisorLifecycle = makeLifecycleInput({ auditEvents: events });
+
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+
+    // No chain rows should exist for events without workerId
+    const chainRows = section.rows.filter(r => r.key?.startsWith("lifecycle-chain:"));
+    expect(chainRows).toEqual([]);
+
+    // But raw event row should still exist
+    const rawRow = section.rows.find(r => r.key === "lifecycle-event:evt-supervisor");
+    expect(rawRow).toBeDefined();
+  });
+
+
 });
