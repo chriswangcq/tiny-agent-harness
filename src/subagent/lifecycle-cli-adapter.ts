@@ -540,6 +540,16 @@ function createRuntimePorts(
       }
       const shutdown = ports.shutdownProcess ?? defaultShutdownProcess;
       await shutdown(pid, workerId, reason);
+      // Write terminal state back to the run-scoped worker state file.
+      const workerPaths = planRunScopedWorkerPaths(projectRoot, runId, workerId);
+      try {
+        const raw = await ports.fs.readFile(workerPaths.runWorkerStateFile);
+        const current = JSON.parse(raw) as Record<string, unknown>;
+        const next = { ...current, status: "terminated", endedAt: ports.nowIso(), exitSignal: "SIGTERM" };
+        await ports.fs.writeFile(workerPaths.runWorkerStateFile, JSON.stringify(next, null, 2));
+      } catch {
+        // State file absent or unparseable -- keep shutdown success; do not hide it.
+      }
     },
     applyContactEvent: async (event: ContactRegistryEvent) => {
       const snapshot = await readTeamDirectory(ports.fs, context.teamLayout);
@@ -574,6 +584,9 @@ async function readWorkerPidFromState(
     return undefined;
   }
   const parsed = JSON.parse(raw) as Record<string, unknown>;
+  // Skip if the process has already reached a terminal state.
+  const status = typeof parsed.status === "string" ? parsed.status : undefined;
+  if (status === "exited" || status === "terminated") return undefined;
   const pid = parsed.pid ?? parsed.spawnedPid;
   return typeof pid === "number" && Number.isInteger(pid) && pid > 0
     ? pid

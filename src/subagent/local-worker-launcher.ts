@@ -109,15 +109,22 @@ export type WorkerProcessState = {
   runId: string;
   pid: number;
   spawnedPid: number;
-  status: "running";
+  status: "running" | "exited" | "terminated";
+  /** ISO timestamp when the process ended (terminal states only). */
+  endedAt?: string;
+  /** Exit code for "exited" state. */
+  exitCode?: number;
+  /** Signal for "terminated" state. */
+  exitSignal?: string;
   startedAt: string;
   command: string;
   args: string[];
   cwd: string;
 };
 
-/** Worker state writer port — explicit durable state effect. */
+/** Worker state port — explicit durable state read/write. */
 export type WorkerStatePort = {
+  read: (filePath: string) => Promise<WorkerProcessState | undefined>;
   write: (filePath: string, state: WorkerProcessState) => Promise<void>;
 };
 

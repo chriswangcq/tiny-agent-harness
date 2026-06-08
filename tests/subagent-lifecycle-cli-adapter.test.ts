@@ -121,6 +121,22 @@ async function writeWorkerState(
     JSON.stringify(state, null, 2),
   );
 }
+async function readWorkerState(
+  projectRoot: string,
+  runId: string,
+  workerId: string,
+): Promise<Record<string, unknown>> {
+  const workerDir = path.join(
+    projectRoot,
+    ".tiny-agent",
+    "runs",
+    runId,
+    "workers",
+    workerId,
+  );
+  const raw = await readFile(path.join(workerDir, "state.json"), "utf-8");
+  return JSON.parse(raw) as Record<string, unknown>;
+}
 
 async function readLifecycleEvents(
   projectRoot: string,
@@ -267,6 +283,13 @@ describe("lifecycle CLI adapter", () => {
     expect(eventTypes).toContain("shutdown_requested");
     expect(eventTypes).toContain("shutdown_completed");
     expect(eventTypes).toContain("reaper_executed");
+
+    // Verify terminal state was written after shutdown
+    const workerState = await readWorkerState(projectRoot, "run-1", "stale");
+    expect(workerState.status).toBe("terminated");
+    expect(workerState.endedAt).toBe(NOW);
+    expect(workerState.exitSignal).toBe("SIGTERM");
+    expect(workerState.pid).toBe(12345);
   });
 
   it("shutdown execute reports missing pid as structured failure", async () => {
@@ -282,6 +305,36 @@ describe("lifecycle CLI adapter", () => {
     expect(result.ok).toBe(false);
     expect(result.errorCode).toBe("SHUTDOWN_FAILED");
     expect(result.error).toContain("Missing worker pid");
+
+    const eventTypes = (await readLifecycleEvents(projectRoot, "run-1")).map(
+      (event) => event.type,
+    );
+    expect(eventTypes).toContain("shutdown_requested");
+    expect(eventTypes).toContain("shutdown_failed");
+  });
+
+  it("shutdown execute skips terminal worker state and does not call shutdownProcess", async () => {
+    const projectRoot = await makeProject();
+    const shutdownCalls: Array<{ pid: number; workerId: string }> = [];
+    await writeRunRegistry(projectRoot, "run-1", [makeWorker()]);
+    // Write worker state with a terminal status that should be skipped
+    await writeWorkerState(projectRoot, "run-1", "worker-1", {
+      pid: 12345,
+      status: "terminated",
+      endedAt: "2026-06-07T11:00:00.000Z",
+      exitSignal: "SIGTERM",
+    });
+
+    const result = await executeLifecycleAdapterCommand(
+      makePorts(shutdownCalls),
+      ["shutdown", "worker-1", "--run", "run-1", "--execute"],
+      { projectRoot, cwd: projectRoot },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.errorCode).toBe("SHUTDOWN_FAILED");
+    expect(result.error).toContain("Missing worker pid");
+    expect(shutdownCalls).toEqual([]);
 
     const eventTypes = (await readLifecycleEvents(projectRoot, "run-1")).map(
       (event) => event.type,
