@@ -480,9 +480,18 @@ describe("TerminalService", () => {
   });
 
   it("restarts and terminates the requested session", async () => {
-    const { ports, restarts, terminates, saves } = makePorts({
+    const promptChunk =
+      formatPromptMarker({
+        nonce: "nonce",
+        returnCode: 0,
+        cwd: "/tmp",
+        promptSeq: 2,
+      }) +
+      "\n";
+    const { ports, readCalls, restarts, terminates, saves } = makePorts({
       currentSession: "default",
       snapshots: [makeSnapshot("default", terminal(3))],
+      reads: { default: [promptChunk] },
     });
     const service = new TerminalService(ports, makeConfig());
 
@@ -495,8 +504,18 @@ describe("TerminalService", () => {
       reason: "done",
     });
 
+    expect(readCalls[0]).toMatchObject({
+      session: "default",
+      cursor: "0",
+      options: { afterPromptSeq: 1 },
+    });
+    expect(restart.screen.text).toBe(promptChunk);
+    expect(restart.returnedToPrompt).toBe(true);
     expect(restarts).toEqual([{ session: "default", cwd: "/tmp" }]);
     expect(terminates).toEqual(["default"]);
+    expect(saves.at(-2)?.terminal).toMatchObject({
+      lastShellPrompt: { cwd: "/tmp", promptSeq: 2 },
+    });
     expect(saves.at(-1)?.terminal).toMatchObject({
       alive: false,
       termination: {
