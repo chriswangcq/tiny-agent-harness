@@ -498,6 +498,24 @@ export interface LifecycleAuditEventItem {
   reason?: string;
   summary?: string;
 }
+export type WorkerLifecycleChainState = {
+  workerId: string;
+  /** Sorted chronological event kinds observed for this worker */
+  stages: string[];
+  /** Whether this worker reached shutdown_completed */
+  shutdownCompleted: boolean;
+  /** Whether this worker reached shutdown_failed */
+  shutdownFailed: boolean;
+  /** Whether a missing_process or stale_heartbeat trigger was observed */
+  triggerKind?: string;
+  /** Last diagnostic reason from the chain */
+  reason?: string;
+  /** Earliest observed timestamp */
+  firstSeen?: string;
+  /** Latest observed timestamp */
+  lastSeen?: string;
+};
+
 
 export interface SupervisorLifecycleInput {
   leases: SupervisorLeaseItem[];
@@ -612,6 +630,16 @@ function buildSupervisorLifecycleSection(
     });
   }
 
+  // Worker lifecycle chain projection (group events by worker)
+  const chainRows = buildWorkerLifecycleChainRows(input.auditEvents ?? []);
+  if (chainRows.length > 0) {
+    rows.push({
+      text: `Worker Lifecycle Chains: ${chainRows.length}`,
+      status: "info",
+    });
+    rows.push(...chainRows);
+  }
+
   const auditRows = buildLifecycleAuditRows(input.auditEvents ?? []);
   if (auditRows.length > 0) {
     rows.push({
@@ -683,3 +711,102 @@ function lifecycleAuditStatus(kind: string): DashboardRowStatus {
       return "info";
   }
 }
+
+// ─── Worker Lifecycle Chain Projection ────────────────────────────
+
+/**
+ * Build chain summary rows: group audit events by workerId, detect lifecycle
+ * stages, and produce one status row per worker showing the chain progression.
+ *
+ * Pure display projection — no orchestration or side effects.
+ */
+function buildWorkerLifecycleChainRows(
+  events: LifecycleAuditEventItem[],
+): TeamDashboardRow[] {
+  // Group events by workerId
+  const byWorker = new Map<string, LifecycleAuditEventItem[]>();
+  for (const event of events) {
+    const wid = event.workerId ?? "supervisor";
+    let list = byWorker.get(wid);
+    if (!list) {
+      list = [];
+      byWorker.set(wid, list);
+    }
+    list.push(event);
+  }
+
+  const rows: TeamDashboardRow[] = [];
+
+  for (const [workerId, workerEvents] of byWorker) {
+    // Sort chronologically
+    workerEvents.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+
+    const stages: string[] = [];
+    let triggerKind: string | undefined;
+    let shutdownCompleted = false;
+    let shutdownFailed = false;
+    let reason: string | undefined;
+    const firstSeen = workerEvents[0]?.timestamp;
+    const lastSeen = workerEvents[workerEvents.length - 1]?.timestamp;
+
+    for (const event of workerEvents) {
+      stages.push(event.kind);
+
+      // Detect trigger events: missing_process, stale_heartbeat, reaper_*
+      if (
+        event.kind === "missing_process" ||
+        event.kind === "stale_heartbeat" ||
+        event.kind === "reaper_planned" ||
+        event.kind === "reaper_executed"
+      ) {
+        if (!triggerKind) triggerKind = event.kind;
+      }
+
+      if (event.kind === "shutdown_completed") {
+        shutdownCompleted = true;
+      }
+      if (event.kind === "shutdown_failed") {
+        shutdownFailed = true;
+      }
+
+      // Capture the most diagnostic reason
+      if (event.reason) {
+        reason = event.reason;
+      }
+    }
+
+    // Determine status
+    let status: DashboardRowStatus;
+    if (shutdownFailed || triggerKind === "missing_process") {
+      status = "error";
+    } else if (
+      triggerKind === "stale_heartbeat" ||
+      triggerKind === "reaper_planned" ||
+      triggerKind === "reaper_executed" ||
+      (!shutdownCompleted && !shutdownFailed && stages.some(s => s === "shutdown_requested" || s === "shutdown_draining"))
+    ) {
+      status = "warn";
+    } else if (shutdownCompleted) {
+      status = "ok";
+    } else {
+      status = "info";
+    }
+
+    // Build chain text
+    const uniqueStages = [...new Set(stages)];
+    const chainText = uniqueStages.join(" → ");
+    let text = `Chain ${workerId}: ${chainText}`;
+    if (reason) {
+      text += ` (${reason})`;
+    }
+
+    rows.push({
+      text: safeDashboardText(text),
+      status,
+      key: `lifecycle-chain:${workerId}`,
+    });
+  }
+
+  return rows;
+}
+
