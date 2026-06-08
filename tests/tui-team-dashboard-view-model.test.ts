@@ -757,4 +757,141 @@ describe("supervisor lifecycle section", () => {
     expect(row.text.endsWith("...")).toBe(true);
   });
 
+
+  it("shows worker lifecycle chain for missing_process -> shutdown_requested -> shutdown_completed", () => {
+    const events: LifecycleAuditEventItem[] = [
+      {
+        eventId: "evt-missing",
+        timestamp: "2026-06-07T00:00:00.000Z",
+        kind: "missing_process",
+        workerId: "coder-1",
+        reason: "process not found",
+      },
+      {
+        eventId: "evt-requested",
+        timestamp: "2026-06-07T00:01:00.000Z",
+        kind: "shutdown_requested",
+        workerId: "coder-1",
+        reason: "missing process cleanup",
+      },
+      {
+        eventId: "evt-completed",
+        timestamp: "2026-06-07T00:02:00.000Z",
+        kind: "shutdown_completed",
+        workerId: "coder-1",
+      },
+    ];
+
+    const input = emptyInput();
+    input.supervisorLifecycle = makeLifecycleInput({ auditEvents: events });
+
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+
+    const chainRow = section.rows.find(r => r.key === "lifecycle-chain:coder-1");
+    expect(chainRow).toBeDefined();
+    expect(chainRow!.status).toBe("error");
+    expect(chainRow!.text).toContain("coder-1");
+    expect(chainRow!.text).toContain("missing_process");
+    expect(chainRow!.text).toContain("shutdown_requested");
+    expect(chainRow!.text).toContain("shutdown_completed");
+    expect(chainRow!.text).toContain("\u2192");
+  });
+
+  it("shows worker lifecycle chain for stale_heartbeat -> shutdown_requested -> shutdown_failed", () => {
+    const events: LifecycleAuditEventItem[] = [
+      {
+        eventId: "evt-stale",
+        timestamp: "2026-06-07T00:00:00.000Z",
+        kind: "stale_heartbeat",
+        workerId: "coder-2",
+        reason: "no heartbeat for 300s",
+      },
+      {
+        eventId: "evt-requested",
+        timestamp: "2026-06-07T00:01:00.000Z",
+        kind: "shutdown_requested",
+        workerId: "coder-2",
+        reason: "stale heartbeat reaper",
+      },
+      {
+        eventId: "evt-failed",
+        timestamp: "2026-06-07T00:02:00.000Z",
+        kind: "shutdown_failed",
+        workerId: "coder-2",
+        reason: "process already exited",
+      },
+    ];
+
+    const input = emptyInput();
+    input.supervisorLifecycle = makeLifecycleInput({ auditEvents: events });
+
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+
+    const chainRow = section.rows.find(r => r.key === "lifecycle-chain:coder-2");
+    expect(chainRow).toBeDefined();
+    expect(chainRow!.status).toBe("error");
+    expect(chainRow!.text).toContain("coder-2");
+    expect(chainRow!.text).toContain("stale_heartbeat");
+    expect(chainRow!.text).toContain("shutdown_requested");
+    expect(chainRow!.text).toContain("shutdown_failed");
+  });
+
+  it("redacts and clips chain reason text for display safety", () => {
+    const events: LifecycleAuditEventItem[] = [
+      {
+        eventId: "evt-secret",
+        timestamp: "2026-06-07T00:00:00.000Z",
+        kind: "shutdown_failed",
+        workerId: "coder-3",
+        reason: "failed with token=abc123def456" + "x".repeat(200),
+      },
+    ];
+
+    const input = emptyInput();
+    input.supervisorLifecycle = makeLifecycleInput({ auditEvents: events });
+
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+
+    const chainRow = section.rows.find(r => r.key === "lifecycle-chain:coder-3");
+    expect(chainRow).toBeDefined();
+
+    // Reason should be redacted and clipped
+    expect(chainRow!.text).toContain("[REDACTED]");
+    expect(chainRow!.text).not.toContain("abc123def456");
+    expect(chainRow!.text.length).toBeLessThanOrEqual(140);
+  });
+
+
+
+  it("does not create lifecycle-chain row for audit events without workerId", () => {
+    // Supervisor-level events without workerId should NOT appear in chain rows
+    const events: LifecycleAuditEventItem[] = [
+      {
+        eventId: "evt-supervisor",
+        timestamp: "2026-06-07T00:00:00.000Z",
+        kind: "shutdown_requested",
+        // no workerId - supervisor-level event
+        reason: "operator requested shutdown",
+      },
+    ];
+
+    const input = emptyInput();
+    input.supervisorLifecycle = makeLifecycleInput({ auditEvents: events });
+
+    const vm = buildTeamDashboardViewModel(input);
+    const section = vm.sections.find(s => s.kind === "supervisor-lifecycle")!;
+
+    // No chain rows should exist for events without workerId
+    const chainRows = section.rows.filter(r => r.key?.startsWith("lifecycle-chain:"));
+    expect(chainRows).toEqual([]);
+
+    // But raw event row should still exist
+    const rawRow = section.rows.find(r => r.key === "lifecycle-event:evt-supervisor");
+    expect(rawRow).toBeDefined();
+  });
+
+
 });
