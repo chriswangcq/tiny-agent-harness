@@ -60,6 +60,9 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("--text-stdin");
     expect(prompt.messages[0]!.content).toContain("io_wait");
     expect(prompt.messages[0]!.content).toContain("Thinking is reasoning-only");
+    expect(prompt.messages[0]!.content).toContain("There is no model-level final turn");
+    expect(prompt.messages[0]!.content).toContain("Thinking text is never delivered to the user");
+    expect(prompt.messages[0]!.content).toContain("send the reply through IM before calling io_wait");
     expect(prompt.messages[0]!.content).toContain("no special User main message");
     expect(prompt.messages[0]!.content).toContain("role=user for chat-template compatibility");
 

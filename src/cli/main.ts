@@ -557,7 +557,7 @@ async function main(): Promise<void> {
       die("Usage: tiny-agent run --channel <channel> [--task <task>] [--state-dir <dir>] OR tiny-agent run --resume <runId|latest>");
     }
   } else if (args[0]) {
-    const reserved = ["io_wait", "io-wait", "final"];
+    const reserved = ["io_wait", "io-wait"];
     if (reserved.includes(args[0])) {
       die(`"${args[0]}" is a tool call, not a CLI command.`);
     }

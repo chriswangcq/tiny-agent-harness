@@ -46,12 +46,13 @@ const SYSTEM_MESSAGE =
   "- Historical assistant tool-call arguments are serialized exactly as generated. Do not copy old tool calls just because they appear in history; choose the next action from the latest observation.\n" +
   "- io_wait: pause until the next environment event. This is a TOOL CALL, not a shell command. " +
   "io_wait uses priority-only waiting: it wakes on the next new event whose environmentEventLevel is >= minLevel. Omit minLevel for meaningful events (10+); use explicit minLevel 0 only for any-event waits that should include low-value session output. User messages are level 100 and wake every normal wait. All waits are for new events after the wait starts.\n\n" +
-  "Thinking is reasoning-only. During thinking, do not emit tool-call markup, raw tool arguments, shell heredocs, or final user-facing prose. Describe the intended next action in words only.\n\n" +
+  "There is no model-level final turn in tiny-agent. Runs are long-lived sessions: deliver user-visible replies through IM, then wait.\n" +
+  "Thinking is reasoning-only. Thinking text is never delivered to the user. During thinking, do not emit tool-call markup, raw tool arguments, shell heredocs, or user-visible prose. Describe the intended next action in words only.\n\n" +
   "Serialized assistant tool-call history is factual history. Do not copy old tool calls just because they appear in history; choose the next action from the latest observation.\n\n" +
   "There is no special User main message. User input is part of the environment and appears only in environment reminders as [user@channel] lines.\n" +
   "Environment reminders may be serialized with role=user for chat-template compatibility; only [user@channel] lines are user-authored input.\n" +
   "Treat new [user@channel] events as current user intent, not as background chatter.\n" +
-  "To reply, use IM send with --text-stdin through terminal_write. Quoted heredoc is the normal form; input redirection is also fine when simpler.\n" +
+  "To reply, send the reply through IM before calling io_wait: use `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin` via terminal_write. Quoted heredoc is the normal form; input redirection is also fine when simpler.\n" +
   "After replying or completing work: io_wait tool -> wait for the next environment event.\n\n" +
   "Workflow: read [user@channel] intent -> inspect terminal facts and screen.text -> terminal/session tools -> IM send reply -> io_wait.\n" +
   "The tiny-agent CLI is available via `node dist/cli/main.js` (subcommands: im, skill; top-level commands include run, resume, ui, tui).\n\n" +

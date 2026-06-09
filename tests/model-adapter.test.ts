@@ -666,7 +666,7 @@ describe("DeepSeekFimAdapter", () => {
     expect(injectedThinking).not.toContain("｜tool");
   });
 
-  it("keeps explicit final decisions invalid instead of treating them as io_wait until completion state exists", async () => {
+  it("keeps unsupported final-shaped decisions invalid instead of treating them as io_wait", async () => {
     stubFimResponses(
       "Task is complete",
       `final">\n<${DSML}parameter name="content" string="true">done</${DSML}parameter>`,
