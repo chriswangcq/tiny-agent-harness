@@ -511,7 +511,7 @@ export function createRuntimeAdapter(
     const staleDecisions: Array<{ workerId: string; action: string; reason: string }> = [];
 
     for (const w of allWorkers) {
-      if (w.status === "terminated") continue;
+      if (w.status === "terminated" || w.status === "offline") continue;
 
       const input = buildLifecycleInput(w, snapshot.processExistence?.[w.workerId] ?? true);
       const lifecycle = computeLifecycleState(input, config);
@@ -607,6 +607,14 @@ export function createRuntimeAdapter(
         };
         const compResult = await ports.appendSupervisorEvent(compEvent);
         appended.push({ type: "shutdown_completed", ...compResult });
+
+        await ports.applyContactEvent({
+          kind: "worker_status_changed",
+          eventId: ports.generateId("status-chg", d.workerId),
+          workerId: d.workerId,
+          status: "terminated",
+          reason: d.reason,
+        });
       }
 
       // reaper_executed (records the reaper action, not the shutdown result)
@@ -669,7 +677,7 @@ export function createRuntimeAdapter(
     const plan = {
       event: "worker_status_changed",
       workerId: worker.workerId,
-      targetStatus: "offline" as const,
+      targetStatus: "terminated" as const,
       reason,
       timestamp: now,
     };
@@ -737,7 +745,7 @@ export function createRuntimeAdapter(
       kind: "worker_status_changed",
       eventId: ports.generateId("status-chg", worker.workerId),
       workerId: worker.workerId,
-      status: "offline",
+      status: "terminated",
       reason,
     });
 
