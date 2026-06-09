@@ -31,6 +31,8 @@ import {
   type SuccessEnvelopeInput,
 } from "../cli/envelope.js";
 import type { UserMessage } from "../types/environment.js";
+import type { TeamDirectoryEvent } from "./directory-store.js";
+import { DIRECTORY_EVENT_VERSION } from "./directory-store.js";
 
 const TOOL_NAME = "team";
 
@@ -117,12 +119,14 @@ export type TeamParseResult =
 export type TeamServiceState = {
   roster: TeamRosterState;
   taskState: SubAgentTeamState;
+  events: TeamDirectoryEvent[];
 };
 
 export function createTeamServiceState(teamId = "default-team"): TeamServiceState {
   return {
     roster: createTeamRosterState(teamId),
     taskState: createSubAgentTeamState(teamId),
+    events: [],
   };
 }
 
@@ -406,12 +410,22 @@ function parseTaskArgs(args: string[]): TeamParseResult {
 }
 
 export function handleCreateCommand(
+  ports: TeamCliPorts,
   state: TeamServiceState,
   cmd: TeamCreateParsedCommand,
   cwd?: string,
 ): CliEnvelope {
   state.roster = createTeamRosterState(cmd.teamId);
   state.taskState = createSubAgentTeamState(cmd.teamId);
+  state.events = [
+    {
+      schemaVersion: DIRECTORY_EVENT_VERSION,
+      kind: "team_created",
+      eventId: `evt-${ports.newEventId("evt", cmd.teamId)}-team-created`,
+      timestamp: ports.nowIso(),
+      teamId: cmd.teamId,
+    },
+  ];
   return successEnvelope({
     tool: TOOL_NAME,
     cwd,
@@ -468,6 +482,7 @@ export function handleMemberCommand(
       const result = applyTeamRosterEvent(state.roster, event);
       if (result.status === "applied") {
         state.roster = result.state;
+        recordRosterEvent(ports, state, event);
         addTaskMemberIfMissing(ports, state, cmd.memberId);
         return successEnvelope({
           ...base,
@@ -502,6 +517,7 @@ export function handleMemberCommand(
       const result = applyTeamRosterEvent(state.roster, event);
       if (result.status === "applied") {
         state.roster = result.state;
+        recordRosterEvent(ports, state, event);
         return successEnvelope({
           ...base,
           extra: { command: "member update", memberId: cmd.memberId, result: result.state.members[cmd.memberId] },
@@ -526,6 +542,9 @@ export function handleMemberCommand(
       const result = applyTeamRosterEvent(state.roster, event);
       if (result.status === "applied" || result.status === "duplicate") {
         state.roster = result.state;
+        if (result.status === "applied") {
+          recordRosterEvent(ports, state, event);
+        }
         if (cmd.status === "offline" || cmd.status === "terminated") {
           markTaskMemberOffline(ports, state, cmd.memberId);
         }
@@ -554,6 +573,7 @@ export function handleMemberCommand(
       const result = applyTeamRosterEvent(state.roster, event);
       if (result.status === "applied") {
         state.roster = result.state;
+        recordRosterEvent(ports, state, event);
         return successEnvelope({
           ...base,
           extra: {
@@ -582,6 +602,9 @@ export function handleMemberCommand(
       const result = applyTeamRosterEvent(state.roster, event);
       if (result.status === "applied" || result.status === "duplicate") {
         state.roster = result.state;
+        if (result.status === "applied") {
+          recordRosterEvent(ports, state, event);
+        }
         markTaskMemberOffline(ports, state, cmd.memberId);
         return successEnvelope({
           ...base,
@@ -615,7 +638,7 @@ export function handleTaskCommand(
         taskId: cmd.taskId,
         title: cmd.title,
       };
-      return applyTaskEvent(state, event, base, "TASK_CREATE_FAILED", {
+      return applyTaskEvent(ports, state, event, base, "TASK_CREATE_FAILED", {
         command: "task create",
         taskId: cmd.taskId,
       });
@@ -660,7 +683,7 @@ export function handleTaskCommand(
         taskId: cmd.taskId,
         workerId: cmd.memberId,
       };
-      const assigned = applyTaskEvent(state, event, base, "TASK_ASSIGN_FAILED", {
+      const assigned = applyTaskEvent(ports, state, event, base, "TASK_ASSIGN_FAILED", {
         command: "task assign",
         taskId: cmd.taskId,
         memberId: cmd.memberId,
@@ -710,6 +733,7 @@ export function handleTaskCommand(
         });
       }
       state.taskState = dispatchRequested.state;
+      recordTaskEvent(ports, state, dispatchEvent);
 
       return successEnvelope({
         ...base,
@@ -728,7 +752,7 @@ export function handleTaskCommand(
         eventId: `evt-${ports.newEventId("evt", cmd.taskId)}-start`,
         taskId: cmd.taskId,
       };
-      return applyTaskEvent(state, event, base, "TASK_START_FAILED", {
+      return applyTaskEvent(ports, state, event, base, "TASK_START_FAILED", {
         command: "task start",
         taskId: cmd.taskId,
       });
@@ -741,7 +765,7 @@ export function handleTaskCommand(
         taskId: cmd.taskId,
         output: parseOptionalJson(cmd.output),
       };
-      return applyTaskEvent(state, event, base, "TASK_SUCCEED_FAILED", {
+      return applyTaskEvent(ports, state, event, base, "TASK_SUCCEED_FAILED", {
         command: "task succeed",
         taskId: cmd.taskId,
       });
@@ -754,7 +778,7 @@ export function handleTaskCommand(
         taskId: cmd.taskId,
         error: cmd.error,
       };
-      return applyTaskEvent(state, event, base, "TASK_FAIL_FAILED", {
+      return applyTaskEvent(ports, state, event, base, "TASK_FAIL_FAILED", {
         command: "task fail",
         taskId: cmd.taskId,
       });
@@ -767,7 +791,7 @@ export function handleTaskCommand(
         taskId: cmd.taskId,
         reason: cmd.reason,
       };
-      return applyTaskEvent(state, event, base, "TASK_CANCEL_FAILED", {
+      return applyTaskEvent(ports, state, event, base, "TASK_CANCEL_FAILED", {
         command: "task cancel",
         taskId: cmd.taskId,
       });
@@ -794,7 +818,7 @@ export function executeTeamCommand(
 
   const cmd = parsed.command;
   if (cmd.group === "create") {
-    return handleCreateCommand(state, cmd, cwd);
+    return handleCreateCommand(ports, state, cmd, cwd);
   }
   if (cmd.group === "member") {
     return handleMemberCommand(ports, state, cmd, cwd);
@@ -807,15 +831,19 @@ export function recordTaskDispatchSent(
   state: TeamServiceState,
   dispatch: TeamTaskDispatchPlan,
 ): void {
-  const result = applySubAgentTeamEvent(state.taskState, {
+  const event: SubAgentTeamEvent = {
     kind: "task_dispatch_sent",
     eventId: `evt-${ports.newEventId("evt", dispatch.taskId)}-dispatch-sent`,
     taskId: dispatch.taskId,
     messageId: dispatch.message.id,
     timestamp: ports.nowIso(),
-  });
+  };
+  const result = applySubAgentTeamEvent(state.taskState, event);
   if (result.status === "applied" || result.status === "duplicate") {
     state.taskState = result.state;
+    if (result.status === "applied") {
+      recordTaskEvent(ports, state, event);
+    }
   }
 }
 
@@ -825,16 +853,20 @@ export function recordTaskDispatchFailed(
   dispatch: TeamTaskDispatchPlan,
   error: string,
 ): void {
-  const result = applySubAgentTeamEvent(state.taskState, {
+  const event: SubAgentTeamEvent = {
     kind: "task_dispatch_failed",
     eventId: `evt-${ports.newEventId("evt", dispatch.taskId)}-dispatch-failed`,
     taskId: dispatch.taskId,
     messageId: dispatch.message.id,
     timestamp: ports.nowIso(),
     error,
-  });
+  };
+  const result = applySubAgentTeamEvent(state.taskState, event);
   if (result.status === "applied" || result.status === "duplicate") {
     state.taskState = result.state;
+    if (result.status === "applied") {
+      recordTaskEvent(ports, state, event);
+    }
   }
 }
 
@@ -892,7 +924,38 @@ function defaultTaskInstruction(
   ].join("\n");
 }
 
+function recordRosterEvent(
+  ports: TeamCliPorts,
+  state: TeamServiceState,
+  event: TeamRosterEvent,
+): void {
+  state.events.push({
+    schemaVersion: DIRECTORY_EVENT_VERSION,
+    kind: "roster_event",
+    eventId: event.eventId,
+    timestamp: ports.nowIso(),
+    teamId: state.roster.teamId,
+    event,
+  });
+}
+
+function recordTaskEvent(
+  ports: TeamCliPorts,
+  state: TeamServiceState,
+  event: SubAgentTeamEvent,
+): void {
+  state.events.push({
+    schemaVersion: DIRECTORY_EVENT_VERSION,
+    kind: "task_event",
+    eventId: event.eventId,
+    timestamp: ports.nowIso(),
+    teamId: state.roster.teamId,
+    event,
+  });
+}
+
 function applyTaskEvent(
+  ports: TeamCliPorts,
   state: TeamServiceState,
   event: SubAgentTeamEvent,
   base: SuccessEnvelopeInput,
@@ -902,6 +965,9 @@ function applyTaskEvent(
   const result = applySubAgentTeamEvent(state.taskState, event);
   if (result.status === "applied" || result.status === "duplicate") {
     state.taskState = result.state;
+    if (result.status === "applied") {
+      recordTaskEvent(ports, state, event);
+    }
     return successEnvelope({ ...base, extra: successExtra });
   }
   return failureEnvelope({
@@ -921,13 +987,15 @@ function addTaskMemberIfMissing(
   if (state.taskState.workers[memberId]) {
     return;
   }
-  const result = applySubAgentTeamEvent(state.taskState, {
+  const event: SubAgentTeamEvent = {
     kind: "member_added",
     eventId: `evt-${ports.newEventId("evt", memberId)}-task-member`,
     workerId: memberId,
-  });
+  };
+  const result = applySubAgentTeamEvent(state.taskState, event);
   if (result.status === "applied") {
     state.taskState = result.state;
+    recordTaskEvent(ports, state, event);
   }
 }
 
@@ -939,13 +1007,15 @@ function markTaskMemberOffline(
   if (!state.taskState.workers[memberId]) {
     return;
   }
-  const result = applySubAgentTeamEvent(state.taskState, {
+  const event: SubAgentTeamEvent = {
     kind: "worker_offline",
     eventId: `evt-${ports.newEventId("evt", memberId)}-task-offline`,
     workerId: memberId,
-  });
+  };
+  const result = applySubAgentTeamEvent(state.taskState, event);
   if (result.status === "applied") {
     state.taskState = result.state;
+    recordTaskEvent(ports, state, event);
   }
 }
 

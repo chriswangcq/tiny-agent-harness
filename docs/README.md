@@ -70,7 +70,7 @@
           step-0000-thinking.trace.txt
 ```
 
-`state.json` 是最新 run snapshot；`transcript.jsonl` 是 append-only audit ledger；`session.json` 保存 `ModelContextSession` snapshot 以支持 resume；`im/`、`environment/`、`skill-runs/`、`supervisor/`、`team/`、`workers/` 都是 run-scoped；`team/state.json` 是 run-scoped team snapshot。project-scoped `team/state.json` 保存当前 team roster 与 taskState；task assignment 通过 run-scoped IM inbox 派发并在 task dispatch events 中留痕。`debug/prompts/` 和 `debug/thinking/` 保存不适合直接进入 transcript/model-context 的调试 payload；`runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log` 保存完整 raw PTY 输出。模型看到的 `screen.text` 是一屏 semantic viewport，raw log 通过 `screen.logRef.path` 追溯。
+`state.json` 是最新 run snapshot；`transcript.jsonl` 是 append-only audit ledger；`session.json` 保存 `ModelContextSession` snapshot 以支持 resume；`im/`、`environment/`、`skill-runs/`、`supervisor/`、`team/`、`workers/` 都是 run-scoped；`team/state.json` 是 run-scoped team snapshot。project-scoped `team/events.jsonl` 是 append-only team fact stream 和 canonical read source，project-scoped `team/state.json` 是从事件流写出的 roster/taskState snapshot。task assignment 通过 run-scoped IM inbox 派发并在 task dispatch events 中留痕。`debug/prompts/` 和 `debug/thinking/` 保存不适合直接进入 transcript/model-context 的调试 payload；`runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log` 保存完整 raw PTY 输出。模型看到的 `screen.text` 是一屏 semantic viewport，raw log 通过 `screen.logRef.path` 追溯。
 
 ## Keeping Docs Current
 

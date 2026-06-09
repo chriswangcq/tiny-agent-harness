@@ -197,10 +197,16 @@ describe("team service commands", () => {
 
   it("creates team state", () => {
     const state = fresh();
-    const env = handleCreateCommand(state, { group: "create", teamId: "team-p6" });
+    const env = handleCreateCommand(fakePorts(), state, { group: "create", teamId: "team-p6" });
     expect(env.ok).toBe(true);
     expect(state.roster.teamId).toBe("team-p6");
     expect(state.taskState.teamId).toBe("team-p6");
+    expect(state.events).toHaveLength(1);
+    expect(state.events[0]).toMatchObject({
+      kind: "team_created",
+      teamId: "team-p6",
+      timestamp: "2026-06-05T23:00:00.000Z",
+    });
   });
 
   it("lists empty roster", () => {
@@ -397,6 +403,23 @@ describe("team service commands", () => {
         },
       });
     }
+    expect(state.events.map((event) => event.kind)).toEqual([
+      "task_event",
+      "roster_event",
+      "task_event",
+      "roster_event",
+      "task_event",
+      "task_event",
+    ]);
+    expect(state.events.map((event) => event.kind === "task_event" ? event.event.kind : event.kind))
+      .toEqual([
+        "task_submitted",
+        "roster_event",
+        "member_added",
+        "roster_event",
+        "task_assigned",
+        "task_dispatch_requested",
+      ]);
   });
 });
 

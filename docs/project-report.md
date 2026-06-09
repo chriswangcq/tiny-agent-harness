@@ -271,12 +271,12 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 - `SubAgentTeamState`：task / worker / applied event ids。
 - `applySubAgentTeamEvent(...)`：纯 FSM reducer，处理 submit/register/assign/dispatch/start/succeed/fail/cancel/offline。
-- `team-cli-adapter.ts`：显式 fs / clock / id / IM ports，读取 project-scoped team state，执行命令，写回 snapshot。
+- `team-cli-adapter.ts`：显式 fs / clock / id / IM ports，从 project-scoped team event stream 投影当前 state，执行命令，先 append `team/events.jsonl`，再写回 `team/state.json` snapshot。
 - `task_dispatch_requested`、`task_dispatch_sent`、`task_dispatch_failed`：记录 master 通过 IM 给 worker 派发指令的可观察链路。
 - invalid transition rejection codes 和 duplicate event id no-op。
 - `summarizeSubAgentTeam(...)` / `listActiveSubAgentAssignments(...)` 给未来 TUI、CLI、MCP、cloud adapter 消费。
 
-这个边界让未来 “subagent team 管理服务” 可以先复用可测状态机，再在外层接进 MCP、云端队列或本地 worker launcher。workspace、branch、ledger 仍通过 IM 指令、metadata 或 handoff evidence 表达，不成为 roster schema 的必填字段。
+这个边界让未来 “subagent team 管理服务” 可以先复用可测状态机，再在外层接进 MCP、云端队列或本地 worker launcher。workspace、branch、ledger 仍通过 IM 指令、metadata 或 handoff evidence 表达，不成为 roster schema 的必填字段。`team/events.jsonl` 是 team 事实源和 canonical read source，`team/state.json` 是由事件流写出的 projection snapshot。
 
 
 ### 4.13 Subagent Lifecycle Runtime 与可观察性

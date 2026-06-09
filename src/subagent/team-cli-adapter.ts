@@ -10,6 +10,7 @@ import { failureEnvelope, type CliEnvelope } from "../cli/envelope.js";
 import { ImCliTransport } from "../im/transport.js";
 import type { UserMessage } from "../types/environment.js";
 import {
+  appendTeamDirectoryEvents,
   createTeamDirectorySnapshot,
   planTeamDirectoryLayout,
   readTeamDirectory,
@@ -85,6 +86,7 @@ export async function executeTeamAdapterCommand(
     state = {
       roster: snapshot.roster,
       taskState: snapshot.taskState,
+      events: [],
     };
     createdAt = snapshot.createdAt;
   }
@@ -96,7 +98,31 @@ export async function executeTeamAdapterCommand(
 
   const dispatch = readDispatchPlan(result);
   if (dispatch) {
+    let flushedEventCount = 0;
+    const preDispatchEventFailure = await appendEventsOrFailure(
+      ports.fs,
+      layout,
+      state,
+      flushedEventCount,
+      options.cwd,
+    );
+    if (preDispatchEventFailure.envelope) {
+      return preDispatchEventFailure.envelope;
+    }
+    flushedEventCount = preDispatchEventFailure.nextOffset;
+
     const dispatchResult = await deliverDispatch(ports, state, dispatch, options);
+    const postDispatchEventFailure = await appendEventsOrFailure(
+      ports.fs,
+      layout,
+      state,
+      flushedEventCount,
+      options.cwd,
+    );
+    if (postDispatchEventFailure.envelope) {
+      return postDispatchEventFailure.envelope;
+    }
+
     const writeFailure = await writeCurrentStateOrFailure(
       ports.fs,
       layout,
@@ -118,6 +144,21 @@ export async function executeTeamAdapterCommand(
         status: "sent",
       },
     };
+  }
+
+  if (state.events.length === 0) {
+    return result;
+  }
+
+  const eventFailure = await appendEventsOrFailure(
+    ports.fs,
+    layout,
+    state,
+    0,
+    options.cwd,
+  );
+  if (eventFailure.envelope) {
+    return eventFailure.envelope;
   }
 
   const writeFailure = await writeCurrentStateOrFailure(
@@ -220,6 +261,34 @@ async function writeCurrentState(
     createdAt,
   );
   await writeTeamDirectory(fs, layout, snapshot);
+}
+
+async function appendEventsOrFailure(
+  fs: FsPort,
+  layout: ReturnType<typeof planTeamDirectoryLayout>,
+  state: TeamServiceState,
+  offset: number,
+  cwd: string | undefined,
+): Promise<{ nextOffset: number; envelope?: CliEnvelope }> {
+  const events = state.events.slice(offset);
+  if (events.length === 0) {
+    return { nextOffset: state.events.length };
+  }
+
+  try {
+    await appendTeamDirectoryEvents(fs, layout, events);
+    return { nextOffset: state.events.length };
+  } catch (error) {
+    return {
+      nextOffset: offset,
+      envelope: failureEnvelope({
+        tool: TOOL_NAME,
+        cwd,
+        errorCode: "TEAM_EVENT_APPEND_FAILED",
+        error: `Failed to append team events: ${formatError(error)}`,
+      }),
+    };
+  }
 }
 
 async function writeCurrentStateOrFailure(

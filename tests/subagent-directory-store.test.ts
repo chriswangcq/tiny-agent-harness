@@ -1,13 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
+  appendTeamDirectoryEvents,
   DEFAULT_TEAM_DIR,
   createInMemoryFsPort,
   createTeamDirectorySnapshot,
   planRunScopedTeamPaths,
   planTeamDirectoryLayout,
+  readTeamDirectoryEvents,
+  replayTeamDirectoryEvents,
   readTeamDirectory,
   validateTeamDirectorySnapshot,
+  validateTeamDirectoryEvent,
   writeTeamDirectory,
+  DIRECTORY_EVENT_VERSION,
+  type FsPort,
   type TeamDirectorySnapshot,
 } from "../src/subagent/directory-store.js";
 import { createTeamRosterState } from "../src/subagent/team-roster.js";
@@ -150,6 +156,234 @@ describe("team directory snapshot", () => {
     const result = validateTeamDirectorySnapshot(snapshot);
     expect(result.valid).toBe(false);
     expect(result.errors.some((e) => e.includes("teamId"))).toBe(true);
+  });
+});
+
+describe("team directory event log", () => {
+  const T0 = "2026-06-05T12:00:00.000Z";
+
+  it("validates supported event envelopes", () => {
+    const result = validateTeamDirectoryEvent({
+      schemaVersion: DIRECTORY_EVENT_VERSION,
+      eventId: "evt-1",
+      timestamp: T0,
+      teamId: "team-p6",
+      kind: "team_created",
+    });
+
+    expect(result.valid).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it("appends and reads JSONL events with duplicate event ids skipped", async () => {
+    const fs = createInMemoryFsPort();
+    const layout = planTeamDirectoryLayout("/root");
+    const event = {
+      schemaVersion: DIRECTORY_EVENT_VERSION,
+      eventId: "evt-1",
+      timestamp: T0,
+      teamId: "team-p6",
+      kind: "team_created" as const,
+    };
+
+    const first = await appendTeamDirectoryEvents(fs, layout, [event]);
+    const second = await appendTeamDirectoryEvents(fs, layout, [event]);
+
+    expect(first).toEqual({ status: "appended", appended: 1, duplicates: 0 });
+    expect(second).toEqual({ status: "appended", appended: 0, duplicates: 1 });
+
+    const read = await readTeamDirectoryEvents(fs, layout);
+    expect(read.parseErrors).toEqual([]);
+    expect(read.validEvents).toEqual([event]);
+  });
+
+  it("reports malformed JSONL lines separately from valid events", async () => {
+    const fs = createInMemoryFsPort();
+    const layout = planTeamDirectoryLayout("/root");
+    await fs.mkdir(layout.teamDir);
+    await fs.writeFile(
+      layout.eventsFile,
+      [
+        "not-json",
+        JSON.stringify({
+          schemaVersion: DIRECTORY_EVENT_VERSION,
+          eventId: "evt-1",
+          timestamp: T0,
+          teamId: "team-p6",
+          kind: "team_created",
+        }),
+        "",
+      ].join("\n"),
+    );
+
+    const read = await readTeamDirectoryEvents(fs, layout);
+    expect(read.validEvents).toHaveLength(1);
+    expect(read.parseErrors).toHaveLength(1);
+  });
+
+  it("replays events into a team snapshot", () => {
+    const snapshot = replayTeamDirectoryEvents([
+      {
+        schemaVersion: DIRECTORY_EVENT_VERSION,
+        eventId: "evt-create",
+        timestamp: T0,
+        teamId: "team-p6",
+        kind: "team_created",
+      },
+      {
+        schemaVersion: DIRECTORY_EVENT_VERSION,
+        eventId: "evt-member",
+        timestamp: "2026-06-05T12:00:01.000Z",
+        teamId: "team-p6",
+        kind: "roster_event",
+        event: {
+          kind: "member_added",
+          eventId: "member-added",
+          memberId: "coder-1",
+          role: "coder",
+          channel: "worker-channel",
+        },
+      },
+      {
+        schemaVersion: DIRECTORY_EVENT_VERSION,
+        eventId: "evt-task",
+        timestamp: "2026-06-05T12:00:02.000Z",
+        teamId: "team-p6",
+        kind: "task_event",
+        event: {
+          kind: "task_submitted",
+          eventId: "task-submitted",
+          taskId: "ticket-1",
+          title: "Fix event log",
+        },
+      },
+    ]);
+
+    expect(snapshot.roster.members["coder-1"]).toMatchObject({
+      role: "coder",
+      channel: "worker-channel",
+    });
+    expect(snapshot.taskState.tasks["ticket-1"]).toMatchObject({
+      status: "queued",
+      title: "Fix event log",
+    });
+  });
+
+  it("reads from events when the snapshot file is missing", async () => {
+    const fs = createInMemoryFsPort();
+    const layout = planTeamDirectoryLayout("/root");
+    await appendTeamDirectoryEvents(fs, layout, [
+      {
+        schemaVersion: DIRECTORY_EVENT_VERSION,
+        eventId: "evt-create",
+        timestamp: T0,
+        teamId: "team-p6",
+        kind: "team_created",
+      },
+      {
+        schemaVersion: DIRECTORY_EVENT_VERSION,
+        eventId: "evt-task",
+        timestamp: "2026-06-05T12:00:02.000Z",
+        teamId: "team-p6",
+        kind: "task_event",
+        event: {
+          kind: "task_submitted",
+          eventId: "task-submitted",
+          taskId: "ticket-1",
+          title: "Fix event log",
+        },
+      },
+    ]);
+
+    const snapshot = await readTeamDirectory(fs, layout);
+    expect(snapshot.teamId).toBe("team-p6");
+    expect(snapshot.taskState.tasks["ticket-1"]?.title).toBe("Fix event log");
+  });
+
+  it("prefers events over a stale snapshot", async () => {
+    const fs = createInMemoryFsPort();
+    const layout = planTeamDirectoryLayout("/root");
+    await writeTeamDirectory(
+      fs,
+      layout,
+      createTeamDirectorySnapshot(
+        createTeamRosterState("team-p6"),
+        createSubAgentTeamState("team-p6"),
+        T0,
+      ),
+    );
+    await appendTeamDirectoryEvents(fs, layout, [
+      {
+        schemaVersion: DIRECTORY_EVENT_VERSION,
+        eventId: "evt-create",
+        timestamp: T0,
+        teamId: "team-p6",
+        kind: "team_created",
+      },
+      {
+        schemaVersion: DIRECTORY_EVENT_VERSION,
+        eventId: "evt-task",
+        timestamp: "2026-06-05T12:00:02.000Z",
+        teamId: "team-p6",
+        kind: "task_event",
+        event: {
+          kind: "task_submitted",
+          eventId: "task-submitted",
+          taskId: "ticket-1",
+          title: "Canonical event task",
+        },
+      },
+    ]);
+
+    const snapshot = await readTeamDirectory(fs, layout);
+    expect(snapshot.taskState.tasks["ticket-1"]?.title).toBe(
+      "Canonical event task",
+    );
+  });
+
+  it("does not fall back to snapshot when the event stream is malformed", async () => {
+    const fs = createInMemoryFsPort();
+    const layout = planTeamDirectoryLayout("/root");
+    await writeTeamDirectory(
+      fs,
+      layout,
+      createTeamDirectorySnapshot(
+        createTeamRosterState("team-p6"),
+        createSubAgentTeamState("team-p6"),
+        T0,
+      ),
+    );
+    await fs.writeFile(layout.eventsFile, "not-json\n");
+
+    await expect(readTeamDirectory(fs, layout)).rejects.toThrow(
+      "Cannot replay team events",
+    );
+  });
+
+  it("propagates non-missing event stream read errors", async () => {
+    const layout = planTeamDirectoryLayout("/root");
+    const fs: FsPort = {
+      async readFile(): Promise<string> {
+        const error = new Error("EACCES: permission denied");
+        (error as NodeJS.ErrnoException).code = "EACCES";
+        throw error;
+      },
+      async writeFile(): Promise<void> {},
+      async mkdir(): Promise<void> {},
+    };
+
+    await expect(readTeamDirectoryEvents(fs, layout)).rejects.toThrow("EACCES");
+    await expect(
+      appendTeamDirectoryEvents(fs, layout, [
+        {
+          schemaVersion: DIRECTORY_EVENT_VERSION,
+          eventId: "evt-create",
+          timestamp: T0,
+          teamId: "team-p6",
+          kind: "team_created",
+        },
+      ]),
+    ).rejects.toThrow("EACCES");
   });
 });
 

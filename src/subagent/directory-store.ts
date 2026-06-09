@@ -4,8 +4,18 @@
 // No direct IO, no side effects in core logic. All filesystem access goes
 // through FsPort. Time is an explicit input; no hidden Date reads.
 
-import type { TeamRosterState } from "./team-roster.js";
-import type { SubAgentTeamState } from "./team.js";
+import {
+  applyTeamRosterEvent,
+  createTeamRosterState,
+  type TeamRosterState,
+} from "./team-roster.js";
+import type { TeamRosterEvent } from "./team-roster.js";
+import {
+  applySubAgentTeamEvent,
+  createSubAgentTeamState,
+  type SubAgentTeamState,
+} from "./team.js";
+import type { SubAgentTeamEvent } from "./team.js";
 
 // ---------------------------------------------------------------------------
 // Path planner — pure functions
@@ -60,6 +70,7 @@ export function planRunScopedTeamPaths(
 // ---------------------------------------------------------------------------
 
 export const DIRECTORY_SNAPSHOT_VERSION = 1;
+export const DIRECTORY_EVENT_VERSION = 1;
 
 export type TeamDirectorySnapshot = {
   schemaVersion: number;
@@ -73,6 +84,47 @@ export type TeamDirectorySnapshot = {
 export type SnapshotValidationResult = {
   valid: boolean;
   errors: string[];
+};
+
+export type TeamDirectoryEvent =
+  | {
+      schemaVersion: typeof DIRECTORY_EVENT_VERSION;
+      eventId: string;
+      timestamp: string;
+      teamId: string;
+      kind: "team_created";
+    }
+  | {
+      schemaVersion: typeof DIRECTORY_EVENT_VERSION;
+      eventId: string;
+      timestamp: string;
+      teamId: string;
+      kind: "roster_event";
+      event: TeamRosterEvent;
+    }
+  | {
+      schemaVersion: typeof DIRECTORY_EVENT_VERSION;
+      eventId: string;
+      timestamp: string;
+      teamId: string;
+      kind: "task_event";
+      event: SubAgentTeamEvent;
+    };
+
+export type TeamDirectoryEventValidationResult = {
+  valid: boolean;
+  errors: string[];
+};
+
+export type AppendTeamDirectoryEventsResult = {
+  status: "appended";
+  appended: number;
+  duplicates: number;
+};
+
+export type ReadTeamDirectoryEventsResult = {
+  validEvents: TeamDirectoryEvent[];
+  parseErrors: string[];
 };
 
 export function createTeamDirectorySnapshot(
@@ -156,6 +208,43 @@ export function validateTeamDirectorySnapshot(
   return { valid: errors.length === 0, errors };
 }
 
+export function validateTeamDirectoryEvent(
+  event: unknown,
+): TeamDirectoryEventValidationResult {
+  const errors: string[] = [];
+
+  if (!event || typeof event !== "object") {
+    return { valid: false, errors: ["Event is not an object"] };
+  }
+
+  const e = event as Record<string, unknown>;
+  if (e.schemaVersion !== DIRECTORY_EVENT_VERSION) {
+    errors.push(`Unsupported schemaVersion: ${e.schemaVersion}`);
+  }
+  if (typeof e.eventId !== "string" || e.eventId.length === 0) {
+    errors.push("Missing or invalid eventId");
+  }
+  if (typeof e.timestamp !== "string" || e.timestamp.length === 0) {
+    errors.push("Missing or invalid timestamp");
+  }
+  if (typeof e.teamId !== "string" || e.teamId.length === 0) {
+    errors.push("Missing or invalid teamId");
+  }
+  if (
+    e.kind !== "team_created" &&
+    e.kind !== "roster_event" &&
+    e.kind !== "task_event"
+  ) {
+    errors.push(`Unsupported kind: ${String(e.kind)}`);
+  }
+
+  if ((e.kind === "roster_event" || e.kind === "task_event") && !e.event) {
+    errors.push("Missing event payload");
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
 // ---------------------------------------------------------------------------
 // FsPort — explicit filesystem adapter
 // ---------------------------------------------------------------------------
@@ -209,6 +298,11 @@ export async function readTeamDirectory(
   fs: FsPort,
   layout: TeamDirectoryLayout,
 ): Promise<TeamDirectorySnapshot> {
+  const replayed = await tryReplayTeamDirectoryFromEvents(fs, layout);
+  if (replayed) {
+    return replayed;
+  }
+
   let raw: string;
   try {
     raw = await fs.readFile(layout.stateFile);
@@ -237,6 +331,72 @@ export async function readTeamDirectory(
   return parsed as TeamDirectorySnapshot;
 }
 
+export function replayTeamDirectoryEvents(
+  events: TeamDirectoryEvent[],
+): TeamDirectorySnapshot {
+  let roster: TeamRosterState | undefined;
+  let taskState: SubAgentTeamState | undefined;
+  let teamId: string | undefined;
+  let createdAt: string | undefined;
+  let updatedAt: string | undefined;
+
+  for (const event of events) {
+    if (event.kind === "team_created") {
+      teamId = event.teamId;
+      roster = createTeamRosterState(event.teamId);
+      taskState = createSubAgentTeamState(event.teamId);
+      createdAt ??= event.timestamp;
+      updatedAt = event.timestamp;
+      continue;
+    }
+
+    if (!roster || !taskState || !teamId) {
+      throw new Error(
+        `Cannot replay ${event.kind} before team_created (${event.eventId})`,
+      );
+    }
+
+    if (event.teamId !== teamId) {
+      throw new Error(
+        `Cannot replay event ${event.eventId}: teamId ${event.teamId} does not match ${teamId}`,
+      );
+    }
+
+    if (event.kind === "roster_event") {
+      const result = applyTeamRosterEvent(roster, event.event);
+      if (result.status === "rejected") {
+        throw new Error(
+          `Roster replay rejected ${event.eventId}: ${result.rejection.code}: ${result.rejection.message}`,
+        );
+      }
+      roster = result.state;
+    } else {
+      const result = applySubAgentTeamEvent(taskState, event.event);
+      if (result.status === "rejected") {
+        throw new Error(
+          `Task replay rejected ${event.eventId}: ${result.rejection.code}: ${result.rejection.message}`,
+        );
+      }
+      taskState = result.state;
+    }
+
+    updatedAt = event.timestamp;
+  }
+
+  if (!teamId || !roster || !taskState || !createdAt || !updatedAt) {
+    throw new Error("Cannot replay team directory events: missing team_created");
+  }
+
+  return {
+    schemaVersion: DIRECTORY_SNAPSHOT_VERSION,
+    teamId,
+    createdAt,
+    updatedAt,
+    roster,
+    taskState,
+  };
+}
+
 export async function writeTeamDirectory(
   fs: FsPort,
   layout: TeamDirectoryLayout,
@@ -244,4 +404,125 @@ export async function writeTeamDirectory(
 ): Promise<void> {
   await fs.mkdir(layout.teamDir);
   await fs.writeFile(layout.stateFile, JSON.stringify(snapshot, null, 2));
+}
+
+async function tryReplayTeamDirectoryFromEvents(
+  fs: FsPort,
+  layout: TeamDirectoryLayout,
+): Promise<TeamDirectorySnapshot | undefined> {
+  const events = await readTeamDirectoryEvents(fs, layout);
+  if (events.parseErrors.length > 0) {
+    throw new Error(
+      `Cannot replay team events: ${events.parseErrors.join("; ")}`,
+    );
+  }
+  if (events.validEvents.length === 0) {
+    return undefined;
+  }
+  return replayTeamDirectoryEvents(events.validEvents);
+}
+
+export async function appendTeamDirectoryEvents(
+  fs: FsPort,
+  layout: TeamDirectoryLayout,
+  events: TeamDirectoryEvent[],
+): Promise<AppendTeamDirectoryEventsResult> {
+  if (events.length === 0) {
+    return { status: "appended", appended: 0, duplicates: 0 };
+  }
+
+  await fs.mkdir(layout.teamDir);
+
+  let existingContent = "";
+  try {
+    existingContent = await fs.readFile(layout.eventsFile);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+    // New event stream.
+  }
+
+  const existingIds = new Set<string>();
+  for (const line of existingContent.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const parsed = JSON.parse(trimmed) as { eventId?: unknown };
+      if (typeof parsed.eventId === "string") {
+        existingIds.add(parsed.eventId);
+      }
+    } catch {
+      // Malformed historic lines are reported by readTeamDirectoryEvents.
+    }
+  }
+
+  const lines: string[] = [];
+  let duplicates = 0;
+  for (const event of events) {
+    const validation = validateTeamDirectoryEvent(event);
+    if (!validation.valid) {
+      throw new Error(
+        `Invalid team directory event: ${validation.errors.join("; ")}`,
+      );
+    }
+    if (existingIds.has(event.eventId)) {
+      duplicates += 1;
+      continue;
+    }
+    existingIds.add(event.eventId);
+    lines.push(JSON.stringify(event));
+  }
+
+  if (lines.length > 0) {
+    const separator =
+      existingContent.length > 0 && !existingContent.endsWith("\n") ? "\n" : "";
+    await fs.writeFile(
+      layout.eventsFile,
+      `${existingContent}${separator}${lines.join("\n")}\n`,
+    );
+  }
+
+  return { status: "appended", appended: lines.length, duplicates };
+}
+
+export async function readTeamDirectoryEvents(
+  fs: FsPort,
+  layout: TeamDirectoryLayout,
+): Promise<ReadTeamDirectoryEventsResult> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(layout.eventsFile);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+    return { validEvents: [], parseErrors: [] };
+  }
+
+  const validEvents: TeamDirectoryEvent[] = [];
+  const parseErrors: string[] = [];
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      parseErrors.push(`Failed to parse JSONL line: ${trimmed.slice(0, 100)}`);
+      continue;
+    }
+
+    const validation = validateTeamDirectoryEvent(parsed);
+    if (validation.valid) {
+      validEvents.push(parsed as TeamDirectoryEvent);
+    } else {
+      parseErrors.push(
+        `Invalid team directory event: ${validation.errors.join("; ")}`,
+      );
+    }
+  }
+
+  return { validEvents, parseErrors };
 }

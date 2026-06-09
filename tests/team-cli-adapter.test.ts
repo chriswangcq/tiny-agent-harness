@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createInMemoryFsPort,
   planTeamDirectoryLayout,
+  readTeamDirectoryEvents,
   readTeamDirectory,
 } from "../src/subagent/directory-store.js";
 import {
@@ -98,6 +99,33 @@ describe("team CLI adapter", () => {
       status: "sent",
       sentAt: "2026-06-08T12:00:00.000Z",
     });
+
+    const events = await readTeamDirectoryEvents(
+      ports.fs,
+      planTeamDirectoryLayout(stateRoot),
+    );
+    expect(events.parseErrors).toEqual([]);
+    expect(events.validEvents.map((event) => event.kind)).toEqual([
+      "team_created",
+      "roster_event",
+      "task_event",
+      "roster_event",
+      "task_event",
+      "task_event",
+      "task_event",
+      "task_event",
+    ]);
+    expect(events.validEvents.map((event) => event.kind === "task_event" ? event.event.kind : event.kind))
+      .toEqual([
+        "team_created",
+        "roster_event",
+        "member_added",
+        "roster_event",
+        "task_submitted",
+        "task_assigned",
+        "task_dispatch_requested",
+        "task_dispatch_sent",
+      ]);
   });
 
   it("records dispatch failure when a member has no run id", async () => {
@@ -135,6 +163,14 @@ describe("team CLI adapter", () => {
     expect(snapshot.taskState.tasks["ticket-1"]?.dispatch).toMatchObject({
       status: "failed",
       error: expect.stringContaining("has no runId"),
+    });
+    const events = await readTeamDirectoryEvents(
+      ports.fs,
+      planTeamDirectoryLayout(stateRoot),
+    );
+    expect(events.validEvents.at(-1)).toMatchObject({
+      kind: "task_event",
+      event: { kind: "task_dispatch_failed" },
     });
   });
 

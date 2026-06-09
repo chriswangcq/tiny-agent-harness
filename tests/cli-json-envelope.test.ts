@@ -253,6 +253,25 @@ describe("Team CLI real output envelope", () => {
         readFileSync(join(tmp, "team", "state.json"), "utf-8"),
       ) as Record<string, any>;
       expect(teamState.taskState.tasks["ticket-1"].dispatch.status).toBe("sent");
+
+      const teamEvents = readFileSync(join(tmp, "team", "events.jsonl"), "utf-8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, any>);
+      expect(teamEvents.map((event) => event.kind)).toEqual([
+        "team_created",
+        "roster_event",
+        "task_event",
+        "roster_event",
+        "task_event",
+        "task_event",
+        "task_event",
+        "task_event",
+      ]);
+      expect(teamEvents.at(-1)).toMatchObject({
+        kind: "task_event",
+        event: { kind: "task_dispatch_sent" },
+      });
     } finally {
       if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
     }

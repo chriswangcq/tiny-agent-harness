@@ -105,6 +105,16 @@ Project-scoped team state:
 
 `team/state.json` contains both `roster` and `taskState`.
 
+`team/events.jsonl` is the append-only team event stream. Each mutating command appends current facts before the snapshot is written:
+
+```text
+team_created
+roster_event
+task_event
+```
+
+The event stream is the canonical read source. The directory reader replays a valid `team/events.jsonl` first and only falls back to `team/state.json` when no event stream exists.
+
 Run-scoped team state and lifecycle facts:
 
 ```text

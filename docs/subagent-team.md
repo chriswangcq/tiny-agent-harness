@@ -90,6 +90,16 @@ type TeamDirectorySnapshot = {
 
 `createTeamDirectorySnapshot(roster, taskState, now, createdAt?)` takes explicit time input. `readTeamDirectory` and `writeTeamDirectory` take an injected `FsPort`; the core module performs no hidden IO.
 
+`team/events.jsonl` is now the append-only project/run-scoped fact stream:
+
+```text
+team_created
+roster_event -> TeamRosterEvent
+task_event   -> SubAgentTeamEvent
+```
+
+`team/events.jsonl` is the canonical source for reads. `team/state.json` is a snapshot projection written after event append for inspection and recovery, but `readTeamDirectory` replays a valid event stream first and only falls back to the snapshot when no event stream exists. Malformed event lines fail replay instead of silently producing a partial state.
+
 ## Team Task FSM
 
 `src/subagent/team.ts` tracks tasks and assignment lifecycle. It still uses `workerId` internally for task execution targets because lifecycle/process management is worker-oriented.
