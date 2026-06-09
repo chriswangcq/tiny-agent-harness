@@ -164,6 +164,8 @@ type IoWaitRequest = {
 
 Omitting `minLevel` means "wake on the next meaningful event" (`level >= 10`). Explicit `minLevel: 0` means "wake on any new environment event", including low-value session output. Before each model turn, the orchestrator calls `consumeSince(runId)` and advances the run's environment cursor. If that same model turn later emits `io_wait`, the wait starts from that consumed cursor, not from the later wait-registration timestamp. This preserves user/environment events that arrive while the model is thinking and lets them satisfy `io_wait` immediately. `minLevel` matches events where `environmentEventLevel(event) >= minLevel`; user messages default to level `100` and should be treated as highest-priority operator input, skill events default to level `10`, and ordinary missing non-user levels default to `1`. Legacy `source`, `eventKind`, `session`, and `channel` condition fields are not runtime filters.
 
+Before entering `waiting_for_io`, if the latest terminal observation has `returnedToPrompt: false`, the orchestrator performs a best-effort `session_observe` so prompt facts (`session_returned_to_prompt`, `session_input_ready`) are recorded as environment events through `recordTerminalEnvironmentEvents`. No synthetic prompt events are fabricated; if this pre-observe fails, the wait proceeds normally.
+
 While `waiting_for_io`, the orchestrator also runs a best-effort `session_observe` pump. It does not append hidden tool observations to model history; it only converts new terminal facts into `EnvironmentEvent`s such as `session_output_available`, `session_input_ready`, `session_continuation_prompt`, and `session_returned_to_prompt`.
 
 ## Active Skill Run State

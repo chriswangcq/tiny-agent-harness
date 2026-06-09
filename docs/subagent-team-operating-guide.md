@@ -142,6 +142,17 @@ node dist/cli/main.js im send \
 
 Reports must include the handoff evidence fields required by the worker handoff contract.
 
+## Supervisor Lifecycle Events
+
+The supervisor maintains a run-scoped lifecycle ledger at `.tiny-agent/runs/<runId>/supervisor/lifecycle-events.jsonl`. This append-only JSONL records worker lifecycle facts that the TUI/team dashboard and stale-run reaper consume:
+
+- **Heartbeat & lease**: when a worker calls `team contact heartbeat <workerId>`, the lifecycle adapter records a `heartbeat_recorded` event, updates the worker contact snapshot, and evaluates lease health. Duplicate heartbeats are idempotent.
+- **Stale detection**: the reaper (`runReaper`) identifies stale active workers whose heartbeats have aged past configured thresholds. Workers with contact status `terminated` or `offline` are skipped.
+- **Shutdown chain**: for each stale active worker, the reaper emits `shutdown_requested`, attempts a graceful shutdown, then records `shutdown_completed` or `shutdown_failed`. Successful shutdown marks the contact status `terminated`.
+- **Lifecycle state**: the pure `computeLifecycleState` function derives `WorkerLifecycleState` (`healthy` / `stale` / `expired` / `grace_period` / `shutdown` / `terminated` / `missing_process` / `unknown`) from heartbeat age, process existence, and contact status.
+
+These events are durable facts, not runtime internals. The TUI lifecycle audit projection reads `lifecycle-events.jsonl` directly to render worker lifecycle timelines without consulting agent state.
+
 ## Related Documents
 
 - [subagent-team.md](subagent-team.md) — Detailed module specifications

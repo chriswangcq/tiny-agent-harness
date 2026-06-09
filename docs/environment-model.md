@@ -58,6 +58,7 @@ type EnvironmentEvent =
 - `io_wait` is priority-only. Its effective threshold is `wait.minLevel ?? wait.condition?.minLevel ?? 10`; legacy `source`, `eventKind`, `session`, and `channel` fields are accepted only for historical compatibility and do not filter wake events. Missing user-message events default to level `100` and are treated as highest-priority operator input; skill lifecycle events default to level `10`; other missing non-user event levels default to `1`.
 - `Environment.renderReminder` serializes user messages as `[user@channel] ...` and skill/session facts as factual reminder lines.
 - When `events.jsonl` is configured, `Environment` also watches the JSONL file while waiting so sibling CLI commands such as `skill close` can wake the run.
+- Before entering `io_wait`, if the latest terminal observation has `returnedToPrompt: false`, the orchestrator performs a best-effort `session_observe` so prompt facts (`session_returned_to_prompt`, `session_input_ready`) are recorded as environment events through `recordTerminalEnvironmentEvents`. No synthetic prompt events are fabricated; if this pre-observe fails, the wait proceeds normally.
 - While `io_wait` is pending, the orchestrator starts a best-effort session observe pump so terminal prompt/output facts can become session environment events.
 
 ## Event Levels
