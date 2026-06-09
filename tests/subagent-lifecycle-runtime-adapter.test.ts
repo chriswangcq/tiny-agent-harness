@@ -120,6 +120,7 @@ function makeFakePorts(overrides: {
   const appended: SupervisorLifecycleEvent[] = [];
   const shutdownCalls: Array<{ workerId: string; reason?: string }> = [];
   const contactEvents: Record<string, number> = {};
+  const contactEventPayloads: Array<{ kind: string; status?: string; workerId: string }> = [];
   const seenIds = new Set<string>();
 
   const ports: LifecycleRuntimePorts = {
@@ -137,12 +138,13 @@ function makeFakePorts(overrides: {
       shutdownCalls.push({ workerId, reason });
     },
     applyContactEvent: async (event) => {
+      contactEventPayloads.push({ kind: event.kind, status: (event as any).status, workerId: (event as any).workerId ?? "" });
       contactEvents[event.kind] = (contactEvents[event.kind] ?? 0) + 1;
       return "applied";
     },
   };
 
-  return { ports, appended, shutdownCalls, contactEvents };
+  return { ports, appended, shutdownCalls, contactEvents, contactEventPayloads };
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +195,7 @@ describe("lifecycle-runtime-adapter - lease", () => {
   });
 
   it("updates contact projection on heartbeat", async () => {
-    const { ports, contactEvents } = makeFakePorts();
+    const { ports, contactEvents, contactEventPayloads } = makeFakePorts();
     const adapter = createRuntimeAdapter(ports);
     const worker = makeWorker({ workerId: "w1" });
 
@@ -539,5 +541,151 @@ describe("lifecycle-runtime-adapter - error handling", () => {
 
     expect(facts.totalWorkers).toBe(0);
     expect(facts.workers).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. Reaper exec updates contact status
+// ---------------------------------------------------------------------------
+
+describe("lifecycle-runtime-adapter - reaper contact status", () => {
+  it("reaper execute updates worker contact status to terminated", async () => {
+    const { ports, shutdownCalls, contactEvents, contactEventPayloads } = makeFakePorts();
+    const adapter = createRuntimeAdapter(ports);
+    const snapshot = makeTeamSnapshot([
+      { workerId: "stale", status: "active", lastHeartbeat: "2026-06-07T11:45:00.000Z" },
+    ]);
+
+    await adapter.runReaper(snapshot, {
+      now: NOW,
+      staleThresholdMs: 300000,
+      execute: true,
+    });
+
+    expect(shutdownCalls.length).toBeGreaterThanOrEqual(1);
+    // The contact event should have been applied
+    expect(contactEvents["worker_status_changed"]).toBe(1);
+    // Assert the payload status is "terminated"
+    const statusChange = contactEventPayloads.find((e) => e.kind === "worker_status_changed");
+    expect(statusChange).toBeDefined();
+    expect(statusChange!.status).toBe("terminated");
+  });
+
+  it("reaper skips offline workers (previously terminated)", async () => {
+    const { ports, shutdownCalls } = makeFakePorts();
+    const adapter = createRuntimeAdapter(ports);
+    const snapshot = makeTeamSnapshot([
+      { workerId: "offline", status: "offline", lastHeartbeat: "2026-06-07T11:00:00.000Z" },
+      { workerId: "stale", status: "active", lastHeartbeat: "2026-06-07T11:45:00.000Z" },
+    ]);
+
+    const envelope = await adapter.runReaper(snapshot, {
+      now: NOW,
+      staleThresholdMs: 300000,
+      execute: true,
+    });
+
+    // Only the stale active worker should be targeted
+    expect(envelope.staleCount).toBe(1);
+    expect(shutdownCalls.length).toBe(1);
+    expect(shutdownCalls[0].workerId).toBe("stale");
+  });
+
+  it("reaper handles failing shutdownWorker port gracefully", async () => {
+    const { ports: basePorts } = makeFakePorts();
+    const ports: LifecycleRuntimePorts = {
+      ...basePorts,
+      shutdownWorker: async () => {
+        throw new Error("shutdown port failure");
+      },
+    };
+    const adapter = createRuntimeAdapter(ports);
+    const snapshot = makeTeamSnapshot([
+      { workerId: "stale", status: "active", lastHeartbeat: "2026-06-07T11:45:00.000Z" },
+    ]);
+
+    const envelope = await adapter.runReaper(snapshot, {
+      now: NOW,
+      staleThresholdMs: 300000,
+      execute: true,
+    });
+
+    // Should still report status ok (reaper ran) but have failures
+    expect(envelope.status).toBe("ok");
+    expect(envelope.failures).toBeDefined();
+    expect(envelope.failures!.length).toBeGreaterThanOrEqual(1);
+    expect(envelope.failures![0].error).toContain("shutdown port failure");
+  });
+
+
+  it("reaper failing shutdown does not apply contact termination", async () => {
+    const { ports: basePorts } = makeFakePorts();
+    const contactEventPayloads: Array<{ kind: string; status?: string }> = [];
+    const ports: LifecycleRuntimePorts = {
+      ...basePorts,
+      shutdownWorker: async () => {
+        throw new Error("shutdown port failure");
+      },
+      applyContactEvent: async (event) => {
+        contactEventPayloads.push({ kind: event.kind, status: (event as any).status });
+        return "applied";
+      },
+    };
+    const adapter = createRuntimeAdapter(ports);
+    const snapshot = makeTeamSnapshot([
+      { workerId: "stale", status: "active", lastHeartbeat: "2026-06-07T11:45:00.000Z" },
+    ]);
+
+    await adapter.runReaper(snapshot, {
+      now: NOW,
+      staleThresholdMs: 300000,
+      execute: true,
+    });
+
+    // No worker_status_changed event should be emitted when shutdown fails
+    const statusChanges = contactEventPayloads.filter((e) => e.kind === "worker_status_changed");
+    expect(statusChanges).toHaveLength(0);
+
+  });
+
+  it("reaper dry-run does not update contact status", async () => {
+    const { ports, contactEvents, contactEventPayloads } = makeFakePorts();
+    const adapter = createRuntimeAdapter(ports);
+    const snapshot = makeTeamSnapshot([
+      { workerId: "stale", status: "active", lastHeartbeat: "2026-06-07T11:45:00.000Z" },
+    ]);
+
+    await adapter.runReaper(snapshot, {
+      now: NOW,
+      staleThresholdMs: 300000,
+      execute: false,
+    });
+
+    // No contact events should be emitted in dry-run
+    expect(contactEvents["worker_status_changed"]).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. Shutdown sets terminated
+// ---------------------------------------------------------------------------
+
+describe("lifecycle-runtime-adapter - shutdown terminated", () => {
+  it("requestShutdown sets contact status to terminated", async () => {
+    const { ports, contactEvents, contactEventPayloads } = makeFakePorts();
+    const adapter = createRuntimeAdapter(ports);
+    const worker = makeWorker({ workerId: "w1", status: "active" });
+
+    await adapter.requestShutdown(worker, {
+      now: NOW,
+      reason: "test",
+      execute: true,
+    });
+
+    expect(contactEvents["worker_status_changed"]).toBe(1);
+    // Assert the payload status is "terminated"
+    const statusChange = contactEventPayloads.find((e) => e.kind === "worker_status_changed");
+    expect(statusChange).toBeDefined();
+    expect(statusChange!.status).toBe("terminated");
   });
 });
