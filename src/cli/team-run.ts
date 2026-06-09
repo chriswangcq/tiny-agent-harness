@@ -36,7 +36,7 @@ export async function runTeam(args: string[]): Promise<void> {
   // Route lifecycle group to thin dispatcher
   if (group === "lifecycle") {
     const lifecycleArgs = args.slice(1);
-    const stateRoot = resolveTeamStateRoot();
+    const stateRoot = isHelpRequest(lifecycleArgs) ? cwd : resolveTeamStateRoot();
     const result = await executeLifecycleAdapterCommand(
       createNodeLifecycleCliAdapterPorts(),
       lifecycleArgs,
@@ -76,4 +76,8 @@ function resolveTeamStateRoot(): string {
   return new StateRootResolver({
     env: { ...process.env, TAH_STATE_DIR: undefined },
   }).resolve().stateDir;
+}
+
+function isHelpRequest(args: string[]): boolean {
+  return args.length === 0 || args[0] === "--help" || args[0] === "-h";
 }

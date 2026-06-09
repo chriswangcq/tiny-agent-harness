@@ -907,10 +907,12 @@ export const HELP_TEXT = `Usage: tiny-agent team <group> [options]
 Team subcommands:
   team contact <subcommand>         Contact/worker directory management
   team task <subcommand>            Task lifecycle management
+  team lifecycle <subcommand>       Run-scoped worker lease/reaper/shutdown
 
 Groups:
-  contact   Worker registration, lookup, status, heartbeat
-  task      Task creation, assignment, execution, completion
+  contact     Worker registration, lookup, status, heartbeat
+  task        Task creation, assignment, execution, completion
+  lifecycle   Worker lease, lifecycle-status, reaper, shutdown
 
 Options:
   --json    Output JSON envelope (default)
@@ -924,7 +926,12 @@ Examples:
   tiny-agent team task assign t1 w1
   tiny-agent team task start t1
   tiny-agent team task succeed t1
+  tiny-agent team lifecycle lifecycle-status w1 --run run-123
+  tiny-agent team lifecycle lease w1 --run run-123
+  tiny-agent team lifecycle reaper --run run-123
+  tiny-agent team lifecycle shutdown w1 --run run-123 --execute
 
 For group-specific help:
   tiny-agent team contact --help
-  tiny-agent team task --help`;
+  tiny-agent team task --help
+  tiny-agent team lifecycle --help`;

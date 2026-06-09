@@ -16,6 +16,7 @@ import {
 import {
   createLifecycleCliAdapterPorts,
   executeLifecycleAdapterCommand,
+  LIFECYCLE_HELP,
   type LifecycleAdapterFsPort,
 } from "../src/subagent/lifecycle-cli-adapter.js";
 import {
@@ -189,6 +190,26 @@ function makePorts(shutdownCalls: Array<{ pid: number; workerId: string }> = [])
 }
 
 describe("lifecycle CLI adapter", () => {
+  it("returns lifecycle help for --help without touching runtime state", async () => {
+    const stateRoot = await makeProject();
+
+    const result = await executeLifecycleAdapterCommand(
+      makePorts(),
+      ["--help"],
+      { stateRoot, cwd: stateRoot },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: "USAGE",
+      details: { helpText: LIFECYCLE_HELP },
+    });
+    expect(LIFECYCLE_HELP).toContain("lifecycle-status");
+    expect(LIFECYCLE_HELP).toContain("lease");
+    expect(LIFECYCLE_HELP).toContain("reaper");
+    expect(LIFECYCLE_HELP).toContain("shutdown");
+  });
+
   it("records heartbeat and lease into run-scoped supervisor events", async () => {
     const stateRoot = await makeProject();
     await writeRunRegistry(stateRoot, "run-1", [makeWorker()]);
@@ -372,6 +393,29 @@ describe("lifecycle CLI adapter", () => {
     expect(output.ok).toBe(true);
     expect(output.command).toBe("lease");
     expect(output.workerId).toBe("worker-1");
+  });
+
+  it("team-run lifecycle help returns lifecycle help envelope", async () => {
+    const originalWrite = process.stdout.write;
+    const writes: string[] = [];
+
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+
+    try {
+      await runTeam(["lifecycle", "--help"]);
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+
+    const output = JSON.parse(writes.join(""));
+    expect(output).toMatchObject({
+      ok: false,
+      errorCode: "USAGE",
+      details: { helpText: LIFECYCLE_HELP },
+    });
   });
 
   it("returns a usage envelope for missing flag values", async () => {

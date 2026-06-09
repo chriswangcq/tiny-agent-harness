@@ -528,4 +528,9 @@ Command behavior:
 - `team lifecycle reaper --run <runId> --execute` reads each stale worker process state, calls the injected process shutdown port, and appends `reaper_planned`, `shutdown_requested`, `shutdown_completed` or `shutdown_failed`, and `reaper_executed`.
 - `team lifecycle shutdown <workerId> --run <runId> --execute` performs the same explicit process boundary for one worker. Missing worker PID is a structured `SHUTDOWN_FAILED` result and is recorded in supervisor audit events.
 
+CLI discoverability:
+
+- `tiny-agent --help` lists `tiny-agent team <group>` and the `team lifecycle <subcommand>` group.
+- `tiny-agent team --help` lists `team lifecycle lifecycle-status`, `lease`, `reaper`, and `shutdown` alongside the contact/task groups.
+
 The adapter reuses `createRuntimeAdapter` for lifecycle decisions and existing supervisor/directory stores for persistence. The old in-memory `--workers-json` lifecycle dispatcher was removed; normal operator paths use the run-scoped adapter through `team lifecycle`.

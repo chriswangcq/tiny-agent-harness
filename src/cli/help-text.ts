@@ -12,6 +12,7 @@ Usage:
   tiny-agent im  <subcommand> [options]               IM message operations
   tiny-agent skill <subcommand> [options]             Skill management
   tiny-agent mcp  <subcommand> [options]              MCP server interaction
+  tiny-agent team <group> [options]                   Team worker/task/lifecycle control
   tiny-agent --help                                   Show this help
 
 IM subcommands:
@@ -32,6 +33,11 @@ Skill subcommands:
   review-complete <runId>       Complete skill review
   validate <name>               Validate skill structure
   install <source> [<name>]     Install a skill from local directory
+
+Team groups:
+  team contact <subcommand>     Worker registration, lookup, status, heartbeat
+  team task <subcommand>        Task creation, assignment, execution, completion
+  team lifecycle <subcommand>   Run-scoped lease, lifecycle-status, reaper, shutdown
 
 Environment variables:
   DEEPSEEK_API_KEY   (required) API key for DeepSeek

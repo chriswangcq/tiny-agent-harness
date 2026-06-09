@@ -3,6 +3,8 @@
 本文记录 tiny-agent-harness 第一版 run loop、agent run state、effect 和 event 协议。
 
 > Current implementation note: model-level `final` is no longer part of the supported `ModelTurn` contract. Completion replies are sent to the user through IM via the current PTY session, then the agent returns `io_wait` to wait for the next environment event.
+>
+> Product gap: a smoke task that asks the model to "just final reply" currently cannot complete the run through a native final turn. If product semantics require a terminal success state, add an explicit `complete`/`succeeded` run status, a durable completion event, and tests around the state transition instead of only teaching the DSML parser to accept `final`.
 
 ## Design Principles
 

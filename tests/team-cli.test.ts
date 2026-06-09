@@ -667,6 +667,11 @@ describe("help text", () => {
   it("HELP_TEXT contains expected sections", () => {
     expect(HELP_TEXT).toContain("team contact");
     expect(HELP_TEXT).toContain("team task");
+    expect(HELP_TEXT).toContain("team lifecycle");
+    expect(HELP_TEXT).toContain("lifecycle-status");
+    expect(HELP_TEXT).toContain("lease");
+    expect(HELP_TEXT).toContain("reaper");
+    expect(HELP_TEXT).toContain("shutdown");
     expect(HELP_TEXT).toContain("Usage:");
   });
 

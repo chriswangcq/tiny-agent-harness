@@ -666,7 +666,7 @@ describe("DeepSeekFimAdapter", () => {
     expect(injectedThinking).not.toContain("｜tool");
   });
 
-  it("rejects final decisions as unsupported", async () => {
+  it("keeps explicit final decisions invalid instead of treating them as io_wait until completion state exists", async () => {
     stubFimResponses(
       "Task is complete",
       `final">\n<${DSML}parameter name="content" string="true">done</${DSML}parameter>`,
@@ -676,6 +676,7 @@ describe("DeepSeekFimAdapter", () => {
       tools: [...STATIC_TOOL_CATALOG],
     });
 
+    expect(output.turn.kind).not.toBe("io_wait");
     expect(output.turn).toMatchObject({
       kind: "invalid_output",
       message: expect.stringContaining("Unsupported"),

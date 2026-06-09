@@ -289,6 +289,8 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 `src/subagent/lifecycle-runtime-adapter.ts` 是纯 adapter，接收显式 `TeamSnapshot`（含 `processExistence?: Record<string, boolean>`）和注入 port（时钟、事件追加、进程 shutdown、contact event），提供 `recordHeartbeat`、`enumerateWorkers`、`runReaper`、`requestShutdown`。它内部调用 `supervisor-lifecycle.ts` 的纯决策函数（`interpretHeartbeat`、`evaluateLease`、`computeLifecycleState`、`decideReaperAction`）来推导 `WorkerLifecycleState`（healthy / stale / expired / grace_period / shutdown / terminated / missing_process / unknown）。
 
+CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-agent team --help` 暴露 `team lifecycle lifecycle-status|lease|reaper|shutdown`，对应的 effect boundary 仍在 `src/subagent/lifecycle-cli-adapter.ts`，不绕过 run-scoped registry 和 supervisor JSONL。
+
 **Reaper shutdown chain**: the `runReaper` adapter function identifies stale active workers (heartbeat age past threshold, contact status not `terminated` or `offline`). For each stale worker it emits a `shutdown_requested` lifecycle event, attempts graceful shutdown, then records `shutdown_completed` or `shutdown_failed`. Successful shutdown marks the worker contact status `terminated`. This unified chain ensures stale workers are cleanly retired and do not accumulate in the team snapshot.
 
 **Process existence 是 adapter-boundary snapshot input。** `TeamSnapshot.processExistence` 是 `Record<string, boolean>`，由外层（worker launcher spawn 后写入 `workers/<workerId>/state.json`，或 CLI adapter 在 reaper/shutdown 执行前读取 OS process table）注入 adapter。Lifecycle 决策层不自己读 `/proc` 或调用 `process.kill`——它只消费注入的 boolean snapshot 并推导 `missing_process` 状态。

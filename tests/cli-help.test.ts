@@ -6,7 +6,9 @@ describe("main CLI help", () => {
   it("help text documents supported subcommands and excludes removed features", () => {
     expect(HELP_TEXT).toContain("tiny-agent im  <subcommand>");
     expect(HELP_TEXT).toContain("tiny-agent skill <subcommand>");
+    expect(HELP_TEXT).toContain("tiny-agent team <group>");
     expect(HELP_TEXT).toContain("tiny-agent ui  --channel <ch> --resume <runId|latest>");
+    expect(HELP_TEXT).toContain("team lifecycle <subcommand>");
     expect(HELP_TEXT).toContain("terminal/session tools");
     expect(HELP_TEXT).not.toContain("tiny-agent file <subcommand>");
     expect(HELP_TEXT).not.toContain("cat <stashId>");

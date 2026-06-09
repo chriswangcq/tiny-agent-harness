@@ -42,6 +42,23 @@ const TOOL_NAME = "team";
 const DEFAULT_LEASE_DURATION_MS = 60_000;
 const DEFAULT_STALE_THRESHOLD_MS = 300_000;
 
+export const LIFECYCLE_HELP = `Usage: tiny-agent team lifecycle <subcommand> [options]
+
+Lifecycle subcommands:
+  lifecycle-status <workerId>       Show worker lifecycle and lease status
+  lease <workerId>                  Record heartbeat and acquire/renew lease
+  reaper                            Plan stale-worker shutdowns; dry-run by default
+  shutdown <workerId>               Request one worker shutdown
+
+Options:
+  --run <runId|latest>              Target run directory (default: latest)
+  --expiry-ms <ms>                  Lease duration for lease
+  --threshold-ms <ms>               Stale heartbeat threshold
+  --execute                         Execute reaper/shutdown process effects
+  --reason <text>                   Shutdown reason
+  --idempotency-key <key>           Stable event idempotency key
+  --json                            Output JSON envelope (default)`;
+
 export type LifecycleAdapterFsPort = FsPort & SupervisorFsPort;
 
 export type LifecycleCliAdapterPorts = {
@@ -102,7 +119,7 @@ type ParsedCommand =
 
 type ParseResult =
   | { ok: true; command: ParsedCommand }
-  | { ok: false; errorCode: string; error: string };
+  | { ok: false; errorCode: string; error: string; helpText?: string };
 
 export async function executeLifecycleAdapterCommand(
   ports: LifecycleCliAdapterPorts,
@@ -126,6 +143,7 @@ export async function executeLifecycleAdapterCommand(
       cwd: options.cwd,
       errorCode: parsed.errorCode,
       error: parsed.error,
+      ...(parsed.helpText ? { details: { helpText: parsed.helpText } } : {}),
     });
   }
 
@@ -329,7 +347,11 @@ function parseLifecycleAdapterArgs(args: string[]): ParseResult {
       ok: false,
       errorCode: "MISSING_SUBCOMMAND",
       error: "Missing lifecycle subcommand. Expected lifecycle-status, lease, reaper, or shutdown.",
+      helpText: LIFECYCLE_HELP,
     };
+  }
+  if (args[0] === "--help" || args[0] === "-h") {
+    return usage(LIFECYCLE_HELP);
   }
 
   const subcommand = args[0];
@@ -731,7 +753,7 @@ function lookupWorkerOrThrow(
 }
 
 function usage(error: string): ParseResult {
-  return { ok: false, errorCode: "USAGE", error };
+  return { ok: false, errorCode: "USAGE", error, helpText: LIFECYCLE_HELP };
 }
 
 function classifyError(error: unknown): string {
