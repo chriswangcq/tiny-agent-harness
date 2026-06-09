@@ -466,6 +466,37 @@ export class RunOrchestrator {
           continue;
         }
 
+        // Pre-observe if the latest terminal observation is unsettled
+        // (result "ok" with returnedToPrompt false). This handles
+        // commands that finish without a final newline where prompt
+        // facts were not yet recorded when the model chose io_wait.
+        const latestObs = findLatestTerminalObservation(
+          this.ports.modelContext.snapshot().items,
+        );
+        if (
+          latestObs !== undefined &&
+          latestObs.result === "ok" &&
+          !latestObs.returnedToPrompt
+        ) {
+          const preObserveRequest: ToolRequest = {
+            kind: "terminal_tool",
+            toolName: "session_observe",
+            toolCallId: `io-wait-precheck-${this.state.data.runId}-${this.state.data.stepIndex}`,
+            request: { kind: "session_observe" },
+          };
+          try {
+            const preObserveObservation =
+              await this.ports.terminal.execute(preObserveRequest);
+            await this.recordTerminalEnvironmentEvents(
+              preObserveRequest,
+              preObserveObservation,
+              this.state.data.stepIndex,
+            );
+          } catch {
+            // Best-effort pre-observe; fall through to normal io_wait
+          }
+        }
+
         await this.record({
           type: "io_wait_started",
           stepIndex: this.state.data.stepIndex,
@@ -1071,6 +1102,24 @@ function pendingImSendMessage(
   }
 
   return "Cannot wait for user input yet: the latest IM send terminal_write has not returned to a shell prompt. Observe the session until the command finishes and the prompt returns, then call io_wait.";
+}
+
+function findLatestTerminalObservation(
+  items: readonly ModelContextItem[],
+): TerminalObservation | undefined {
+  const latestObservationIndex = findLastHistoryIndex(
+    items,
+    (entry) => entry.type === "observation",
+  );
+  if (latestObservationIndex === -1) return undefined;
+
+  const latestObservation = items[latestObservationIndex] as Extract<
+    ModelContextItem,
+    { type: "observation" }
+  >;
+  const observation = latestObservation.observation;
+  if (!isTerminalObservation(observation)) return undefined;
+  return observation;
 }
 
 function terminalObservationToEnvironmentEvents(input: {
