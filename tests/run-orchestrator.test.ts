@@ -1006,7 +1006,10 @@ describe("RunOrchestrator", () => {
 
     await orchestrator.run();
 
-    expect(terminalCalls).toEqual([
+    const nonPrecheckCalls = terminalCalls.filter(
+      (c) => !c.toolCallId.includes("io-wait-precheck-"),
+    );
+    expect(nonPrecheckCalls).toEqual([
       {
         kind: "terminal_tool",
         toolName: "terminal_write",
@@ -2182,5 +2185,162 @@ describe("RunOrchestrator", () => {
     expect(validatedEvent).toBeDefined();
     expect(usageEvent!.decisionId).toBe("decision-run-001-0");
     expect((validatedEvent as any).decisionId).toBe("decision-run-001-0");
+  });
+
+  it("pre-observes when latest terminal_write has not returned to prompt before io_wait", async () => {
+    const toolCall: InternalToolCall = {
+      id: "call-preobserve",
+      name: "terminal_write",
+      arguments: { expectedInputSeq: 1, text: "long-running-cmd\\n" },
+    };
+    const wait: IoWaitRequest = {
+      reason: "wait after command",
+      condition: { kind: "event", source: "session", minLevel: 10 },
+    };
+    // First observation: the terminal_write that returnedToPrompt false
+    const unsettledObservation: TerminalObservation = {
+      currentSession: "default",
+      observedSession: "default",
+      terminal: terminal(2),
+      request: "terminal_write",
+      result: "ok",
+      returnedToPrompt: false,
+      screen: { text: "still running", rows: 24, cols: 80, truncated: false, logRef: { path: "managed-pty://default" } },
+    };
+    // Second observation: the pre-observe session_observe, which returns prompt
+    const settledObservation: TerminalObservation = {
+      currentSession: "default",
+      observedSession: "default",
+      terminal: { ...terminal(3), lastShellPrompt: { cwd: "/repo", promptSeq: 5, lastReturnCode: 0 } },
+      request: "session_observe",
+      result: "ok",
+      returnedToPrompt: true,
+      terminalEvents: [
+        { kind: "prompt", returnCode: 0, cwd: "/repo", promptSeq: 5, promptNonce: "nonce-pre" },
+      ],
+      screen: { text: "[repo]$ ", rows: 24, cols: 80, truncated: false, logRef: { path: "managed-pty://default" } },
+    };
+    const environment = new Environment();
+    const { orchestrator, terminalCalls, transcript } = makeRun({
+      outputs: [toolOutput(toolCall), ioWaitOutput(wait)],
+      terminalObservations: [unsettledObservation, settledObservation],
+      environment,
+    });
+
+    await orchestrator.run();
+
+    // The pre-observe should have been called
+    expect(terminalCalls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolCallId: expect.stringContaining("io-wait-precheck-"),
+        }),
+      ]),
+    );
+    // The io_wait should have been satisfied
+    expect(readTranscript(transcript)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "io_wait_satisfied" }),
+      ]),
+    );
+    // A session_input_ready event should have been recorded from the pre-observe
+    expect(environment.state.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "session_input_ready" }),
+      ]),
+    );
+  });
+
+  it("does not pre-observe when latest terminal_write has already returned to prompt", async () => {
+    const toolCall: InternalToolCall = {
+      id: "call-settled",
+      name: "terminal_write",
+      arguments: { expectedInputSeq: 1, text: "echo done\\n" },
+    };
+    const wait: IoWaitRequest = {
+      reason: "awaiting next instruction",
+      condition: { kind: "new_user_message", channel: "default" },
+    };
+    // Observation that already returned to prompt
+    const settledObservation: TerminalObservation = {
+      currentSession: "default",
+      observedSession: "default",
+      terminal: terminal(2),
+      request: "terminal_write",
+      result: "ok",
+      returnedToPrompt: true,
+      screen: { text: "[repo]$ ", rows: 24, cols: 80, truncated: false, logRef: { path: "managed-pty://default" } },
+    };
+    const waitEvent: EnvironmentEvent = {
+      id: "msg-pre-settled",
+      kind: "user_message_received",
+      source: "im",
+      timestamp: "2026-06-09T12:00:00.000Z",
+      message: { id: "msg-settled", channel: "default", role: "user", text: "ok", createdAt: "2026-06-09T12:00:00.000Z" },
+    };
+    const environment = new Environment();
+    const envPort: RunPorts["environment"] = {
+      appendEvent(event) {
+        return environment.appendEvent(event);
+      },
+      consumeSince(options) {
+        return environment.consumeSince(options);
+      },
+      waitFor(options) {
+        return environment.waitFor(options);
+      },
+    };
+    const { orchestrator, terminalCalls, transcript } = makeRun({
+      outputs: [toolOutput(toolCall), ioWaitOutput(wait)],
+      terminalObservations: [settledObservation],
+      environment: envPort,
+    });
+
+    const runPromise = orchestrator.run();
+    // Wait for io_wait_started, then inject the user message to wake it
+    await waitForTranscriptCount(transcript, "io_wait_started", 1);
+    environment.appendEvent(waitEvent);
+    await runPromise;
+
+    // No pre-observe should have been called with io-wait-precheck
+    const precheckCalls = terminalCalls.filter((c) =>
+      c.toolCallId.includes("io-wait-precheck-"),
+    );
+    expect(precheckCalls).toHaveLength(0);
+    // The io_wait should still have been satisfied (by user message)
+    expect(readTranscript(transcript)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "io_wait_satisfied" }),
+      ]),
+    );
+  });
+
+  it("user message still wakes io_wait immediately after pre-observe logic", async () => {
+    const wait: IoWaitRequest = {
+      reason: "awaiting next instruction",
+    };
+    const userEvent: EnvironmentEvent = {
+      id: "msg-env-user-wake",
+      kind: "user_message_received",
+      source: "im",
+      timestamp: "2026-06-09T12:00:00.000Z",
+      message: { id: "msg-user-wake", channel: "default", role: "user", text: "continue", createdAt: "2026-06-09T12:00:00.000Z" },
+    };
+    const environment = new Environment();
+    const { orchestrator, transcript } = makeRun({
+      outputs: [ioWaitOutput(wait)],
+      environment,
+    });
+
+    const runPromise = orchestrator.run();
+    await waitForTranscriptCount(transcript, "io_wait_started", 1);
+    environment.appendEvent(userEvent);
+    await runPromise;
+
+    expect(readTranscript(transcript)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "io_wait_satisfied" }),
+      ]),
+    );
   });
 });
