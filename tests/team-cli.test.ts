@@ -22,6 +22,10 @@ function fakePorts(): TeamCliPorts {
       eventCounter += 1;
       return `${prefix}-${seed}-${eventCounter.toString().padStart(3, "0")}`;
     },
+    newMessageId: (prefix: string, seed: string) => {
+      eventCounter += 1;
+      return `${prefix}-${seed}-${eventCounter.toString().padStart(3, "0")}`;
+    },
   };
 }
 
@@ -163,6 +167,19 @@ describe("parseTeamArgs", () => {
     expect(assign.ok).toBe(true);
     if (assign.ok && assign.command.sub === "assign") {
       expect(assign.command.memberId).toBe("w1");
+    }
+
+    const assignWithText = parseTeamArgs([
+      "task",
+      "assign",
+      "t1",
+      "w1",
+      "--text",
+      "Use IM and report evidence",
+    ]);
+    expect(assignWithText.ok).toBe(true);
+    if (assignWithText.ok && assignWithText.command.sub === "assign") {
+      expect(assignWithText.command.instruction).toBe("Use IM and report evidence");
     }
   });
 
@@ -340,14 +357,46 @@ describe("team service commands", () => {
       role: "coder",
       channel: "default",
     });
+    handleMemberCommand(ports, state, {
+      group: "member",
+      sub: "update",
+      memberId: "w1",
+      patch: { runId: "run-worker-1" },
+    });
     const assigned = handleTaskCommand(ports, state, {
       group: "task",
       sub: "assign",
       taskId: "t1",
       memberId: "w1",
+      instruction: "Please inspect and report evidence.",
     });
     expect(assigned.ok).toBe(true);
     expect(state.taskState.tasks["t1"]?.workerId).toBe("w1");
+    expect(state.taskState.tasks["t1"]?.dispatch).toMatchObject({
+      channel: "default",
+      memberId: "w1",
+      instruction: "Please inspect and report evidence.",
+      status: "pending",
+      requestedAt: "2026-06-05T23:00:00.000Z",
+    });
+    if (assigned.ok) {
+      expect(assigned.dispatch).toMatchObject({
+        taskId: "t1",
+        memberId: "w1",
+        channel: "default",
+        runId: "run-worker-1",
+        message: {
+          role: "user",
+          text: "Please inspect and report evidence.",
+          metadata: {
+            from: "team",
+            teamId: "test-team",
+            taskId: "t1",
+            memberId: "w1",
+          },
+        },
+      });
+    }
   });
 });
 

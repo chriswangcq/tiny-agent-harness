@@ -37,7 +37,7 @@ Skill subcommands:
 Team groups:
   team create <teamId>          Create/reset lightweight team state
   team member <subcommand>      Team roster management
-  team task <subcommand>        Task creation, assignment, execution, completion
+  team task <subcommand>        Task lifecycle; assign dispatches instructions via IM
   team lifecycle <subcommand>   Run-scoped lease, lifecycle-status, reaper, shutdown
 
 Environment variables:

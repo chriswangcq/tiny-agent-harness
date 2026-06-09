@@ -166,6 +166,81 @@ describe("sub-agent team FSM core", () => {
     expect(rejected.state).toBe(state);
   });
 
+  it("tracks task dispatch from pending to sent", () => {
+    const assigned = applyAll(createSubAgentTeamState("team-a"), [
+      { kind: "task_submitted", eventId: "e1", taskId: "task-1", title: "Inspect" },
+      { kind: "member_added", eventId: "e2", workerId: "worker-1" },
+      { kind: "task_assigned", eventId: "e3", taskId: "task-1", workerId: "worker-1" },
+      {
+        kind: "task_dispatch_requested",
+        eventId: "e4",
+        taskId: "task-1",
+        memberId: "worker-1",
+        channel: "worker-1",
+        messageId: "msg-1",
+        instruction: "Inspect and report evidence.",
+        timestamp: "2026-06-06T00:00:00.000Z",
+      },
+    ]);
+
+    expect(assigned.tasks["task-1"]?.dispatch).toEqual({
+      messageId: "msg-1",
+      channel: "worker-1",
+      memberId: "worker-1",
+      instruction: "Inspect and report evidence.",
+      status: "pending",
+      requestedAt: "2026-06-06T00:00:00.000Z",
+    });
+
+    const sent = applySubAgentTeamEvent(assigned, {
+      kind: "task_dispatch_sent",
+      eventId: "e5",
+      taskId: "task-1",
+      messageId: "msg-1",
+      timestamp: "2026-06-06T00:00:01.000Z",
+    });
+
+    expect(sent.status).toBe("applied");
+    expect(sent.state.tasks["task-1"]?.dispatch).toMatchObject({
+      status: "sent",
+      sentAt: "2026-06-06T00:00:01.000Z",
+    });
+  });
+
+  it("records task dispatch failures for auditability", () => {
+    const pending = applyAll(createSubAgentTeamState("team-a"), [
+      { kind: "task_submitted", eventId: "e1", taskId: "task-1", title: "Inspect" },
+      { kind: "member_added", eventId: "e2", workerId: "worker-1" },
+      { kind: "task_assigned", eventId: "e3", taskId: "task-1", workerId: "worker-1" },
+      {
+        kind: "task_dispatch_requested",
+        eventId: "e4",
+        taskId: "task-1",
+        memberId: "worker-1",
+        channel: "worker-1",
+        messageId: "msg-1",
+        instruction: "Inspect and report evidence.",
+        timestamp: "2026-06-06T00:00:00.000Z",
+      },
+    ]);
+
+    const failed = applySubAgentTeamEvent(pending, {
+      kind: "task_dispatch_failed",
+      eventId: "e5",
+      taskId: "task-1",
+      messageId: "msg-1",
+      timestamp: "2026-06-06T00:00:01.000Z",
+      error: "run id missing",
+    });
+
+    expect(failed.status).toBe("applied");
+    expect(failed.state.tasks["task-1"]?.dispatch).toMatchObject({
+      status: "failed",
+      failedAt: "2026-06-06T00:00:01.000Z",
+      error: "run id missing",
+    });
+  });
+
   it("marks a busy worker offline and fails the active task", () => {
     const running = applyAll(createSubAgentTeamState("team-a"), [
       { kind: "task_submitted", eventId: "e1", taskId: "task-1", title: "Inspect" },

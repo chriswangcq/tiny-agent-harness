@@ -9,6 +9,7 @@ Sub-agent team 仍然优先保持纯状态域。它的核心不是“替 master 
 ```text
 member roster events -> TeamRosterState
 task events          -> SubAgentTeamState
+task dispatch        -> run-scoped IM inbox + task dispatch events
 lifecycle events     -> supervisor/lifecycle-events.jsonl
 display projections  -> TUI team dashboard
 ```
@@ -65,12 +66,12 @@ Valid transitions：
 
 ## Directory Store
 
-`src/subagent/directory-store.ts` stores `TeamRosterState` snapshots through explicit filesystem ports.
+`src/subagent/directory-store.ts` stores project/run-scoped team snapshots through explicit filesystem ports.
 
 ```text
-~/.tiny-agent/projects/<projectId>/team/roster.json
+~/.tiny-agent/projects/<projectId>/team/state.json
 ~/.tiny-agent/projects/<projectId>/team/events.jsonl
-~/.tiny-agent/projects/<projectId>/runs/<runId>/team/roster.json
+~/.tiny-agent/projects/<projectId>/runs/<runId>/team/state.json
 ~/.tiny-agent/projects/<projectId>/runs/<runId>/team/events.jsonl
 ```
 
@@ -83,10 +84,11 @@ type TeamDirectorySnapshot = {
   createdAt: string;
   updatedAt: string;
   roster: TeamRosterState;
+  taskState: SubAgentTeamState;
 };
 ```
 
-`createTeamDirectorySnapshot(state, now, createdAt?)` takes explicit time input. `readTeamDirectory` and `writeTeamDirectory` take an injected `FsPort`; the core module performs no hidden IO.
+`createTeamDirectorySnapshot(roster, taskState, now, createdAt?)` takes explicit time input. `readTeamDirectory` and `writeTeamDirectory` take an injected `FsPort`; the core module performs no hidden IO.
 
 ## Team Task FSM
 
@@ -102,6 +104,16 @@ assigned/running -> cancelled
 ```
 
 Reducers remain pure and idempotent by `eventId`.
+
+Assignment dispatch is explicit:
+
+```text
+task_assigned
+task_dispatch_requested
+task_dispatch_sent | task_dispatch_failed
+```
+
+`task assign` builds a `UserMessage` for the assigned member's channel. The adapter posts that message to the member run's IM inbox, then records sent/failed back into `taskState.tasks[taskId].dispatch`. A member needs a `runId` for dispatch because IM inboxes are run-scoped; channel-only targeting is ambiguous once multiple workers exist.
 
 ## Team CLI
 
@@ -119,14 +131,14 @@ tiny-agent team member heartbeat <memberId> [--evidence <text>]
 tiny-agent team member terminate <memberId> [--reason <text>]
 
 tiny-agent team task create <taskId> <title>
-tiny-agent team task assign <taskId> <memberId>
+tiny-agent team task assign <taskId> <memberId> [--text <instruction>|--text-stdin]
 tiny-agent team task start <taskId>
 tiny-agent team task succeed <taskId> [--output <json>]
 tiny-agent team task fail <taskId> <error>
 tiny-agent team task cancel <taskId> [reason]
 ```
 
-There is no compatibility path for removed roster command names.
+There is no compatibility path for removed roster command names. For non-lifecycle team commands, create a team first; state is stored under the project state root, not process-local memory.
 
 ## Local Worker Launcher
 
@@ -212,6 +224,7 @@ Key tests:
 - `tests/subagent-team-roster.test.ts`
 - `tests/subagent-directory-store.test.ts`
 - `tests/team-cli.test.ts`
+- `tests/team-cli-adapter.test.ts`
 - `tests/subagent-local-worker-launcher.test.ts`
 - `tests/subagent-lifecycle-runtime-adapter.test.ts`
 - `tests/subagent-lifecycle-cli-adapter.test.ts`

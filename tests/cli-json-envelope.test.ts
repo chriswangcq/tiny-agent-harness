@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -159,6 +159,100 @@ describe("IM CLI real output envelope", () => {
       expect(env!.channel).toBe("test");
       expect(env!.count).toBeGreaterThanOrEqual(1);
       expect(Array.isArray(env!.messages)).toBe(true);
+    } finally {
+      if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Team CLI real output envelope", () => {
+  it("persists team state and dispatches task assignment into run-scoped IM inbox", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "team-env-test-"));
+    try {
+      expect(runCli(["team", "create", "team-p6", "--state-dir", tmp]).stdout)
+        .toMatchObject({ ok: true, tool: "team" });
+      expect(
+        runCli([
+          "team",
+          "member",
+          "add",
+          "coder-1",
+          "coder",
+          "worker-channel",
+          "--state-dir",
+          tmp,
+        ]).stdout,
+      ).toMatchObject({ ok: true, tool: "team" });
+      expect(
+        runCli([
+          "team",
+          "member",
+          "update",
+          "coder-1",
+          "--json",
+          '{"runId":"run-worker-1"}',
+          "--state-dir",
+          tmp,
+        ]).stdout,
+      ).toMatchObject({ ok: true, tool: "team" });
+      expect(
+        runCli([
+          "team",
+          "task",
+          "create",
+          "ticket-1",
+          "Fix dispatch",
+          "--state-dir",
+          tmp,
+        ]).stdout,
+      ).toMatchObject({ ok: true, tool: "team" });
+
+      const assigned = runCli([
+        "team",
+        "task",
+        "assign",
+        "ticket-1",
+        "coder-1",
+        "--text",
+        "Please fix dispatch and report evidence.",
+        "--state-dir",
+        tmp,
+      ]).stdout as Record<string, unknown>;
+
+      expect(assigned).toMatchObject({
+        ok: true,
+        tool: "team",
+        dispatch: {
+          status: "sent",
+          taskId: "ticket-1",
+          memberId: "coder-1",
+          channel: "worker-channel",
+          runId: "run-worker-1",
+        },
+      });
+
+      const inboxPath = join(
+        tmp,
+        "runs",
+        "run-worker-1",
+        "im",
+        "worker-channel.inbox.jsonl",
+      );
+      const inbox = readFileSync(inboxPath, "utf-8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(inbox).toHaveLength(1);
+      expect(inbox[0]).toMatchObject({
+        channel: "worker-channel",
+        role: "user",
+        text: "Please fix dispatch and report evidence.",
+      });
+
+      const teamState = JSON.parse(
+        readFileSync(join(tmp, "team", "state.json"), "utf-8"),
+      ) as Record<string, any>;
+      expect(teamState.taskState.tasks["ticket-1"].dispatch.status).toBe("sent");
     } finally {
       if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
     }

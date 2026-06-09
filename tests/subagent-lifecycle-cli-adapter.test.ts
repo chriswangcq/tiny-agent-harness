@@ -13,6 +13,7 @@ import {
   createTeamDirectorySnapshot,
   planRunScopedTeamPaths,
 } from "../src/subagent/directory-store.js";
+import { createSubAgentTeamState } from "../src/subagent/team.js";
 import {
   createLifecycleCliAdapterPorts,
   executeLifecycleAdapterCommand,
@@ -102,8 +103,12 @@ async function writeRunRoster(
   const paths = planRunScopedTeamPaths(stateRoot, runId);
   await fsPort.mkdir(paths.runTeamDir);
   const state = rosterWithWorkers(workers);
-  const snapshot = createTeamDirectorySnapshot(state, NOW);
-  await fsPort.writeFile(paths.runRosterFile, JSON.stringify(snapshot, null, 2));
+  const snapshot = createTeamDirectorySnapshot(
+    state,
+    createSubAgentTeamState(state.teamId),
+    NOW,
+  );
+  await fsPort.writeFile(paths.runStateFile, JSON.stringify(snapshot, null, 2));
 }
 
 async function writeWorkerState(
@@ -158,7 +163,7 @@ async function readRosterSnapshot(
   runId: string,
 ): Promise<{ roster: TeamRosterState }> {
   const paths = planRunScopedTeamPaths(stateRoot, runId);
-  return JSON.parse(await readFile(paths.runRosterFile, "utf-8"));
+  return JSON.parse(await readFile(paths.runStateFile, "utf-8"));
 }
 
 const fsPort: LifecycleAdapterFsPort = {

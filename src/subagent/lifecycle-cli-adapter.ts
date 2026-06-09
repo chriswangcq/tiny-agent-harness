@@ -541,7 +541,7 @@ async function loadLifecycleContext(
   const runTeamPaths = planRunScopedTeamPaths(stateRoot, runId);
   const teamLayout: TeamDirectoryLayout = {
     teamDir: runTeamPaths.runTeamDir,
-    rosterFile: runTeamPaths.runRosterFile,
+    stateFile: runTeamPaths.runStateFile,
     eventsFile: runTeamPaths.runEventsFile,
     runsDir: path.join(stateRoot, "runs"),
   };
@@ -628,6 +628,7 @@ function createRuntimePorts(
       }
       const nextSnapshot = createTeamDirectorySnapshot(
         result.state,
+        snapshot.taskState,
         ports.nowIso(),
         snapshot.createdAt,
       );

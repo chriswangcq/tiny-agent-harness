@@ -17,6 +17,7 @@ import {
 import type {
   SubAgentTeamEvent,
   SubAgentTeamState,
+  SubAgentTask,
 } from "./team.js";
 import {
   applySubAgentTeamEvent,
@@ -29,12 +30,22 @@ import {
   type CliEnvelope,
   type SuccessEnvelopeInput,
 } from "../cli/envelope.js";
+import type { UserMessage } from "../types/environment.js";
 
 const TOOL_NAME = "team";
 
 export type TeamCliPorts = {
   nowIso: () => string;
   newEventId: (prefix: string, seed: string) => string;
+  newMessageId: (prefix: string, seed: string) => string;
+};
+
+export type TeamTaskDispatchPlan = {
+  taskId: string;
+  memberId: string;
+  channel: string;
+  runId?: string;
+  message: UserMessage;
 };
 
 export type TeamParsedCommand =
@@ -87,7 +98,13 @@ export type TeamTaskParsedCommand =
   | { group: "task"; sub: "create"; taskId: string; title: string }
   | { group: "task"; sub: "list" }
   | { group: "task"; sub: "show"; taskId: string }
-  | { group: "task"; sub: "assign"; taskId: string; memberId: string }
+  | {
+      group: "task";
+      sub: "assign";
+      taskId: string;
+      memberId: string;
+      instruction?: string;
+    }
   | { group: "task"; sub: "start"; taskId: string }
   | { group: "task"; sub: "succeed"; taskId: string; output?: string }
   | { group: "task"; sub: "fail"; taskId: string; error: string }
@@ -305,7 +322,11 @@ function parseTaskArgs(args: string[]): TeamParseResult {
 
     case "assign": {
       if (args.length < 3) {
-        return { ok: false, error: "Usage: team task assign <taskId> <memberId>", helpText: TASK_HELP };
+        return {
+          ok: false,
+          error: "Usage: team task assign <taskId> <memberId> [--text <instruction>|--text-stdin]",
+          helpText: TASK_HELP,
+        };
       }
       return {
         ok: true,
@@ -314,6 +335,7 @@ function parseTaskArgs(args: string[]): TeamParseResult {
           sub: "assign",
           taskId: args[1],
           memberId: args[2],
+          instruction: readFlagValue(args, "--text"),
         },
       };
     }
@@ -622,7 +644,8 @@ export function handleTaskCommand(
     }
 
     case "assign": {
-      if (!lookupMember(state.roster, cmd.memberId)) {
+      const member = lookupMember(state.roster, cmd.memberId);
+      if (!member) {
         return failureEnvelope({
           tool: TOOL_NAME,
           cwd,
@@ -637,10 +660,65 @@ export function handleTaskCommand(
         taskId: cmd.taskId,
         workerId: cmd.memberId,
       };
-      return applyTaskEvent(state, event, base, "TASK_ASSIGN_FAILED", {
+      const assigned = applyTaskEvent(state, event, base, "TASK_ASSIGN_FAILED", {
         command: "task assign",
         taskId: cmd.taskId,
         memberId: cmd.memberId,
+      });
+      if (!assigned.ok) {
+        return assigned;
+      }
+
+      const task = state.taskState.tasks[cmd.taskId];
+      if (!task) {
+        return failureEnvelope({
+          tool: TOOL_NAME,
+          cwd,
+          errorCode: "TASK_ASSIGN_FAILED",
+          error: `Task "${cmd.taskId}" was not found after assignment.`,
+        });
+      }
+
+      const dispatch = buildTaskDispatchPlan({
+        ports,
+        state,
+        task,
+        member,
+        instruction: cmd.instruction,
+      });
+      const dispatchEvent: SubAgentTeamEvent = {
+        kind: "task_dispatch_requested",
+        eventId: `evt-${ports.newEventId("evt", cmd.taskId)}-dispatch-requested`,
+        taskId: cmd.taskId,
+        memberId: cmd.memberId,
+        channel: dispatch.channel,
+        messageId: dispatch.message.id,
+        instruction: dispatch.message.text,
+        timestamp: dispatch.message.createdAt,
+      };
+      const dispatchRequested = applySubAgentTeamEvent(state.taskState, dispatchEvent);
+      if (dispatchRequested.status !== "applied") {
+        return failureEnvelope({
+          tool: TOOL_NAME,
+          cwd,
+          errorCode: "TASK_DISPATCH_PLAN_FAILED",
+          error: `Task dispatch plan failed: ${dispatchRequested.status}`,
+          details:
+            dispatchRequested.status === "rejected"
+              ? dispatchRequested.rejection
+              : undefined,
+        });
+      }
+      state.taskState = dispatchRequested.state;
+
+      return successEnvelope({
+        ...base,
+        extra: {
+          command: "task assign",
+          taskId: cmd.taskId,
+          memberId: cmd.memberId,
+          dispatch,
+        },
       });
     }
 
@@ -722,6 +800,96 @@ export function executeTeamCommand(
     return handleMemberCommand(ports, state, cmd, cwd);
   }
   return handleTaskCommand(ports, state, cmd, cwd);
+}
+
+export function recordTaskDispatchSent(
+  ports: TeamCliPorts,
+  state: TeamServiceState,
+  dispatch: TeamTaskDispatchPlan,
+): void {
+  const result = applySubAgentTeamEvent(state.taskState, {
+    kind: "task_dispatch_sent",
+    eventId: `evt-${ports.newEventId("evt", dispatch.taskId)}-dispatch-sent`,
+    taskId: dispatch.taskId,
+    messageId: dispatch.message.id,
+    timestamp: ports.nowIso(),
+  });
+  if (result.status === "applied" || result.status === "duplicate") {
+    state.taskState = result.state;
+  }
+}
+
+export function recordTaskDispatchFailed(
+  ports: TeamCliPorts,
+  state: TeamServiceState,
+  dispatch: TeamTaskDispatchPlan,
+  error: string,
+): void {
+  const result = applySubAgentTeamEvent(state.taskState, {
+    kind: "task_dispatch_failed",
+    eventId: `evt-${ports.newEventId("evt", dispatch.taskId)}-dispatch-failed`,
+    taskId: dispatch.taskId,
+    messageId: dispatch.message.id,
+    timestamp: ports.nowIso(),
+    error,
+  });
+  if (result.status === "applied" || result.status === "duplicate") {
+    state.taskState = result.state;
+  }
+}
+
+function buildTaskDispatchPlan(input: {
+  ports: TeamCliPorts;
+  state: TeamServiceState;
+  task: SubAgentTask;
+  member: NonNullable<ReturnType<typeof lookupMember>>;
+  instruction?: string;
+}): TeamTaskDispatchPlan {
+  const createdAt = input.ports.nowIso();
+  const instruction =
+    input.instruction && input.instruction.trim().length > 0
+      ? input.instruction
+      : defaultTaskInstruction(input.state.roster.teamId, input.task, input.member);
+  const message: UserMessage = {
+    id: input.ports.newMessageId(
+      "msg",
+      `${input.state.roster.teamId}-${input.task.id}-${input.member.memberId}`,
+    ),
+    channel: input.member.channel,
+    role: "user",
+    text: instruction,
+    createdAt,
+    metadata: {
+      from: "team",
+      teamId: input.state.roster.teamId,
+      taskId: input.task.id,
+      memberId: input.member.memberId,
+    },
+  };
+
+  return {
+    taskId: input.task.id,
+    memberId: input.member.memberId,
+    channel: input.member.channel,
+    runId: input.member.runId,
+    message,
+  };
+}
+
+function defaultTaskInstruction(
+  teamId: string,
+  task: SubAgentTask,
+  member: NonNullable<ReturnType<typeof lookupMember>>,
+): string {
+  return [
+    `Team ${teamId} assigned you task ${task.id}: ${task.title}`,
+    "",
+    `Role: ${member.role}`,
+    `Channel: ${member.channel}`,
+    "",
+    "Work in your current tiny-agent session. Keep changes scoped to the task instructions you were given.",
+    "Report progress, blockers, and final evidence back through IM using `im send --text-stdin`.",
+  ].join("\n");
 }
 
 function applyTaskEvent(
@@ -920,7 +1088,8 @@ Task subcommands:
   create <taskId> <title>           Create a new task
   list                              List all tasks and summary
   show <taskId>                     Show task details
-  assign <taskId> <memberId>        Assign task to a team member
+  assign <taskId> <memberId> [--text <instruction>]
+                                    Assign task and dispatch instruction via IM
   start <taskId>                    Start task execution
   succeed <taskId> [--output <json>] Mark task as succeeded
   fail <taskId> <error>             Mark task as failed
@@ -952,7 +1121,7 @@ Examples:
   tiny-agent team member add w1 coder default --metadata '{"workspace":"/ws","branch":"codex/p6/01"}'
   tiny-agent team member status w1 active
   tiny-agent team task create t1 "Inspect issue"
-  tiny-agent team task assign t1 w1
+  tiny-agent team task assign t1 w1 --text "Inspect issue and report evidence"
   tiny-agent team lifecycle lifecycle-status w1 --run run-123
 
 For group-specific help:

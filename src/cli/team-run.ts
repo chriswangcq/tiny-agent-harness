@@ -1,10 +1,11 @@
 import * as path from "node:path";
 import {
-  createTeamServiceState,
-  executeTeamCommand,
   HELP_TEXT,
-  type TeamCliPorts,
 } from "../subagent/team-cli.js";
+import {
+  createNodeTeamCliAdapterPorts,
+  executeTeamAdapterCommand,
+} from "../subagent/team-cli-adapter.js";
 import {
   createNodeLifecycleCliAdapterPorts,
   executeLifecycleAdapterCommand,
@@ -15,28 +16,28 @@ import { StateRootResolver } from "../state/root.js";
 // Register team tool version
 CAPABILITY_VERSIONS["team"] = "0.1.0";
 
-// Real clock/id ports — only at the CLI boundary
-const realPorts: TeamCliPorts = {
-  nowIso: () => new Date().toISOString(),
-  newEventId: (prefix: string, seed: string) =>
-    `${prefix}-${Date.now()}-${seed}`,
-};
-
 export async function runTeam(args: string[]): Promise<void> {
+  const options = parseTeamRunOptions(args);
   // Check for --help before anything else
-  if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
+  if (
+    options.commandArgs.length === 0 ||
+    options.commandArgs[0] === "--help" ||
+    options.commandArgs[0] === "-h"
+  ) {
     process.stdout.write(HELP_TEXT);
     process.stdout.write("\n");
     return;
   }
 
-  const group = args[0];
+  const group = options.commandArgs[0];
   const cwd = process.cwd();
 
   // Route lifecycle group to thin dispatcher
   if (group === "lifecycle") {
-    const lifecycleArgs = args.slice(1);
-    const stateRoot = isHelpRequest(lifecycleArgs) ? cwd : resolveTeamStateRoot();
+    const lifecycleArgs = options.commandArgs.slice(1);
+    const stateRoot = isHelpRequest(lifecycleArgs)
+      ? cwd
+      : resolveTeamStateRoot(options.stateDir);
     const result = await executeLifecycleAdapterCommand(
       createNodeLifecycleCliAdapterPorts(),
       lifecycleArgs,
@@ -47,14 +48,21 @@ export async function runTeam(args: string[]): Promise<void> {
     return;
   }
 
-  // Route contact/task through existing handler
-  const state = createTeamServiceState();
-  const result = executeTeamCommand(realPorts, state, args, cwd);
+  const normalizedArgs = await normalizeTextStdin(options.commandArgs);
+  const result = await executeTeamAdapterCommand(
+    createNodeTeamCliAdapterPorts(),
+    normalizedArgs,
+    { stateRoot: resolveTeamStateRoot(options.stateDir), cwd },
+  );
   process.stdout.write(JSON.stringify(result));
   process.stdout.write("\n");
 }
 
-function resolveTeamStateRoot(): string {
+function resolveTeamStateRoot(explicitStateDir?: string): string {
+  if (explicitStateDir) {
+    return path.resolve(explicitStateDir);
+  }
+
   if (process.env.TAH_PROJECT_STATE_DIR) {
     return path.resolve(process.env.TAH_PROJECT_STATE_DIR);
   }
@@ -80,4 +88,45 @@ function resolveTeamStateRoot(): string {
 
 function isHelpRequest(args: string[]): boolean {
   return args.length === 0 || args[0] === "--help" || args[0] === "-h";
+}
+
+function parseTeamRunOptions(args: string[]): {
+  commandArgs: string[];
+  stateDir?: string;
+} {
+  const commandArgs: string[] = [];
+  let stateDir: string | undefined;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--state-dir") {
+      stateDir = args[index + 1];
+      index += 1;
+      continue;
+    }
+    if (arg !== undefined) {
+      commandArgs.push(arg);
+    }
+  }
+
+  return { commandArgs, stateDir };
+}
+
+async function normalizeTextStdin(args: string[]): Promise<string[]> {
+  if (!args.includes("--text-stdin")) {
+    return args;
+  }
+  if (args.includes("--text")) {
+    return args;
+  }
+  const text = await readStdinText(process.stdin as AsyncIterable<Buffer | string>);
+  return [...args.filter((arg) => arg !== "--text-stdin"), "--text", text];
+}
+
+async function readStdinText(stdin: AsyncIterable<Buffer | string>): Promise<string> {
+  let text = "";
+  for await (const chunk of stdin) {
+    text += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+  }
+  return text;
 }

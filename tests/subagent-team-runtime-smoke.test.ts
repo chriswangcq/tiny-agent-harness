@@ -181,15 +181,16 @@ describe("P6-02 directory store smoke", () => {
   it("plans team directory layout", () => {
     const layout = planTeamDirectoryLayout("/home/project");
     expect(layout.teamDir).toBe("/home/project/team");
-    expect(layout.rosterFile).toBe("/home/project/team/roster.json");
+    expect(layout.stateFile).toBe("/home/project/team/state.json");
     expect(layout.eventsFile).toBe("/home/project/team/events.jsonl");
   });
 
   it("creates valid snapshot from roster", () => {
     const roster = createTeamRosterState("team-p6-09");
-    // API: createTeamDirectorySnapshot(state, now, createdAt?)
+    // API: createTeamDirectorySnapshot(roster, taskState, now, createdAt?)
     const snapshot = createTeamDirectorySnapshot(
       roster,
+      createSubAgentTeamState("team-p6-09"),
       "2026-06-06T12:00:00.000Z",
     );
     const validation = validateTeamDirectorySnapshot(snapshot);
@@ -400,6 +401,7 @@ describe("E2E runtime chain", () => {
     // 2. Directory store snapshot
     const snapshot = createTeamDirectorySnapshot(
       roster,
+      createSubAgentTeamState("team-p6-09"),
       "2026-06-06T12:00:00.000Z",
     );
     expect(validateTeamDirectorySnapshot(snapshot).valid).toBe(true);

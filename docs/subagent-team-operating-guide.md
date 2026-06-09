@@ -13,15 +13,16 @@ team create <teamId>
   -> team lifecycle lease/reaper/shutdown for run-scoped worker processes
 ```
 
-Workspace layout, git branch policy, child ledgers, and QA protocol are instructions sent to workers or metadata/evidence submitted by workers. They are not required fields in the team roster schema.
+Workspace layout, git branch policy, child ledgers, and QA protocol are instructions sent to workers through IM or metadata/evidence submitted by workers. They are not required fields in the team roster schema.
 
 ## Runtime Boundaries
 
 | Layer | Responsibility |
 | --- | --- |
 | `team-roster.ts` | Pure member roster FSM. Durable people/control-plane truth. |
-| `team.ts` | Pure task FSM for assignment and task lifecycle. |
-| `directory-store.ts` | Explicit-port JSON snapshot store for `team/roster.json`. |
+| `team.ts` | Pure task FSM for assignment, IM dispatch status, and task lifecycle. |
+| `team-cli-adapter.ts` | Project-scoped effect boundary: load/save team state and post assignment instructions to run-scoped IM. |
+| `directory-store.ts` | Explicit-port JSON snapshot store for `team/state.json`. |
 | `local-worker-launcher.ts` | Optional adapter that can spawn a local worker process when explicitly asked. |
 | `lifecycle-runtime-adapter.ts` | Lease, heartbeat, stale reaper, shutdown chain over run-scoped worker process facts. |
 | TUI dashboard | Observer/control projection only. It does not orchestrate or bypass review. |
@@ -69,10 +70,20 @@ tiny-agent team member heartbeat coder-1 --evidence "commit abc123"
 tiny-agent team member terminate coder-1 --reason "task complete"
 
 tiny-agent team task create T-001 "Fix roster projection"
-tiny-agent team task assign T-001 coder-1
+tiny-agent team task assign T-001 coder-1 --text "Fix roster projection and report commit/test evidence"
+tiny-agent team task assign T-001 coder-1 --text-stdin < task-instructions.md
 tiny-agent team task start T-001
 tiny-agent team task succeed T-001 --output '{"commit":"abc123"}'
 ```
+
+`task assign` is the normal dispatch path. It writes a user message to the assigned member's run-scoped IM inbox and records the dispatch chain in the task state:
+
+```text
+task_assigned -> task_dispatch_requested -> task_dispatch_sent
+task_assigned -> task_dispatch_requested -> task_dispatch_failed
+```
+
+The assigned member must have `runId` set before dispatch. The channel alone is not enough for a product team because multiple worker runs may share a project state root.
 
 Lifecycle commands are for run-scoped worker processes:
 
@@ -85,17 +96,19 @@ tiny-agent team lifecycle shutdown coder-1 --run run-123 --execute --reason "sta
 
 ## Durable State
 
-Project-scoped roster:
+Project-scoped team state:
 
 ```text
-~/.tiny-agent/projects/<projectId>/team/roster.json
+~/.tiny-agent/projects/<projectId>/team/state.json
 ~/.tiny-agent/projects/<projectId>/team/events.jsonl
 ```
 
-Run-scoped roster and lifecycle facts:
+`team/state.json` contains both `roster` and `taskState`.
+
+Run-scoped team state and lifecycle facts:
 
 ```text
-~/.tiny-agent/projects/<projectId>/runs/<runId>/team/roster.json
+~/.tiny-agent/projects/<projectId>/runs/<runId>/team/state.json
 ~/.tiny-agent/projects/<projectId>/runs/<runId>/team/events.jsonl
 ~/.tiny-agent/projects/<projectId>/runs/<runId>/supervisor/lifecycle-events.jsonl
 ~/.tiny-agent/projects/<projectId>/runs/<runId>/workers/<workerId>/state.json
@@ -107,11 +120,12 @@ Run-scoped roster and lifecycle facts:
 
 1. Create or select a team.
 2. Add members with role and channel only.
-3. Send concrete instructions to members through IM or terminal/session tools.
-4. Include workspace/git/ledger requirements inside the assignment text when needed.
-5. Record optional facts as metadata or handoff evidence after they exist.
-6. Use lifecycle lease/heartbeat/reaper/shutdown for worker processes.
-7. Merge code through git and review gates outside the roster reducer.
+3. Bind active worker runs back to roster members with `team member update <memberId> --json '{"runId":"run-..."}'`.
+4. Send concrete instructions with `team task assign`; it dispatches through IM and records sent/failed.
+5. Include workspace/git/ledger requirements inside the assignment text when needed.
+6. Record optional facts as metadata or handoff evidence after they exist.
+7. Use lifecycle lease/heartbeat/reaper/shutdown for worker processes.
+8. Merge code through git and review gates outside the roster reducer.
 
 ## Design Rules
 

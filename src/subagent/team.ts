@@ -7,6 +7,19 @@ export type SubAgentTaskStatus =
   | "cancelled";
 
 export type SubAgentWorkerStatus = "idle" | "busy" | "offline";
+export type SubAgentTaskDispatchStatus = "pending" | "sent" | "failed";
+
+export type SubAgentTaskDispatch = {
+  messageId: string;
+  channel: string;
+  memberId: string;
+  instruction: string;
+  status: SubAgentTaskDispatchStatus;
+  requestedAt: string;
+  sentAt?: string;
+  failedAt?: string;
+  error?: string;
+};
 
 export type SubAgentTask = {
   id: string;
@@ -14,6 +27,7 @@ export type SubAgentTask = {
   status: SubAgentTaskStatus;
   input?: unknown;
   workerId?: string;
+  dispatch?: SubAgentTaskDispatch;
   output?: unknown;
   error?: string;
   cancelReason?: string;
@@ -54,6 +68,31 @@ export type SubAgentTeamEvent =
       workerId: string;
     }
   | {
+      kind: "task_dispatch_requested";
+      eventId: string;
+      taskId: string;
+      memberId: string;
+      channel: string;
+      messageId: string;
+      instruction: string;
+      timestamp: string;
+    }
+  | {
+      kind: "task_dispatch_sent";
+      eventId: string;
+      taskId: string;
+      messageId: string;
+      timestamp: string;
+    }
+  | {
+      kind: "task_dispatch_failed";
+      eventId: string;
+      taskId: string;
+      messageId: string;
+      timestamp: string;
+      error: string;
+    }
+  | {
       kind: "task_started";
       eventId: string;
       taskId: string;
@@ -90,6 +129,10 @@ export type SubAgentTransitionRejectionCode =
   | "unknown_task"
   | "unknown_member"
   | "task_not_assignable"
+  | "task_not_dispatchable"
+  | "task_dispatch_exists"
+  | "task_dispatch_missing"
+  | "task_dispatch_mismatch"
   | "task_not_startable"
   | "task_not_completable"
   | "task_terminal"
@@ -163,6 +206,12 @@ export function applySubAgentTeamEvent(
       return registerWorker(state, event);
     case "task_assigned":
       return assignTask(state, event);
+    case "task_dispatch_requested":
+      return requestTaskDispatch(state, event);
+    case "task_dispatch_sent":
+      return completeTaskDispatch(state, event, "sent");
+    case "task_dispatch_failed":
+      return completeTaskDispatch(state, event, "failed");
     case "task_started":
       return startTask(state, event);
     case "task_succeeded":
@@ -296,6 +345,111 @@ function assignTask(
         ...worker,
         status: "busy",
         currentTaskId: event.taskId,
+      },
+    },
+  }));
+}
+
+function requestTaskDispatch(
+  state: SubAgentTeamState,
+  event: Extract<SubAgentTeamEvent, { kind: "task_dispatch_requested" }>,
+): SubAgentTransitionResult {
+  const task = state.tasks[event.taskId];
+  if (!task) {
+    return rejected(state, "unknown_task", `Task ${event.taskId} does not exist.`);
+  }
+  if (task.status !== "assigned") {
+    return rejected(
+      state,
+      "task_not_dispatchable",
+      `Task ${event.taskId} is ${task.status}.`,
+    );
+  }
+  if (task.workerId !== event.memberId) {
+    return rejected(
+      state,
+      "worker_task_mismatch",
+      `Task ${event.taskId} is assigned to ${task.workerId ?? "no worker"}.`,
+    );
+  }
+  if (task.dispatch) {
+    return rejected(
+      state,
+      "task_dispatch_exists",
+      `Task ${event.taskId} already has dispatch ${task.dispatch.messageId}.`,
+    );
+  }
+
+  return applied(withEvent(state, event.eventId, {
+    tasks: {
+      ...state.tasks,
+      [event.taskId]: {
+        ...task,
+        dispatch: {
+          messageId: event.messageId,
+          channel: event.channel,
+          memberId: event.memberId,
+          instruction: event.instruction,
+          status: "pending",
+          requestedAt: event.timestamp,
+        },
+      },
+    },
+  }));
+}
+
+function completeTaskDispatch(
+  state: SubAgentTeamState,
+  event: Extract<
+    SubAgentTeamEvent,
+    { kind: "task_dispatch_sent" | "task_dispatch_failed" }
+  >,
+  status: Extract<SubAgentTaskDispatchStatus, "sent" | "failed">,
+): SubAgentTransitionResult {
+  const task = state.tasks[event.taskId];
+  if (!task) {
+    return rejected(state, "unknown_task", `Task ${event.taskId} does not exist.`);
+  }
+  if (!task.dispatch) {
+    return rejected(
+      state,
+      "task_dispatch_missing",
+      `Task ${event.taskId} has no pending dispatch.`,
+    );
+  }
+  if (task.dispatch.messageId !== event.messageId) {
+    return rejected(
+      state,
+      "task_dispatch_mismatch",
+      `Task ${event.taskId} dispatch is ${task.dispatch.messageId}, not ${event.messageId}.`,
+    );
+  }
+  if (task.dispatch.status !== "pending") {
+    return rejected(
+      state,
+      "task_not_dispatchable",
+      `Task ${event.taskId} dispatch is already ${task.dispatch.status}.`,
+    );
+  }
+
+  return applied(withEvent(state, event.eventId, {
+    tasks: {
+      ...state.tasks,
+      [event.taskId]: {
+        ...task,
+        dispatch: {
+          ...task.dispatch,
+          status,
+          ...(status === "sent"
+            ? { sentAt: event.timestamp }
+            : {
+                failedAt: event.timestamp,
+                error:
+                  event.kind === "task_dispatch_failed"
+                    ? event.error
+                    : "Dispatch failed.",
+              }),
+        },
       },
     },
   }));

@@ -267,14 +267,16 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 ### 4.12 Sub-agent Team Domain
 
-`src/subagent` 当前是 sub-agent team 的本地域模型，不是实际 sub-agent process runtime。它提供：
+`src/subagent` 当前是 sub-agent team 的轻量控制面：核心仍是本地域模型，但已经有 project-scoped CLI adapter 负责 team snapshot 落盘，并通过 run-scoped IM inbox 派发 task assignment。它提供：
 
 - `SubAgentTeamState`：task / worker / applied event ids。
-- `applySubAgentTeamEvent(...)`：纯 FSM reducer，处理 submit/register/assign/start/succeed/fail/cancel/offline。
+- `applySubAgentTeamEvent(...)`：纯 FSM reducer，处理 submit/register/assign/dispatch/start/succeed/fail/cancel/offline。
+- `team-cli-adapter.ts`：显式 fs / clock / id / IM ports，读取 project-scoped team state，执行命令，写回 snapshot。
+- `task_dispatch_requested`、`task_dispatch_sent`、`task_dispatch_failed`：记录 master 通过 IM 给 worker 派发指令的可观察链路。
 - invalid transition rejection codes 和 duplicate event id no-op。
 - `summarizeSubAgentTeam(...)` / `listActiveSubAgentAssignments(...)` 给未来 TUI、CLI、MCP、cloud adapter 消费。
 
-这个边界让未来 “subagent team 管理服务” 可以先复用可测状态机，再在外层接进 MCP、云端队列或本地 CLI。
+这个边界让未来 “subagent team 管理服务” 可以先复用可测状态机，再在外层接进 MCP、云端队列或本地 worker launcher。workspace、branch、ledger 仍通过 IM 指令、metadata 或 handoff evidence 表达，不成为 roster schema 的必填字段。
 
 
 ### 4.13 Subagent Lifecycle Runtime 与可观察性
@@ -289,7 +291,7 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 `src/subagent/lifecycle-runtime-adapter.ts` 是纯 adapter，接收显式 `TeamSnapshot`（含 `rosterState` 与 `processExistence?: Record<string, boolean>`）和注入 port（时钟、事件追加、进程 shutdown、roster event），提供 `recordHeartbeat`、`enumerateWorkers`、`runReaper`、`requestShutdown`。它内部调用 `supervisor-lifecycle.ts` 的纯决策函数（`interpretHeartbeat`、`evaluateLease`、`computeLifecycleState`、`decideReaperAction`）来推导 `WorkerLifecycleState`（healthy / stale / expired / grace_period / shutdown / terminated / missing_process / unknown）。
 
-CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-agent team --help` 暴露 `team create|member|task|lifecycle`，对应的 effect boundary 仍在 `src/subagent/lifecycle-cli-adapter.ts`，不绕过 run-scoped roster 和 supervisor JSONL。
+CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-agent team --help` 暴露 `team create|member|task|lifecycle`。普通 team 命令的 effect boundary 在 `src/subagent/team-cli-adapter.ts`；lifecycle 命令的 effect boundary 在 `src/subagent/lifecycle-cli-adapter.ts`，不绕过 run-scoped team state 和 supervisor JSONL。
 
 **Reaper shutdown chain**: the `runReaper` adapter function identifies stale active workers (heartbeat age past threshold, member status not `terminated` or `offline`). For each stale worker it emits a `shutdown_requested` lifecycle event, attempts graceful shutdown, then records `shutdown_completed` or `shutdown_failed`. Successful shutdown marks the roster member status `terminated`. This unified chain ensures stale workers are cleanly retired and do not accumulate in the team snapshot.
 

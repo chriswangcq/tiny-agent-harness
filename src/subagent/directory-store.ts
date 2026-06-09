@@ -5,6 +5,7 @@
 // through FsPort. Time is an explicit input; no hidden Date reads.
 
 import type { TeamRosterState } from "./team-roster.js";
+import type { SubAgentTeamState } from "./team.js";
 
 // ---------------------------------------------------------------------------
 // Path planner — pure functions
@@ -16,7 +17,7 @@ export const DEFAULT_TEAM_DIR = "team";
 /** Project-scoped team directory layout. */
 export type TeamDirectoryLayout = {
   teamDir: string;
-  rosterFile: string;
+  stateFile: string;
   eventsFile: string;
   runsDir: string;
 };
@@ -24,7 +25,7 @@ export type TeamDirectoryLayout = {
 /** Run-scoped team directory layout under runs/<runId>/team/. */
 export type RunScopedTeamPaths = {
   runTeamDir: string;
-  runRosterFile: string;
+  runStateFile: string;
   runEventsFile: string;
 };
 
@@ -35,7 +36,7 @@ export function planTeamDirectoryLayout(
   const teamDir = `${root}/${DEFAULT_TEAM_DIR}`;
   return {
     teamDir,
-    rosterFile: `${teamDir}/roster.json`,
+    stateFile: `${teamDir}/state.json`,
     eventsFile: `${teamDir}/events.jsonl`,
     runsDir: `${teamDir}/runs`,
   };
@@ -49,7 +50,7 @@ export function planRunScopedTeamPaths(
   const runTeamDir = `${root}/runs/${runId}/team`;
   return {
     runTeamDir,
-    runRosterFile: `${runTeamDir}/roster.json`,
+    runStateFile: `${runTeamDir}/state.json`,
     runEventsFile: `${runTeamDir}/events.jsonl`,
   };
 }
@@ -66,6 +67,7 @@ export type TeamDirectorySnapshot = {
   createdAt: string;
   updatedAt: string;
   roster: TeamRosterState;
+  taskState: SubAgentTeamState;
 };
 
 export type SnapshotValidationResult = {
@@ -74,16 +76,18 @@ export type SnapshotValidationResult = {
 };
 
 export function createTeamDirectorySnapshot(
-  state: TeamRosterState,
+  roster: TeamRosterState,
+  taskState: SubAgentTeamState,
   now: string,
   createdAt?: string,
 ): TeamDirectorySnapshot {
   return {
     schemaVersion: DIRECTORY_SNAPSHOT_VERSION,
-    teamId: state.teamId,
+    teamId: roster.teamId,
     createdAt: createdAt ?? now,
     updatedAt: now,
-    roster: state,
+    roster,
+    taskState,
   };
 }
 
@@ -127,6 +131,25 @@ export function validateTeamDirectorySnapshot(
     }
     if (!roster.members || typeof roster.members !== "object") {
       errors.push("roster.members is missing or not an object");
+    }
+  }
+
+  if (!s.taskState || typeof s.taskState !== "object") {
+    errors.push("Missing or invalid taskState");
+  } else {
+    const taskState = s.taskState as Record<string, unknown>;
+    if (typeof taskState.teamId !== "string") {
+      errors.push("taskState.teamId is missing or not a string");
+    } else if (taskState.teamId !== s.teamId) {
+      errors.push(
+        `taskState.teamId "${taskState.teamId}" does not match snapshot teamId "${s.teamId}"`,
+      );
+    }
+    if (!taskState.tasks || typeof taskState.tasks !== "object") {
+      errors.push("taskState.tasks is missing or not an object");
+    }
+    if (!taskState.workers || typeof taskState.workers !== "object") {
+      errors.push("taskState.workers is missing or not an object");
     }
   }
 
@@ -188,11 +211,11 @@ export async function readTeamDirectory(
 ): Promise<TeamDirectorySnapshot> {
   let raw: string;
   try {
-    raw = await fs.readFile(layout.rosterFile);
+    raw = await fs.readFile(layout.stateFile);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
-      throw new Error(`Team roster not found at ${layout.rosterFile}`);
+      throw new Error(`Team state not found at ${layout.stateFile}`);
     }
     throw err;
   }
@@ -201,7 +224,7 @@ export async function readTeamDirectory(
   try {
     parsed = JSON.parse(raw);
   } catch {
-    throw new Error(`Failed to parse team roster JSON at ${layout.rosterFile}`);
+    throw new Error(`Failed to parse team state JSON at ${layout.stateFile}`);
   }
 
   const validation = validateTeamDirectorySnapshot(parsed);
@@ -220,5 +243,5 @@ export async function writeTeamDirectory(
   snapshot: TeamDirectorySnapshot,
 ): Promise<void> {
   await fs.mkdir(layout.teamDir);
-  await fs.writeFile(layout.rosterFile, JSON.stringify(snapshot, null, 2));
+  await fs.writeFile(layout.stateFile, JSON.stringify(snapshot, null, 2));
 }
