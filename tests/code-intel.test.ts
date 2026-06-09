@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
+import { isCodeIntelCliMain } from "../src/code-intel/cli.js";
 import { createCodeIntelRuntime, executeCodeIntelArgv, parseCodeIntelArgv } from "../src/code-intel/commands.js";
 import { parseSourceLocation } from "../src/code-intel/location.js";
 import { parseTscDiagnosticLine } from "../src/code-intel/tsc-diagnostics.js";
@@ -96,6 +98,25 @@ describe("code-intel argv parsing", () => {
     expect(() => parseCodeIntelArgv(["references", "src/file.ts:1:2", "--apply", "--json"])).toThrow(
       "read-only",
     );
+  });
+});
+
+describe("code-intel CLI entrypoint", () => {
+  it("treats npm-linked symlinks as the main module", () => {
+    const realEntry = "/repo/dist/code-intel/cli.js";
+    const linkedBin = "/opt/homebrew/bin/codeq";
+    const realpaths = new Map([
+      [realEntry, realEntry],
+      [linkedBin, realEntry],
+    ]);
+
+    expect(
+      isCodeIntelCliMain({
+        importMetaUrl: pathToFileURL(realEntry).href,
+        argvPath: linkedBin,
+        realpath: (value) => realpaths.get(value) ?? value,
+      }),
+    ).toBe(true);
   });
 });
 

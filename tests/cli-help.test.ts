@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { HELP_TEXT } from "../src/cli/help-text.js";
 
@@ -27,5 +28,10 @@ describe("main CLI help", () => {
     );
     // The output should match the canonical HELP_TEXT
     expect(help).toBe(HELP_TEXT);
+  });
+
+  it("main bin entry has a node shebang for npm link", () => {
+    const source = readFileSync("src/cli/main.ts", "utf8");
+    expect(source.split("\n")[0]).toBe("#!/usr/bin/env node");
   });
 });
