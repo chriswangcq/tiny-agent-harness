@@ -149,6 +149,7 @@ TUI 启动器的 stdout/stderr 日志，用于排查 UI 启动问题。不属于
 | Skill runs | `.tiny-agent/runs/<runId>/skill-runs/` |
 | Model context snapshot | `.tiny-agent/runs/<runId>/session.json` |
 | Debug prompt/trace artifacts | `.tiny-agent/runs/<runId>/debug/` |
+| Supervisor lifecycle events | `.tiny-agent/runs/<runId>/supervisor/lifecycle-events.jsonl` (append-only heartbeat, lease, shutdown_requested/completed/failed, reaper facts) |
 | Worker process state | `.tiny-agent/runs/<runId>/workers/<workerId>/state.json` |
 
 仍保持项目级：
