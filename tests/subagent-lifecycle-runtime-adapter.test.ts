@@ -447,8 +447,8 @@ describe("lifecycle-runtime-adapter - shutdown", () => {
 // ---------------------------------------------------------------------------
 
 describe("lifecycle-runtime-adapter - idempotency", () => {
-  it("duplicate append via same eventId returns ok without duplicate events", async () => {
-    const { ports, appended } = makeFakePorts();
+  it("duplicate append via same eventId returns ok without duplicate events or contact updates", async () => {
+    const { ports, appended, contactEvents } = makeFakePorts();
     const adapter = createRuntimeAdapter(ports);
     const worker = makeWorker({ workerId: "w1" });
 
@@ -469,6 +469,8 @@ describe("lifecycle-runtime-adapter - idempotency", () => {
     });
     expect(env2.status).toBe("ok");
     expect(appended.length).toBe(count1);
+    // Contact event should only fire once — not on duplicate
+    expect(contactEvents["worker_heartbeat"]).toBe(1);
   });
 
   it("different idempotencyKeys produce distinct events", async () => {
