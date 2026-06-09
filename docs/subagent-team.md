@@ -206,10 +206,10 @@ P6-02 adds `src/subagent/directory-store.ts` — a durable persistence layer for
 
 | Scope | Path | Purpose |
 |-------|------|---------|
-| Project-scoped | `.tiny-agent/team/contact-registry.json` | Cross-run team registry snapshot |
-| Project-scoped | `.tiny-agent/team/events.jsonl` | Team-level event log |
-| Run-scoped | `.tiny-agent/runs/<runId>/team/contact-registry.json` | Per-run team state snapshot |
-| Run-scoped | `.tiny-agent/runs/<runId>/team/events.jsonl` | Per-run team event log |
+| Project-scoped | `~/.tiny-agent/projects/<projectId>/team/contact-registry.json` | Cross-run team registry snapshot |
+| Project-scoped | `~/.tiny-agent/projects/<projectId>/team/events.jsonl` | Team-level event log |
+| Run-scoped | `~/.tiny-agent/projects/<projectId>/runs/<runId>/team/contact-registry.json` | Per-run team state snapshot |
+| Run-scoped | `~/.tiny-agent/projects/<projectId>/runs/<runId>/team/events.jsonl` | Per-run team event log |
 
 Project-scoped registry persists across runs; run-scoped state stays self-contained under `runs/<runId>/` per the state-layout contract.
 
@@ -220,7 +220,7 @@ Project-scoped registry persists across runs; run-scoped state stays self-contai
 
 ### Three layers
 
-1. **Path planner** — pure functions `planTeamDirectoryLayout(projectRoot)` and `planRunScopedTeamPaths(projectRoot, runId)`. No IO, no side effects.
+1. **Path planner** — pure functions `planTeamDirectoryLayout(stateRoot)` and `planRunScopedTeamPaths(stateRoot, runId)`. No IO, no side effects.
 
 2. **Snapshot schema** — `TeamDirectorySnapshot` wrapping `ContactRegistryState` plus `schemaVersion`, `registryId`, `createdAt`, `updatedAt`. Validation via `validateTeamDirectorySnapshot()`.
 
@@ -503,7 +503,7 @@ The team dashboard can display a worker-scoped lifecycle audit projection for he
 
 The TUI view model consumes these as display projections (`auditEvents`) and renders stable row keys, severity, bounded text, and display-only redaction. It does not read lifecycle JSONL directly, decide whether a worker is stale, or execute reaper/shutdown effects.
 
-The adapter from durable runtime state to display projection is `RunLifecycleAuditReader` in `src/tui/lifecycle-audit-projection.ts`. It tails `.tiny-agent/runs/<runId>/supervisor/lifecycle-events.jsonl` by byte offset, validates supervisor lifecycle events, and returns `state.auditEvents` that can be passed directly into `SupervisorLifecycleInput.auditEvents`. The reader is a TUI boundary adapter; the pure `projectLifecycleAuditEvents()` function handles only typed event-to-display mapping.
+The adapter from durable runtime state to display projection is `RunLifecycleAuditReader` in `src/tui/lifecycle-audit-projection.ts`. It tails `~/.tiny-agent/projects/<projectId>/runs/<runId>/supervisor/lifecycle-events.jsonl` by byte offset, validates supervisor lifecycle events, and returns `state.auditEvents` that can be passed directly into `SupervisorLifecycleInput.auditEvents`. The reader is a TUI boundary adapter; the pure `projectLifecycleAuditEvents()` function handles only typed event-to-display mapping.
 
 ## Run-Scoped Lifecycle Adapter (P6-09)
 
@@ -511,14 +511,15 @@ P6-09 wires `team lifecycle ...` to real run-scoped runtime state instead of a f
 
 Active state paths:
 
-- Team contact snapshot: `.tiny-agent/runs/<runId>/team/contact-registry.json`
-- Supervisor audit events: `.tiny-agent/runs/<runId>/supervisor/lifecycle-events.jsonl`
-- Worker process state: `.tiny-agent/runs/<runId>/workers/<workerId>/state.json` written by the local worker launcher after spawn succeeds, then read by lifecycle shutdown/reaper execute.
+- Team contact snapshot: `~/.tiny-agent/projects/<projectId>/runs/<runId>/team/contact-registry.json`
+- Supervisor audit events: `~/.tiny-agent/projects/<projectId>/runs/<runId>/supervisor/lifecycle-events.jsonl`
+- Worker process state: `~/.tiny-agent/projects/<projectId>/runs/<runId>/workers/<workerId>/state.json` written by the local worker launcher after spawn succeeds, then read by lifecycle shutdown/reaper execute.
+- Worker spawn commands pass `--state-dir ~/.tiny-agent/projects/<projectId>` explicitly so child tiny-agent runs do not inherit a parent PTY's run-scoped `TAH_STATE_DIR`.
 
 Run selection:
 
 - Prefer passing `--run <runId>` from supervisors and scripts so audit actions are explicit.
-- `--run latest` or an omitted `--run` resolves to the latest `run-*` directory under `.tiny-agent/runs` using the adapter's run listing port.
+- `--run latest` or an omitted `--run` resolves to the latest `run-*` directory under `~/.tiny-agent/projects/<projectId>/runs` using the adapter's run listing port.
 
 Command behavior:
 

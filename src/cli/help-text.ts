@@ -39,5 +39,5 @@ Environment variables:
   MODEL_NAME         Model name (default: deepseek-v4-pro)
   TAH_IM_CHANNEL     Default IM channel (default: "default")
 
-Most CLI subcommands accept --json for machine-readable output. Use --state-dir to override .tiny-agent location.
+Most CLI subcommands accept --json for machine-readable output. Use --state-dir to override the product state root.
 `;

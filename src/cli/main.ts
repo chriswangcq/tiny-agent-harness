@@ -36,6 +36,7 @@ import {
   type ModelContextWindowPort,
 } from "../model/context-window.js";
 import { HELP_TEXT } from "./help-text.js";
+import { StateRootResolver } from "../state/root.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -126,6 +127,7 @@ function createCliTerminalPort(options: {
   channel: string;
   runId: string;
   runDir: string;
+  stateDir: string;
   paths: RunScopedPaths;
   skillsDir: string;
   transcriptPath: string;
@@ -138,6 +140,7 @@ function createCliTerminalPort(options: {
       runId: options.runId,
       runDir: options.runDir,
       stateDir: options.runDir,
+      projectStateDir: options.stateDir,
       imDir: options.paths.imDir,
       skillRunsDir: options.paths.skillRunsDir,
       sessionsDir: options.paths.sessionsDir,
@@ -220,6 +223,10 @@ function publishLatestRun(runsDir: string, runId: string, runDir: string): void 
   } catch {
     // latest.json is the portable fallback.
   }
+}
+
+function resolveCliStateRoot(stateDir?: string): string {
+  return new StateRootResolver().resolve({ stateDir }).stateDir;
 }
 
 function readLatestRunId(runsDir: string): string | undefined {
@@ -332,7 +339,7 @@ async function runUnifiedUi(args: string[]): Promise<void> {
     die("tiny-agent ui accepts either --task or --resume, not both.");
   }
 
-  const baseDir = path.resolve(stateDir ?? ".tiny-agent");
+  const baseDir = resolveCliStateRoot(stateDir);
   const runsDir = path.join(baseDir, "runs");
   const launcherDir = path.join(baseDir, "launcher");
   fs.mkdirSync(launcherDir, { recursive: true });
@@ -581,7 +588,7 @@ async function main(): Promise<void> {
   }
 
   // --- Create directory structure ---
-  const baseDir = path.resolve(stateDirArg ?? ".tiny-agent");
+  const baseDir = resolveCliStateRoot(stateDirArg);
   const runsDir = path.join(baseDir, "runs");
   const skillsDir = path.join(baseDir, "skills");
   for (const dir of [runsDir, skillsDir]) {
@@ -752,6 +759,7 @@ async function main(): Promise<void> {
       channel,
       runId,
       runDir,
+      stateDir: baseDir,
       paths: runPaths,
       skillsDir,
       transcriptPath,

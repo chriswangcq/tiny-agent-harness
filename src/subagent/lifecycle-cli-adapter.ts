@@ -48,9 +48,9 @@ export type LifecycleCliAdapterPorts = {
   fs: LifecycleAdapterFsPort;
   nowIso: () => string;
   newEventId: (prefix: string, seed: string) => string;
-  listRunIds?: (projectRoot: string) => Promise<string[]>;
+  listRunIds?: (stateRoot: string) => Promise<string[]>;
   readWorkerPid?: (input: {
-    projectRoot: string;
+    stateRoot: string;
     runId: string;
     workerId: string;
   }) => Promise<number | undefined>;
@@ -60,7 +60,7 @@ export type LifecycleCliAdapterPorts = {
     reason?: string,
   ) => Promise<void>;
   checkProcessExists?: (input: {
-    projectRoot: string;
+    stateRoot: string;
     runId: string;
     workerId: string;
     pid: number;
@@ -68,7 +68,7 @@ export type LifecycleCliAdapterPorts = {
 };
 
 export type ExecuteLifecycleAdapterOptions = {
-  projectRoot: string;
+  stateRoot: string;
   cwd?: string;
 };
 
@@ -130,10 +130,10 @@ export async function executeLifecycleAdapterCommand(
   }
 
   try {
-    const runId = await resolveRunId(ports, options.projectRoot, parsed.command.runId);
-    const context = await loadLifecycleContext(ports, options.projectRoot, runId);
+    const runId = await resolveRunId(ports, options.stateRoot, parsed.command.runId);
+    const context = await loadLifecycleContext(ports, options.stateRoot, runId);
     const adapter = createRuntimeAdapter(
-      createRuntimePorts(ports, options.projectRoot, runId, context),
+      createRuntimePorts(ports, options.stateRoot, runId, context),
     );
 
     switch (parsed.command.kind) {
@@ -280,8 +280,8 @@ export function createNodeLifecycleCliAdapterPorts(): LifecycleCliAdapterPorts {
       counter += 1;
       return `${prefix}-${Date.now()}-${seed}-${counter}`;
     },
-    async listRunIds(projectRoot) {
-      const runsDir = path.join(projectRoot, ".tiny-agent", "runs");
+    async listRunIds(stateRoot) {
+      const runsDir = path.join(stateRoot, "runs");
       const entries = await nodeFs.readdir(runsDir, { withFileTypes: true });
       return entries
         .filter((entry) => entry.isDirectory() && entry.name.startsWith("run-"))
@@ -490,24 +490,24 @@ function parsePositiveInt(value: string, flag: string): number {
 
 async function resolveRunId(
   ports: LifecycleCliAdapterPorts,
-  projectRoot: string,
+  stateRoot: string,
   runId: string | undefined,
 ): Promise<string> {
   if (runId && runId !== "latest") return runId;
   if (!ports.listRunIds) {
     throw new Error("Missing run id and no listRunIds port was provided");
   }
-  const runIds = await ports.listRunIds(projectRoot);
+  const runIds = await ports.listRunIds(stateRoot);
   const latest = [...runIds].sort().at(-1);
   if (!latest) {
-    throw new Error(`No run directories found under ${projectRoot}/.tiny-agent/runs`);
+    throw new Error(`No run directories found under ${path.join(stateRoot, "runs")}`);
   }
   return latest;
 }
 
 async function loadLifecycleContext(
   ports: LifecycleCliAdapterPorts,
-  projectRoot: string,
+  stateRoot: string,
   runId: string,
 ): Promise<{
   registry: TeamDirectorySnapshot["registry"];
@@ -516,14 +516,14 @@ async function loadLifecycleContext(
   teamLayout: TeamDirectoryLayout;
   supervisorPorts: SupervisorPorts;
 }> {
-  const runTeamPaths = planRunScopedTeamPaths(projectRoot, runId);
+  const runTeamPaths = planRunScopedTeamPaths(stateRoot, runId);
   const teamLayout: TeamDirectoryLayout = {
     teamDir: runTeamPaths.runTeamDir,
     registryFile: runTeamPaths.runRegistryFile,
     eventsFile: runTeamPaths.runEventsFile,
-    runsDir: path.join(projectRoot, ".tiny-agent", "runs"),
+    runsDir: path.join(stateRoot, "runs"),
   };
-  const supervisorPaths = planRunScopedSupervisorPaths(projectRoot, runId);
+  const supervisorPaths = planRunScopedSupervisorPaths(stateRoot, runId);
   const supervisorPorts: SupervisorPorts = {
     fs: ports.fs,
     clock: { now: ports.nowIso },
@@ -543,7 +543,7 @@ async function loadLifecycleContext(
   for (const [workerId, worker] of Object.entries(teamSnapshot.registry.workers)) {
     processExistence[workerId] = await resolveProcessExistence(
       ports,
-      projectRoot,
+      stateRoot,
       runId,
       workerId,
     );
@@ -563,14 +563,14 @@ async function loadLifecycleContext(
 
 function createRuntimePorts(
   ports: LifecycleCliAdapterPorts,
-  projectRoot: string,
+  stateRoot: string,
   runId: string,
   context: {
     teamLayout: TeamDirectoryLayout;
     supervisorPorts: SupervisorPorts;
   },
 ): LifecycleRuntimePorts {
-  const supervisorPaths = planRunScopedSupervisorPaths(projectRoot, runId);
+  const supervisorPaths = planRunScopedSupervisorPaths(stateRoot, runId);
   return {
     nowIso: ports.nowIso,
     generateId: ports.newEventId,
@@ -578,15 +578,15 @@ function createRuntimePorts(
       appendLifecycleEvent(context.supervisorPorts, supervisorPaths, event),
     shutdownWorker: async (workerId, reason) => {
       const pid = ports.readWorkerPid
-        ? await ports.readWorkerPid({ projectRoot, runId, workerId })
-        : await readWorkerPidFromState(ports.fs, projectRoot, runId, workerId);
+        ? await ports.readWorkerPid({ stateRoot, runId, workerId })
+        : await readWorkerPidFromState(ports.fs, stateRoot, runId, workerId);
       if (pid === undefined) {
         throw new Error(`Missing worker pid for ${workerId}`);
       }
       const shutdown = ports.shutdownProcess ?? defaultShutdownProcess;
       await shutdown(pid, workerId, reason);
       // Write terminal state back to the run-scoped worker state file.
-      const workerPaths = planRunScopedWorkerPaths(projectRoot, runId, workerId);
+      const workerPaths = planRunScopedWorkerPaths(stateRoot, runId, workerId);
       try {
         const raw = await ports.fs.readFile(workerPaths.runWorkerStateFile);
         const current = JSON.parse(raw) as Record<string, unknown>;
@@ -624,11 +624,11 @@ function createRuntimePorts(
  */
 async function resolveProcessExistence(
   ports: LifecycleCliAdapterPorts,
-  projectRoot: string,
+  stateRoot: string,
   runId: string,
   workerId: string,
 ): Promise<boolean> {
-  const workerPaths = planRunScopedWorkerPaths(projectRoot, runId, workerId);
+  const workerPaths = planRunScopedWorkerPaths(stateRoot, runId, workerId);
   let raw: string;
   try {
     raw = await ports.fs.readFile(workerPaths.runWorkerStateFile);
@@ -658,7 +658,7 @@ async function resolveProcessExistence(
 
   if (ports.checkProcessExists) {
     try {
-      return await ports.checkProcessExists({ projectRoot, runId, workerId, pid });
+      return await ports.checkProcessExists({ stateRoot, runId, workerId, pid });
     } catch (err: unknown) {
       if (
         err &&
@@ -688,11 +688,11 @@ async function resolveProcessExistence(
 
 async function readWorkerPidFromState(
   fs: LifecycleAdapterFsPort,
-  projectRoot: string,
+  stateRoot: string,
   runId: string,
   workerId: string,
 ): Promise<number | undefined> {
-  const workerPaths = planRunScopedWorkerPaths(projectRoot, runId, workerId);
+  const workerPaths = planRunScopedWorkerPaths(stateRoot, runId, workerId);
   let raw: string;
   try {
     raw = await fs.readFile(workerPaths.runWorkerStateFile);

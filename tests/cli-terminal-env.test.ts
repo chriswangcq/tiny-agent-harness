@@ -31,6 +31,7 @@ describe("buildCliTerminalEnv", () => {
     const result = buildCliTerminalEnv({}, "default", {
       runId: "run-123",
       runDir: "/repo/.tiny-agent/runs/run-123",
+      projectStateDir: "/repo/.tiny-agent",
       imDir: "/repo/.tiny-agent/runs/run-123/im",
       skillRunsDir: "/repo/.tiny-agent/runs/run-123/skill-runs",
       sessionsDir: "/repo/.tiny-agent/runs/run-123/sessions",
@@ -44,6 +45,7 @@ describe("buildCliTerminalEnv", () => {
       TAH_RUN_ID: "run-123",
       TAH_RUN_DIR: "/repo/.tiny-agent/runs/run-123",
       TAH_STATE_DIR: "/repo/.tiny-agent/runs/run-123",
+      TAH_PROJECT_STATE_DIR: "/repo/.tiny-agent",
       TAH_IM_DIR: "/repo/.tiny-agent/runs/run-123/im",
       TAH_SKILL_RUNS_DIR: "/repo/.tiny-agent/runs/run-123/skill-runs",
       TAH_SESSIONS_DIR: "/repo/.tiny-agent/runs/run-123/sessions",

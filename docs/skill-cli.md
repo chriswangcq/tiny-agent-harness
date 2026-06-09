@@ -61,7 +61,7 @@ RunOrchestrator
 建议目录结构：
 
 ```text
-.tiny-agent/
+~/.tiny-agent/projects/<projectId>/
   skills/
     coding-review/
       skill.json
@@ -84,7 +84,7 @@ RunOrchestrator
 最小可用 skill 可以只有：
 
 ```text
-.tiny-agent/skills/<name>/SKILL.md
+~/.tiny-agent/projects/<projectId>/skills/<name>/SKILL.md
 ```
 
 如果没有 `skill.json`，CLI 可以从 `SKILL.md` frontmatter 或首段描述里提取基本信息。
@@ -211,7 +211,7 @@ skill show coding-review --json
     "description": "Review code changes and report risks, regressions, and missing tests.",
     "entry": "bin/run"
   },
-  "readmePath": ".tiny-agent/skills/coding-review/SKILL.md",
+  "readmePath": "~/.tiny-agent/projects/<projectId>/skills/coding-review/SKILL.md",
   "contentLineCount": 120
 }
 ```
@@ -252,7 +252,7 @@ skill run coding-review --json '{"path":"src"}'
 {
   "returnCode": 0,
   "output": "...",
-  "outputLogPath": ".tiny-agent/runs/<runId>/sessions/default-37a8eec1ce.log"
+  "outputLogPath": "~/.tiny-agent/projects/<projectId>/runs/<runId>/sessions/default-37a8eec1ce.log"
 }
 ```
 
@@ -264,8 +264,8 @@ skill run coding-review --json '{"path":"src"}'
   "skillRunId": "skillrun-2026-05-25-001",
   "skill": "coding-review",
   "status": "running",
-  "statePath": ".tiny-agent/runs/<runId>/skill-runs/skillrun-2026-05-25-001/state.json",
-  "executionLogPath": ".tiny-agent/runs/<runId>/skill-runs/skillrun-2026-05-25-001/execution.txt"
+  "statePath": "~/.tiny-agent/projects/<projectId>/runs/<runId>/skill-runs/skillrun-2026-05-25-001/state.json",
+  "executionLogPath": "~/.tiny-agent/projects/<projectId>/runs/<runId>/skill-runs/skillrun-2026-05-25-001/execution.txt"
 }
 ```
 
@@ -289,7 +289,7 @@ skill status --active --json
       "skill": "coding-review",
       "status": "running",
       "executionReturnCode": 0,
-      "executionLogPath": ".tiny-agent/runs/<runId>/skill-runs/skillrun-2026-05-25-001/execution.txt"
+      "executionLogPath": "~/.tiny-agent/projects/<projectId>/runs/<runId>/skill-runs/skillrun-2026-05-25-001/execution.txt"
     }
   ]
 }
@@ -328,7 +328,7 @@ CLI 不直接把 run 从 reminder 里移除，而是创建 review task：
   "ok": true,
   "skillRunId": "skillrun-2026-05-25-001",
   "status": "review_pending",
-  "reviewTaskPath": ".tiny-agent/runs/<runId>/skill-runs/skillrun-2026-05-25-001/review-task.txt"
+  "reviewTaskPath": "~/.tiny-agent/projects/<projectId>/runs/<runId>/skill-runs/skillrun-2026-05-25-001/review-task.txt"
 }
 ```
 
@@ -351,7 +351,7 @@ skill review-complete skillrun-2026-05-25-001 --json '{
 
 1. 读取 `review-task.txt`、`execution.txt` 和 `state.json`。
 2. 把复盘摘要写入 skill run record。
-3. 把可复用经验追加到 `.tiny-agent/skills/<skill>/attachments/lessons.md`。
+3. 把可复用经验追加到 `~/.tiny-agent/projects/<projectId>/skills/<skill>/attachments/lessons.md`。
 4. 将 skill run 状态改为 `closed`。
 
 输出：
@@ -361,7 +361,7 @@ skill review-complete skillrun-2026-05-25-001 --json '{
   "ok": true,
   "skillRunId": "skillrun-2026-05-25-001",
   "status": "closed",
-  "lessonsPath": ".tiny-agent/skills/coding-review/attachments/lessons.md"
+  "lessonsPath": "~/.tiny-agent/projects/<projectId>/skills/coding-review/attachments/lessons.md"
 }
 ```
 
@@ -406,7 +406,7 @@ Skill CLI 必须遵守普通 Unix CLI 习惯。
 ```json
 {
   "ok": true,
-  "resultPath": ".tiny-agent/artifacts/skill-runs/coding-review-001.md",
+  "resultPath": "~/.tiny-agent/projects/<projectId>/artifacts/skill-runs/coding-review-001.md",
   "summary": "Found 2 potential regressions."
 }
 ```
@@ -497,8 +497,8 @@ Skill reminder 是持续状态，不是一次性 event。
 
 ```text
 Active skill reminder:
-- [skillrun-2026-05-25-001] skill=coding-review status=running rc=0 log=.tiny-agent/runs/<runId>/skill-runs/skillrun-2026-05-25-001/execution.txt
-- [skillrun-2026-05-25-002] skill=debugging status=review_pending task=.tiny-agent/runs/<runId>/skill-runs/skillrun-2026-05-25-002/review-task.txt
+- [skillrun-2026-05-25-001] skill=coding-review status=running rc=0 log=~/.tiny-agent/projects/<projectId>/runs/<runId>/skill-runs/skillrun-2026-05-25-001/execution.txt
+- [skillrun-2026-05-25-002] skill=debugging status=review_pending task=~/.tiny-agent/projects/<projectId>/runs/<runId>/skill-runs/skillrun-2026-05-25-002/review-task.txt
 ```
 
 规则：
@@ -525,9 +525,9 @@ skill accept <proposal-id> --json
 建议流程：
 
 1. Agent 发现某个流程可复用。
-2. Agent 生成 skill proposal 到 `.tiny-agent/skills/proposals/`。
+2. Agent 生成 skill proposal 到 `~/.tiny-agent/projects/<projectId>/skills/proposals/`。
 3. Tool review 或用户审核 proposal。
-4. 通过后移动到 `.tiny-agent/skills/<name>/`。
+4. 通过后移动到 `~/.tiny-agent/projects/<projectId>/skills/<name>/`。
 5. `skill list` 才能发现它。
 
 这样避免 agent 自动写入一个看似权威但没有审核过的能力。
@@ -553,8 +553,8 @@ Agent 需要具体 skill 时，再通过 bash 自己查。
 
 第一版最小实现：
 
-- `.tiny-agent/skills` 作为默认 skill root
-- `.tiny-agent/runs/<runId>/skill-runs` 作为当前 run 的 skill run root（agent PTY 中通过 `TAH_SKILL_RUNS_DIR` 注入）
+- `~/.tiny-agent/projects/<projectId>/skills` 作为默认 skill root
+- `~/.tiny-agent/projects/<projectId>/runs/<runId>/skill-runs` 作为当前 run 的 skill run root（agent PTY 中通过 `TAH_SKILL_RUNS_DIR` 注入）
 - `skill install <source-path> [<name>] --json` 将本地 skill 目录复制到 skills root。安装前校验 SKILL.md 存在且目标名称不冲突。
 - `skill list --json`
 - `skill show <name> --json`

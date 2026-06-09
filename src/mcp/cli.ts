@@ -3,6 +3,7 @@ import { failureEnvelope, successEnvelope } from "../cli/envelope.js";
 import { McpJsonRpcClient } from "./client.js";
 import { ProcessMcpTransport } from "./process-transport.js";
 import { McpRegistryStore } from "./registry.js";
+import { StateRootResolver } from "../state/root.js";
 
 export interface McpCliDeps {
   stdout: { write(text: string): unknown };
@@ -121,7 +122,13 @@ function writeStderrError(deps: McpCliDeps, message: string, errorCode = "MCP_ER
 
 function resolveStateDir(deps: McpCliDeps, override?: string): string {
   if (override) return path.resolve(deps.cwd, override);
-  return deps.env.TAH_STATE_DIR ?? path.resolve(deps.cwd, ".tiny-agent");
+  if (deps.env.TAH_STATE_DIR) return path.resolve(deps.cwd, deps.env.TAH_STATE_DIR);
+  const homeDir = deps.env.HOME ?? deps.env.USERPROFILE ?? path.join(deps.cwd, ".home");
+  return new StateRootResolver({
+    env: { ...deps.env, TAH_STATE_DIR: undefined },
+    cwd: () => deps.cwd,
+    homeDir: () => homeDir,
+  }).resolve().stateDir;
 }
 
 export async function runMcpCli(

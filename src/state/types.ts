@@ -2,7 +2,7 @@ export type ProjectConfig = {
   schemaVersion: number;
   projectId: string;
   projectRoot: string;
-  stateMode: "project-local";
+  stateMode: "home-project" | "explicit";
   createdAt: string;
   updatedAt: string;
 };

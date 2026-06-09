@@ -68,9 +68,9 @@ im listen --channel default
 
 Path resolution:
 
-- `im ... --run latest` writes to `.tiny-agent/runs/<latestRunId>/im/`.
+- `im ... --run latest` writes to `~/.tiny-agent/projects/<projectId>/runs/<latestRunId>/im/` for the current project.
 - Inside an agent PTY, `TAH_IM_DIR` is injected, so `im send/recv` defaults to the current run.
-- If neither run nor `TAH_IM_DIR` exists, the CLI can fall back to project-level `.tiny-agent/im/` for pre-run demos.
+- If neither run nor `TAH_IM_DIR` exists, the CLI falls back to project-level `~/.tiny-agent/projects/<projectId>/im/` for pre-run demos.
 
 ## Message Schema
 
@@ -219,7 +219,7 @@ When a new message arrives:
 For demo, `im` can be backed by local JSONL files:
 
 ```text
-.tiny-agent/
+~/.tiny-agent/projects/<projectId>/
   runs/
     <runId>/
       im/
@@ -232,7 +232,7 @@ For demo, `im` can be backed by local JSONL files:
 Pre-run fallback:
 
 ```text
-.tiny-agent/
+~/.tiny-agent/projects/<projectId>/
   im/
     default.inbox.jsonl
     default.outbox.jsonl

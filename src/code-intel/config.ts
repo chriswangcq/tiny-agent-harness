@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { StateRootResolver } from "../state/root.js";
 import type { CodeIntelConfig, CodeIntelLimits } from "./types.js";
 
 const DEFAULT_LIMITS: CodeIntelLimits = {
@@ -17,7 +18,7 @@ export type LoadedCodeIntelConfig = {
 };
 
 export function loadCodeIntelConfig(workspaceRoot: string): LoadedCodeIntelConfig {
-  const configPath = path.join(workspaceRoot, ".tiny-agent", "code-intel.json");
+  const configPath = path.join(resolveCodeIntelStateRoot(workspaceRoot), "code-intel.json");
   const base = defaultConfig();
 
   if (!fs.existsSync(configPath)) {
@@ -50,6 +51,16 @@ export function loadCodeIntelConfig(workspaceRoot: string): LoadedCodeIntelConfi
   };
 
   return { config: withEnvOverrides(config), configPath };
+}
+
+function resolveCodeIntelStateRoot(workspaceRoot: string): string {
+  if (process.env.TAH_PROJECT_STATE_DIR) {
+    return path.resolve(process.env.TAH_PROJECT_STATE_DIR);
+  }
+  return new StateRootResolver({
+    env: { ...process.env, TAH_STATE_DIR: undefined },
+    cwd: () => workspaceRoot,
+  }).plan().stateDir;
 }
 
 export function defaultConfig(): CodeIntelConfig {

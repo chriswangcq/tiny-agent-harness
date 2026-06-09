@@ -15,8 +15,8 @@ import type {
 export class ImCliTransport implements UserMessageTransport {
   private readonly baseDir: string;
 
-  constructor(options?: { baseDir?: string }) {
-    this.baseDir = options?.baseDir ?? ".tiny-agent/im";
+  constructor(options: { baseDir: string }) {
+    this.baseDir = options.baseDir;
   }
 
   // -----------------------------------------------------------------------

@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { runMcpCli, type McpCliDeps } from "../src/mcp/cli.js";
+import { buildProjectId } from "../src/state/root.js";
 
 const tmpBase = path.join(os.tmpdir(), "mcp-cli-test-" + process.pid);
 const stateDir = path.join(tmpBase, ".tiny-agent");
@@ -258,14 +259,19 @@ describe("mcp CLI", () => {
     expect(err.error).toContain("Invalid JSON");
   });
 
-  it("uses cwd-based state dir when env is not set", async () => {
-    // No TAH_STATE_DIR in env, falls back to deps.cwd/.tiny-agent
+  it("uses home-scoped project state dir when env is not set", async () => {
     const altTmp = path.join(os.tmpdir(), "mcp-cli-test-cwd-" + process.pid);
-    const altState = path.join(altTmp, ".tiny-agent");
+    const altHome = path.join(altTmp, "home");
+    const altState = path.join(
+      altHome,
+      ".tiny-agent",
+      "projects",
+      buildProjectId(altTmp),
+    );
     fs.rmSync(altTmp, { recursive: true, force: true });
-    fs.mkdirSync(altState, { recursive: true });
+    fs.mkdirSync(altTmp, { recursive: true });
     try {
-      const h = makeDeps({ cwd: altTmp, env: {} });
+      const h = makeDeps({ cwd: altTmp, env: { HOME: altHome } });
       const rc = await runMcpCli(
         ["--json", "add", "cwd-srv", "echo"],
         h.deps,
@@ -274,7 +280,6 @@ describe("mcp CLI", () => {
       const json = JSON.parse(h.stdoutLines()[0]);
       expect(json.ok).toBe(true);
 
-      // Verify it wrote to cwd-based path
       const raw = fs.readFileSync(
         path.join(altState, "mcp-servers.json"),
         "utf-8",
@@ -303,8 +308,8 @@ describe("mcp CLI", () => {
       const data = JSON.parse(fs.readFileSync(customPath, "utf-8"));
       expect(data.servers["s1"]).toBeDefined();
 
-      // Default cwd-based path should NOT exist
-      const defaultPath = path.join(tmpBase, ".tiny-agent", "mcp-servers.json");
+      // Default resolver path should NOT exist when --state-dir is explicit
+      const defaultPath = path.join(tmpBase, ".home", ".tiny-agent", "projects");
       expect(fs.existsSync(defaultPath)).toBe(false);
     } finally {
       fs.rmSync(customState, { recursive: true, force: true });

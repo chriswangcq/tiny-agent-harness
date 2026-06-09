@@ -7,20 +7,28 @@ import { parseSourceLocation } from "../src/code-intel/location.js";
 import { parseTscDiagnosticLine } from "../src/code-intel/tsc-diagnostics.js";
 
 const tmpDirs: string[] = [];
+const originalProjectStateDir = process.env.TAH_PROJECT_STATE_DIR;
 
 afterEach(() => {
   for (const dir of tmpDirs) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
   tmpDirs.length = 0;
+  if (originalProjectStateDir === undefined) {
+    delete process.env.TAH_PROJECT_STATE_DIR;
+  } else {
+    process.env.TAH_PROJECT_STATE_DIR = originalProjectStateDir;
+  }
 });
 
 function makeProject(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "code-intel-test-"));
   tmpDirs.push(dir);
+  const stateRoot = path.join(dir, "state-root");
+  process.env.TAH_PROJECT_STATE_DIR = stateRoot;
 
   fs.mkdirSync(path.join(dir, "src"), { recursive: true });
-  fs.mkdirSync(path.join(dir, ".tiny-agent"), { recursive: true });
+  fs.mkdirSync(stateRoot, { recursive: true });
   fs.writeFileSync(path.join(dir, "package.json"), "{}\n", "utf-8");
   fs.writeFileSync(
     path.join(dir, "src", "example.ts"),
@@ -35,7 +43,7 @@ function makeProject(): string {
 
   const fakeServer = path.resolve("tests/fixtures/fake-lsp-server.mjs");
   fs.writeFileSync(
-    path.join(dir, ".tiny-agent", "code-intel.json"),
+    path.join(stateRoot, "code-intel.json"),
     JSON.stringify(
       {
         languages: {

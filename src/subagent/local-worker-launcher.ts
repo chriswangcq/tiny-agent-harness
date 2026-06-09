@@ -19,12 +19,12 @@ import {
 // Path planner — pure functions
 // ---------------------------------------------------------------------------
 
-/** Default workers directory relative to project root (under .tiny-agent/runs). */
-export const DEFAULT_WORKERS_DIR = ".tiny-agent/runs";
+/** Workers directory relative to the product state root. */
+export const DEFAULT_WORKERS_DIR = "runs";
 
 /** Run-scoped worker directory paths. */
 export type RunScopedWorkerPaths = {
-  /** Directory for worker state under .tiny-agent/runs/<runId>/workers/<workerId>/ */
+  /** Directory for worker state under runs/<runId>/workers/<workerId>/ */
   runWorkerDir: string;
   /** Worker state JSON file path */
   runWorkerStateFile: string;
@@ -34,16 +34,16 @@ export type RunScopedWorkerPaths = {
 
 /**
  * Compute run-scoped worker directory paths.
- * Worker state lives under .tiny-agent/runs/<runId>/workers/<workerId>/,
+ * Worker state lives under runs/<runId>/workers/<workerId>/,
  * keeping runtime state self-contained per the state-layout contract.
  * Pure — no IO, no side effects.
  */
 export function planRunScopedWorkerPaths(
-  projectRoot: string,
+  stateRoot: string,
   runId: string,
   workerId: string,
 ): RunScopedWorkerPaths {
-  const root = projectRoot.replace(/\/+$/, ""); // strip trailing slashes
+  const root = stateRoot.replace(/\/+$/, ""); // strip trailing slashes
   const runWorkerDir = `${root}/${DEFAULT_WORKERS_DIR}/${runId}/workers/${workerId}`;
   return {
     runWorkerDir,
@@ -149,8 +149,8 @@ export type WorkerSpawnCommand = {
 
 /** Input parameters for planning a worker launch. */
 export type WorkerLaunchParams = {
-  /** Project root directory (for path computation) */
-  projectRoot: string;
+  /** Product state root directory (for run-scoped path computation) */
+  stateRoot: string;
   /** Agent run id */
   runId: string;
   /** Unique worker identifier */
@@ -175,6 +175,7 @@ export type WorkerLaunchParams = {
 export type WorkerLaunchPlan = {
   workerId: string;
   runId: string;
+  stateRoot: string;
   workspace: string;
   branch: string;
   channel: string;
@@ -201,7 +202,7 @@ export function planWorkerLaunch(
   params: WorkerLaunchParams,
 ): WorkerLaunchPlan {
   const paths = planRunScopedWorkerPaths(
-    params.projectRoot,
+    params.stateRoot,
     params.runId,
     params.workerId,
   );
@@ -209,6 +210,7 @@ export function planWorkerLaunch(
   const plan: WorkerLaunchPlan = {
     workerId: params.workerId,
     runId: params.runId,
+    stateRoot: params.stateRoot,
     workspace: params.workspace,
     branch: params.branch,
     channel: params.channel,
@@ -243,6 +245,8 @@ export function buildSpawnCommand(
     "run",
     "--channel",
     plan.channel,
+    "--state-dir",
+    plan.stateRoot,
   ];
 
   if (plan.taskPrompt && plan.taskPrompt.length > 0) {

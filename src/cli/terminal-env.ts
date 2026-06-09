@@ -22,6 +22,7 @@ export type CliTerminalEnvOptions = {
   runId?: string;
   runDir?: string;
   stateDir?: string;
+  projectStateDir?: string;
   imDir?: string;
   skillRunsDir?: string;
   sessionsDir?: string;
@@ -45,6 +46,7 @@ export function buildCliTerminalEnv(
   assignIfDefined(cleaned, "TAH_RUN_ID", options.runId);
   assignIfDefined(cleaned, "TAH_RUN_DIR", options.runDir);
   assignIfDefined(cleaned, "TAH_STATE_DIR", options.stateDir ?? options.runDir);
+  assignIfDefined(cleaned, "TAH_PROJECT_STATE_DIR", options.projectStateDir);
   assignIfDefined(cleaned, "TAH_IM_DIR", options.imDir);
   assignIfDefined(cleaned, "TAH_SKILL_RUNS_DIR", options.skillRunsDir);
   assignIfDefined(cleaned, "TAH_SESSIONS_DIR", options.sessionsDir);

@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
-  planSupervisorPaths,
   planRunScopedSupervisorPaths,
   createSupervisorLifecycleEvent,
   createSupervisorSnapshot,
@@ -19,70 +18,28 @@ import type {
   ReadLifecycleResult,
 } from "../src/subagent/supervisor-store.js";
 
-// ---------------------------------------------------------------------------
-// Path planner tests
-// ---------------------------------------------------------------------------
-
-describe("planSupervisorPaths", () => {
-  it("returns paths under .tiny-agent/supervisor", () => {
-    const paths = planSupervisorPaths("/home/user/project");
-    expect(paths.supervisorDir).toBe("/home/user/project/.tiny-agent/supervisor");
-    expect(paths.eventsFile).toBe(
-      "/home/user/project/.tiny-agent/supervisor/lifecycle-events.jsonl",
-    );
-    expect(paths.snapshotFile).toBe(
-      "/home/user/project/.tiny-agent/supervisor/snapshot.json",
-    );
-  });
-
-  it("strips trailing slashes from project root", () => {
-    const paths = planSupervisorPaths("/home/user/project/");
-    expect(paths.supervisorDir).toBe("/home/user/project/.tiny-agent/supervisor");
-  });
-
-  it("rejects project roots containing .. that would escape", () => {
-    expect(() => planSupervisorPaths("/home/user/../escape")).toThrow(
-      /path traversal/i,
-    );
-  });
-
-  it("rejects project roots with .. in the middle", () => {
-    expect(() => planSupervisorPaths("/home/../user/project")).toThrow(
-      /path traversal/i,
-    );
-  });
-
-  it("allows normal paths without traversal", () => {
-    expect(() => planSupervisorPaths("/home/user/project")).not.toThrow();
-    expect(() => planSupervisorPaths("/")).not.toThrow();
-    expect(() =>
-      planSupervisorPaths("/home/user/project.with.dots"),
-    ).not.toThrow();
-  });
-});
-
 describe("planRunScopedSupervisorPaths", () => {
-  it("returns paths under .tiny-agent/runs/<runId>/supervisor", () => {
+  it("returns paths under runs/<runId>/supervisor", () => {
     const paths = planRunScopedSupervisorPaths("/home/user/project", "run-001");
     expect(paths.supervisorDir).toBe(
-      "/home/user/project/.tiny-agent/runs/run-001/supervisor",
+      "/home/user/project/runs/run-001/supervisor",
     );
     expect(paths.eventsFile).toBe(
-      "/home/user/project/.tiny-agent/runs/run-001/supervisor/lifecycle-events.jsonl",
+      "/home/user/project/runs/run-001/supervisor/lifecycle-events.jsonl",
     );
     expect(paths.snapshotFile).toBe(
-      "/home/user/project/.tiny-agent/runs/run-001/supervisor/snapshot.json",
+      "/home/user/project/runs/run-001/supervisor/snapshot.json",
     );
   });
 
-  it("strips trailing slashes from project root", () => {
+  it("strips trailing slashes from state root", () => {
     const paths = planRunScopedSupervisorPaths("/home/user/project/", "run-001");
     expect(paths.supervisorDir).toBe(
-      "/home/user/project/.tiny-agent/runs/run-001/supervisor",
+      "/home/user/project/runs/run-001/supervisor",
     );
   });
 
-  it("rejects project roots containing .. that would escape", () => {
+  it("rejects state roots containing .. that would escape", () => {
     expect(() =>
       planRunScopedSupervisorPaths("/home/user/../escape", "run-001"),
     ).toThrow(/path traversal/i);
@@ -427,13 +384,11 @@ describe("validateLifecycleEvent", () => {
 
 describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
   let ports: SupervisorPorts;
-  let paths: SupervisorPaths;
   let runPaths: SupervisorPaths;
   let clockNow: string;
 
   beforeEach(() => {
     ports = createInMemorySupervisorPorts();
-    paths = planSupervisorPaths("/test/project");
     runPaths = planRunScopedSupervisorPaths("/test/project", "run-001");
     clockNow = "2024-06-01T12:00:00.000Z";
   });
@@ -445,10 +400,10 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
       { workerId: "w1" },
       clockNow,
     );
-    const appendResult = await appendLifecycleEvent(ports, paths, event);
+    const appendResult = await appendLifecycleEvent(ports, runPaths, event);
     expect(appendResult.status).toBe("appended");
 
-    const readResult = await readAllLifecycleEvents(ports, paths);
+    const readResult = await readAllLifecycleEvents(ports, runPaths);
     expect(readResult.validEvents).toHaveLength(1);
     expect(readResult.validEvents[0].eventId).toBe("evt-001");
     expect(readResult.parseErrors).toHaveLength(0);
@@ -477,11 +432,11 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
     ];
 
     for (const event of events) {
-      const result = await appendLifecycleEvent(ports, paths, event);
+      const result = await appendLifecycleEvent(ports, runPaths, event);
       expect(result.status).toBe("appended");
     }
 
-    const readResult = await readAllLifecycleEvents(ports, paths);
+    const readResult = await readAllLifecycleEvents(ports, runPaths);
     expect(readResult.validEvents).toHaveLength(3);
     expect(readResult.parseErrors).toHaveLength(0);
     expect(readResult.validEvents.map((e) => e.eventId)).toEqual([
@@ -498,7 +453,7 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
       { workerId: "w1" },
       clockNow,
     );
-    await appendLifecycleEvent(ports, paths, event);
+    await appendLifecycleEvent(ports, runPaths, event);
 
     const event2 = createSupervisorLifecycleEvent(
       "evt-001",
@@ -506,7 +461,7 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
       { workerId: "w1" },
       clockNow,
     );
-    const result = await appendLifecycleEvent(ports, paths, event2);
+    const result = await appendLifecycleEvent(ports, runPaths, event2);
     expect(result.status).toBe("duplicate");
   });
 
@@ -518,13 +473,13 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
       payload: {},
     } as SupervisorLifecycleEvent;
 
-    const result = await appendLifecycleEvent(ports, paths, invalidEvent);
+    const result = await appendLifecycleEvent(ports, runPaths, invalidEvent);
     expect(result.status).toBe("error");
     if (result.status === "error") {
       expect(result.message).toContain("Invalid");
     }
 
-    const readResult = await readAllLifecycleEvents(ports, paths);
+    const readResult = await readAllLifecycleEvents(ports, runPaths);
     expect(readResult.validEvents).toHaveLength(0);
   });
 
@@ -535,15 +490,15 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
       { workerId: "w1" },
       clockNow,
     );
-    await appendLifecycleEvent(ports, paths, event);
+    await appendLifecycleEvent(ports, runPaths, event);
 
-    const eventsPath = paths.eventsFile;
+    const eventsPath = runPaths.eventsFile;
     await ports.fs.writeFile(
       eventsPath,
       (await ports.fs.readFile(eventsPath)) + "this is not json\n",
     );
 
-    const readResult = await readAllLifecycleEvents(ports, paths);
+    const readResult = await readAllLifecycleEvents(ports, runPaths);
     expect(readResult.validEvents).toHaveLength(1);
     expect(readResult.validEvents[0].eventId).toBe("evt-001");
     expect(readResult.parseErrors.length).toBeGreaterThanOrEqual(1);
@@ -556,15 +511,15 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
       { workerId: "w1" },
       clockNow,
     );
-    await appendLifecycleEvent(ports, paths, event);
+    await appendLifecycleEvent(ports, runPaths, event);
 
-    const eventsPath = paths.eventsFile;
+    const eventsPath = runPaths.eventsFile;
     await ports.fs.writeFile(
       eventsPath,
       (await ports.fs.readFile(eventsPath)) + "\n\n",
     );
 
-    const readResult = await readAllLifecycleEvents(ports, paths);
+    const readResult = await readAllLifecycleEvents(ports, runPaths);
     expect(readResult.validEvents).toHaveLength(1);
     expect(readResult.parseErrors).toHaveLength(0);
   });
@@ -576,16 +531,16 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
       { workerId: "w1" },
       clockNow,
     );
-    await appendLifecycleEvent(ports, paths, event);
+    await appendLifecycleEvent(ports, runPaths, event);
 
-    const eventsPath = paths.eventsFile;
+    const eventsPath = runPaths.eventsFile;
     await ports.fs.writeFile(
       eventsPath,
       (await ports.fs.readFile(eventsPath)) +
         JSON.stringify({ eventId: "bad", type: "unknown", timestamp: "x", payload: {} }) + "\n",
     );
 
-    const readResult = await readAllLifecycleEvents(ports, paths);
+    const readResult = await readAllLifecycleEvents(ports, runPaths);
     expect(readResult.validEvents).toHaveLength(1);
     expect(readResult.parseErrors.length).toBeGreaterThanOrEqual(1);
   });
@@ -597,7 +552,7 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
       { workerId: "w1" },
       clockNow,
     );
-    await appendLifecycleEvent(ports, paths, event);
+    await appendLifecycleEvent(ports, runPaths, event);
 
     const snapshot = createSupervisorSnapshot(
       { eventIds: ["evt-001"] },
@@ -605,7 +560,7 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
     );
 
     await ports.fs.writeFile(
-      paths.snapshotFile,
+      runPaths.snapshotFile,
       JSON.stringify(snapshot),
     );
 
@@ -618,7 +573,7 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
 
     const appendResult = await appendLifecycleEvent(
       ports,
-      paths,
+      runPaths,
       event2,
       { loadSnapshot: true },
     );
@@ -626,7 +581,7 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
   });
 
   it("can read from an empty file (no events)", async () => {
-    const readResult = await readAllLifecycleEvents(ports, paths);
+    const readResult = await readAllLifecycleEvents(ports, runPaths);
     expect(readResult.validEvents).toHaveLength(0);
     expect(readResult.parseErrors).toHaveLength(0);
   });
@@ -654,14 +609,15 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
     expect(readResult.parseErrors).toHaveLength(0);
   });
 
-  it("isolates run-scoped from project-scoped stores", async () => {
-    const projectEvent = createSupervisorLifecycleEvent(
+  it("isolates separate run-scoped stores", async () => {
+    const otherRunPaths = planRunScopedSupervisorPaths("/test/project", "run-002");
+    const firstRunEvent = createSupervisorLifecycleEvent(
       "evt-001",
       "worker_heartbeat",
       { workerId: "w1" },
       clockNow,
     );
-    await appendLifecycleEvent(ports, paths, projectEvent);
+    await appendLifecycleEvent(ports, runPaths, firstRunEvent);
 
     const runEvent = createSupervisorLifecycleEvent(
       "evt-r001",
@@ -675,15 +631,15 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
       },
       clockNow,
     );
-    await appendLifecycleEvent(ports, runPaths, runEvent);
+    await appendLifecycleEvent(ports, otherRunPaths, runEvent);
 
-    const projectRead = await readAllLifecycleEvents(ports, paths);
-    expect(projectRead.validEvents).toHaveLength(1);
-    expect(projectRead.validEvents[0].type).toBe("worker_heartbeat");
+    const firstRead = await readAllLifecycleEvents(ports, runPaths);
+    expect(firstRead.validEvents).toHaveLength(1);
+    expect(firstRead.validEvents[0].type).toBe("worker_heartbeat");
 
-    const runRead = await readAllLifecycleEvents(ports, runPaths);
-    expect(runRead.validEvents).toHaveLength(1);
-    expect(runRead.validEvents[0].type).toBe("lease_acquired");
+    const secondRead = await readAllLifecycleEvents(ports, otherRunPaths);
+    expect(secondRead.validEvents).toHaveLength(1);
+    expect(secondRead.validEvents[0].type).toBe("lease_acquired");
   });
 
   it("round-trips all new event types through append and read", async () => {

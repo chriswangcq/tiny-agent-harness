@@ -88,7 +88,7 @@ export function estimateTokenCount(text: string): number {
  * Only files matching `*.prompt.txt` are included. Results are sorted
  * by step number ascending. Non-numeric step prefixes produce step = -1.
  *
- * @param runDir - Absolute path to the run directory (e.g. `.tiny-agent/runs/<runId>`)
+ * @param runDir - Absolute path to the run directory (e.g. `~/.tiny-agent/projects/<projectId>/runs/<runId>`)
  * @returns Sorted array of artifact entries, or empty array if the directory does not exist.
  */
 export function listPromptArtifacts(runDir: string): PromptArtifactEntry[] {

@@ -9,17 +9,10 @@
 // Path planner — pure functions
 // ---------------------------------------------------------------------------
 
-/**
- * Project-scoped supervisor directory.
- * NON-ACTIVE — do not use for new code.
- * Prefer planRunScopedSupervisorPaths which scopes state under a run.
- */
-export const DEFAULT_SUPERVISOR_DIR = ".tiny-agent/supervisor";
-
 /** Run-scoped supervisor directory pattern. */
-export const RUN_SCOPED_SUPERVISOR_DIR = ".tiny-agent/runs";
+export const RUN_SCOPED_SUPERVISOR_DIR = "runs";
 
-/** Paths for supervisor state under a project root. */
+/** Paths for supervisor state under a product state root. */
 export type SupervisorPaths = {
   supervisorDir: string;
   eventsFile: string;
@@ -27,23 +20,23 @@ export type SupervisorPaths = {
 };
 
 /**
- * Validate that a project root does not contain path-traversal segments.
+ * Validate that a state root does not contain path-traversal segments.
  * Throws on any `..` path component that would escape the root.
  */
-function validateProjectRoot(projectRoot: string): void {
-  const normalized = projectRoot.replace(/\/+$/, "");
+function validateStateRoot(stateRoot: string): void {
+  const normalized = stateRoot.replace(/\/+$/, "");
   const segments = normalized.split("/");
   for (const segment of segments) {
     if (segment === "..") {
       throw new Error(
-        `Path traversal detected in project root: "${projectRoot}". ` +
+        `Path traversal detected in state root: "${stateRoot}". ` +
         `The path must not contain ".." segments.`
       );
     }
   }
   if (normalized.includes("%2e%2e") || normalized.includes("..%2F") || normalized.includes("%2F..")) {
     throw new Error(
-      `Path traversal detected in project root: "${projectRoot}". ` +
+      `Path traversal detected in state root: "${stateRoot}". ` +
       `URL-encoded path traversal patterns are not allowed.`
     );
   }
@@ -71,35 +64,18 @@ function validateRunId(runId: string): void {
 }
 
 /**
- * Compute project-scoped supervisor store paths (NON-ACTIVE).
- * Prefer planRunScopedSupervisorPaths for new code.
- * Pure — no IO, no side effects.
- * Throws on path traversal attempts.
- */
-export function planSupervisorPaths(projectRoot: string): SupervisorPaths {
-  validateProjectRoot(projectRoot);
-  const root = projectRoot.replace(/\/+$/, "");
-  const supervisorDir = `${root}/${DEFAULT_SUPERVISOR_DIR}`;
-  return {
-    supervisorDir,
-    eventsFile: `${supervisorDir}/lifecycle-events.jsonl`,
-    snapshotFile: `${supervisorDir}/snapshot.json`,
-  };
-}
-
-/**
  * Compute run-scoped supervisor store paths (ACTIVE).
- * Active path is under .tiny-agent/runs/<runId>/supervisor.
+ * Active path is under runs/<runId>/supervisor.
  * Pure — no IO, no side effects.
- * Throws on path traversal attempts in either projectRoot or runId.
+ * Throws on path traversal attempts in either stateRoot or runId.
  */
 export function planRunScopedSupervisorPaths(
-  projectRoot: string,
+  stateRoot: string,
   runId: string,
 ): SupervisorPaths {
-  validateProjectRoot(projectRoot);
+  validateStateRoot(stateRoot);
   validateRunId(runId);
-  const root = projectRoot.replace(/\/+$/, "");
+  const root = stateRoot.replace(/\/+$/, "");
   const supervisorDir = `${root}/${RUN_SCOPED_SUPERVISOR_DIR}/${runId}/supervisor`;
   return {
     supervisorDir,

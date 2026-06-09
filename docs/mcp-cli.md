@@ -54,14 +54,14 @@ mcp add docs-server node -- ./server.mjs --json
 MCP registry 存在 state root 下：
 
 ```text
-.tiny-agent/
+~/.tiny-agent/projects/<projectId>/
   mcp-servers.json
 ```
 
 当 agent 在 run PTY 里执行 `mcp ...` 时，shell 环境中的 `TAH_STATE_DIR` 默认指向当前 run dir。因此 MCP registry 默认是 run-scoped：
 
 ```text
-.tiny-agent/runs/<runId>/mcp-servers.json
+~/.tiny-agent/projects/<projectId>/runs/<runId>/mcp-servers.json
 ```
 
 人工调试时可以显式传 `--state-dir` 给 `tiny-agent mcp ...` 的外层入口，或设置 `TAH_STATE_DIR`。当前 `mcp` 独立 bin 读取 `TAH_STATE_DIR`，没有额外业务状态。

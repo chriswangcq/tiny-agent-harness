@@ -23,16 +23,16 @@ import { createContactRegistryState } from "../src/subagent/contact-registry.js"
 // Path planner tests
 // ---------------------------------------------------------------------------
 describe("team directory path planner", () => {
-  it("computes project-scoped layout from project root", () => {
+  it("computes project-scoped layout from state root", () => {
     const layout = planTeamDirectoryLayout("/home/project");
-    expect(layout.teamDir).toBe("/home/project/.tiny-agent/team");
+    expect(layout.teamDir).toBe("/home/project/team");
     expect(layout.registryFile).toBe(
-      "/home/project/.tiny-agent/team/contact-registry.json"
+      "/home/project/team/contact-registry.json"
     );
     expect(layout.eventsFile).toBe(
-      "/home/project/.tiny-agent/team/events.jsonl"
+      "/home/project/team/events.jsonl"
     );
-    expect(layout.runsDir).toBe("/home/project/.tiny-agent/team/runs");
+    expect(layout.runsDir).toBe("/home/project/team/runs");
   });
 
   it("produces distinct paths for different roots", () => {
@@ -43,29 +43,26 @@ describe("team directory path planner", () => {
   });
 
   it("uses DEFAULT_TEAM_DIR constant in paths", () => {
-    expect(DEFAULT_TEAM_DIR).toBe(".tiny-agent/team");
+    expect(DEFAULT_TEAM_DIR).toBe("team");
     const layout = planTeamDirectoryLayout("/root");
     expect(layout.teamDir).toContain(DEFAULT_TEAM_DIR);
   });
 
-  it("computes run-scoped paths under .tiny-agent/runs/<runId>/team/", () => {
+  it("computes run-scoped paths under runs/<runId>/team/", () => {
     const paths = planRunScopedTeamPaths("/root", "run-123");
-    // Run-scoped team state lives under .tiny-agent/runs/<runId>/team/
-    expect(paths.runTeamDir).toBe(
-      "/root/.tiny-agent/runs/run-123/team"
-    );
+    expect(paths.runTeamDir).toBe("/root/runs/run-123/team");
     expect(paths.runRegistryFile).toBe(
-      "/root/.tiny-agent/runs/run-123/team/contact-registry.json"
+      "/root/runs/run-123/team/contact-registry.json"
     );
     expect(paths.runEventsFile).toBe(
-      "/root/.tiny-agent/runs/run-123/team/events.jsonl"
+      "/root/runs/run-123/team/events.jsonl"
     );
   });
 
-  it("handles trailing slashes in project root gracefully", () => {
+  it("handles trailing slashes in state root gracefully", () => {
     const a = planTeamDirectoryLayout("/root/");
     const b = planTeamDirectoryLayout("/root");
-    expect(a.teamDir).toBe("/root/.tiny-agent/team");
+    expect(a.teamDir).toBe("/root/team");
   });
 });
 

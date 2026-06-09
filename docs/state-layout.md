@@ -2,13 +2,14 @@
 
 ## 设计原则
 
-- **Run 自包含**：一个 run 的所有状态（IM、session、environment、skill-runs）都在 `runs/run-<ts>/` 下，可独立归档、恢复和清理。
+- **Home-scoped project store**：默认状态根是 `~/.tiny-agent/projects/<projectId>/`，项目源码目录不再自动创建 `.tiny-agent/`。
+- **Run 自包含**：一个 run 的所有状态（IM、session、environment、skill-runs、team/supervisor/worker state）都在 `runs/run-<ts>/` 下，可独立归档、恢复和清理。
 - **Skills 项目公共**：技能定义是跨 run 共享的知识资产，放在项目级 `skills/` 下。
 
 ## 目录结构
 
 ```
-.tiny-agent/
+~/.tiny-agent/projects/<projectId>/
 ├── project.json                    # 项目级元数据
 │
 ├── locks/                          # 进程互斥锁
@@ -71,9 +72,9 @@
 ```json
 {
   "schemaVersion": 1,
-  "projectId": "proj-...",
+  "projectId": "tiny-agent-harness-<sha256-12>",
   "projectRoot": "/path/to/project",
-  "stateMode": "project-local",
+  "stateMode": "home-project",
   "createdAt": "2026-...",
   "updatedAt": "2026-..."
 }
@@ -107,6 +108,7 @@ Managed PTY 启动时会把当前 run 信息注入 shell 环境，供 agent 在 
 | `TAH_RUN_ID` | 当前 run id |
 | `TAH_RUN_DIR` | 当前 `runs/run-<ts>/` 目录 |
 | `TAH_STATE_DIR` | CLI 默认状态目录；在 PTY 中等于当前 run 目录 |
+| `TAH_PROJECT_STATE_DIR` | 当前项目的 home-scoped state root；供 team lifecycle/reaper 等跨 run 控制面使用 |
 | `TAH_RUN_CHANNEL` | 当前 IM channel |
 | `TAH_IM_DIR` | 当前 run 的 IM inbox/outbox 目录 |
 | `TAH_SKILL_RUNS_DIR` | 当前 run 的 skill-runs 目录 |
@@ -143,20 +145,20 @@ TUI 启动器的 stdout/stderr 日志，用于排查 UI 启动问题。不属于
 
 | 能力 | 当前路径 |
 |------|----------|
-| IM inbox/outbox | `.tiny-agent/runs/<runId>/im/` |
-| PTY raw logs | `.tiny-agent/runs/<runId>/sessions/` |
-| Environment events | `.tiny-agent/runs/<runId>/environment/events.jsonl` |
-| Skill runs | `.tiny-agent/runs/<runId>/skill-runs/` |
-| Model context snapshot | `.tiny-agent/runs/<runId>/session.json` |
-| Debug prompt/trace artifacts | `.tiny-agent/runs/<runId>/debug/` |
-| Supervisor lifecycle events | `.tiny-agent/runs/<runId>/supervisor/lifecycle-events.jsonl` (append-only heartbeat, lease, shutdown_requested/completed/failed, reaper facts) |
-| Worker process state | `.tiny-agent/runs/<runId>/workers/<workerId>/state.json` |
+| IM inbox/outbox | `~/.tiny-agent/projects/<projectId>/runs/<runId>/im/` |
+| PTY raw logs | `~/.tiny-agent/projects/<projectId>/runs/<runId>/sessions/` |
+| Environment events | `~/.tiny-agent/projects/<projectId>/runs/<runId>/environment/events.jsonl` |
+| Skill runs | `~/.tiny-agent/projects/<projectId>/runs/<runId>/skill-runs/` |
+| Model context snapshot | `~/.tiny-agent/projects/<projectId>/runs/<runId>/session.json` |
+| Debug prompt/trace artifacts | `~/.tiny-agent/projects/<projectId>/runs/<runId>/debug/` |
+| Supervisor lifecycle events | `~/.tiny-agent/projects/<projectId>/runs/<runId>/supervisor/lifecycle-events.jsonl` (append-only heartbeat, lease, shutdown_requested/completed/failed, reaper facts) |
+| Worker process state | `~/.tiny-agent/projects/<projectId>/runs/<runId>/workers/<workerId>/state.json` |
 
 仍保持项目级：
 
-- `.tiny-agent/skills/` — 跨 run 共享 skill definitions。
-- `.tiny-agent/runs/` — run 容器和 latest pointer。
-- `.tiny-agent/launcher/` — TUI launcher 日志。
-- `.tiny-agent/tmp/` — 临时文件。
+- `skills/` — 跨 run 共享 skill definitions。
+- `runs/` — run 容器和 latest pointer。
+- `launcher/` — TUI launcher 日志。
+- `tmp/` — 临时文件。
 
 因此 `runs/run-<ts>/` 是一个可独立打包、归档或删除的完整运行单元。

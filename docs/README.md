@@ -36,7 +36,7 @@
 一次 run 的核心文件通常长这样：
 
 ```text
-.tiny-agent/
+~/.tiny-agent/projects/<projectId>/
   runs/
     <runId>/
       state.json
@@ -76,7 +76,7 @@
 - 改 `src/run` 或 run event 类型：同步 [Run Orchestrator And Agent Run State](run-orchestrator-state.md)。
 - 改可见工具、terminal/session request、terminal facts、observation：同步 [Tool Call And Observation](tool-call-observation.md) 和 [Model Visible Tool Catalog](model-visible-tool-catalog.md)。
 - 改 model adapter 或 FIM prompt/debug payload：同步 [DeepSeek V4 Native Tool-Call FIM Adapter](deepseek-fim-adapter.md)。
-- 改 `.tiny-agent/` 文件布局或锁策略：同步 [State Layout](state-layout.md) 和 [State Storage And File Locking](state-storage-locking.md)。
+- 改 `~/.tiny-agent/projects/<projectId>/` 文件布局或锁策略：同步 [State Layout](state-layout.md) 和 [State Storage And File Locking](state-storage-locking.md)。
 - 改 TUI projection 或数据源：同步 [TUI](tui.md)。
 - 改 MCP/sub-agent/replay：同步 [MCP CLI](mcp-cli.md)、[Sub-agent Team Domain](subagent-team.md)、[Recovery And Replay](recovery-replay.md)。
 

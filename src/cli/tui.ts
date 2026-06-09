@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { TuiController } from "../tui/controller.js";
 import type { TuiControllerOptions } from "../tui/controller.js";
+import { StateRootResolver } from "../state/root.js";
 
 export type TuiControllerOptionInput = {
   runDir: string;
@@ -41,7 +42,7 @@ export function runTui(args: string[]): void {
     process.exit(1);
   }
 
-  const baseDir = path.resolve(stateDir ?? ".tiny-agent");
+  const baseDir = new StateRootResolver().resolve({ stateDir }).stateDir;
   const runsDir = path.join(baseDir, "runs");
 
   // Resolve "latest"

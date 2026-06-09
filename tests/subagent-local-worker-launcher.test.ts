@@ -100,23 +100,23 @@ function fakeWorkerStatePort(
 // ---------------------------------------------------------------------------
 
 describe("worker path planner", () => {
-  it("computes run-scoped worker paths from project root, runId, workerId", () => {
+  it("computes run-scoped worker paths from state root, runId, workerId", () => {
     const paths = planRunScopedWorkerPaths("/root", "run-abc", "worker-1");
     expect(paths.runWorkerDir).toBe(
-      "/root/.tiny-agent/runs/run-abc/workers/worker-1"
+      "/root/runs/run-abc/workers/worker-1"
     );
     expect(paths.runWorkerStateFile).toBe(
-      "/root/.tiny-agent/runs/run-abc/workers/worker-1/state.json"
+      "/root/runs/run-abc/workers/worker-1/state.json"
     );
     expect(paths.runWorkerLogFile).toBe(
-      "/root/.tiny-agent/runs/run-abc/workers/worker-1/output.log"
+      "/root/runs/run-abc/workers/worker-1/output.log"
     );
   });
 
   it("uses DEFAULT_WORKERS_DIR constant in paths", () => {
-    expect(DEFAULT_WORKERS_DIR).toBe(".tiny-agent/runs");
+    expect(DEFAULT_WORKERS_DIR).toBe("runs");
     const paths = planRunScopedWorkerPaths("/root", "run-abc", "w1");
-    expect(paths.runWorkerDir).toContain(".tiny-agent/runs");
+    expect(paths.runWorkerDir).toContain("runs");
   });
 
   it("produces distinct paths for different workers within same run", () => {
@@ -126,21 +126,21 @@ describe("worker path planner", () => {
     expect(a.runWorkerStateFile).not.toBe(b.runWorkerStateFile);
   });
 
-  it("strips trailing slashes from project root", () => {
+  it("strips trailing slashes from state root", () => {
     const paths = planRunScopedWorkerPaths("/root/", "run-abc", "w1");
     expect(paths.runWorkerDir).toBe(
-      "/root/.tiny-agent/runs/run-abc/workers/w1"
+      "/root/runs/run-abc/workers/w1"
     );
   });
 
-  it("handles nested paths in project root", () => {
+  it("handles nested paths in state root", () => {
     const paths = planRunScopedWorkerPaths(
       "/home/user/projects/my-app",
       "run-001",
       "coder-1"
     );
     expect(paths.runWorkerDir).toBe(
-      "/home/user/projects/my-app/.tiny-agent/runs/run-001/workers/coder-1"
+      "/home/user/projects/my-app/runs/run-001/workers/coder-1"
     );
   });
 });
@@ -151,7 +151,7 @@ describe("worker path planner", () => {
 
 describe("planWorkerLaunch", () => {
   const baseParams: WorkerLaunchParams = {
-    projectRoot: "/home/project",
+    stateRoot: "/home/project",
     runId: "run-001",
     workerId: "coder-1",
     workspace: "/home/workspace",
@@ -167,6 +167,7 @@ describe("planWorkerLaunch", () => {
     const plan = planWorkerLaunch(baseParams);
     expect(plan.workerId).toBe("coder-1");
     expect(plan.runId).toBe("run-001");
+    expect(plan.stateRoot).toBe("/home/project");
     expect(plan.workspace).toBe("/home/workspace");
     expect(plan.branch).toBe("feature/x");
     expect(plan.channel).toBe("worker-coder-1");
@@ -179,13 +180,13 @@ describe("planWorkerLaunch", () => {
   it("computes run-scoped worker paths in the plan", () => {
     const plan = planWorkerLaunch(baseParams);
     expect(plan.paths.runWorkerDir).toBe(
-      "/home/project/.tiny-agent/runs/run-001/workers/coder-1"
+      "/home/project/runs/run-001/workers/coder-1"
     );
     expect(plan.paths.runWorkerStateFile).toContain("state.json");
     expect(plan.paths.runWorkerLogFile).toContain("output.log");
   });
 
-  it("uses projectRoot for path computation, not workspace", () => {
+  it("uses stateRoot for path computation, not workspace", () => {
     const plan = planWorkerLaunch({
       ...baseParams,
       workspace: "/different/workspace",
@@ -210,6 +211,7 @@ describe("buildSpawnCommand", () => {
   const basePlan: WorkerLaunchPlan = {
     workerId: "coder-1",
     runId: "run-001",
+    stateRoot: "/home/project",
     workspace: "/home/workspace",
     branch: "feature/x",
     channel: "worker-coder-1",
@@ -218,11 +220,11 @@ describe("buildSpawnCommand", () => {
     taskPrompt: "Do something useful",
     createdAt: "2026-06-05T15:00:00.000Z",
     paths: {
-      runWorkerDir: "/root/.tiny-agent/runs/run-001/workers/coder-1",
+      runWorkerDir: "/root/runs/run-001/workers/coder-1",
       runWorkerStateFile:
-        "/root/.tiny-agent/runs/run-001/workers/coder-1/state.json",
+        "/root/runs/run-001/workers/coder-1/state.json",
       runWorkerLogFile:
-        "/root/.tiny-agent/runs/run-001/workers/coder-1/output.log",
+        "/root/runs/run-001/workers/coder-1/output.log",
     },
     spawnCommand: { command: "", args: [] },
   };
@@ -235,6 +237,8 @@ describe("buildSpawnCommand", () => {
       "run",
       "--channel",
       "worker-coder-1",
+      "--state-dir",
+      "/home/project",
       "--task",
       "Do something useful",
     ]);
@@ -333,6 +337,7 @@ describe("port type shapes", () => {
 const buildLaunchPlan = (): WorkerLaunchPlan => ({
   workerId: "coder-1",
   runId: "run-001",
+  stateRoot: "/root",
   workspace: "/home/workspace",
   branch: "feature/x",
   channel: "worker-coder-1",
@@ -341,15 +346,24 @@ const buildLaunchPlan = (): WorkerLaunchPlan => ({
   taskPrompt: "Fix the failing tests in auth module",
   createdAt: "2026-06-05T15:00:00.000Z",
   paths: {
-    runWorkerDir: "/root/.tiny-agent/runs/run-001/workers/coder-1",
+    runWorkerDir: "/root/runs/run-001/workers/coder-1",
     runWorkerStateFile:
-      "/root/.tiny-agent/runs/run-001/workers/coder-1/state.json",
+      "/root/runs/run-001/workers/coder-1/state.json",
     runWorkerLogFile:
-      "/root/.tiny-agent/runs/run-001/workers/coder-1/output.log",
+      "/root/runs/run-001/workers/coder-1/output.log",
   },
   spawnCommand: {
     command: "node",
-    args: ["dist/cli/main.js", "run", "--channel", "worker-coder-1", "--task", "Fix the failing tests in auth module"],
+    args: [
+      "dist/cli/main.js",
+      "run",
+      "--channel",
+      "worker-coder-1",
+      "--state-dir",
+      "/root",
+      "--task",
+      "Fix the failing tests in auth module",
+    ],
   },
 });
 

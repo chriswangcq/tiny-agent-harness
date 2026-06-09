@@ -213,7 +213,7 @@ review，再由 agent 用普通补丁流程落盘。
 
 ### 4.7 State Storage 与 File Locking
 
-`src/state` 和 `docs/state-storage-locking.md` 描述了 `.tiny-agent/` 项目内状态目录、snapshot JSON、append-only JSONL、plain log 和目录锁规则。
+`src/state` 和 `docs/state-storage-locking.md` 描述了 `~/.tiny-agent/projects/<projectId>/` home-scoped 状态目录、snapshot JSON、append-only JSONL、plain log 和目录锁规则。
 
 核心思路是：
 
@@ -222,7 +222,7 @@ review，再由 agent 用普通补丁流程落盘。
 - bash output、skill execution output 和 run debug prompt artifact 属于可按路径 inspect 的文件
 - 写 snapshot 和 ledger 时使用文件锁，reader 通过 offset / idempotency 处理并发
 
-这让多个 CLI 能在同一个项目目录下共享状态，同时保持可 inspect、可 grep、可恢复。
+这让多个 CLI 能在同一个 home project state root 下共享状态，同时保持可 inspect、可 grep、可恢复，并避免 runtime 文件污染源码目录。
 
 ### 4.8 TUI
 
@@ -283,7 +283,7 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 #### Supervisor store
 
-`src/subagent/supervisor-store.ts` 定义 supervisor lifecycle 事件类型（`worker_registered`、`worker_status_changed`、`worker_heartbeat`、`worker_terminated`、`lease_*`、`heartbeat_recorded`、`shutdown_*`、`reaper_*`）和 run-scoped 路径规划。事件按 append-only JSONL 写入 `.tiny-agent/runs/<runId>/supervisor/lifecycle-events.jsonl`，snapshot 写入 `supervisor/snapshot.json`。
+`src/subagent/supervisor-store.ts` 定义 supervisor lifecycle 事件类型（`worker_registered`、`worker_status_changed`、`worker_heartbeat`、`worker_terminated`、`lease_*`、`heartbeat_recorded`、`shutdown_*`、`reaper_*`）和 run-scoped 路径规划。事件按 append-only JSONL 写入 `~/.tiny-agent/projects/<projectId>/runs/<runId>/supervisor/lifecycle-events.jsonl`，snapshot 写入 `supervisor/snapshot.json`。
 
 #### Lifecycle runtime adapter
 
@@ -299,11 +299,11 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 #### Worker 进程状态
 
-`src/subagent/local-worker-launcher.ts` 的 `planRunScopedWorkerPaths` 定义 run-scoped worker 目录：`.tiny-agent/runs/<runId>/workers/<workerId>/`，包含 `state.json`（worker 运行状态）和 `output.log`（worker 输出日志）。Process existence 在 spawn 成功后由 launcher 写入，后续被 lifecycle adapter 读取为 `TeamSnapshot.processExistence`。`src/subagent/supervisor-lifecycle.ts` 的 `ProcessTableEntry`（pid / workerId / startTime / exists）是 lifecycle 决策层可见的进程快照契约。
+`src/subagent/local-worker-launcher.ts` 的 `planRunScopedWorkerPaths` 定义 run-scoped worker 目录：`~/.tiny-agent/projects/<projectId>/runs/<runId>/workers/<workerId>/`，包含 `state.json`（worker 运行状态）和 `output.log`（worker 输出日志）。Process existence 在 spawn 成功后由 launcher 写入，后续被 lifecycle adapter 读取为 `TeamSnapshot.processExistence`。`src/subagent/supervisor-lifecycle.ts` 的 `ProcessTableEntry`（pid / workerId / startTime / exists）是 lifecycle 决策层可见的进程快照契约。
 
 #### TUI lifecycle audit projection（display projection）
 
-`src/tui/lifecycle-audit-projection.ts` 的 `RunLifecycleAuditReader` 以 byte offset 方式 tail `.tiny-agent/runs/<runId>/supervisor/lifecycle-events.jsonl`，校验 supervisor lifecycle 事件，返回 `state.auditEvents`。纯函数 `projectLifecycleAuditEvents()` 负责 typed event-to-display mapping，产出 TUI view model 可用的 `auditEvents`。
+`src/tui/lifecycle-audit-projection.ts` 的 `RunLifecycleAuditReader` 以 byte offset 方式 tail `~/.tiny-agent/projects/<projectId>/runs/<runId>/supervisor/lifecycle-events.jsonl`，校验 supervisor lifecycle 事件，返回 `state.auditEvents`。纯函数 `projectLifecycleAuditEvents()` 负责 typed event-to-display mapping，产出 TUI view model 可用的 `auditEvents`。
 
 **这是 display projection chain，不是 orchestrator**：audit reader 从 durable lifecycle-events.jsonl 读取事实，纯 projection 函数将事件映射为显示行（severity / row key / bounded text），TUI renderer 渲染。整条链不拥有 agent 状态，不参与模型决策，也不直接改写 supervisor lifecycle 事件。
 
@@ -451,7 +451,7 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 1. `npm run typecheck`、`npm run build`、`npm test` 持续通过。
 2. `tiny-agent`、`im`、`skill`、`mcp`、`codeq` 的 bin 入口都能从 build 后产物运行。
-3. `.tiny-agent/` project root 与 `.tiny-agent/runs/<runId>/` run-scoped state 使用统一 resolver/env 注入规则。
+3. `~/.tiny-agent/projects/<projectId>/` project state root 与 `runs/<runId>/` run-scoped state 使用统一 resolver/env 注入规则。
 4. README、design docs、system prompt 与实现保持一致。
 
 ### 10.2 把可恢复执行做成主线

@@ -2,7 +2,7 @@
 //
 // Pure projection maps durable supervisor lifecycle events to
 // SupervisorLifecycleInput.auditEvents. The reader below is an adapter boundary:
-// it tails .tiny-agent/runs/<runId>/supervisor/lifecycle-events.jsonl by byte
+// it tails runs/<runId>/supervisor/lifecycle-events.jsonl by byte
 // offset and never performs reaper/shutdown decisions or process effects.
 
 import * as fs from "node:fs";

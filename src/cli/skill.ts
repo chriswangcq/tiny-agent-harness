@@ -5,6 +5,7 @@ import { SkillCli } from "../skill/cli.js";
 import { SkillRunStore } from "../skill/store.js";
 import { SkillDiscovery } from "../skill/discovery.js";
 import type { EnvironmentPort, EnvironmentEvent } from "../types/environment.js";
+import { StateRootResolver } from "../state/root.js";
 
 function die(message: string): never {
   const env = failureEnvelope({ tool: "skill", errorCode: "SKILL_ERROR", error: message });
@@ -36,13 +37,13 @@ function hasFlag(argv: string[], name: string): boolean {
 function resolveStateDir(argv: string[]): string {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--state-dir" && i + 1 < argv.length) {
-      return argv[i + 1]!;
+      return path.resolve(argv[i + 1]!);
     }
   }
   if (process.env.TAH_STATE_DIR) {
-    return process.env.TAH_STATE_DIR;
+    return path.resolve(process.env.TAH_STATE_DIR);
   }
-  return path.resolve(".tiny-agent");
+  return new StateRootResolver().resolve().stateDir;
 }
 
 function buildSkillCli(stateDir: string): SkillCli {

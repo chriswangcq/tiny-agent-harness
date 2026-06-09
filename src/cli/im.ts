@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { ImCliTransport } from "../im/transport.js";
 import { failureEnvelope, successEnvelope } from "./envelope.js";
+import { StateRootResolver } from "../state/root.js";
 
 type StdinSource = AsyncIterable<string | Buffer | Uint8Array>;
 
@@ -142,9 +143,15 @@ function imUsage(): string {
 function resolveImTarget(flags: Record<string, string>): ImTarget {
   const explicitStateDir = flags["state-dir"];
   const run = flags["run"];
-  const stateDir = path.resolve(
-    explicitStateDir ?? process.env.TAH_STATE_DIR ?? ".tiny-agent",
-  );
+
+  if (!run && !explicitStateDir && process.env.TAH_IM_DIR) {
+    return {
+      baseDir: process.env.TAH_IM_DIR,
+      target: "env_im_dir",
+    };
+  }
+
+  const stateDir = resolveStateDir(explicitStateDir);
 
   if (run) {
     const runId = resolveRunId(stateDir, run);
@@ -157,15 +164,8 @@ function resolveImTarget(flags: Record<string, string>): ImTarget {
 
   if (explicitStateDir) {
     return {
-      baseDir: path.join(explicitStateDir, "im"),
+      baseDir: path.join(stateDir, "im"),
       target: "explicit_state",
-    };
-  }
-
-  if (process.env.TAH_IM_DIR) {
-    return {
-      baseDir: process.env.TAH_IM_DIR,
-      target: "env_im_dir",
     };
   }
 
@@ -182,6 +182,16 @@ function resolveImTarget(flags: Record<string, string>): ImTarget {
     baseDir: path.join(stateDir, "im"),
     target: "global_state",
   };
+}
+
+function resolveStateDir(explicitStateDir: string | undefined): string {
+  if (explicitStateDir) {
+    return path.resolve(explicitStateDir);
+  }
+  if (process.env.TAH_STATE_DIR) {
+    return path.resolve(process.env.TAH_STATE_DIR);
+  }
+  return new StateRootResolver().resolve().stateDir;
 }
 
 function resolveRunId(stateDir: string, run: string): string {

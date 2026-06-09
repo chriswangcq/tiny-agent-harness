@@ -22,7 +22,7 @@ printf '%s\n' 'your-deepseek-api-key' > ak.txt
 
 `ak.txt` 已经在 `.gitignore` 里，不会被提交。也可以继续用环境变量 `DEEPSEEK_API_KEY`，但本地 demo 推荐直接放 `ak.txt`。
 
-然后用一个命令启动前台 TUI。它会自动在后台启动 agent run，并把 run 日志写到 `.tiny-agent/launcher/`：
+然后用一个命令启动前台 TUI。它会自动在后台启动 agent run，并把 runtime 状态写到 `~/.tiny-agent/projects/<projectId>/`，launcher 日志在其中的 `launcher/` 下：
 
 ```bash
 cd ~/Documents/DeepSeek

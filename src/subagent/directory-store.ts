@@ -11,8 +11,8 @@ import type { ContactRegistryState } from "./contact-registry.js";
 // Path planner — pure functions
 // ---------------------------------------------------------------------------
 
-/** Default team directory relative to project root (project-scoped). */
-export const DEFAULT_TEAM_DIR = ".tiny-agent/team";
+/** Team directory relative to the product state root. */
+export const DEFAULT_TEAM_DIR = "team";
 
 /** Project-scoped team directory layout. */
 export type TeamDirectoryLayout = {
@@ -22,7 +22,7 @@ export type TeamDirectoryLayout = {
   runsDir: string;
 };
 
-/** Run-scoped team directory layout (under .tiny-agent/runs/<runId>/team/). */
+/** Run-scoped team directory layout (under runs/<runId>/team/). */
 export type RunScopedTeamPaths = {
   runTeamDir: string;
   runRegistryFile: string;
@@ -30,13 +30,13 @@ export type RunScopedTeamPaths = {
 };
 
 /**
- * Compute project-scoped team directory layout from a project root.
+ * Compute project-scoped team directory layout from a product state root.
  * Pure — no IO, no side effects.
  */
 export function planTeamDirectoryLayout(
-  projectRoot: string,
+  stateRoot: string,
 ): TeamDirectoryLayout {
-  const root = projectRoot.replace(/\/+$/, ""); // strip trailing slashes
+  const root = stateRoot.replace(/\/+$/, ""); // strip trailing slashes
   const teamDir = `${root}/${DEFAULT_TEAM_DIR}`;
   return {
     teamDir,
@@ -48,16 +48,16 @@ export function planTeamDirectoryLayout(
 
 /**
  * Compute run-scoped team directory paths.
- * Run-scoped state lives under .tiny-agent/runs/<runId>/team/,
+ * Run-scoped state lives under runs/<runId>/team/,
  * keeping runtime state self-contained per the state-layout contract.
  * Pure — no IO, no side effects.
  */
 export function planRunScopedTeamPaths(
-  projectRoot: string,
+  stateRoot: string,
   runId: string,
 ): RunScopedTeamPaths {
-  const root = projectRoot.replace(/\/+$/, "");
-  const runTeamDir = `${root}/.tiny-agent/runs/${runId}/team`;
+  const root = stateRoot.replace(/\/+$/, "");
+  const runTeamDir = `${root}/runs/${runId}/team`;
   return {
     runTeamDir,
     runRegistryFile: `${runTeamDir}/contact-registry.json`,

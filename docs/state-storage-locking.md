@@ -4,30 +4,21 @@
 
 ## Decision
 
-Agent 从某个项目目录启动。默认情况下，所有 harness CLI 都把状态写在该项目下的 `.tiny-agent/`。
+Agent 从某个项目目录启动。默认情况下，所有 harness CLI 都把状态写在 home-scoped project store 下：
 
 ```text
-project/
-  .tiny-agent/
-    project.json
-    locks/
-    runs/
-    skills/
-    launcher/
-    tmp/
+~/.tiny-agent/projects/<projectId>/
+  project.json
+  locks/
+  runs/
+  skills/
+  launcher/
+  tmp/
 ```
 
-这样 demo 最简单：用户 `cd` 到项目目录，`tiny-agent`、`im`、`skill`、`tui` 看到的是同一套状态。
+`<projectId>` 由项目根目录 basename 和项目根绝对路径 sha256 短 hash 确定，例如 `tiny-agent-harness-4f2a1b7c9e01`。这样 runtime 状态不污染源码目录，同时同一项目的 `tiny-agent`、`im`、`skill`、`tui`、`mcp` 和 `team` 仍看到同一套状态。
 
 当前实现进一步把 run 产生的可变状态全部收敛到 `runs/<runId>/`：IM inbox/outbox、environment events、PTY session log、skill-runs、model context 和 debug artifacts 都随 run 自包含。项目级目录只保留共享 skill definitions、run 容器、启动器日志、锁和临时文件。
-
-后续可以兼容 Claude Code 风格的 home cache：
-
-```text
-~/.tiny-agent/projects/<projectHash>/
-```
-
-但第一版不默认使用 home cache。原因是本项目的核心目标是一个完全操作 bash 的 agent harness，项目内状态更容易被 agent 用 bash 原生命令检查、分页、grep 和调试。
 
 ## State Root Resolution
 
@@ -37,17 +28,18 @@ project/
 
 1. 如果传入 `--state-dir <path>`，使用该目录。
 2. 如果存在环境变量 `TAH_STATE_DIR`，使用该目录。
-3. 从当前工作目录向上查找 `.tiny-agent/project.json`，找到后使用对应 `.tiny-agent/`。
-4. 如果找不到，在当前工作目录创建 `.tiny-agent/`。
+3. 否则从当前工作目录向上寻找项目根标记（`.git` 或 `package.json`），计算稳定 `projectId`，使用 `~/.tiny-agent/projects/<projectId>/`。
+
+Resolver 不自动发现、读取或迁移项目内 `.tiny-agent/project.json`。旧 repo-local state 应删除或人工归档；`--state-dir` 只用于测试、调试或明确指定的新 state root。
 
 `project.json` 是 state root 的 identity 文件：
 
 ```json
 {
   "schemaVersion": 1,
-  "projectId": "proj-2026-05-25-001",
+  "projectId": "tiny-agent-harness-4f2a1b7c9e01",
   "projectRoot": "/absolute/path/to/project",
-  "stateMode": "project-local",
+  "stateMode": "home-project",
   "createdAt": "2026-05-25T12:00:00.000Z",
   "updatedAt": "2026-05-25T12:00:00.000Z"
 }
@@ -55,9 +47,9 @@ project/
 
 规则：
 
-- CLI 输出给 agent 的路径优先使用相对项目根的路径，例如 `.tiny-agent/runs/...`。
-- state root 内部文件可以记录绝对路径，方便 TUI 或外部工具直接打开。
-- 不同项目不能共享同一个 `.tiny-agent/`，除非用户显式传 `--state-dir`。
+- CLI 输出给 agent 的路径可以使用绝对 state-root 路径，方便 TUI 或外部工具直接打开。
+- PTY 内 `TAH_STATE_DIR` 等于当前 run dir，用于 MCP 等 run-scoped CLI；`TAH_PROJECT_STATE_DIR` 等于 home project state root，用于 team lifecycle/reaper 等跨 run 控制面。
+- 不同项目不能共享同一个 state root，除非用户显式传 `--state-dir`。
 
 ## CLI Surface
 
@@ -98,7 +90,7 @@ sub-agent runtime       # 当前只有纯 domain/FSM，不独立调度子进程
 ## Canonical Directory Layout
 
 ```text
-.tiny-agent/
+~/.tiny-agent/projects/<projectId>/
   project.json
 
   locks/
@@ -268,8 +260,8 @@ Run debug artifacts are write-once files under the run owner. Transcript events 
 获取锁：
 
 ```text
-mkdir .tiny-agent/locks/<name>.lock
-write .tiny-agent/locks/<name>.lock/owner.json
+mkdir ~/.tiny-agent/projects/<projectId>/locks/<name>.lock
+write ~/.tiny-agent/projects/<projectId>/locks/<name>.lock/owner.json
 ```
 
 `mkdir` 在本地文件系统上是原子的。创建成功表示拿到锁。
@@ -292,7 +284,7 @@ write .tiny-agent/locks/<name>.lock/owner.json
 
 ```text
 remove owner.json
-rmdir .tiny-agent/locks/<name>.lock
+rmdir ~/.tiny-agent/projects/<projectId>/locks/<name>.lock
 ```
 
 规则：
@@ -515,7 +507,7 @@ latest pointer lock
   "error": {
     "code": "LOCK_TIMEOUT",
     "message": "Could not acquire lock session-default.lock",
-    "lock": ".tiny-agent/locks/session-default.lock"
+    "lock": "~/.tiny-agent/projects/<projectId>/locks/session-default.lock"
   }
 }
 ```

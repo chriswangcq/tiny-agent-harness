@@ -483,7 +483,7 @@ codeq server stop --json
 Daemon state should live under:
 
 ```text
-.tiny-agent/code-intel/
+~/.tiny-agent/projects/<projectId>/code-intel/
   servers/
     <workspace-id>/
       state.json
@@ -517,7 +517,7 @@ V1 can work without config by auto-detecting:
 Optional config path:
 
 ```text
-.tiny-agent/code-intel.json
+~/.tiny-agent/projects/<projectId>/code-intel.json
 ```
 
 Shape:
@@ -700,7 +700,7 @@ Do not make tests depend on a user's editor, global VS Code install, or existing
 ### Phase 4: explicit daemon
 
 - Add `codeq server start/status/restart/stop`.
-- Persist daemon state and logs under `.tiny-agent/code-intel/`.
+- Persist daemon state and logs under `~/.tiny-agent/projects/<projectId>/code-intel/`.
 - Include daemon state in every result.
 - Keep stateless mode as the default unless the user asks for daemon mode.
 

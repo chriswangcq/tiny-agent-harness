@@ -19,7 +19,7 @@ import { scanRunIndex } from "./run-index-reader.js";
 
 export type TuiControllerOptions = {
   runDir: string;
-  imBaseDir?: string;
+  imBaseDir: string;
   channel?: string;
   pollIntervalMs?: number;
   runsDir?: string;
@@ -47,7 +47,7 @@ export class TuiController {
       sessionsDir: path.join(options.runDir, "sessions"),
     });
     this.im = new ImCliTransport({
-      baseDir: options.imBaseDir ?? ".tiny-agent/im",
+      baseDir: options.imBaseDir,
     });
     this.channel = options.channel ?? "default";
     this.pollIntervalMs = options.pollIntervalMs ?? 100;

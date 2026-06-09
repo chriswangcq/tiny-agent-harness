@@ -173,9 +173,9 @@ describe("P6-01 contact registry smoke", () => {
 describe("P6-02 directory store smoke", () => {
   it("plans team directory layout", () => {
     const layout = planTeamDirectoryLayout("/home/project");
-    expect(layout.teamDir).toBe("/home/project/.tiny-agent/team");
-    expect(layout.registryFile).toBe("/home/project/.tiny-agent/team/contact-registry.json");
-    expect(layout.eventsFile).toBe("/home/project/.tiny-agent/team/events.jsonl");
+    expect(layout.teamDir).toBe("/home/project/team");
+    expect(layout.registryFile).toBe("/home/project/team/contact-registry.json");
+    expect(layout.eventsFile).toBe("/home/project/team/events.jsonl");
   });
 
   it("creates valid snapshot from registry", () => {
@@ -260,11 +260,11 @@ describe("P6-04 worker launcher planning smoke", () => {
 
   it("plans worker launch", () => {
     // API: planWorkerLaunch(params: WorkerLaunchParams)
-    // WorkerLaunchParams requires: projectRoot, runId, workerId, workspace, branch, channel, taskPrompt, role, allowedActions, now
+    // WorkerLaunchParams requires: stateRoot, runId, workerId, workspace, branch, channel, taskPrompt, role, allowedActions, now
     const params: WorkerLaunchParams = {
       workerId: "coder-1",
       role: "coder",
-      projectRoot: "/home/project",
+      stateRoot: "/home/project",
       runId: "run-001",
       workspace: "/home/project",
       branch: "codex/p6/09",
@@ -286,7 +286,7 @@ describe("P6-04 worker launcher planning smoke", () => {
     const plan = planWorkerLaunch({
       workerId: "coder-1",
       runId: "run-001",
-      projectRoot: "/home/project",
+      stateRoot: "/home/project",
       branch: "codex/p6/09",
       channel: "p6-09",
       role: "coder",
@@ -300,6 +300,7 @@ describe("P6-04 worker launcher planning smoke", () => {
     // The spawn command uses --channel <channel> not workerId directly
     expect(cmd.args.join(" ")).toContain("--channel");
     expect(cmd.args.join(" ")).toContain("p6-09");
+    expect(cmd.args.join(" ")).toContain("--state-dir");
   });
 });
 
@@ -410,7 +411,7 @@ describe("E2E runtime chain", () => {
     const plan = planWorkerLaunch({
       workerId: "coder-1",
       role: "coder",
-      projectRoot: "/tmp/e2e-test",
+      stateRoot: "/tmp/e2e-test",
       runId: "run-e2e-001",
       workspace: "/tmp/e2e-test",
       branch: "codex/p6/09",
