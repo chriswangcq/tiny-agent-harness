@@ -21,7 +21,7 @@ export type WorkerLifecycleState =
 
 export interface LifecycleInput {
   workerId: string;
-  contactStatus: string;
+  memberStatus: string;
   lastHeartbeat?: string;
   lastEvidence?: string;
   runStatus?: string;
@@ -192,11 +192,11 @@ export function computeLifecycleState(
 ): LifecycleResult {
   const riskFlags: string[] = [];
 
-  // 1. Terminated contact is always terminated
-  if (input.contactStatus === "terminated" || input.terminatedAt) {
+  // 1. Terminated member is always terminated
+  if (input.memberStatus === "terminated" || input.terminatedAt) {
     return {
       state: "terminated",
-      reason: "Worker contact is terminated",
+      reason: "Worker member is terminated",
       evidence: {
         heartbeatInterpretation: interpretHeartbeat(input.lastHeartbeat, config.now, config),
         processExists: input.processExists,
@@ -206,7 +206,7 @@ export function computeLifecycleState(
   }
 
   // 2. Offline with no recent signals -> terminated
-  if (input.contactStatus === "offline") {
+  if (input.memberStatus === "offline") {
     const hbAge = computeAge(input.lastHeartbeat, config.now);
     if (hbAge === undefined || hbAge > config.processMissingMaxAgeMs) {
       return {

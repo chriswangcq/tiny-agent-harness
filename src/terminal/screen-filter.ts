@@ -128,7 +128,9 @@ function markerCandidate(line: string): string {
   const markerIndex = normalized.indexOf("__TAH_");
   if (markerIndex > 0) {
     const prefix = normalized.slice(0, markerIndex);
-    return isShellPromptPrefix(prefix) ? normalized.slice(markerIndex) : normalized;
+    return isShellPromptPrefix(prefix) || prefix.endsWith("__PROMPT_CHROME")
+      ? normalized.slice(markerIndex)
+      : normalized;
   }
 
   // markerIndex is -1 or 0.  If -1, the marker was not found.

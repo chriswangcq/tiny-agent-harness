@@ -41,7 +41,7 @@ function makeConfig(overrides: Partial<LifecycleConfig> = {}): LifecycleConfig {
 function makeInput(overrides: Partial<LifecycleInput> = {}): LifecycleInput {
   return {
     workerId: "coder-1",
-    contactStatus: "active" as const,
+    memberStatus: "active" as const,
     lastHeartbeat: ONE_MIN_AGO,
     lastEvidence: ONE_MIN_AGO,
     runStatus: "running",
@@ -216,8 +216,8 @@ describe("isGracePeriodActive", () => {
 // ---- Lifecycle state computation ----
 
 describe("computeLifecycleState", () => {
-  it("returns terminated when contactStatus is terminated", () => {
-    const input = makeInput({ contactStatus: "terminated" });
+  it("returns terminated when memberStatus is terminated", () => {
+    const input = makeInput({ memberStatus: "terminated" });
     const result = computeLifecycleState(input, makeConfig());
     expect(result.state).toBe("terminated");
   });
@@ -271,7 +271,7 @@ describe("computeLifecycleState", () => {
 
   it("returns terminated for offline contact with no heartbeat", () => {
     const input = makeInput({
-      contactStatus: "offline",
+      memberStatus: "offline",
       lastHeartbeat: undefined,
       lastEvidence: undefined,
     });
@@ -357,7 +357,7 @@ describe("decideReaperAction", () => {
   });
 
   it("returns none for terminated worker", () => {
-    const input = makeInput({ contactStatus: "terminated" });
+    const input = makeInput({ memberStatus: "terminated" });
     const config = makeConfig();
     const lifecycle = computeLifecycleState(input, config);
     const result = decideReaperAction(input, lifecycle, config);

@@ -7,7 +7,7 @@
 // No IO. No side effects. No runtime. Observer/control surface only.
 
 import type { SubAgentTeamSummary } from "../subagent/team.js";
-import type { ContactRegistrySummary } from "../subagent/contact-registry.js";
+import type { TeamRosterSummary } from "../subagent/team-roster.js";
 import type { MasterReviewChecklist } from "../subagent/merge-protocol.js";
 
 // ─── Input Types ──────────────────────────────────────────────────
@@ -24,7 +24,7 @@ export type TeamDashboardRun = {
 /** Pure input for the team dashboard view model builder. */
 export type TeamDashboardInput = {
   teamSummary: SubAgentTeamSummary;
-  contactRegistrySummary: ContactRegistrySummary;
+  rosterSummary: TeamRosterSummary;
   runSummaries: TeamDashboardRun[];
   mergeChecklist: MasterReviewChecklist | null;
   /** Optional human-readable QA summary text */
@@ -47,7 +47,7 @@ export type TeamDashboardRow = {
 
 export type TeamDashboardSectionKind =
   | "team-overview"
-  | "contact-roster"
+  | "team-roster"
   | "active-tasks"
   | "run-status"
   | "merge-qa"
@@ -117,7 +117,7 @@ function safeDashboardText(text: string): string {
 
 // ─── Status Helpers ───────────────────────────────────────────────
 
-function contactStatusRowStatus(
+function memberStatusRowStatus(
   status: string,
 ): DashboardRowStatus {
   switch (status) {
@@ -188,6 +188,7 @@ function buildTeamOverviewSection(
 
   // Task status breakdown
   for (const [status, count] of Object.entries(team.tasksByStatus ?? {})) {
+    if (count === 0) continue;
     rows.push({
       text: `  Tasks ${status}: ${count}`,
       status: taskStatusRowStatus(status),
@@ -196,9 +197,10 @@ function buildTeamOverviewSection(
 
   // Worker status breakdown
   for (const [status, count] of Object.entries(team.workersByStatus ?? {})) {
+    if (count === 0) continue;
     rows.push({
       text: `  Workers ${status}: ${count}`,
-      status: contactStatusRowStatus(status),
+      status: memberStatusRowStatus(status),
     });
   }
 
@@ -210,36 +212,37 @@ function buildTeamOverviewSection(
   };
 }
 
-function buildContactRosterSection(
-  summary: ContactRegistrySummary,
+function buildTeamRosterSection(
+  summary: TeamRosterSummary,
 ): TeamDashboardSection {
   const rows: TeamDashboardRow[] = [
-    { text: `Total Contacts: ${summary.totalWorkers}`, status: "info" },
+    { text: `Total Members: ${summary.totalMembers}`, status: "info" },
   ];
 
-  for (const [status, count] of Object.entries(summary.workersByStatus ?? {})) {
+  for (const [status, count] of Object.entries(summary.membersByStatus ?? {})) {
+    if (count === 0) continue;
     rows.push({
       text: `  ${status}: ${count}`,
-      status: contactStatusRowStatus(status),
+      status: memberStatusRowStatus(status),
     });
   }
 
-  if (summary.activeWorkers && summary.activeWorkers.length > 0) {
-    rows.push({ text: "Active Workers:", status: "info" });
-    for (const worker of summary.activeWorkers) {
-      const displayId = worker.workerId ?? "unknown";
-      const displayRole = worker.role ? ` (${worker.role})` : "";
+  if (summary.activeMembers.length > 0) {
+    rows.push({ text: "Active Members:", status: "info" });
+    for (const member of summary.activeMembers) {
+      const displayId = member.memberId;
+      const displayRole = member.role ? ` (${member.role})` : "";
       rows.push({
         text: `  ${displayId}${displayRole}`,
         status: "ok",
-        key: `worker:${displayId}`,
+        key: `member:${displayId}`,
       });
     }
   }
 
   return {
-    kind: "contact-roster",
-    title: "Contact Roster",
+    kind: "team-roster",
+    title: "Team Roster",
     rows,
     selectable: true,
   };
@@ -423,7 +426,7 @@ export function buildTeamDashboardViewModel(
   const sections: TeamDashboardSection[] = [];
 
   sections.push(buildTeamOverviewSection(input.teamSummary));
-  sections.push(buildContactRosterSection(input.contactRegistrySummary));
+  sections.push(buildTeamRosterSection(input.rosterSummary));
   sections.push(buildActiveTasksSection(input.teamSummary));
   sections.push(buildRunStatusSection(input.runSummaries));
 
@@ -676,7 +679,7 @@ function buildLifecycleAuditText(event: LifecycleAuditEventItem): string {
 function lifecycleAuditStatus(kind: string): DashboardRowStatus {
   switch (kind) {
     case "heartbeat_recorded":
-    case "worker_heartbeat":
+    case "member_heartbeat":
     case "lease_acquired":
     case "lease_renewed":
     case "shutdown_completed":
@@ -793,4 +796,3 @@ function buildWorkerLifecycleChainRows(
 
   return rows;
 }
-

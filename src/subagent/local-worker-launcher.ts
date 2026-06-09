@@ -5,15 +5,11 @@
 // Real side effects enter through explicit port interfaces.
 
 import type {
-  WorkerContact,
-  ContactRegistryState,
-  ContactRegistryEvent,
-  ContactRegistryResult,
-} from "./contact-registry.js";
-import {
-  createContactRegistryState,
-  applyContactRegistryEvent,
-} from "./contact-registry.js";
+  TeamMember,
+  TeamRosterState,
+  TeamRosterEvent,
+  TeamRosterResult,
+} from "./team-roster.js";
 
 // ---------------------------------------------------------------------------
 // Path planner — pure functions
@@ -95,12 +91,12 @@ export type GitPort = {
   checkout: (cwd: string, branch: string) => Promise<GitCheckoutResult>;
 };
 
-/** Contact store port — registry read/write for worker contact events. */
-export type ContactStorePort = {
-  /** Load current contact registry state. */
-  load: () => Promise<ContactRegistryState>;
-  /** Persist a contact registry event and return updated state. */
-  apply: (event: ContactRegistryEvent) => Promise<ContactRegistryResult>;
+/** Roster store port — read/write for team member events. */
+export type RosterStorePort = {
+  /** Load current team roster state. */
+  load: () => Promise<TeamRosterState>;
+  /** Persist a roster event and return updated state. */
+  apply: (event: TeamRosterEvent) => Promise<TeamRosterResult>;
 };
 
 /** Durable process state written for reaper/shutdown lookup. */
@@ -133,7 +129,7 @@ export type WorkerLaunchEffects = {
   git: GitPort;
   clock: Clock;
   ids: IdGenerator;
-  contacts: ContactStorePort;
+  roster: RosterStorePort;
   workerState: WorkerStatePort;
 };
 
@@ -268,9 +264,9 @@ export type LaunchFailureStage =
   | "checkout"
   | "spawn"
   | "worker_state"
-  | "contact_register"
-  | "contact_update"
-  | "contact_status";
+  | "member_add"
+  | "member_update"
+  | "member_status";
 
 /** Successful worker launch result. */
 export type WorkerLaunchSuccess = {
@@ -281,7 +277,7 @@ export type WorkerLaunchSuccess = {
   branch: string;
   workspace: string;
   spawnedPid: number;
-  contact: WorkerContact;
+  member: TeamMember;
 };
 
 /** Failed worker launch result with stage and evidence. */
@@ -315,10 +311,10 @@ export type WorkerLaunchResult = WorkerLaunchSuccess | WorkerLaunchFailure;
  * Execute a worker launch from a plan and effect ports.
  *
  * Steps:
- * 1. Register the worker in the contact registry (idempotent).
+ * 1. Add the worker to the team roster (idempotent).
  * 2. Checkout the target branch via git port.
  * 3. Spawn the worker process via spawn port.
- * 4. Update the worker's runId in the contact registry.
+ * 4. Update the member's runId in the team roster.
  *
  * Returns structured success or failure with stage/evidence.
  * All side effects go through explicit ports.
@@ -330,27 +326,29 @@ export async function launchLocalWorker(
 ): Promise<WorkerLaunchResult> {
   const now = effects.clock.nowISO();
 
-  // Step 1: Register worker contact (idempotent via event id)
+  // Step 1: add worker member to the roster (idempotent via event id).
   const registerEventId = effects.ids.newId();
-  const registerEvent: ContactRegistryEvent = {
-    kind: "worker_registered",
+  const registerEvent: TeamRosterEvent = {
+    kind: "member_added",
     eventId: registerEventId,
-    workerId: plan.workerId,
+    memberId: plan.workerId,
     role: plan.role,
-    workspace: plan.workspace,
-    branch: plan.branch,
-    imChannel: plan.channel,
-    allowedActions: plan.allowedActions,
+    channel: plan.channel,
+    metadata: {
+      workspace: plan.workspace,
+      branch: plan.branch,
+      allowedActions: plan.allowedActions.join(","),
+    },
   };
 
   try {
-    const registerResult = await effects.contacts.apply(registerEvent);
+    const registerResult = await effects.roster.apply(registerEvent);
     if (registerResult.status === "rejected") {
       return {
         kind: "launch_failure",
         workerId: plan.workerId,
-        stage: "contact_register",
-        error: `Worker registration rejected: ${registerResult.rejection.message}`,
+        stage: "member_add",
+        error: `Member add rejected: ${registerResult.rejection.message}`,
         evidence: {
           registeredEventId: registerEventId,
           failedAt: now,
@@ -361,8 +359,8 @@ export async function launchLocalWorker(
     return {
       kind: "launch_failure",
       workerId: plan.workerId,
-      stage: "contact_register",
-      error: `Failed to register worker: ${formatError(err)}`,
+      stage: "member_add",
+      error: `Failed to add member: ${formatError(err)}`,
       evidence: {
         registeredEventId: registerEventId,
         failedAt: now,
@@ -469,10 +467,10 @@ export async function launchLocalWorker(
 
   // Step 5: Update worker with runId
   const updateEventId = effects.ids.newId();
-  const updateEvent: ContactRegistryEvent = {
-    kind: "worker_updated",
+  const updateEvent: TeamRosterEvent = {
+    kind: "member_updated",
     eventId: updateEventId,
-    workerId: plan.workerId,
+    memberId: plan.workerId,
     patch: {
       runId: plan.runId,
       currentTask: plan.taskPrompt,
@@ -480,12 +478,12 @@ export async function launchLocalWorker(
   };
 
   try {
-    const updateResult = await effects.contacts.apply(updateEvent);
+    const updateResult = await effects.roster.apply(updateEvent);
     if (updateResult.status === "rejected") {
       return {
         kind: "launch_failure",
         workerId: plan.workerId,
-        stage: "contact_update",
+        stage: "member_update",
         error: `Worker update rejected: ${updateResult.rejection.message}`,
         evidence: {
           branch: plan.branch,
@@ -500,8 +498,8 @@ export async function launchLocalWorker(
     return {
       kind: "launch_failure",
       workerId: plan.workerId,
-      stage: "contact_update",
-      error: `Worker launched but contact update failed: ${formatError(err)}`,
+      stage: "member_update",
+      error: `Worker launched but member update failed: ${formatError(err)}`,
       evidence: {
         branch: plan.branch,
         registeredEventId: registerEventId,
@@ -514,21 +512,21 @@ export async function launchLocalWorker(
 
   // Step 6: Set worker status to active
   const statusEventId = effects.ids.newId();
-  const statusEvent: ContactRegistryEvent = {
-    kind: "worker_status_changed",
+  const statusEvent: TeamRosterEvent = {
+    kind: "member_status_changed",
     eventId: statusEventId,
-    workerId: plan.workerId,
+    memberId: plan.workerId,
     status: "active",
     reason: "launch completed",
   };
 
   try {
-    const statusResult = await effects.contacts.apply(statusEvent);
+    const statusResult = await effects.roster.apply(statusEvent);
     if (statusResult.status === "rejected") {
       return {
         kind: "launch_failure",
         workerId: plan.workerId,
-        stage: "contact_status",
+        stage: "member_status",
         error: `Status change rejected: ${statusResult.rejection.message}`,
         evidence: {
           branch: plan.branch,
@@ -543,7 +541,7 @@ export async function launchLocalWorker(
     return {
       kind: "launch_failure",
       workerId: plan.workerId,
-      stage: "contact_status",
+      stage: "member_status",
       error: `Status change failed: ${formatError(err)}`,
       evidence: {
         branch: plan.branch,
@@ -555,9 +553,9 @@ export async function launchLocalWorker(
     };
   }
 
-  // Get contact for success response
-  const state = await effects.contacts.load();
-  const contact = state.workers[plan.workerId];
+  // Get member for success response.
+  const state = await effects.roster.load();
+  const member = state.members[plan.workerId];
 
   return {
     kind: "launch_success",
@@ -567,14 +565,16 @@ export async function launchLocalWorker(
     branch: plan.branch,
     workspace: plan.workspace,
     spawnedPid: spawnResult.pid,
-    contact: contact ?? {
-      workerId: plan.workerId,
+    member: member ?? {
+      memberId: plan.workerId,
       role: plan.role,
-      workspace: plan.workspace,
-      branch: plan.branch,
       runId: plan.runId,
-      imChannel: plan.channel,
-      allowedActions: plan.allowedActions,
+      channel: plan.channel,
+      metadata: {
+        workspace: plan.workspace,
+        branch: plan.branch,
+        allowedActions: plan.allowedActions.join(","),
+      },
       currentTask: plan.taskPrompt,
       status: "active",
     },

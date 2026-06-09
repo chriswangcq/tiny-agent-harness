@@ -11,11 +11,11 @@ import {
   type HeartbeatEnvelope,
 } from "../src/subagent/lifecycle-runtime-adapter.js";
 import {
-  createContactRegistryState,
-  applyContactRegistryEvent,
-  type ContactRegistryState,
-  type WorkerContact,
-} from "../src/subagent/contact-registry.js";
+  createTeamRosterState,
+  applyTeamRosterEvent,
+  type TeamRosterState,
+  type TeamMember,
+} from "../src/subagent/team-roster.js";
 import type { SupervisorLifecycleEvent } from "../src/subagent/supervisor-store.js";
 
 // ---------------------------------------------------------------------------
@@ -24,65 +24,61 @@ import type { SupervisorLifecycleEvent } from "../src/subagent/supervisor-store.
 
 const NOW = "2026-06-07T12:00:00.000Z";
 
-function makeWorker(overrides: Partial<WorkerContact> = {}): WorkerContact {
+function makeWorker(
+  overrides: Partial<TeamMember> & { workerId?: string } = {},
+): TeamMember {
+  const memberId = overrides.memberId ?? overrides.workerId ?? "w1";
+  const { workerId: _workerId, memberId: _memberId, ...rest } = overrides;
   return {
-    workerId: "w1",
+    memberId,
     role: "coder",
-    workspace: "/tmp/w1",
-    branch: "codex/p6/w1",
-    imChannel: "ch-w1",
-    allowedActions: ["code"],
+    channel: "ch-w1",
+    metadata: {
+      workspace: "/tmp/w1",
+      branch: "codex/p6/w1",
+      allowedActions: "code",
+    },
     status: "active",
-    ...overrides,
+    ...rest,
   };
 }
 
-function makeTeamSnapshot(workers: Array<Partial<WorkerContact>> = []): TeamSnapshot {
-  let state = createContactRegistryState("test-registry");
+function makeTeamSnapshot(
+  workers: Array<Partial<TeamMember> & { workerId?: string }> = [],
+): TeamSnapshot {
+  let state = createTeamRosterState("test-team");
   const events: SupervisorLifecycleEvent[] = [];
   for (const w of workers) {
-    const full: WorkerContact = {
-      workerId: w.workerId ?? "w1",
-      role: w.role ?? "coder",
-      workspace: w.workspace ?? "/tmp/w1",
-      branch: w.branch ?? "codex/p6/w1",
-      imChannel: w.imChannel ?? "ch-w1",
-      allowedActions: w.allowedActions ?? ["code"],
-      status: w.status ?? "active",
-      lastHeartbeat: w.lastHeartbeat,
-      lastEvidence: w.lastEvidence,
-    };
-    state = applyContactRegistryEvent(state, {
-      kind: "worker_registered",
-      eventId: `ev-reg-${full.workerId}`,
-      workerId: full.workerId,
+    const full = makeWorker(w);
+    state = applyTeamRosterEvent(state, {
+      kind: "member_added",
+      eventId: `ev-reg-${full.memberId}`,
+      memberId: full.memberId,
       role: full.role,
-      workspace: full.workspace,
-      branch: full.branch,
-      imChannel: full.imChannel,
-      allowedActions: full.allowedActions,
+      channel: full.channel,
+      metadata: full.metadata,
     }).state;
 
     if (full.status && full.status !== "idle") {
-      state = applyContactRegistryEvent(state, {
-        kind: "worker_status_changed" as const,
-        eventId: `ev-status-${full.workerId}`,
-        workerId: full.workerId,
+      state = applyTeamRosterEvent(state, {
+        kind: "member_status_changed" as const,
+        eventId: `ev-status-${full.memberId}`,
+        memberId: full.memberId,
         status: full.status as any,
       }).state;
     }
 
     if (full.lastHeartbeat) {
-      state = applyContactRegistryEvent(state, {
-        kind: "worker_heartbeat" as const,
-        eventId: `ev-hb-${full.workerId}`,
-        workerId: full.workerId,
+      state = applyTeamRosterEvent(state, {
+        kind: "member_heartbeat" as const,
+        eventId: `ev-hb-${full.memberId}`,
+        memberId: full.memberId,
         timestamp: full.lastHeartbeat,
       }).state;
     }
   }
   return {
-    registryState: state,
+    rosterState: state,
     supervisorEvents: events,
     createdAt: NOW,
     runId: "run-test",
@@ -120,7 +116,7 @@ function makeFakePorts(overrides: {
   const appended: SupervisorLifecycleEvent[] = [];
   const shutdownCalls: Array<{ workerId: string; reason?: string }> = [];
   const contactEvents: Record<string, number> = {};
-  const contactEventPayloads: Array<{ kind: string; status?: string; workerId: string }> = [];
+  const contactEventPayloads: Array<{ kind: string; status?: string; memberId: string }> = [];
   const seenIds = new Set<string>();
 
   const ports: LifecycleRuntimePorts = {
@@ -138,7 +134,7 @@ function makeFakePorts(overrides: {
       shutdownCalls.push({ workerId, reason });
     },
     applyContactEvent: async (event) => {
-      contactEventPayloads.push({ kind: event.kind, status: (event as any).status, workerId: (event as any).workerId ?? "" });
+      contactEventPayloads.push({ kind: event.kind, status: (event as any).status, memberId: (event as any).memberId ?? "" });
       contactEvents[event.kind] = (contactEvents[event.kind] ?? 0) + 1;
       return "applied";
     },
@@ -201,7 +197,7 @@ describe("lifecycle-runtime-adapter - lease", () => {
 
     await adapter.recordHeartbeat(worker, [], { heartbeatNow: NOW, leaseDurationMs: 60000 });
 
-    expect(contactEvents["worker_heartbeat"]).toBe(1);
+    expect(contactEvents["member_heartbeat"]).toBe(1);
   });
 
   it("returns error for missing worker", async () => {
@@ -472,7 +468,7 @@ describe("lifecycle-runtime-adapter - idempotency", () => {
     expect(env2.status).toBe("ok");
     expect(appended.length).toBe(count1);
     // Contact event should only fire once — not on duplicate
-    expect(contactEvents["worker_heartbeat"]).toBe(1);
+    expect(contactEvents["member_heartbeat"]).toBe(1);
   });
 
   it("different idempotencyKeys produce distinct events", async () => {
@@ -545,11 +541,11 @@ describe("lifecycle-runtime-adapter - error handling", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 7. Reaper exec updates contact status
+// 7. Reaper exec updates member status
 // ---------------------------------------------------------------------------
 
-describe("lifecycle-runtime-adapter - reaper contact status", () => {
-  it("reaper execute updates worker contact status to terminated", async () => {
+describe("lifecycle-runtime-adapter - reaper member status", () => {
+  it("reaper execute updates worker member status to terminated", async () => {
     const { ports, shutdownCalls, contactEvents, contactEventPayloads } = makeFakePorts();
     const adapter = createRuntimeAdapter(ports);
     const snapshot = makeTeamSnapshot([
@@ -564,9 +560,9 @@ describe("lifecycle-runtime-adapter - reaper contact status", () => {
 
     expect(shutdownCalls.length).toBeGreaterThanOrEqual(1);
     // The contact event should have been applied
-    expect(contactEvents["worker_status_changed"]).toBe(1);
+    expect(contactEvents["member_status_changed"]).toBe(1);
     // Assert the payload status is "terminated"
-    const statusChange = contactEventPayloads.find((e) => e.kind === "worker_status_changed");
+    const statusChange = contactEventPayloads.find((e) => e.kind === "member_status_changed");
     expect(statusChange).toBeDefined();
     expect(statusChange!.status).toBe("terminated");
   });
@@ -642,13 +638,13 @@ describe("lifecycle-runtime-adapter - reaper contact status", () => {
       execute: true,
     });
 
-    // No worker_status_changed event should be emitted when shutdown fails
-    const statusChanges = contactEventPayloads.filter((e) => e.kind === "worker_status_changed");
+    // No member_status_changed event should be emitted when shutdown fails
+    const statusChanges = contactEventPayloads.filter((e) => e.kind === "member_status_changed");
     expect(statusChanges).toHaveLength(0);
 
   });
 
-  it("reaper dry-run does not update contact status", async () => {
+  it("reaper dry-run does not update member status", async () => {
     const { ports, contactEvents, contactEventPayloads } = makeFakePorts();
     const adapter = createRuntimeAdapter(ports);
     const snapshot = makeTeamSnapshot([
@@ -662,7 +658,7 @@ describe("lifecycle-runtime-adapter - reaper contact status", () => {
     });
 
     // No contact events should be emitted in dry-run
-    expect(contactEvents["worker_status_changed"]).toBeUndefined();
+    expect(contactEvents["member_status_changed"]).toBeUndefined();
   });
 });
 
@@ -671,7 +667,7 @@ describe("lifecycle-runtime-adapter - reaper contact status", () => {
 // ---------------------------------------------------------------------------
 
 describe("lifecycle-runtime-adapter - shutdown terminated", () => {
-  it("requestShutdown sets contact status to terminated", async () => {
+  it("requestShutdown sets member status to terminated", async () => {
     const { ports, contactEvents, contactEventPayloads } = makeFakePorts();
     const adapter = createRuntimeAdapter(ports);
     const worker = makeWorker({ workerId: "w1", status: "active" });
@@ -682,9 +678,9 @@ describe("lifecycle-runtime-adapter - shutdown terminated", () => {
       execute: true,
     });
 
-    expect(contactEvents["worker_status_changed"]).toBe(1);
+    expect(contactEvents["member_status_changed"]).toBe(1);
     // Assert the payload status is "terminated"
-    const statusChange = contactEventPayloads.find((e) => e.kind === "worker_status_changed");
+    const statusChange = contactEventPayloads.find((e) => e.kind === "member_status_changed");
     expect(statusChange).toBeDefined();
     expect(statusChange!.status).toBe("terminated");
   });

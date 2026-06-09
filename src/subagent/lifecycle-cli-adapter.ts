@@ -9,11 +9,11 @@ import * as path from "node:path";
 import process from "node:process";
 import { failureEnvelope, successEnvelope, type CliEnvelope } from "../cli/envelope.js";
 import {
-  applyContactRegistryEvent,
-  lookupWorker,
-  type ContactRegistryEvent,
-  type WorkerContact,
-} from "./contact-registry.js";
+  applyTeamRosterEvent,
+  lookupMember,
+  type TeamRosterEvent,
+  type TeamMember,
+} from "./team-roster.js";
 import {
   createTeamDirectorySnapshot,
   planRunScopedTeamPaths,
@@ -156,19 +156,19 @@ export async function executeLifecycleAdapterCommand(
 
     switch (parsed.command.kind) {
       case "lifecycle-status": {
-        const worker = lookupWorkerOrThrow(context.registry, parsed.command.workerId);
+        const worker = lookupMemberOrThrow(context.roster, parsed.command.workerId);
         const facts = await adapter.enumerateWorkers(context.snapshot, {
           now: ports.nowIso(),
           staleThresholdMs: parsed.command.staleThresholdMs,
         });
-        const fact = facts.workers.find((item) => item.workerId === worker.workerId);
+        const fact = facts.workers.find((item) => item.workerId === worker.memberId);
         return successEnvelope({
           tool: TOOL_NAME,
           cwd: options.cwd,
           extra: {
             command: "lifecycle-status",
             runId,
-            workerId: worker.workerId,
+            workerId: worker.memberId,
             worker,
             fact,
           },
@@ -176,7 +176,7 @@ export async function executeLifecycleAdapterCommand(
       }
 
       case "lease": {
-        const worker = lookupWorkerOrThrow(context.registry, parsed.command.workerId);
+        const worker = lookupMemberOrThrow(context.roster, parsed.command.workerId);
         const envelope = await adapter.recordHeartbeat(
           worker,
           context.supervisorEvents,
@@ -201,7 +201,7 @@ export async function executeLifecycleAdapterCommand(
           extra: {
             command: "lease",
             runId,
-            workerId: worker.workerId,
+            workerId: worker.memberId,
             envelope,
           },
         });
@@ -234,7 +234,7 @@ export async function executeLifecycleAdapterCommand(
       }
 
       case "shutdown": {
-        const worker = lookupWorkerOrThrow(context.registry, parsed.command.workerId);
+        const worker = lookupMemberOrThrow(context.roster, parsed.command.workerId);
         const envelope = await adapter.requestShutdown(worker, {
           now: ports.nowIso(),
           reason: parsed.command.reason,
@@ -255,7 +255,7 @@ export async function executeLifecycleAdapterCommand(
           extra: {
             command: "shutdown",
             runId,
-            workerId: worker.workerId,
+            workerId: worker.memberId,
             envelope,
           },
         });
@@ -532,7 +532,7 @@ async function loadLifecycleContext(
   stateRoot: string,
   runId: string,
 ): Promise<{
-  registry: TeamDirectorySnapshot["registry"];
+  roster: TeamDirectorySnapshot["roster"];
   supervisorEvents: SupervisorLifecycleEvent[];
   snapshot: TeamSnapshot;
   teamLayout: TeamDirectoryLayout;
@@ -541,7 +541,7 @@ async function loadLifecycleContext(
   const runTeamPaths = planRunScopedTeamPaths(stateRoot, runId);
   const teamLayout: TeamDirectoryLayout = {
     teamDir: runTeamPaths.runTeamDir,
-    registryFile: runTeamPaths.runRegistryFile,
+    rosterFile: runTeamPaths.runRosterFile,
     eventsFile: runTeamPaths.runEventsFile,
     runsDir: path.join(stateRoot, "runs"),
   };
@@ -554,7 +554,7 @@ async function loadLifecycleContext(
   const events = await readAllLifecycleEvents(supervisorPorts, supervisorPaths);
 
   const snapshot: TeamSnapshot = {
-    registryState: teamSnapshot.registry,
+    rosterState: teamSnapshot.roster,
     supervisorEvents: events.validEvents,
     createdAt: teamSnapshot.createdAt,
     runId,
@@ -562,7 +562,7 @@ async function loadLifecycleContext(
 
   // Populate per-worker process existence from run-scoped worker state files.
   const processExistence: Record<string, boolean> = {};
-  for (const [workerId, worker] of Object.entries(teamSnapshot.registry.workers)) {
+  for (const [workerId] of Object.entries(teamSnapshot.roster.members)) {
     processExistence[workerId] = await resolveProcessExistence(
       ports,
       stateRoot,
@@ -575,7 +575,7 @@ async function loadLifecycleContext(
   }
 
   return {
-    registry: teamSnapshot.registry,
+    roster: teamSnapshot.roster,
     supervisorEvents: events.validEvents,
     snapshot,
     teamLayout,
@@ -618,12 +618,12 @@ function createRuntimePorts(
         // State file absent or unparseable -- keep shutdown success; do not hide it.
       }
     },
-    applyContactEvent: async (event: ContactRegistryEvent) => {
+    applyContactEvent: async (event: TeamRosterEvent) => {
       const snapshot = await readTeamDirectory(ports.fs, context.teamLayout);
-      const result = applyContactRegistryEvent(snapshot.registry, event);
+      const result = applyTeamRosterEvent(snapshot.roster, event);
       if (result.status === "rejected") {
         throw new Error(
-          `Contact event rejected: ${result.rejection.code}: ${result.rejection.message}`,
+          `Roster event rejected: ${result.rejection.code}: ${result.rejection.message}`,
         );
       }
       const nextSnapshot = createTeamDirectorySnapshot(
@@ -739,11 +739,11 @@ async function defaultShutdownProcess(
   process.kill(pid, "SIGTERM");
 }
 
-function lookupWorkerOrThrow(
-  registry: TeamDirectorySnapshot["registry"],
+function lookupMemberOrThrow(
+  roster: TeamDirectorySnapshot["roster"],
   workerId: string,
-): WorkerContact {
-  const worker = lookupWorker(registry, workerId);
+): TeamMember {
+  const worker = lookupMember(roster, workerId);
   if (!worker) {
     throw Object.assign(new Error(`Unknown worker: "${workerId}"`), {
       code: "UNKNOWN_WORKER",

@@ -12,7 +12,7 @@ Usage:
   tiny-agent im  <subcommand> [options]               IM message operations
   tiny-agent skill <subcommand> [options]             Skill management
   tiny-agent mcp  <subcommand> [options]              MCP server interaction
-  tiny-agent team <group> [options]                   Team worker/task/lifecycle control
+  tiny-agent team <group> [options]                   Team member/task/lifecycle control
   tiny-agent --help                                   Show this help
 
 IM subcommands:
@@ -35,7 +35,8 @@ Skill subcommands:
   install <source> [<name>]     Install a skill from local directory
 
 Team groups:
-  team contact <subcommand>     Worker registration, lookup, status, heartbeat
+  team create <teamId>          Create/reset lightweight team state
+  team member <subcommand>      Team roster management
   team task <subcommand>        Task creation, assignment, execution, completion
   team lifecycle <subcommand>   Run-scoped lease, lifecycle-status, reaper, shutdown
 

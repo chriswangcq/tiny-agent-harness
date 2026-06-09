@@ -72,8 +72,8 @@ describe("planRunScopedSupervisorPaths", () => {
 // ---------------------------------------------------------------------------
 
 describe("createSupervisorLifecycleEvent", () => {
-  it("creates a worker_registered event with required fields", () => {
-    const event = createSupervisorLifecycleEvent("evt-001", "worker_registered", {
+  it("creates a member_added event with required fields", () => {
+    const event = createSupervisorLifecycleEvent("evt-001", "member_added", {
       workerId: "w1",
       role: "coder",
       workspace: "/home/w1",
@@ -81,36 +81,36 @@ describe("createSupervisorLifecycleEvent", () => {
       imChannel: "ch1",
     }, "2024-01-01T00:00:00.000Z");
     expect(event.eventId).toBe("evt-001");
-    expect(event.type).toBe("worker_registered");
+    expect(event.type).toBe("member_added");
     expect(event.timestamp).toBeDefined();
     expect(typeof event.timestamp).toBe("string");
   });
 
-  it("creates a worker_status_changed event", () => {
+  it("creates a member_status_changed event", () => {
     const event = createSupervisorLifecycleEvent(
       "evt-002",
-      "worker_status_changed",
+      "member_status_changed",
       { workerId: "w1", status: "active", previousStatus: "idle" },
       "2024-01-01T00:00:00.000Z",
     );
-    expect(event.type).toBe("worker_status_changed");
+    expect(event.type).toBe("member_status_changed");
   });
 
-  it("creates a worker_heartbeat event", () => {
-    const event = createSupervisorLifecycleEvent("evt-003", "worker_heartbeat", {
+  it("creates a member_heartbeat event", () => {
+    const event = createSupervisorLifecycleEvent("evt-003", "member_heartbeat", {
       workerId: "w1",
     }, "2024-01-01T00:00:00.000Z");
-    expect(event.type).toBe("worker_heartbeat");
+    expect(event.type).toBe("member_heartbeat");
   });
 
-  it("creates a worker_terminated event", () => {
+  it("creates a member_terminated event", () => {
     const event = createSupervisorLifecycleEvent(
       "evt-004",
-      "worker_terminated",
+      "member_terminated",
       { workerId: "w1", reason: "completed" },
       "2024-01-01T00:00:00.000Z",
     );
-    expect(event.type).toBe("worker_terminated");
+    expect(event.type).toBe("member_terminated");
   });
 
   // ---- Lease events ----
@@ -235,7 +235,7 @@ describe("createSupervisorLifecycleEvent", () => {
 
 describe("validateLifecycleEvent", () => {
   it("accepts a valid existing event", () => {
-    const event = createSupervisorLifecycleEvent("evt-001", "worker_heartbeat", {
+    const event = createSupervisorLifecycleEvent("evt-001", "member_heartbeat", {
       workerId: "w1",
     }, "2024-01-01T00:00:00.000Z");
     const result = validateLifecycleEvent(event);
@@ -337,7 +337,7 @@ describe("validateLifecycleEvent", () => {
 
   it("rejects missing eventId", () => {
     const result = validateLifecycleEvent({
-      type: "worker_heartbeat",
+      type: "member_heartbeat",
       timestamp: "2024-01-01T00:00:00.000Z",
       payload: { workerId: "w1" },
     });
@@ -359,17 +359,17 @@ describe("validateLifecycleEvent", () => {
   it("rejects missing timestamp", () => {
     const result = validateLifecycleEvent({
       eventId: "evt-001",
-      type: "worker_heartbeat",
+      type: "member_heartbeat",
       payload: { workerId: "w1" },
     });
     expect(result.valid).toBe(false);
     expect(result.errors.some((e) => /timestamp/i.test(e))).toBe(true);
   });
 
-  it("rejects worker_heartbeat without workerId in payload", () => {
+  it("rejects member_heartbeat without workerId in payload", () => {
     const result = validateLifecycleEvent({
       eventId: "evt-001",
-      type: "worker_heartbeat",
+      type: "member_heartbeat",
       timestamp: "2024-01-01T00:00:00.000Z",
       payload: {},
     });
@@ -396,7 +396,7 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
   it("appends and reads back a single event", async () => {
     const event = createSupervisorLifecycleEvent(
       "evt-001",
-      "worker_heartbeat",
+      "member_heartbeat",
       { workerId: "w1" },
       clockNow,
     );
@@ -413,19 +413,19 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
     const events = [
       createSupervisorLifecycleEvent(
         "evt-001",
-        "worker_registered",
+        "member_added",
         { workerId: "w1", role: "coder", workspace: "/w1", branch: "main", imChannel: "ch1" },
         clockNow,
       ),
       createSupervisorLifecycleEvent(
         "evt-002",
-        "worker_status_changed",
+        "member_status_changed",
         { workerId: "w1", status: "active", previousStatus: "idle" },
         clockNow,
       ),
       createSupervisorLifecycleEvent(
         "evt-003",
-        "worker_heartbeat",
+        "member_heartbeat",
         { workerId: "w1" },
         clockNow,
       ),
@@ -449,7 +449,7 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
   it("rejects duplicate event IDs", async () => {
     const event = createSupervisorLifecycleEvent(
       "evt-001",
-      "worker_heartbeat",
+      "member_heartbeat",
       { workerId: "w1" },
       clockNow,
     );
@@ -457,7 +457,7 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
 
     const event2 = createSupervisorLifecycleEvent(
       "evt-001",
-      "worker_heartbeat",
+      "member_heartbeat",
       { workerId: "w1" },
       clockNow,
     );
@@ -486,7 +486,7 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
   it("reads valid events alongside malformed lines", async () => {
     const event = createSupervisorLifecycleEvent(
       "evt-001",
-      "worker_heartbeat",
+      "member_heartbeat",
       { workerId: "w1" },
       clockNow,
     );
@@ -507,7 +507,7 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
   it("skips empty lines in the JSONL file", async () => {
     const event = createSupervisorLifecycleEvent(
       "evt-001",
-      "worker_heartbeat",
+      "member_heartbeat",
       { workerId: "w1" },
       clockNow,
     );
@@ -527,7 +527,7 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
   it("reports validation errors for events with wrong shape", async () => {
     const event = createSupervisorLifecycleEvent(
       "evt-001",
-      "worker_heartbeat",
+      "member_heartbeat",
       { workerId: "w1" },
       clockNow,
     );
@@ -548,7 +548,7 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
   it("preserves idempotency across restarts by tracking event IDs in snapshot", async () => {
     const event = createSupervisorLifecycleEvent(
       "evt-001",
-      "worker_heartbeat",
+      "member_heartbeat",
       { workerId: "w1" },
       clockNow,
     );
@@ -566,7 +566,7 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
 
     const event2 = createSupervisorLifecycleEvent(
       "evt-001",
-      "worker_heartbeat",
+      "member_heartbeat",
       { workerId: "w1" },
       clockNow,
     );
@@ -613,7 +613,7 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
     const otherRunPaths = planRunScopedSupervisorPaths("/test/project", "run-002");
     const firstRunEvent = createSupervisorLifecycleEvent(
       "evt-001",
-      "worker_heartbeat",
+      "member_heartbeat",
       { workerId: "w1" },
       clockNow,
     );
@@ -635,7 +635,7 @@ describe("appendLifecycleEvent and readAllLifecycleEvents", () => {
 
     const firstRead = await readAllLifecycleEvents(ports, runPaths);
     expect(firstRead.validEvents).toHaveLength(1);
-    expect(firstRead.validEvents[0].type).toBe("worker_heartbeat");
+    expect(firstRead.validEvents[0].type).toBe("member_heartbeat");
 
     const secondRead = await readAllLifecycleEvents(ports, otherRunPaths);
     expect(secondRead.validEvents).toHaveLength(1);

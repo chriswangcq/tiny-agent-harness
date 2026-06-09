@@ -171,6 +171,16 @@ describe("stripManagedShellScreenNoise", () => {
     expect(result.pending).toBe("");
   });
 
+  it("strips continuation marker inserted after prompt chrome sentinel", () => {
+    const result = stripManagedShellScreenNoise(
+      "printf '__PROMPT_CHROME__TAH_CONT__ nonce=n reason=unknown seq=1\r\n",
+    );
+
+    expect(result.output).toBe("");
+    expect(result.pending).toBe("");
+    expect(result.state.pendingPromptKind).toBe("continuation");
+  });
+
   it("strips managed shell prompt counter setup lines", () => {
     const result = stripManagedShellScreenNoise(
       [

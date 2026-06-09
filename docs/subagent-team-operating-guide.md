@@ -1,164 +1,124 @@
 # Subagent Team Operating Guide
 
-This guide documents how to operate the P6 sub-agent team runtime. It covers architecture, worker roles, isolation model, concurrency scheduling, and collaboration flows. For detailed module specifications, see [subagent-team.md](subagent-team.md).
+This guide documents the current lightweight team control plane. The team layer is a member roster and task/lifecycle coordination surface; it is not a mandatory workspace, branch, or ledger factory.
 
-## Architecture Overview
+## Mental Model
 
-The sub-agent team system has two layers:
+Create a team, add members, assign work, and observe lifecycle facts.
 
-**Agent Runtime** (src/subagent/*.ts): Pure domain modules implementing the team state machine, worker management, and merge protocol. These are consumed by the CLI and TUI layers. The runtime itself does not read files, start processes, or access the network — those are done by outer adapters.
-
-**TUI/CLI Display**: The `tiny-agent team` CLI and TUI dashboard project worker and task state for human consumption. Display is a separate concern from the runtime domain.
-
-### Worker Roles
-
-| Role | Responsibility |
-|------|---------------|
-| **Coder** | Executes implementation tasks in a child workspace/branch |
-| **QA** | Reviews coder output, runs gates, produces handoff evidence |
-| **Merge** | Evaluates merge gates, merges PRs, creates post-merge verification |
-| **Verifier** | Post-merge verification worker confirming merge correctness |
-
-Workers register via `tiny-agent team contact register` and are tracked in the contact registry.
-
-### Ledger Hierarchy
-
-| Level | Description |
-|-------|-------------|
-| **Root ledger** | Master agent's ledger in the primary workspace. Serial, drives the overall plan. |
-| **Child ledger** | Each worker has a `.complex-problems` child ledger in its workspace. Records worker-level problems/tickets/results/checks. |
-
-The root ledger dispatches work; child ledgers execute it. Root ledger proceeds serially but workers execute concurrently.
-
-## Isolation Model
-
-Each worker operates in strict isolation:
-
-| Isolation | Scope |
-|-----------|-------|
-| **Workspace** | Each worker gets a dedicated filesystem workspace directory |
-| **Branch** | Each worker works on a dedicated git branch (e.g., `codex/p6/XX-...`) |
-| **Run** | Each worker has its own `tiny-agent run` instance with a run-scoped state |
-| **Channel** | Each worker has an IM channel for communication |
-
-### Run-Scoped State
-
-Run-scoped state lives under `.tiny-agent/runs/<runId>/`. Each run is self-contained and does not leak state across runs. Project-scoped state (e.g., team contact registry) persists across runs.
-
-## Concurrency Scheduling Protocol
-
-```
-Root Agent (master workspace)
-  ├── dispatches → Worker 1 (coder, workspace A, branch B1, run R1, child ledger L1)
-  ├── dispatches → Worker 2 (QA, workspace B, branch B2, run R2, child ledger L2)
-  └── dispatches → Worker N (...)
+```text
+team create <teamId>
+  -> team member add/update/status/heartbeat/terminate
+  -> team task create/assign/start/succeed/fail/cancel
+  -> team lifecycle lease/reaper/shutdown for run-scoped worker processes
 ```
 
-- **Root ledger is serial**: The master agent processes problems one at a time.
-- **Workers are concurrent**: Multiple workers can execute simultaneously.
-- **Merge requires full chain**: QA evidence → merge worker evaluation → post-merge verifier confirmation.
+Workspace layout, git branch policy, child ledgers, and QA protocol are instructions sent to workers or metadata/evidence submitted by workers. They are not required fields in the team roster schema.
 
-## Git PR/Merge Collaboration Flow
+## Runtime Boundaries
 
-1. **Worker creates branch** from base.
-2. **Coder** implements changes, commits, pushes.
-3. **QA** reviews, runs typecheck/build/test gates, produces handoff evidence via `worker-handoff-evidence.ts` contract.
-4. **Merge worker** evaluates `MasterReviewChecklist` gates (derived from handoff evidence), merges PR.
-5. **Post-merge verifier** confirms merge correctness on the updated base.
+| Layer | Responsibility |
+| --- | --- |
+| `team-roster.ts` | Pure member roster FSM. Durable people/control-plane truth. |
+| `team.ts` | Pure task FSM for assignment and task lifecycle. |
+| `directory-store.ts` | Explicit-port JSON snapshot store for `team/roster.json`. |
+| `local-worker-launcher.ts` | Optional adapter that can spawn a local worker process when explicitly asked. |
+| `lifecycle-runtime-adapter.ts` | Lease, heartbeat, stale reaper, shutdown chain over run-scoped worker process facts. |
+| TUI dashboard | Observer/control projection only. It does not orchestrate or bypass review. |
 
-### Handoff Evidence Contract
+Core domain code does not read time, files, env, network, or process state. Those inputs arrive through explicit ports or typed snapshots.
 
-Every worker final report must include:
-- `childLedgerId`, `childLedgerStatus` (must be "closed")
-- `commit`, `branch`, `workspace`
-- `changedFiles`, gate results (`typecheck`, `build`, `test`)
-- `overallResult` (PASS/FAIL)
-- `residualRisk`, `mergeRecommendation`
+## Member Roster
 
-See `src/subagent/worker-handoff-evidence.ts` for the full contract schema.
+Required member fields:
 
-## Capability Matrix
+- `memberId`
+- `role`
+- `channel`
+- `status`
 
-### Merged (P6-01 ~ P6-06)
+Optional member fields:
 
-| Phase | Module | Status |
-|-------|--------|--------|
-| P6-01 | `contact-registry.ts` — Worker contact FSM and pure state machine | ✅ Merged |
-| P6-02 | `directory-store.ts` — Durable persistence with explicit ports | ✅ Merged |
-| P6-03 | Team CLI (`tiny-agent team ...`) — Task and contact management | ✅ Merged |
-| P6-04 | `local-worker-launcher.ts` — Local worker spawn with explicit effects | ✅ Merged |
-| P6-05 | `status-projector.ts` — Pure worker status derivation from snapshots | ✅ Merged |
-| P6-06 | `worker-handoff-evidence.ts` — Typed handoff contract and gate derivation | ✅ Merged |
+- `runId`
+- `assignment`
+- `currentTask`
+- `lastHeartbeat`
+- `lastEvidence`
+- `metadata`
 
-### In Progress / Pending (P6-07 ~ P6-09)
-
-| Phase | Planned Work | Status |
-|-------|-------------|--------|
-| P6-07 | Team runtime smoke tests | 🔄 In Progress |
-| P6-08 | TUI sub-agent dashboard | ⏳ Pending |
-| P6-09 | Cloud queue / MCP wrapper integration | ⏳ Pending |
-
-These capabilities are not yet available and must not be relied upon.
-
-## Practical Usage
-
-### Registering Workers
+Use `metadata` for facts like workspace, branch, ledger id, capability labels, or service endpoints:
 
 ```bash
-tiny-agent team contact register <workerId> <role> <workspace> <branch> <imChannel>
-tiny-agent team contact list
+tiny-agent team member add coder-1 coder default \
+  --metadata '{"workspace":"/work/coder-1","branch":"codex/p6/foo","ledgerId":"L-123"}'
 ```
 
-### Creating and Assigning Tasks
+These metadata values are observable facts, not scheduler obligations. The master agent may instruct a worker to create a workspace or branch, but the roster does not require or enforce that strategy.
+
+## Common Commands
 
 ```bash
-tiny-agent team task create <taskId> <title>
-tiny-agent team task assign <taskId> <workerId>
-tiny-agent team task start <taskId>
-tiny-agent team task succeed <taskId> [--output <json>]
+tiny-agent team create team-p6
+
+tiny-agent team member add coder-1 coder default
+tiny-agent team member list
+tiny-agent team member show coder-1
+tiny-agent team member update coder-1 --json '{"runId":"run-123","currentTask":"Fix TUI roster"}'
+tiny-agent team member status coder-1 active
+tiny-agent team member heartbeat coder-1 --evidence "commit abc123"
+tiny-agent team member terminate coder-1 --reason "task complete"
+
+tiny-agent team task create T-001 "Fix roster projection"
+tiny-agent team task assign T-001 coder-1
+tiny-agent team task start T-001
+tiny-agent team task succeed T-001 --output '{"commit":"abc123"}'
 ```
 
-### Checking Worker Status
+Lifecycle commands are for run-scoped worker processes:
 
 ```bash
-tiny-agent team contact show <workerId>
-tiny-agent team task list
+tiny-agent team lifecycle lease coder-1 --run run-123
+tiny-agent team lifecycle lifecycle-status coder-1 --run run-123
+tiny-agent team lifecycle reaper --run run-123 --threshold-ms 300000
+tiny-agent team lifecycle shutdown coder-1 --run run-123 --execute --reason "stale heartbeat"
 ```
 
-### Recording Worker Heartbeat
+## Durable State
 
-```bash
-tiny-agent team contact heartbeat <workerId>
+Project-scoped roster:
+
+```text
+~/.tiny-agent/projects/<projectId>/team/roster.json
+~/.tiny-agent/projects/<projectId>/team/events.jsonl
 ```
 
-### Sending Final Report via IM
+Run-scoped roster and lifecycle facts:
 
-```bash
-node dist/cli/main.js im send \
-  --channel <channel> \
-  --kind status \
-  --text-stdin < /path/to/report.txt
+```text
+~/.tiny-agent/projects/<projectId>/runs/<runId>/team/roster.json
+~/.tiny-agent/projects/<projectId>/runs/<runId>/team/events.jsonl
+~/.tiny-agent/projects/<projectId>/runs/<runId>/supervisor/lifecycle-events.jsonl
+~/.tiny-agent/projects/<projectId>/runs/<runId>/workers/<workerId>/state.json
 ```
 
-Reports must include the handoff evidence fields required by the worker handoff contract.
+`lifecycle-events.jsonl` is the audit trail for `heartbeat_recorded`, `lease_*`, `reaper_*`, and `shutdown_*`. The TUI team dashboard projects these events for humans; it does not own the lifecycle state.
 
-## Supervisor Lifecycle Events
+## Operating Pattern
 
-The supervisor maintains a run-scoped lifecycle ledger at `.tiny-agent/runs/<runId>/supervisor/lifecycle-events.jsonl`. This append-only JSONL records worker lifecycle facts that the TUI/team dashboard and stale-run reaper consume:
+1. Create or select a team.
+2. Add members with role and channel only.
+3. Send concrete instructions to members through IM or terminal/session tools.
+4. Include workspace/git/ledger requirements inside the assignment text when needed.
+5. Record optional facts as metadata or handoff evidence after they exist.
+6. Use lifecycle lease/heartbeat/reaper/shutdown for worker processes.
+7. Merge code through git and review gates outside the roster reducer.
 
-- **Heartbeat & lease**: when a worker calls `team contact heartbeat <workerId>`, the lifecycle adapter records a `heartbeat_recorded` event, updates the worker contact snapshot, and evaluates lease health. Duplicate heartbeats are idempotent.
-- **Stale detection**: the reaper (`runReaper`) identifies stale active workers whose heartbeats have aged past configured thresholds. Workers with contact status `terminated` or `offline` are skipped.
-- **Shutdown chain**: for each stale active worker, the reaper emits `shutdown_requested`, attempts a graceful shutdown, then records `shutdown_completed` or `shutdown_failed`. Successful shutdown marks the contact status `terminated`.
-- **Lifecycle state**: the pure `computeLifecycleState` function derives `WorkerLifecycleState` (`healthy` / `stale` / `expired` / `grace_period` / `shutdown` / `terminated` / `missing_process` / `unknown`) from heartbeat age, process existence, and contact status.
+## Design Rules
 
-These events are durable facts, not runtime internals. The TUI lifecycle audit projection reads `lifecycle-events.jsonl` directly to render worker lifecycle timelines without consulting agent state.
+- Do not add provider-native tools for team workers.
+- Do not make workspace, branch, or ledger mandatory roster fields.
+- Do not let the TUI mutate runtime state directly.
+- Do not keep compatibility paths for removed roster command names.
+- Keep reducers pure and adapters explicit-port based.
 
-## Related Documents
-
-- [subagent-team.md](subagent-team.md) — Detailed module specifications
-- [agent-team-trial.md](agent-team-trial.md) — Trial notes
-- [merge-protocol reference](../src/subagent/merge-protocol.ts) — Merge gate definitions
-
----
-
-Last updated: 2026-06-06. Matches P6-01 through P6-06 at commit f2170a1.
+Last updated: 2026-06-09.

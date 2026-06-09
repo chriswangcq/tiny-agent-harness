@@ -42,7 +42,7 @@ export type SubAgentTeamEvent =
       input?: unknown;
     }
   | {
-      kind: "worker_registered";
+      kind: "member_added";
       eventId: string;
       workerId: string;
       label?: string;
@@ -86,9 +86,9 @@ export type SubAgentTeamEvent =
 
 export type SubAgentTransitionRejectionCode =
   | "task_exists"
-  | "worker_exists"
+  | "member_exists"
   | "unknown_task"
-  | "unknown_worker"
+  | "unknown_member"
   | "task_not_assignable"
   | "task_not_startable"
   | "task_not_completable"
@@ -159,7 +159,7 @@ export function applySubAgentTeamEvent(
   switch (event.kind) {
     case "task_submitted":
       return submitTask(state, event);
-    case "worker_registered":
+    case "member_added":
       return registerWorker(state, event);
     case "task_assigned":
       return assignTask(state, event);
@@ -243,10 +243,10 @@ function submitTask(
 
 function registerWorker(
   state: SubAgentTeamState,
-  event: Extract<SubAgentTeamEvent, { kind: "worker_registered" }>,
+  event: Extract<SubAgentTeamEvent, { kind: "member_added" }>,
 ): SubAgentTransitionResult {
   if (state.workers[event.workerId]) {
-    return rejected(state, "worker_exists", `Worker ${event.workerId} already exists.`);
+    return rejected(state, "member_exists", `Worker ${event.workerId} already exists.`);
   }
 
   return applied(withEvent(state, event.eventId, {
@@ -275,7 +275,7 @@ function assignTask(
 
   const worker = state.workers[event.workerId];
   if (!worker) {
-    return rejected(state, "unknown_worker", `Worker ${event.workerId} does not exist.`);
+    return rejected(state, "unknown_member", `Worker ${event.workerId} does not exist.`);
   }
   if (worker.status !== "idle") {
     return rejected(state, "worker_not_available", `Worker ${event.workerId} is ${worker.status}.`);
@@ -392,7 +392,7 @@ function markWorkerOffline(
 ): SubAgentTransitionResult {
   const worker = state.workers[event.workerId];
   if (!worker) {
-    return rejected(state, "unknown_worker", `Worker ${event.workerId} does not exist.`);
+    return rejected(state, "unknown_member", `Worker ${event.workerId} does not exist.`);
   }
 
   const task =

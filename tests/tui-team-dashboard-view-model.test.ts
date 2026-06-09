@@ -14,7 +14,7 @@ import type {
   LifecycleAuditEventItem,
 } from "../src/tui/team-dashboard-view-model.js";
 import type { SubAgentTeamSummary } from "../src/subagent/team.js";
-import type { ContactRegistrySummary } from "../src/subagent/contact-registry.js";
+import type { TeamRosterSummary } from "../src/subagent/team-roster.js";
 import type { MasterReviewChecklist } from "../src/subagent/merge-protocol.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────
@@ -30,18 +30,26 @@ function emptyTeamSummary(): SubAgentTeamSummary {
   };
 }
 
-function emptyContactSummary(): ContactRegistrySummary {
+function emptyContactSummary(): TeamRosterSummary {
   return {
-    totalWorkers: 0,
-    workersByStatus: {},
-    activeWorkers: [],
+    teamId: "test-team",
+    totalMembers: 0,
+    membersByStatus: {
+      active: 0,
+      idle: 0,
+      stale: 0,
+      offline: 0,
+      terminated: 0,
+    },
+    membersByRole: {},
+    activeMembers: [],
   };
 }
 
 function emptyInput(): TeamDashboardInput {
   return {
     teamSummary: emptyTeamSummary(),
-    contactRegistrySummary: emptyContactSummary(),
+    rosterSummary: emptyContactSummary(),
     runSummaries: [],
     mergeChecklist: null,
   };
@@ -65,7 +73,7 @@ describe("buildTeamDashboardViewModel", () => {
     const vm = buildTeamDashboardViewModel(emptyInput());
     const kinds = vm.sections.map((s) => s.kind);
     expect(kinds).toContain("team-overview");
-    expect(kinds).toContain("contact-roster");
+    expect(kinds).toContain("team-roster");
     expect(kinds).toContain("active-tasks");
     expect(kinds).toContain("run-status");
   });
@@ -90,22 +98,24 @@ describe("buildTeamDashboardViewModel", () => {
     expect(texts.some((t) => t.includes("Total Workers: 3"))).toBe(true);
   });
 
-  it("includes contact roster data with active workers", () => {
+  it("includes team roster data with active members", () => {
     const input = emptyInput();
-    input.contactRegistrySummary = {
-      totalWorkers: 3,
-      workersByStatus: { active: 2, idle: 1 },
-      activeWorkers: [
-        { workerId: "w1", role: "coder" },
-        { workerId: "w2", role: "reviewer" },
+    input.rosterSummary = {
+      teamId: "team-alpha",
+      totalMembers: 3,
+      membersByStatus: { active: 2, idle: 1, stale: 0, offline: 0, terminated: 0 },
+      membersByRole: { coder: 1, reviewer: 1 },
+      activeMembers: [
+        { memberId: "w1", role: "coder", channel: "default", status: "active" },
+        { memberId: "w2", role: "reviewer", channel: "default", status: "idle" },
       ],
-    } as ContactRegistrySummary;
+    } as TeamRosterSummary;
 
     const vm = buildTeamDashboardViewModel(input);
-    const roster = vm.sections.find((s) => s.kind === "contact-roster")!;
+    const roster = vm.sections.find((s) => s.kind === "team-roster")!;
     expect(roster).toBeDefined();
     const texts = roster.rows.map((r) => r.text);
-    expect(texts.some((t) => t.includes("Total Contacts: 3"))).toBe(true);
+    expect(texts.some((t) => t.includes("Total Members: 3"))).toBe(true);
     expect(texts.some((t) => t.includes("w1") && t.includes("coder"))).toBe(true);
     expect(texts.some((t) => t.includes("w2") && t.includes("reviewer"))).toBe(true);
   });
@@ -300,10 +310,18 @@ describe("purity contract", () => {
         workersByStatus: { active: 3 },
         activeAssignments: [],
       },
-      contactRegistrySummary: {
-        totalWorkers: 3,
-        workersByStatus: { active: 3 },
-        activeWorkers: [],
+      rosterSummary: {
+        teamId: "test",
+        totalMembers: 3,
+        membersByStatus: {
+          active: 3,
+          idle: 0,
+          stale: 0,
+          offline: 0,
+          terminated: 0,
+        },
+        membersByRole: { coder: 3 },
+        activeMembers: [],
       },
       runSummaries: [
         { runId: "r1", workerId: "w1", status: "finished" },

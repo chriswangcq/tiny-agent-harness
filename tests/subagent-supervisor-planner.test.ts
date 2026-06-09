@@ -13,7 +13,7 @@ import {
   type LeaseRecord,
   type WorkerLifecycleState,
 } from "../src/subagent/supervisor-lifecycle.js";
-import type { WorkerContact } from "../src/subagent/contact-registry.js";
+import type { TeamMember } from "../src/subagent/team-roster.js";
 import * as barrel from "../src/subagent/index.js";
 
 // ---------------------------------------------------------------------------
@@ -53,18 +53,24 @@ function makeConfig(overrides: Partial<PlannerConfig> = {}): PlannerConfig {
   };
 }
 
-function makeContact(overrides: Partial<WorkerContact> = {}): WorkerContact {
+function makeContact(
+  overrides: Partial<TeamMember> & { workerId?: string } = {},
+): TeamMember {
+  const memberId = overrides.memberId ?? overrides.workerId ?? "coder-1";
+  const { workerId: _workerId, memberId: _memberId, ...rest } = overrides;
   return {
-    workerId: "coder-1",
+    memberId,
     role: "coder",
-    workspace: "/tmp/workspace",
-    branch: "feature/test",
-    imChannel: "coder-1",
+    channel: "coder-1",
+    metadata: {
+      workspace: "/tmp/workspace",
+      branch: "feature/test",
+      allowedActions: "terminal_write,session_focus",
+    },
     status: "active" as const,
-    allowedActions: ["terminal_write", "session_focus"],
     lastHeartbeat: ONE_MIN_AGO,
     lastEvidence: ONE_MIN_AGO,
-    ...overrides,
+    ...rest,
   };
 }
 
@@ -73,7 +79,7 @@ function makeLifecycleInput(
 ): LifecycleInput {
   return {
     workerId: "coder-1",
-    contactStatus: "active",
+    memberStatus: "active",
     lastHeartbeat: ONE_MIN_AGO,
     lastEvidence: ONE_MIN_AGO,
     runStatus: "running",
@@ -104,12 +110,12 @@ function makeLease(overrides: Partial<LeaseRecord> = {}): LeaseRecord {
 function makeSnapshot(
   overrides: Partial<PlannerSnapshot> = {},
 ): PlannerSnapshot {
-  const contact = overrides.contact ?? makeContact();
+  const member = overrides.member ?? makeContact();
   const lifecycleInput = overrides.lifecycleInput ?? makeLifecycleInput();
   const lease = overrides.lease;
   return {
-    workerId: contact.workerId,
-    contact,
+    workerId: member.memberId,
+    member,
     lifecycleInput,
     lease,
     processExists: lifecycleInput.processExists,
@@ -221,7 +227,7 @@ describe("computeSupervisorPlan", () => {
     const config = makeConfig({ includeTerminated: false });
     const snapshot = makeSnapshot({
       lifecycleInput: makeLifecycleInput({
-        contactStatus: "terminated",
+        memberStatus: "terminated",
         terminatedAt: ONE_MIN_AGO,
       }),
     });
@@ -239,7 +245,7 @@ describe("computeSupervisorPlan", () => {
     const config = makeConfig({ includeTerminated: true });
     const snapshot = makeSnapshot({
       lifecycleInput: makeLifecycleInput({
-        contactStatus: "terminated",
+        memberStatus: "terminated",
         terminatedAt: ONE_MIN_AGO,
       }),
     });
@@ -393,13 +399,13 @@ describe("computeSupervisorPlan", () => {
       // Healthy worker -> noop (priority 10)
       makeSnapshot({
         workerId: "coder-1",
-        contact: makeContact({ workerId: "coder-1" }),
+        member: makeContact({ workerId: "coder-1" }),
         lifecycleInput: makeLifecycleInput({ workerId: "coder-1" }),
       }),
       // Missing process -> escalate (priority 1)
       makeSnapshot({
         workerId: "coder-2",
-        contact: makeContact({ workerId: "coder-2" }),
+        member: makeContact({ workerId: "coder-2" }),
         lifecycleInput: makeLifecycleInput({
           workerId: "coder-2",
           processExists: false,
@@ -410,7 +416,7 @@ describe("computeSupervisorPlan", () => {
       // Expired -> reap_terminate (priority 2)
       makeSnapshot({
         workerId: "coder-3",
-        contact: makeContact({ workerId: "coder-3" }),
+        member: makeContact({ workerId: "coder-3" }),
         lifecycleInput: makeLifecycleInput({
           workerId: "coder-3",
           lastHeartbeat: ONE_HOUR_AGO,
@@ -420,7 +426,7 @@ describe("computeSupervisorPlan", () => {
       // Shutdown needed -> request_shutdown (priority 4)
       makeSnapshot({
         workerId: "coder-4",
-        contact: makeContact({ workerId: "coder-4" }),
+        member: makeContact({ workerId: "coder-4" }),
         lifecycleInput: makeLifecycleInput({
           workerId: "coder-4",
           shutdownRequestedAt: "2026-06-06T03:25:00.000Z",
@@ -453,7 +459,7 @@ describe("computeSupervisorPlan", () => {
     const config = makeConfig();
     const snapshot = makeSnapshot({
       lifecycleInput: makeLifecycleInput({
-        contactStatus: "offline",
+        memberStatus: "offline",
         lastHeartbeat: ONE_HOUR_AGO,
         lastEvidence: ONE_HOUR_AGO,
         processExists: false,
@@ -479,14 +485,14 @@ describe("computeSupervisorPlan", () => {
   });
 
   it("buildSnapshot helper creates correct snapshot", () => {
-    const contact = makeContact({ workerId: "test-worker" });
+    const member = makeContact({ workerId: "test-worker" });
     const lifecycleInput = makeLifecycleInput({ workerId: "test-worker" });
     const lease = makeLease({ workerId: "test-worker" });
 
-    const snapshot = buildSnapshot(contact, lifecycleInput, lease, 1234, ONE_MIN_AGO);
+    const snapshot = buildSnapshot(member, lifecycleInput, lease, 1234, ONE_MIN_AGO);
 
     expect(snapshot.workerId).toBe("test-worker");
-    expect(snapshot.contact).toBe(contact);
+    expect(snapshot.member).toBe(member);
     expect(snapshot.lifecycleInput).toBe(lifecycleInput);
     expect(snapshot.lease).toBe(lease);
     expect(snapshot.processExists).toBe(true);
@@ -553,7 +559,7 @@ describe("PlannedAction audit contract", () => {
     // Terminated worker
     const termSnapshot = makeSnapshot({
       lifecycleInput: makeLifecycleInput({
-        contactStatus: "terminated",
+        memberStatus: "terminated",
         terminatedAt: ONE_MIN_AGO,
       }),
     });

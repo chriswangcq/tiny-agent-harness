@@ -91,10 +91,10 @@ export function planRunScopedSupervisorPaths(
 /** Known supervisor lifecycle event types. */
 export type SupervisorLifecycleEventType =
   // Worker registration and status
-  | "worker_registered"
-  | "worker_status_changed"
-  | "worker_heartbeat"
-  | "worker_terminated"
+  | "member_added"
+  | "member_status_changed"
+  | "member_heartbeat"
+  | "member_terminated"
   // Leases — full resource-binding lifecycle
   | "lease_requested"
   | "lease_acquired"
@@ -115,7 +115,7 @@ export type SupervisorLifecycleEventType =
 
 /** Payload for each event type (documentation only — runtime uses Record<string, unknown>). */
 export type SupervisorLifecycleEventPayload =
-  // worker_registered
+  // member_added
   | {
       workerId: string;
       role: string;
@@ -123,15 +123,15 @@ export type SupervisorLifecycleEventPayload =
       branch: string;
       imChannel: string;
     }
-  // worker_status_changed
+  // member_status_changed
   | {
       workerId: string;
       status: string;
       previousStatus?: string;
     }
-  // worker_heartbeat
+  // member_heartbeat
   | { workerId: string }
-  // worker_terminated
+  // member_terminated
   | { workerId: string; reason?: string }
   // lease_requested
   | {
@@ -223,10 +223,10 @@ export type ValidationResult = {
 // ---------------------------------------------------------------------------
 
 const VALID_EVENT_TYPES: ReadonlySet<string> = new Set([
-  "worker_registered",
-  "worker_status_changed",
-  "worker_heartbeat",
-  "worker_terminated",
+  "member_added",
+  "member_status_changed",
+  "member_heartbeat",
+  "member_terminated",
   "lease_requested",
   "lease_acquired",
   "lease_renewed",

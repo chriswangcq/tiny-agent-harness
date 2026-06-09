@@ -11,7 +11,7 @@ import type {
   MasterReviewChecklist,
   MergePriority,
 } from "../src/subagent/merge-protocol.js";
-import type { WorkerContact } from "../src/subagent/contact-registry.js";
+import type { TeamMember } from "../src/subagent/team-roster.js";
 import type {
   WorkerHandoffEvidence,
   GateResult,
@@ -19,16 +19,21 @@ import type {
 
 // --- Test helpers ---
 
-function makeContact(overrides: Partial<WorkerContact> = {}): WorkerContact {
+function makeMember(
+  overrides: Partial<TeamMember> & { workerId?: string } = {},
+): TeamMember {
+  const memberId = overrides.memberId ?? overrides.workerId ?? "w1";
+  const { workerId: _workerId, memberId: _memberId, ...rest } = overrides;
   return {
-    workerId: "w1",
+    memberId,
     role: "coder",
-    workspace: "/tmp/test",
-    branch: "feature/test",
-    imChannel: "test-channel",
-    allowedActions: [],
+    channel: "test-channel",
+    metadata: {
+      workspace: "/tmp/test",
+      branch: "feature/test",
+    },
     status: "active",
-    ...overrides,
+    ...rest,
   };
 }
 
@@ -159,7 +164,7 @@ describe("master merge queue adapter — buildChecklist", () => {
 describe("master merge queue adapter — computeMergeReadiness", () => {
   it("marks worker ready when all gates pass", () => {
     const input: WorkerMergeInput = {
-      contact: makeContact({ workerId: "w1" }),
+      member: makeMember({ workerId: "w1" }),
       handoffEvidence: makeHandoffEvidence(),
       branchSnapshot: {
         noConflicts: true,
@@ -178,7 +183,7 @@ describe("master merge queue adapter — computeMergeReadiness", () => {
 
   it("marks worker not ready when typecheck fails", () => {
     const input: WorkerMergeInput = {
-      contact: makeContact({ workerId: "w2" }),
+      member: makeMember({ workerId: "w2" }),
       handoffEvidence: makeHandoffEvidence({
         gates: { typecheck: "FAIL", build: "PASS", test: "PASS" },
       }),
@@ -198,7 +203,7 @@ describe("master merge queue adapter — computeMergeReadiness", () => {
 
   it("marks worker not ready with no inputs (all gates fail)", () => {
     const input: WorkerMergeInput = {
-      contact: makeContact({ workerId: "w3" }),
+      member: makeMember({ workerId: "w3" }),
     };
     const result = computeMergeReadiness(input);
     expect(result.ready).toBe(false);
@@ -210,7 +215,7 @@ describe("master merge queue adapter — computeMergeQueue", () => {
   it("sorts merge order by priority", () => {
     const tickets = makeTickets();
     const input: WorkerMergeInput = {
-      contact: makeContact({ workerId: "w1" }),
+      member: makeMember({ workerId: "w1" }),
       handoffEvidence: makeHandoffEvidence(),
       branchSnapshot: {
         noConflicts: true,
@@ -231,7 +236,7 @@ describe("master merge queue adapter — computeMergeQueue", () => {
   it("separates ready and blocked workers", () => {
     const tickets = makeTickets();
     const readyWorker: WorkerMergeInput = {
-      contact: makeContact({ workerId: "ready-1" }),
+      member: makeMember({ workerId: "ready-1" }),
       ticketSlug: "runtime-tool-policy",
       handoffEvidence: makeHandoffEvidence(),
       branchSnapshot: {
@@ -243,7 +248,7 @@ describe("master merge queue adapter — computeMergeQueue", () => {
       },
     };
     const blockedWorker: WorkerMergeInput = {
-      contact: makeContact({ workerId: "blocked-1" }),
+      member: makeMember({ workerId: "blocked-1" }),
     };
     const result = computeMergeQueue([readyWorker, blockedWorker], tickets);
     expect(result.readyWorkers).toEqual(["ready-1"]);
@@ -262,7 +267,7 @@ describe("master merge queue adapter — computeMergeQueue", () => {
   it("computes per-worker results with full checklists", () => {
     const tickets = makeTickets();
     const input: WorkerMergeInput = {
-      contact: makeContact({ workerId: "detail-worker" }),
+      member: makeMember({ workerId: "detail-worker" }),
       handoffEvidence: makeHandoffEvidence(),
       branchSnapshot: {
         noConflicts: true,
@@ -296,7 +301,7 @@ describe("master merge queue adapter — purity contract", () => {
 
   it("computeMergeReadiness is deterministic", () => {
     const input: WorkerMergeInput = {
-      contact: makeContact({ workerId: "det-worker" }),
+      member: makeMember({ workerId: "det-worker" }),
     };
     const r1 = computeMergeReadiness(input);
     const r2 = computeMergeReadiness(input);
@@ -309,7 +314,7 @@ describe("master merge queue adapter — purity contract", () => {
 describe("master merge queue adapter — edge hardening", () => {
   it("warning-only gates do not block merge readiness (rebasedOnMain)", () => {
     const input: WorkerMergeInput = {
-      contact: makeContact({ workerId: "warn-worker" }),
+      member: makeMember({ workerId: "warn-worker" }),
       handoffEvidence: makeHandoffEvidence(),
       branchSnapshot: {
         noConflicts: true,
@@ -330,7 +335,7 @@ describe("master merge queue adapter — edge hardening", () => {
 
   it("warning-only: workerRanGates does not block", () => {
     const input: WorkerMergeInput = {
-      contact: makeContact({ workerId: "no-self-gates" }),
+      member: makeMember({ workerId: "no-self-gates" }),
       handoffEvidence: makeHandoffEvidence({ gates: {} }),
       branchSnapshot: {
         noConflicts: true,
@@ -350,7 +355,7 @@ describe("master merge queue adapter — edge hardening", () => {
 
   it("warning-only: codeReviewed does not block", () => {
     const input: WorkerMergeInput = {
-      contact: makeContact({ workerId: "no-code-review" }),
+      member: makeMember({ workerId: "no-code-review" }),
       handoffEvidence: makeHandoffEvidence(),
       branchSnapshot: {
         noConflicts: true,
@@ -370,7 +375,7 @@ describe("master merge queue adapter — edge hardening", () => {
 
   it("missing handoff evidence causes blocked worker", () => {
     const input: WorkerMergeInput = {
-      contact: makeContact({ workerId: "no-handoff" }),
+      member: makeMember({ workerId: "no-handoff" }),
       branchSnapshot: {
         noConflicts: true,
         rebasedOnMain: true,
@@ -389,7 +394,7 @@ describe("master merge queue adapter — edge hardening", () => {
 
   it("missing branch snapshot causes blocked worker", () => {
     const input: WorkerMergeInput = {
-      contact: makeContact({ workerId: "no-branch" }),
+      member: makeMember({ workerId: "no-branch" }),
       handoffEvidence: makeHandoffEvidence(),
     };
     const result = computeMergeReadiness(input);
@@ -403,7 +408,7 @@ describe("master merge queue adapter — edge hardening", () => {
   it("blocked worker reason is readable (contains workerId and failure)", () => {
     const tickets = makeTickets();
     const blockedWorker: WorkerMergeInput = {
-      contact: makeContact({ workerId: "readable-blocked" }),
+      member: makeMember({ workerId: "readable-blocked" }),
     };
     const result = computeMergeQueue([blockedWorker], tickets);
     expect(result.blockedWorkers.length).toBe(1);
@@ -418,7 +423,7 @@ describe("master merge queue adapter — edge hardening", () => {
   it("blocked worker with multiple failures lists all in reason", () => {
     const tickets = makeTickets();
     const blockedWorker: WorkerMergeInput = {
-      contact: makeContact({ workerId: "multi-fail" }),
+      member: makeMember({ workerId: "multi-fail" }),
       handoffEvidence: makeHandoffEvidence({
         childLedgerStatus: "open",
         gates: { typecheck: "FAIL", build: "NOT_RUN", test: "NOT_RUN" },
@@ -446,7 +451,7 @@ describe("master merge queue adapter — edge hardening", () => {
   it("computeMergeQueue readyWorkers without ticketSlug go to end (unmapped)", () => {
     const tickets = makeTickets();
     const worker1: WorkerMergeInput = {
-      contact: makeContact({ workerId: "second-ready" }),
+      member: makeMember({ workerId: "second-ready" }),
       handoffEvidence: makeHandoffEvidence(),
       branchSnapshot: {
         noConflicts: true,
@@ -457,7 +462,7 @@ describe("master merge queue adapter — edge hardening", () => {
       },
     };
     const worker2: WorkerMergeInput = {
-      contact: makeContact({ workerId: "first-ready" }),
+      member: makeMember({ workerId: "first-ready" }),
       handoffEvidence: makeHandoffEvidence(),
       branchSnapshot: {
         noConflicts: true,
@@ -479,7 +484,7 @@ describe("master merge queue adapter — edge hardening", () => {
       { slug: "runtime-ticket", priority: "runtime_truth" as MergePriority },
     ];
     const lowPriorityWorker: WorkerMergeInput = {
-      contact: makeContact({ workerId: "low-prio" }),
+      member: makeMember({ workerId: "low-prio" }),
       ticketSlug: "tui-ticket",
       handoffEvidence: makeHandoffEvidence(),
       branchSnapshot: {
@@ -491,7 +496,7 @@ describe("master merge queue adapter — edge hardening", () => {
       },
     };
     const highPriorityWorker: WorkerMergeInput = {
-      contact: makeContact({ workerId: "high-prio" }),
+      member: makeMember({ workerId: "high-prio" }),
       ticketSlug: "runtime-ticket",
       handoffEvidence: makeHandoffEvidence(),
       branchSnapshot: {
@@ -513,7 +518,7 @@ describe("master merge queue adapter — edge hardening", () => {
       { slug: "mapped-tkt", priority: "runtime_truth" as MergePriority },
     ];
     const mappedWorker: WorkerMergeInput = {
-      contact: makeContact({ workerId: "mapped" }),
+      member: makeMember({ workerId: "mapped" }),
       ticketSlug: "mapped-tkt",
       handoffEvidence: makeHandoffEvidence(),
       branchSnapshot: {
@@ -525,7 +530,7 @@ describe("master merge queue adapter — edge hardening", () => {
       },
     };
     const unmappedWorker: WorkerMergeInput = {
-      contact: makeContact({ workerId: "unmapped" }),
+      member: makeMember({ workerId: "unmapped" }),
       handoffEvidence: makeHandoffEvidence(),
       branchSnapshot: {
         noConflicts: true,

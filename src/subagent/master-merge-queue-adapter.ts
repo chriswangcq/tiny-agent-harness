@@ -1,11 +1,11 @@
 // Master merge queue adapter.
 //
-// Pure adapter that converts explicit worker/contact/branch/gate snapshots
+// Pure adapter that converts explicit worker/member/branch/gate snapshots
 // into MasterReviewChecklist and merge readiness / queue results.
 // Reuses merge-protocol.ts domain functions; no copied gate logic.
 // No Date, process.env, fs, network, git, or process execution.
 
-import type { WorkerContact } from "./contact-registry.js";
+import type { TeamMember } from "./team-roster.js";
 import type {
   MasterReviewChecklist,
   MergeGateResult,
@@ -44,7 +44,7 @@ export interface MergeQueueTicket {
 
 /** Aggregate input for a single worker in the merge queue. */
 export interface WorkerMergeInput {
-  contact: WorkerContact;
+  member: TeamMember;
   /** Optional ticket slug that links this worker to a MergeQueueTicket for priority ordering. */
   ticketSlug?: string;
   handoffEvidence?: WorkerHandoffEvidence;
@@ -134,7 +134,7 @@ export function computeMergeReadiness(
   const checklist = buildChecklist(input.handoffEvidence, input.branchSnapshot);
   const gateResult = evaluateMergeGates(checklist);
   return {
-    workerId: input.contact.workerId,
+    workerId: input.member.memberId,
     checklist,
     gateResult,
     ready: gateResult.passed,
@@ -165,7 +165,7 @@ export function computeMergeQueue(
   const workerToTicket = new Map<string, string>();
   for (const w of workers) {
     if (w.ticketSlug) {
-      workerToTicket.set(w.contact.workerId, w.ticketSlug);
+      workerToTicket.set(w.member.memberId, w.ticketSlug);
     }
   }
 
@@ -186,11 +186,11 @@ export function computeMergeQueue(
   mergeOrder.forEach((slug, idx) => mergeOrderIndex.set(slug, idx));
 
   const readyWorkers = workers
-    .filter((w) => readyWorkerIds.has(w.contact.workerId))
+    .filter((w) => readyWorkerIds.has(w.member.memberId))
     .map((w) => {
       const ticketSlug = w.ticketSlug;
       const orderIdx = ticketSlug ? (mergeOrderIndex.get(ticketSlug) ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER;
-      return { workerId: w.contact.workerId, orderIdx };
+      return { workerId: w.member.memberId, orderIdx };
     })
     .sort((a, b) => a.orderIdx - b.orderIdx)
     .map((w) => w.workerId);

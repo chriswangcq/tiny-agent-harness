@@ -1,31 +1,98 @@
 # Sub-agent Team Domain
 
-本文记录 `src/subagent` 的当前边界。
+本文记录 `src/subagent` 的当前边界。这里的 team 是轻量控制平面：管理成员、任务、worker process lifecycle 和合并评审输入，不强制规定 workspace/git/ledger 策略。
 
 ## Decision
 
-Sub-agent team 目前是一个纯状态域，不是完整 sub-agent runtime。它不启动 worker process，不调模型，不调 MCP，也不写文件。它提供的是未来 sub-agent 服务需要复用的可测试 FSM：
+Sub-agent team 仍然优先保持纯状态域。它的核心不是“替 master 自动创建 17 个 workspace”，而是提供一个可测试、可审计、可恢复的团队事实模型：
 
 ```text
-SubAgentTeamEvent
-  -> applySubAgentTeamEvent(state, event)
-  -> next SubAgentTeamState | rejection | duplicate
+member roster events -> TeamRosterState
+task events          -> SubAgentTeamState
+lifecycle events     -> supervisor/lifecycle-events.jsonl
+display projections  -> TUI team dashboard
 ```
 
-这个设计先把任务、worker、分配、开始、完成、失败、取消、离线这些状态转移固定下来，避免未来接云端队列或 MCP worker 时把生命周期逻辑散落在外层服务里。
+Workspace、branch、child ledger、PR 流程是 assignment 指令或 worker evidence。它们可以放进 `TeamMember.metadata` 或 handoff evidence，但不是 roster 的必填 schema。
 
-## State
+## Team Roster
+
+`src/subagent/team-roster.ts` 是成员花名册 FSM。
 
 ```ts
-type SubAgentTeamState = {
-  teamId: string;
-  tasks: Record<string, SubAgentTask>;
-  workers: Record<string, SubAgentWorker>;
-  appliedEventIds: string[];
+type TeamMember = {
+  memberId: string;
+  role: string;
+  channel: string;
+  runId?: string;
+  assignment?: { id: string; title?: string; status?: string };
+  currentTask?: string;
+  status: "active" | "idle" | "stale" | "offline" | "terminated";
+  lastHeartbeat?: string;
+  lastEvidence?: string;
+  metadata?: Record<string, string>;
 };
 ```
 
-Task status：
+事件：
+
+```text
+member_added
+member_updated
+member_status_changed
+member_heartbeat
+member_terminated
+```
+
+Helper：
+
+- `createTeamRosterState(teamId)`
+- `applyTeamRosterEvent(state, event)`
+- `summarizeTeamRoster(state)`
+- `lookupMember(state, memberId)`
+- `listMembersByRole(state, role)`
+- `listMembersByStatus(state, status)`
+
+Valid transitions：
+
+| From | To |
+| --- | --- |
+| active | idle, stale, offline, terminated |
+| idle | active, stale, offline, terminated |
+| stale | active, idle, offline, terminated |
+| offline | active, idle, stale, terminated |
+| terminated | none |
+
+## Directory Store
+
+`src/subagent/directory-store.ts` stores `TeamRosterState` snapshots through explicit filesystem ports.
+
+```text
+~/.tiny-agent/projects/<projectId>/team/roster.json
+~/.tiny-agent/projects/<projectId>/team/events.jsonl
+~/.tiny-agent/projects/<projectId>/runs/<runId>/team/roster.json
+~/.tiny-agent/projects/<projectId>/runs/<runId>/team/events.jsonl
+```
+
+Snapshot:
+
+```ts
+type TeamDirectorySnapshot = {
+  schemaVersion: number;
+  teamId: string;
+  createdAt: string;
+  updatedAt: string;
+  roster: TeamRosterState;
+};
+```
+
+`createTeamDirectorySnapshot(state, now, createdAt?)` takes explicit time input. `readTeamDirectory` and `writeTeamDirectory` take an injected `FsPort`; the core module performs no hidden IO.
+
+## Team Task FSM
+
+`src/subagent/team.ts` tracks tasks and assignment lifecycle. It still uses `workerId` internally for task execution targets because lifecycle/process management is worker-oriented.
+
+Task status:
 
 ```text
 queued -> assigned -> running -> succeeded
@@ -34,503 +101,122 @@ assigned/running -> failed
 assigned/running -> cancelled
 ```
 
-Worker status：
+Reducers remain pure and idempotent by `eventId`.
 
-```text
-idle
-busy
-offline
-```
+## Team CLI
 
-`appliedEventIds` 用于幂等。重复 event id 返回 `duplicate`，不再次改变 state。
-
-## Events
-
-当前事件：
-
-```text
-task_submitted
-worker_registered
-task_assigned
-task_started
-task_succeeded
-task_failed
-task_cancelled
-worker_offline
-```
-
-事件必须带 `eventId`。外层 runtime 如果来自队列、MCP、webhook 或人工 UI，都应先构造明确事件，再交给 reducer。
-
-## Rejections
-
-非法转移不会修改 state，而是返回结构化 rejection：
-
-```text
-task_exists
-worker_exists
-unknown_task
-unknown_worker
-task_not_assignable
-task_not_startable
-task_not_completable
-task_terminal
-worker_not_available
-worker_task_mismatch
-```
-
-这对 AI-assisted maintenance 很重要：未来 agent 或服务扩展失败时，可以看到是哪个 transition 违反了 FSM，而不是靠日志猜。
-
-## Summary Helpers
-
-`summarizeSubAgentTeam(state)` 返回 counts 和 active assignments：
-
-```ts
-type SubAgentTeamSummary = {
-  teamId: string;
-  totalTasks: number;
-  totalWorkers: number;
-  tasksByStatus: Record<SubAgentTaskStatus, number>;
-  workersByStatus: Record<SubAgentWorkerStatus, number>;
-  activeAssignments: SubAgentAssignmentSummary[];
-};
-```
-
-`listActiveSubAgentAssignments(state)` 给 TUI、CLI 或 cloud adapter 展示当前分配。
-
-## Integration Boundary
-
-未来接 runtime 时应保持这个边界：
-
-```text
-CLI / MCP / cloud queue / local worker process
-  -> validate command/event envelope
-  -> load durable SubAgentTeamState
-  -> applySubAgentTeamEvent(...)
-  -> persist state + outbox atomically
-  -> publish effects outside reducer
-```
-
-不要在 reducer 内：
-
-- 读文件
-- 读时间
-- 调模型
-- 发网络请求
-- 启动进程
-- 写 transcript
-
-这些都是外层 adapter / service 的职责。
-
-## Current Scope
-
-已实现：
-
-- 纯 reducer (team FSM, contact registry FSM)
-- 合并协议纯域 (merge-protocol)：master review checklist、merge order、conflict policy、feedback loop、gate evaluation
-- duplicate event no-op
-- invalid transition rejection
-- worker offline 时释放/失败 active task
-- summary helpers
-- root barrel export
-- Contact Registry (P6-01) — worker contact FSM
-- Directory Store (P6-02) — durable persistence with explicit ports
-- Team CLI (P6-03) — `tiny-agent team contact` and `tiny-agent team task` subcommands
-- Local Worker Launcher (P6-04) — local worker spawn with explicit effects
-- Status Projector (P6-05) — pure worker status derivation from snapshots
-- Worker Handoff Evidence Contract (P6-06) — typed handoff schema and gate derivation
-- 单元测试覆盖 happy path、failure、cancel、duplicate、invalid assignment、offline 和 summary
-
-未实现：
-
-- cloud queue
-- MCP wrapper
-- TUI sub-agent dashboard (P6-08 pending)
-- 自动任务拆分/调度策略
-
-当前状态：P6-01 到 P6-06 已合入，提供完整的 contact registry、directory store、team CLI、local worker launcher、status projector 和 worker handoff evidence contract。P6-07/P6-08/P6-09 仍在进行或等待中。
-
-See [subagent-team-operating-guide.md](subagent-team-operating-guide.md) for usage and operating instructions.
-P6-01 added `src/subagent/contact-registry.ts` — a pure domain module for team contact / personnel directory. This is durable runtime truth, not TUI state.
-
-### WorkerContact
-
-Each worker record includes:
-- `workerId` — unique identity
-- `role` — coder, reviewer, master, etc.
-- `workspace` — filesystem path
-- `branch` — git branch
-- `runId` — current agent run id
-- `imChannel` — IM channel for communication
-- `ledgerId` — child ledger id
-- `ticket` — { id, title, status }
-- `currentTask` — human-readable task description
-- `status` — WorkerContactStatus: active | idle | stale | offline | terminated
-- `lastHeartbeat` — ISO timestamp
-- `lastEvidence` — ISO timestamp of last work output
-- `allowedActions` — set of allowed action categories
-
-### Events
-
-```
-worker_registered → worker_updated → worker_status_changed → worker_heartbeat → worker_terminated
-```
-
-### Pure helpers
-
-- `createContactRegistryState(registryId)` — init
-- `applyContactRegistryEvent(state, event)` — pure FSM reducer with duplicate detection and invalid transition rejection
-- `summarizeContactRegistry(state)` — summary with status/role counts and active workers
-- `lookupWorker(state, workerId)` — direct lookup
-- `listWorkersByRole(state, role)` / `listWorkersByStatus(state, status)` — filtered queries
-
-### Valid transitions
-
-| From | To |
-| --- | --- |
-| active | idle, stale, offline, terminated |
-| idle | active, stale, offline, terminated |
-| stale | active, idle, offline, terminated |
-| offline | active, idle, stale, terminated |
-| terminated | (none) |
-
-### Integration boundary
-
-Do not implement durable store, CLI, worker launcher, or TUI dashboard in this module. Those belong to P6-02/P6-03/P6-04/P6-08. The contact registry provides the pure state shape and FSM that those services consume.
-
-
-## Directory Store (P6-02)
-
-P6-02 adds `src/subagent/directory-store.ts` — a durable persistence layer for the contact registry with explicit ports.
-
-### Layout boundary
-
-| Scope | Path | Purpose |
-|-------|------|---------|
-| Project-scoped | `~/.tiny-agent/projects/<projectId>/team/contact-registry.json` | Cross-run team registry snapshot |
-| Project-scoped | `~/.tiny-agent/projects/<projectId>/team/events.jsonl` | Team-level event log |
-| Run-scoped | `~/.tiny-agent/projects/<projectId>/runs/<runId>/team/contact-registry.json` | Per-run team state snapshot |
-| Run-scoped | `~/.tiny-agent/projects/<projectId>/runs/<runId>/team/events.jsonl` | Per-run team event log |
-
-Project-scoped registry persists across runs; run-scoped state stays self-contained under `runs/<runId>/` per the state-layout contract.
-
-### Explicit dependency ports
-
-- **Time**: `createTeamDirectorySnapshot(state, now)` takes explicit ISO timestamp input. No hidden `new Date()`.
-- **Filesystem**: `readTeamDirectory(fs, layout)` and `writeTeamDirectory(fs, layout, snapshot)` take an `FsPort` with `readFile`, `writeFile`, `mkdir`. The in-memory `createInMemoryFsPort()` is provided for testing. Production Node FS adapters live outside this module; consumers inject the FsPort.
-
-### Three layers
-
-1. **Path planner** — pure functions `planTeamDirectoryLayout(stateRoot)` and `planRunScopedTeamPaths(stateRoot, runId)`. No IO, no side effects.
-
-2. **Snapshot schema** — `TeamDirectorySnapshot` wrapping `ContactRegistryState` plus `schemaVersion`, `registryId`, `createdAt`, `updatedAt`. Validation via `validateTeamDirectorySnapshot()`.
-
-3. **Repository** — async `readTeamDirectory` and `writeTeamDirectory` with graceful error handling and automatic directory creation.
-
-### Integration boundary
-
-This module does NOT implement: CLI, worker launcher, TUI dashboard, file locking, or Node FS adapter. P6-03/P6-04/P6-08 consume these interfaces.
-
-## Team CLI (P6-03)
-
-`tiny-agent team` is a CLI surface for team task and contact management.
-All subcommands output JSON envelope (`ok`, `tool`, `version`, `cwd`).
-
-### Contact subcommands
+Current CLI surface:
 
 ```bash
-# List all registered workers
-tiny-agent team contact list
+tiny-agent team create <teamId>
 
-# Show worker details
-tiny-agent team contact show <workerId>
+tiny-agent team member list [--role <role>] [--status <status>]
+tiny-agent team member show <memberId>
+tiny-agent team member add <memberId> <role> <channel> [--metadata <json>]
+tiny-agent team member update <memberId> --json <patch>
+tiny-agent team member status <memberId> <status>
+tiny-agent team member heartbeat <memberId> [--evidence <text>]
+tiny-agent team member terminate <memberId> [--reason <text>]
 
-# Register a new worker
-tiny-agent team contact register <workerId> <role> <workspace> <branch> <imChannel> [allowedAction...]
-
-# Update worker fields (JSON patch)
-tiny-agent team contact update <workerId> --json '{"currentTask":"Inspect issue"}'
-
-# Change worker status
-tiny-agent team contact status <workerId> <active|idle|stale|offline|terminated>
-
-# Record heartbeat (now)
-tiny-agent team contact heartbeat <workerId>
-
-# Terminate a worker
-tiny-agent team contact terminate <workerId>
-```
-
-### Task subcommands
-
-```bash
-# Create a new task
 tiny-agent team task create <taskId> <title>
-
-# List all tasks and summary
-tiny-agent team task list
-
-# Show task details
-tiny-agent team task show <taskId>
-
-# Assign task to worker (worker must be registered)
-tiny-agent team task assign <taskId> <workerId>
-
-# Start task execution
+tiny-agent team task assign <taskId> <memberId>
 tiny-agent team task start <taskId>
-
-# Mark task as succeeded (optional JSON output)
 tiny-agent team task succeed <taskId> [--output <json>]
-
-# Mark task as failed
 tiny-agent team task fail <taskId> <error>
-
-# Cancel a task
 tiny-agent team task cancel <taskId> [reason]
 ```
 
-### Architecture notes
+There is no compatibility path for removed roster command names.
 
-- **Contact state**: backed by P6-01 `contact-registry.ts` pure FSM; persisted through P6-02 `directory-store.ts` project-scoped layout.
-- **Task state**: backed by `team.ts` pure FSM; currently in-memory only. Persistent task state is a future durable task-store concern.
-- **CLI service layer**: `src/subagent/team-cli.ts` — pure command parsing and handler functions.
-- **Binary entry**: `src/cli/team-entry.ts` and `src/cli/team-run.ts`.
-- **Integration**: routed through `src/cli/main.ts` as `tiny-agent team ...`.
+## Local Worker Launcher
 
+`src/subagent/local-worker-launcher.ts` is an optional adapter for local worker processes. It can receive explicit `workspace`, `branch`, and `allowedActions` inputs because launching a local process may need them. When it writes to the roster, those facts are stored as `member.metadata`; they do not become required roster fields.
 
-## Local Worker Launcher (P6-04)
+Launch effects are injected:
 
-P6-04 adds `src/subagent/local-worker-launcher.ts` — a local worker launcher domain with explicit ports.
+- `SpawnPort`
+- `GitPort`
+- `Clock`
+- `IdGenerator`
+- `RosterStorePort`
+- `WorkerStatePort`
 
-This is a **local runtime/CLI launcher**, not a provider-native sub-agent tool. It provides:
+Failure stages use current member terms:
 
-- Pure planning functions: `planRunScopedWorkerPaths`, `planWorkerLaunch`, `buildSpawnCommand`
-- Explicit effect ports: `SpawnPort`, `GitPort`, `Clock`, `IdGenerator`, `ContactStorePort`
-- An async `launchLocalWorker(plan, effects)` orchestrator that executes launch steps:
-  1. Register worker contact via `worker_registered` event (idempotent)
-  2. Checkout target branch via git port
-  3. Spawn worker process (`node dist/cli/main.js run`) via spawn port
-  4. Update worker runId/currentTask via `worker_updated` event
-  5. Set worker status to `active` via `worker_status_changed` event
-- Structured result: `WorkerLaunchSuccess` or `WorkerLaunchFailure` with exact failure stage (`checkout`, `spawn`, `contact_register`, `contact_update`, `contact_status`) and evidence (branch, registeredEventId, runId, spawnResult, failedAt)
-- All inputs explicit: no hidden `Date`, env, filesystem, or network reads
-- Tests use fake ports only (no real git/process/clock/network)
-
-### Integration boundary
-
-- Consumes P6-01 `contact-registry` types and FSM
-- Does NOT implement durable file storage — that is P6-02's responsibility
-- Does NOT implement CLI entry points — launch is invoked programmatically
-- Does NOT start real processes in tests — only fake spawn/git/contact ports
-
-## Status Projector (P6-05)
-
-P6-05 adds `src/subagent/status-projector.ts` — a pure status projector that derives worker status from explicit input snapshots. It is consumed by the master agent and TUI projection layer, not by another orchestrator.
-
-### Design
-
-- **Pure function**: `projectWorkerStatus(input)` takes explicit snapshots and returns a deterministic `WorkerStatusProjection`. No `Date.now()`, `fs`, network, random, or ambient environment access.
-- **Explicit inputs**: `WorkerContact`, optional `RunSnapshot`, `ImSnapshot`, `LedgerSnapshot`, `LifecycleTemplate`, and `ProjectorConfig` (explicit `now` ISO timestamp and age thresholds).
-- **Output**: `status` classification, `reason`, per-source `evidence` with timestamps and computed age, `riskFlags`, and `projectedAt`.
-- **Status priority**: terminated > offline > done > stuck > degraded > idle > healthy > unknown.
-- **Risk flags**: `stale_heartbeat`, `missing_heartbeat`, `missing_evidence`, `stale_evidence`, `im_silence`, `ledger_stall`, `run_stall`.
-- **"done" requires multiple signals**: run must be explicitly `finished` or ledger must show zero open problems with no risk flags. A single IM or display event cannot trigger false "done".
-- **Lifecycle templates** allow per-role heartbeat thresholds (e.g., master checks in every 10 min, coder every 1 min).
-
-### Integration boundary
-
-- Consumes P6-01 `WorkerContact` type.
-- Does NOT implement IM reading, transcript reading, ledger reading, or filesystem access — those snapshots are provided as explicit inputs by the caller.
-- Does NOT determine merge readiness — that is a separate concern.
-- The projector is exported from `src/subagent/index.ts`.
-
-### Testing
-
-Tests in `tests/subagent-status-projector.test.ts` cover: healthy, idle, offline, terminated, stale heartbeat, missing evidence, IM silence, run stall, ledger stall, stuck (multiple flags), done, false done avoidance, lifecycle thresholds, age computation, purity contract, and barrel export.
-
-## Worker Handoff Evidence Contract
-
-`src/subagent/worker-handoff-evidence.ts` defines the typed schema, parser, validator, and normalizer for worker handoff evidence that every coder/QA final report must include.
-
-### Evidence Fields
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `childLedgerId` | `string` | Yes | Unique child ledger identifier |
-| `childLedgerStatus` | `"open" \| "closed" \| "missing"` | Yes | Ledger status; must be "closed" |
-| `commit` | `string \| null` | Yes | Git commit hash |
-| `branch` | `string` | Yes | Git branch |
-| `workspace` | `string` | Yes | Absolute workspace path |
-| `changedFiles` | `string[]` | Yes | Files changed/added/removed |
-| `commands` | `string[]` | No | Commands executed as gates |
-| `gates` | `Record<string, GateResult>` | Yes | Per-gate PASS/FAIL/NOT_RUN |
-| `overallResult` | `"PASS" \| "FAIL"` | Yes | Overall handoff verdict |
-| `residualRisk` | `string` | Yes | Human-readable risk assessment |
-| `mergeRecommendation` | `"approve" \| "reject" \| "needs_review"` | Yes | QA merge recommendation |
-| `timestamp` | `string` | No | ISO-8601 timestamp |
-| `reviewer` | `string` | No | Reviewer identifier |
-
-### Required Gates
-
-Every handoff must report: `typecheck`, `build`, `test`.
-
-### Pure Functions
-
-- `normalizeWorkerHandoffEvidence(input)` — Normalize from text or partial object
-- `parseHandoffText(text)` — Parse free-form IM/outbox/report text
-- `validateHandoffEvidence(evidence)` — Validate against required contract
-- `deriveGatesFromEvidence(evidence)` — Bridge to `MasterReviewChecklist` gates
-- `summarizeHandoffEvidence(evidence)` — Human-readable summary for IM/TUI
-
-### Final IM Format
-
-When sending a final report via IM, use `--text-stdin` with a file redirect or safe heredoc:
-
-```bash
-node dist/cli/main.js im send \
-  --channel <channel> \
-  --kind status \
-  --text-stdin < /path/to/report.txt
+```text
+checkout
+spawn
+worker_state
+member_add
+member_update
+member_status
 ```
 
-For long reports, prefer file redirection over inline text to avoid shell escaping issues.
+## Lifecycle Runtime
 
-### Bridge to Merge Protocol
+`src/subagent/lifecycle-runtime-adapter.ts` consumes explicit snapshots:
 
-`deriveGatesFromEvidence()` converts handoff evidence into a subset of `MasterReviewChecklist` gates (`workerReported`, `runCompleted`, `typecheckPasses`, `buildPasses`, `testsPass`, `workerRanGates`), which can be merged into the master's checklist before merge gate evaluation.
-
-## Master Merge Queue Adapter (P6-07)
-
-P6-07 adds `src/subagent/master-merge-queue-adapter.ts` — a pure adapter that converts explicit worker/contact/branch/gate snapshots into `MasterReviewChecklist` and merge readiness / queue results.
-
-### Design
-
-- **Pure adapter**: takes explicit input snapshots (`WorkerContact`, `WorkerHandoffEvidence`, `BranchSnapshot`, `MergeQueueTicket`) and returns structured output. No `Date.now()`, `process.env`, `fs`, network, `git`, or process execution.
-- **Reuses merge-protocol.ts**: evaluates gates via `evaluateMergeGates()`, sorts merge priority via `sortByMergePriority()`, and checks merge eligibility via `canMergeNow()`. No gate logic is duplicated.
-- **Explicit inputs**: all data is provided as function arguments; the adapter does not read state from the environment.
-
-### Input types
-
-| Type | Description |
-|------|-------------|
-| `BranchSnapshot` | Branch state: `noConflicts`, `rebasedOnMain`, `diffReviewable`, `noRevertOfOthers`, `codeReviewed`. |
-| `MergeQueueTicket` | Ticket with `slug` and `priority` for merge ordering. |
-| `WorkerMergeInput` | Per-worker aggregate: `contact`, optional `handoffEvidence`, optional `branchSnapshot`. |
-
-### Output types
-
-| Type | Description |
-|------|-------------|
-| `WorkerMergeReadiness` | Per-worker: `checklist`, `gateResult`, `ready` flag. |
-| `MergeQueueResult` | Aggregate: `workerResults`, `mergeOrder` (sorted ticket slugs), `readyWorkers`, `blockedWorkers` (with reasons). |
-
-### Pure functions
-
-- `buildChecklist(handoffEvidence?, branchSnapshot?)` — builds `MasterReviewChecklist` by merging `EvidenceDerivedGates` from `deriveGatesFromEvidence()` with explicit `BranchSnapshot` gates.
-- `computeMergeReadiness(input)` — evaluates merge gates for a single worker.
-- `computeMergeQueue(workers, tickets)` — computes per-worker readiness and merge order.
-- `createDefaultBranchSnapshot()` — returns all-false default branch snapshot.
-- Re-exports `canMergeNow` from `merge-protocol.ts`.
-
-### Integration boundary
-
-- Consumes P6-01 `WorkerContact` type.
-- Consumes P6-01 `worker-handoff-evidence` types and `deriveGatesFromEvidence()`.
-- Consumes P6-01 `merge-protocol` domain functions.
-- Does NOT implement: runtime git checks, real typecheck/build/test execution, IM reporting, durable persistence.
-
-### Testing
-
-Tests in `tests/subagent-master-merge-queue-adapter.test.ts` cover:
-- `createDefaultBranchSnapshot` returns all false.
-- `buildChecklist` with no inputs, handoff evidence, branch snapshot, and both.
-- `computeMergeReadiness` for ready and blocked workers.
-- `computeMergeQueue` for sort order, ready/blocked separation, empty input, per-worker checklist output.
-- Purity contract: deterministic output for same inputs.
-
-## Supervisor Lifecycle (P6-08 TUI/Docs)
-
-P6-08 adds supervisor lifecycle projections and TUI dashboard integration:
-
-### Leases
-
-Supervisor manages leases for worker resources. A lease binds a holder (worker or supervisor) to a resource for a time window.
-
-```
-SupervisorLease {
-  leaseId: string
-  holder: string (workerId or supervisorId)
-  resource: string (taskId, runId, or resource key)
-  acquiredAt: ISO timestamp
-  expiresAt: ISO timestamp
-  renewedAt?: ISO timestamp
-  status: "active" | "expired" | "released"
-}
+```ts
+type TeamSnapshot = {
+  rosterState: TeamRosterState;
+  supervisorEvents: SupervisorLifecycleEvent[];
+  createdAt: string;
+  runId: string;
+  processExistence?: Record<string, boolean>;
+};
 ```
 
-### Heartbeat Cadence
+It provides:
 
-Workers send heartbeats at a configured interval (`heartbeatCadenceMs`). The status projector uses `expectedHeartbeatIntervalMs` from the lifecycle template or falls back to `heartbeatMaxAgeMs` from projector config to detect stale heartbeats.
+- `recordHeartbeat`
+- `enumerateWorkers`
+- `runReaper`
+- `requestShutdown`
 
-### Stale-Run Reaper
+The worker lifecycle layer keeps `workerId` in supervisor events because it manages worker processes under `runs/<runId>/workers/<workerId>/`.
 
-`identifyStaleWorkers(input: StaleRunReaperInput)` is a pure function that scans worker contacts to identify workers with missing or stale heartbeats based on heartbeat timestamp and evidence age. It does not accept or process run snapshots — run-based stale detection requires explicit worker/run association provided by the caller. In dry-run mode, stale entries are computed but `reapable` is empty. When not dry-run, `reapable` lists workers that should be reaped.
+## Status Projector
 
-### Unified Shutdown
+`src/subagent/status-projector.ts` derives worker health from explicit snapshots:
 
-`deriveUnifiedShutdown(workers, runs, phase, now)` projects the supervisor shutdown state across four phases:
+- `member: TeamMember`
+- optional run snapshot
+- optional IM snapshot
+- optional ledger snapshot
+- optional lifecycle template
+- explicit config with `now`
 
-- **active**: Normal operation, no shutdown in progress.
-- **draining**: Accepting no new work, existing workers completing.
-- **shutting_down**: Workers are being terminated.
-- **stopped**: All workers terminated or offline.
+It has no hidden clock, filesystem, network, or env reads. `done` requires corroboration from run finished or clean ledger plus zero risk flags.
 
-### Dry-Run Behavior
+## TUI Dashboard
 
-All lifecycle projections support dry-run semantics. `dryRun: true` in `StaleRunReaperInput` or the dashboard `SupervisorLifecycleInput` computes and displays projections without emitting actions. The TUI dashboard shows a `Dry Run: ON` warning status.
+`src/tui/team-dashboard-view-model.ts` projects:
 
-### Safe Recovery
+- `team-overview`
+- `team-roster`
+- `active-tasks`
+- `run-status`
+- `merge-qa`
+- `supervisor-lifecycle`
 
-Recovery readiness (`recoveryReady: boolean`) is exposed in the supervisor lifecycle dashboard section. When true, the supervisor has sufficient durable state (contact registry, run snapshots, ledger state) to recover worker state after a supervisor restart.
+The TUI is a display/control surface, not another orchestrator. Display redaction remains display-only and must not feed back into runtime prompt/model context.
 
-### Lifecycle Audit Visibility
+## Merge Queue
 
-The team dashboard can display a worker-scoped lifecycle audit projection for heartbeat, lease, reaper, and shutdown events:
+`src/subagent/master-merge-queue-adapter.ts` consumes explicit member, handoff evidence, and branch snapshots. Branch and workspace are evidence/merge facts, not roster requirements.
 
-- `heartbeat_recorded` and `worker_heartbeat` show the latest liveness facts for a worker.
-- `lease_acquired`, `lease_renewed`, and `lease_expired` show the lease chain for worker resources.
-- `reaper_planned`, `reaper_executed`, and `reaper_skipped` show stale-worker cleanup intent and outcome.
-- `shutdown_requested`, `shutdown_draining`, `shutdown_completed`, and `shutdown_failed` show shutdown intent, progress, and failure reasons.
+## Testing Contract
 
-The TUI view model consumes these as display projections (`auditEvents`) and renders stable row keys, severity, bounded text, and display-only redaction. It does not read lifecycle JSONL directly, decide whether a worker is stale, or execute reaper/shutdown effects.
+Key tests:
 
-The adapter from durable runtime state to display projection is `RunLifecycleAuditReader` in `src/tui/lifecycle-audit-projection.ts`. It tails `~/.tiny-agent/projects/<projectId>/runs/<runId>/supervisor/lifecycle-events.jsonl` by byte offset, validates supervisor lifecycle events, and returns `state.auditEvents` that can be passed directly into `SupervisorLifecycleInput.auditEvents`. The reader is a TUI boundary adapter; the pure `projectLifecycleAuditEvents()` function handles only typed event-to-display mapping.
+- `tests/subagent-team-roster.test.ts`
+- `tests/subagent-directory-store.test.ts`
+- `tests/team-cli.test.ts`
+- `tests/subagent-local-worker-launcher.test.ts`
+- `tests/subagent-lifecycle-runtime-adapter.test.ts`
+- `tests/subagent-lifecycle-cli-adapter.test.ts`
+- `tests/tui-team-dashboard-view-model.test.ts`
 
-## Run-Scoped Lifecycle Adapter (P6-09)
+These tests pin the current rule: team creation manages members; isolation strategy is carried by instructions, metadata, or evidence.
 
-P6-09 wires `team lifecycle ...` to real run-scoped runtime state instead of a fresh in-memory contact registry.
-
-Active state paths:
-
-- Team contact snapshot: `~/.tiny-agent/projects/<projectId>/runs/<runId>/team/contact-registry.json`
-- Supervisor audit events: `~/.tiny-agent/projects/<projectId>/runs/<runId>/supervisor/lifecycle-events.jsonl`
-- Worker process state: `~/.tiny-agent/projects/<projectId>/runs/<runId>/workers/<workerId>/state.json` written by the local worker launcher after spawn succeeds, then read by lifecycle shutdown/reaper execute.
-- Worker spawn commands pass `--state-dir ~/.tiny-agent/projects/<projectId>` explicitly so child tiny-agent runs do not inherit a parent PTY's run-scoped `TAH_STATE_DIR`.
-
-Run selection:
-
-- Prefer passing `--run <runId>` from supervisors and scripts so audit actions are explicit.
-- `--run latest` or an omitted `--run` resolves to the latest `run-*` directory under `~/.tiny-agent/projects/<projectId>/runs` using the adapter's run listing port.
-
-Command behavior:
-
-- `team lifecycle lease <workerId> --run <runId>` records `heartbeat_recorded`, acquires or renews a `worker-lease`, and updates the run-scoped contact registry heartbeat.
-- `team lifecycle reaper --run <runId>` is dry-run by default. It enumerates stale workers from the run-scoped snapshot and returns planned actions without process effects.
-- `team lifecycle reaper --run <runId> --execute` reads each stale worker process state, calls the injected process shutdown port, and appends `reaper_planned`, `shutdown_requested`, `shutdown_completed` or `shutdown_failed`, and `reaper_executed`.
-- `team lifecycle shutdown <workerId> --run <runId> --execute` performs the same explicit process boundary for one worker. Missing worker PID is a structured `SHUTDOWN_FAILED` result and is recorded in supervisor audit events.
-
-CLI discoverability:
-
-- `tiny-agent --help` lists `tiny-agent team <group>` and the `team lifecycle <subcommand>` group.
-- `tiny-agent team --help` lists `team lifecycle lifecycle-status`, `lease`, `reaper`, and `shutdown` alongside the contact/task groups.
-
-The adapter reuses `createRuntimeAdapter` for lifecycle decisions and existing supervisor/directory stores for persistence. The old in-memory `--workers-json` lifecycle dispatcher was removed; normal operator paths use the run-scoped adapter through `team lifecycle`.
+See [subagent-team-operating-guide.md](subagent-team-operating-guide.md) for practical usage.

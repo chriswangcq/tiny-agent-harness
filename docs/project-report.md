@@ -283,21 +283,21 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 #### Supervisor store
 
-`src/subagent/supervisor-store.ts` 定义 supervisor lifecycle 事件类型（`worker_registered`、`worker_status_changed`、`worker_heartbeat`、`worker_terminated`、`lease_*`、`heartbeat_recorded`、`shutdown_*`、`reaper_*`）和 run-scoped 路径规划。事件按 append-only JSONL 写入 `~/.tiny-agent/projects/<projectId>/runs/<runId>/supervisor/lifecycle-events.jsonl`，snapshot 写入 `supervisor/snapshot.json`。
+`src/subagent/supervisor-store.ts` 定义 supervisor lifecycle 事件类型（`member_added`、`member_status_changed`、`member_heartbeat`、`member_terminated`、`lease_*`、`heartbeat_recorded`、`shutdown_*`、`reaper_*`）和 run-scoped 路径规划。事件按 append-only JSONL 写入 `~/.tiny-agent/projects/<projectId>/runs/<runId>/supervisor/lifecycle-events.jsonl`，snapshot 写入 `supervisor/snapshot.json`。
 
 #### Lifecycle runtime adapter
 
-`src/subagent/lifecycle-runtime-adapter.ts` 是纯 adapter，接收显式 `TeamSnapshot`（含 `processExistence?: Record<string, boolean>`）和注入 port（时钟、事件追加、进程 shutdown、contact event），提供 `recordHeartbeat`、`enumerateWorkers`、`runReaper`、`requestShutdown`。它内部调用 `supervisor-lifecycle.ts` 的纯决策函数（`interpretHeartbeat`、`evaluateLease`、`computeLifecycleState`、`decideReaperAction`）来推导 `WorkerLifecycleState`（healthy / stale / expired / grace_period / shutdown / terminated / missing_process / unknown）。
+`src/subagent/lifecycle-runtime-adapter.ts` 是纯 adapter，接收显式 `TeamSnapshot`（含 `rosterState` 与 `processExistence?: Record<string, boolean>`）和注入 port（时钟、事件追加、进程 shutdown、roster event），提供 `recordHeartbeat`、`enumerateWorkers`、`runReaper`、`requestShutdown`。它内部调用 `supervisor-lifecycle.ts` 的纯决策函数（`interpretHeartbeat`、`evaluateLease`、`computeLifecycleState`、`decideReaperAction`）来推导 `WorkerLifecycleState`（healthy / stale / expired / grace_period / shutdown / terminated / missing_process / unknown）。
 
-CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-agent team --help` 暴露 `team lifecycle lifecycle-status|lease|reaper|shutdown`，对应的 effect boundary 仍在 `src/subagent/lifecycle-cli-adapter.ts`，不绕过 run-scoped registry 和 supervisor JSONL。
+CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-agent team --help` 暴露 `team create|member|task|lifecycle`，对应的 effect boundary 仍在 `src/subagent/lifecycle-cli-adapter.ts`，不绕过 run-scoped roster 和 supervisor JSONL。
 
-**Reaper shutdown chain**: the `runReaper` adapter function identifies stale active workers (heartbeat age past threshold, contact status not `terminated` or `offline`). For each stale worker it emits a `shutdown_requested` lifecycle event, attempts graceful shutdown, then records `shutdown_completed` or `shutdown_failed`. Successful shutdown marks the worker contact status `terminated`. This unified chain ensures stale workers are cleanly retired and do not accumulate in the team snapshot.
+**Reaper shutdown chain**: the `runReaper` adapter function identifies stale active workers (heartbeat age past threshold, member status not `terminated` or `offline`). For each stale worker it emits a `shutdown_requested` lifecycle event, attempts graceful shutdown, then records `shutdown_completed` or `shutdown_failed`. Successful shutdown marks the roster member status `terminated`. This unified chain ensures stale workers are cleanly retired and do not accumulate in the team snapshot.
 
 **Process existence 是 adapter-boundary snapshot input。** `TeamSnapshot.processExistence` 是 `Record<string, boolean>`，由外层（worker launcher spawn 后写入 `workers/<workerId>/state.json`，或 CLI adapter 在 reaper/shutdown 执行前读取 OS process table）注入 adapter。Lifecycle 决策层不自己读 `/proc` 或调用 `process.kill`——它只消费注入的 boolean snapshot 并推导 `missing_process` 状态。
 
 #### Status projector
 
-`src/subagent/status-projector.ts` 是纯函数 `projectWorkerStatus(input)`，从显式输入 snapshot（`WorkerContact`、可选的 `RunSnapshot`、`ImSnapshot`、`LedgerSnapshot`、`LifecycleTemplate` 和显式 `now` ISO timestamp）推导 `WorkerStatusCode`（healthy / degraded / stuck / idle / offline / done / terminated / unknown）。输出包含 risk flags（`stale_heartbeat`、`missing_evidence`、`im_silence`、`ledger_stall`、`run_stall`），供 master agent 和 TUI 消费。
+`src/subagent/status-projector.ts` 是纯函数 `projectWorkerStatus(input)`，从显式输入 snapshot（`TeamMember`、可选的 `RunSnapshot`、`ImSnapshot`、`LedgerSnapshot`、`LifecycleTemplate` 和显式 `now` ISO timestamp）推导 `WorkerStatusCode`（healthy / degraded / stuck / idle / offline / done / terminated / unknown）。输出包含 risk flags（`stale_heartbeat`、`missing_evidence`、`im_silence`、`ledger_stall`、`run_stall`），供 master agent 和 TUI 消费。
 
 #### Worker 进程状态
 
@@ -509,13 +509,13 @@ capability as CLI
 
 ## Status Projector
 
-`src/subagent/status-projector.ts` provides a pure-function worker status projector: `projectWorkerStatus(input: ProjectorInput): WorkerStatusProjection`. It derives a `WorkerStatusCode` (`healthy` | `degraded` | `stuck` | `idle` | `offline` | `done` | `terminated` | `unknown`) from explicit input snapshots (contact, run, IM, ledger), a lifecycle template, and an explicit `now` ISO timestamp in `ProjectorConfig`.
+`src/subagent/status-projector.ts` provides a pure-function worker status projector: `projectWorkerStatus(input: ProjectorInput): WorkerStatusProjection`. It derives a `WorkerStatusCode` (`healthy` | `degraded` | `stuck` | `idle` | `offline` | `done` | `terminated` | `unknown`) from explicit input snapshots (member, run, IM, ledger), a lifecycle template, and an explicit `now` ISO timestamp in `ProjectorConfig`.
 
 Key design properties:
 - **No side effects**: zero `Date.now()`, `new Date()`, `process.env`, `fs`, or network calls. Timestamp parsing uses a RegExp-based UTC ISO 8601 parser with `Date.UTC` and no clock read.
 - **Invalid input is guarded**: unrecognised timestamps produce 0 ms (treated as missing evidence) instead of NaN propagation.
 - **Evidence and risk flags**: every input timestamp is mapped to an `EvidenceItem` with computed `ageMs`. Risk flags (`stale_heartbeat`, `missing_heartbeat`, `missing_evidence`, `stale_evidence`, `im_silence`, `ledger_stall`, `run_stall`) are derived from evidence age vs. configured thresholds and lifecycle template.
-- **Contact semantics**: `terminated` and `offline` are terminal; `stale` maps to `degraded`; only `active` maps to `healthy` with zero risk flags.
+- **Member semantics**: `terminated` and `offline` are terminal; `stale` maps to `degraded`; only `active` maps to `healthy` with zero risk flags.
 - **"done" requires corroboration**: run `finished` status **or** zero open problems in the ledger, with zero risk flags. A single IM event or display state does not trigger "done".
 - **Purity contract**: identical inputs produce identical outputs; all time flows through the explicit `config.now` parameter.
 

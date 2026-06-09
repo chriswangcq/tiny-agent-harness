@@ -157,7 +157,7 @@ function eventAction(event: SupervisorLifecycleEvent): string | undefined {
 function eventSummary(event: SupervisorLifecycleEvent): string {
   const payload = event.payload;
   switch (event.type) {
-    case "worker_heartbeat":
+    case "member_heartbeat":
     case "heartbeat_recorded":
       return "heartbeat recorded";
     case "lease_requested":

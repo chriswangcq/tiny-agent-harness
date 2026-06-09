@@ -1,44 +1,28 @@
-// Team CLI — pure command parsing and service layer for contact + task subcommands.
-// Consumes contact-registry, team FSM, and directory-store.
-// Produces typed results; no shell/pty dependency.
+// Team CLI — pure command parsing and service layer for lightweight team
+// roster plus task lifecycle commands. The team roster is a people/control-plane
+// directory; workspace, branch, and ledger facts arrive through instructions or
+// member metadata rather than mandatory runtime schema.
 
 import type {
-  WorkerContact,
-  WorkerContactStatus,
-  ContactRegistryState,
-  ContactRegistryEvent,
-  ContactRegistryResult,
-} from "./contact-registry.js";
+  TeamMemberStatus,
+  TeamRosterEvent,
+  TeamRosterState,
+} from "./team-roster.js";
 import {
-  createContactRegistryState,
-  applyContactRegistryEvent,
-  summarizeContactRegistry,
-  lookupWorker,
-  listWorkersByRole,
-  listWorkersByStatus,
-} from "./contact-registry.js";
+  applyTeamRosterEvent,
+  createTeamRosterState,
+  lookupMember,
+  summarizeTeamRoster,
+} from "./team-roster.js";
 import type {
-  SubAgentTeamState,
   SubAgentTeamEvent,
-  SubAgentTransitionResult,
+  SubAgentTeamState,
 } from "./team.js";
 import {
-  createSubAgentTeamState,
   applySubAgentTeamEvent,
+  createSubAgentTeamState,
   summarizeSubAgentTeam,
 } from "./team.js";
-import type {
-  TeamDirectoryLayout,
-  TeamDirectorySnapshot,
-} from "./directory-store.js";
-import {
-  planTeamDirectoryLayout,
-  planRunScopedTeamPaths,
-  readTeamDirectory,
-  writeTeamDirectory,
-  createTeamDirectorySnapshot,
-  type FsPort,
-} from "./directory-store.js";
 import {
   successEnvelope,
   failureEnvelope,
@@ -46,136 +30,102 @@ import {
   type SuccessEnvelopeInput,
 } from "../cli/envelope.js";
 
-// ---------------------------------------------------------------------------
-// Tool name for JSON envelope
-// ---------------------------------------------------------------------------
 const TOOL_NAME = "team";
 
-// ---------------------------------------------------------------------------
-// Explicit dependency ports — no hidden time or id generation in core logic
-// ---------------------------------------------------------------------------
 export type TeamCliPorts = {
-  /** ISO-8601 timestamp — explicit clock input */
   nowIso: () => string;
-  /** Generate a unique event id — explicit id generation */
   newEventId: (prefix: string, seed: string) => string;
 };
 
-// ---------------------------------------------------------------------------
-// Parsed command types
-// ---------------------------------------------------------------------------
 export type TeamParsedCommand =
-  | TeamContactParsedCommand
+  | TeamCreateParsedCommand
+  | TeamMemberParsedCommand
   | TeamTaskParsedCommand;
 
-// --- Contact subcommands ---
-export type TeamContactParsedCommand =
-  | { group: "contact"; sub: "list" }
-  | { group: "contact"; sub: "show"; workerId: string }
+export type TeamCreateParsedCommand = {
+  group: "create";
+  teamId: string;
+};
+
+export type TeamMemberParsedCommand =
   | {
-      group: "contact";
-      sub: "register";
-      workerId: string;
+      group: "member";
+      sub: "list";
+      role?: string;
+      status?: TeamMemberStatus;
+    }
+  | { group: "member"; sub: "show"; memberId: string }
+  | {
+      group: "member";
+      sub: "add";
+      memberId: string;
       role: string;
-      workspace: string;
-      branch: string;
-      imChannel: string;
-      allowedActions: string[];
+      channel: string;
+      metadata?: Record<string, string>;
     }
   | {
-      group: "contact";
+      group: "member";
       sub: "update";
-      workerId: string;
+      memberId: string;
       patch: Record<string, unknown>;
     }
   | {
-      group: "contact";
+      group: "member";
       sub: "status";
-      workerId: string;
-      status: WorkerContactStatus;
+      memberId: string;
+      status: TeamMemberStatus;
     }
   | {
-      group: "contact";
+      group: "member";
       sub: "heartbeat";
-      workerId: string;
+      memberId: string;
+      evidence?: string;
     }
-  | { group: "contact"; sub: "terminate"; workerId: string };
+  | { group: "member"; sub: "terminate"; memberId: string; reason?: string };
 
-// --- Task subcommands ---
 export type TeamTaskParsedCommand =
   | { group: "task"; sub: "create"; taskId: string; title: string }
   | { group: "task"; sub: "list" }
   | { group: "task"; sub: "show"; taskId: string }
-  | {
-      group: "task";
-      sub: "assign";
-      taskId: string;
-      workerId: string;
-    }
-  | {
-      group: "task";
-      sub: "start";
-      taskId: string;
-    }
-  | {
-      group: "task";
-      sub: "succeed";
-      taskId: string;
-      output?: string;
-    }
-  | {
-      group: "task";
-      sub: "fail";
-      taskId: string;
-      error: string;
-    }
-  | {
-      group: "task";
-      sub: "cancel";
-      taskId: string;
-      reason?: string;
-    };
+  | { group: "task"; sub: "assign"; taskId: string; memberId: string }
+  | { group: "task"; sub: "start"; taskId: string }
+  | { group: "task"; sub: "succeed"; taskId: string; output?: string }
+  | { group: "task"; sub: "fail"; taskId: string; error: string }
+  | { group: "task"; sub: "cancel"; taskId: string; reason?: string };
 
-// ---------------------------------------------------------------------------
-// Parsed result
-// ---------------------------------------------------------------------------
 export type TeamParseResult =
   | { ok: true; command: TeamParsedCommand }
   | { ok: false; error: string; helpText?: string };
 
-// ---------------------------------------------------------------------------
-// In-memory service state
-// ---------------------------------------------------------------------------
 export type TeamServiceState = {
-  contactRegistry: ContactRegistryState;
+  roster: TeamRosterState;
   taskState: SubAgentTeamState;
 };
 
-export function createTeamServiceState(
-  registryId?: string,
-  teamId?: string,
-): TeamServiceState {
+export function createTeamServiceState(teamId = "default-team"): TeamServiceState {
   return {
-    contactRegistry: createContactRegistryState(
-      registryId ?? "default-registry",
-    ),
-    taskState: createSubAgentTeamState(teamId ?? "default-team"),
+    roster: createTeamRosterState(teamId),
+    taskState: createSubAgentTeamState(teamId),
   };
 }
 
-// ---------------------------------------------------------------------------
-// Pure command parser
-// ---------------------------------------------------------------------------
 export function parseTeamArgs(args: string[]): TeamParseResult {
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
     return { ok: false, error: "Missing subcommand", helpText: HELP_TEXT };
   }
 
   const group = args[0];
-  if (group !== "contact" && group !== "task") {
+  if (group === "create") {
+    if (args.length < 2) {
+      return { ok: false, error: "Usage: team create <teamId>", helpText: HELP_TEXT };
+    }
+    return { ok: true, command: { group: "create", teamId: args[1] } };
+  }
+
+  if (group !== "member" && group !== "task") {
     return {
       ok: false,
-      error: `Unknown team group: "${group}". Expected "contact" or "task".`,
+      error: `Unknown team group: "${group}". Expected "create", "member", or "task".`,
       helpText: HELP_TEXT,
     };
   }
@@ -185,57 +135,54 @@ export function parseTeamArgs(args: string[]): TeamParseResult {
     return {
       ok: false,
       error: `Missing ${group} subcommand.`,
-      helpText: group === "contact" ? CONTACT_HELP : TASK_HELP,
+      helpText: group === "member" ? MEMBER_HELP : TASK_HELP,
     };
   }
 
-  if (group === "contact") {
-    return parseContactArgs(rest);
-  }
-  return parseTaskArgs(rest);
+  return group === "member" ? parseMemberArgs(rest) : parseTaskArgs(rest);
 }
 
-function parseContactArgs(args: string[]): TeamParseResult {
+function parseMemberArgs(args: string[]): TeamParseResult {
   const sub = args[0];
   switch (sub) {
-    case "list":
-      return { ok: true, command: { group: "contact", sub: "list" } };
+    case "list": {
+      const role = readFlagValue(args, "--role");
+      const rawStatus = readFlagValue(args, "--status");
+      const status = rawStatus ? parseStatus(rawStatus) : undefined;
+      if (rawStatus && !status) {
+        return { ok: false, error: `Invalid status "${rawStatus}".` };
+      }
+      return { ok: true, command: { group: "member", sub: "list", role, status } };
+    }
 
     case "show": {
       if (args.length < 2) {
-        return {
-          ok: false,
-          error: "Usage: team contact show <workerId>",
-          helpText: CONTACT_HELP,
-        };
+        return { ok: false, error: "Usage: team member show <memberId>", helpText: MEMBER_HELP };
       }
-      return {
-        ok: true,
-        command: { group: "contact", sub: "show", workerId: args[1] },
-      };
+      return { ok: true, command: { group: "member", sub: "show", memberId: args[1] } };
     }
 
-    case "register": {
-      // register <workerId> <role> <workspace> <branch> <imChannel> [actions...]
-      if (args.length < 6) {
+    case "add": {
+      if (args.length < 4) {
         return {
           ok: false,
-          error:
-            "Usage: team contact register <workerId> <role> <workspace> <branch> <imChannel> [allowedAction...]",
-          helpText: CONTACT_HELP,
+          error: "Usage: team member add <memberId> <role> <channel> [--metadata <json>]",
+          helpText: MEMBER_HELP,
         };
+      }
+      const metadataResult = parseMetadataFlag(args);
+      if (!metadataResult.ok) {
+        return metadataResult;
       }
       return {
         ok: true,
         command: {
-          group: "contact",
-          sub: "register",
-          workerId: args[1],
+          group: "member",
+          sub: "add",
+          memberId: args[1],
           role: args[2],
-          workspace: args[3],
-          branch: args[4],
-          imChannel: args[5],
-          allowedActions: args.slice(6),
+          channel: args[3],
+          metadata: metadataResult.metadata,
         },
       };
     }
@@ -244,32 +191,21 @@ function parseContactArgs(args: string[]): TeamParseResult {
       if (args.length < 2) {
         return {
           ok: false,
-          error: "Usage: team contact update <workerId> --json <patch>",
-          helpText: CONTACT_HELP,
+          error: "Usage: team member update <memberId> --json <patch>",
+          helpText: MEMBER_HELP,
         };
       }
-      // Accept --json flag with JSON patch
-      let patch: Record<string, unknown> = {};
-      for (let i = 2; i < args.length; i++) {
-        if (args[i] === "--json" && i + 1 < args.length) {
-          try {
-            patch = JSON.parse(args[i + 1]);
-          } catch {
-            return {
-              ok: false,
-              error: "Invalid JSON for --json: could not parse.",
-            };
-          }
-          break;
-        }
+      const patchResult = parseJsonFlag(args, "--json");
+      if (!patchResult.ok) {
+        return patchResult;
       }
       return {
         ok: true,
         command: {
-          group: "contact",
+          group: "member",
           sub: "update",
-          workerId: args[1],
-          patch,
+          memberId: args[1],
+          patch: patchResult.value,
         },
       };
     }
@@ -278,32 +214,17 @@ function parseContactArgs(args: string[]): TeamParseResult {
       if (args.length < 3) {
         return {
           ok: false,
-          error: "Usage: team contact status <workerId> <status>",
-          helpText: CONTACT_HELP,
+          error: "Usage: team member status <memberId> <status>",
+          helpText: MEMBER_HELP,
         };
       }
-      const status = args[2] as WorkerContactStatus;
-      const validStatuses: WorkerContactStatus[] = [
-        "active",
-        "idle",
-        "stale",
-        "offline",
-        "terminated",
-      ];
-      if (!validStatuses.includes(status)) {
-        return {
-          ok: false,
-          error: `Invalid status "${status}". Valid: ${validStatuses.join(", ")}`,
-        };
+      const status = parseStatus(args[2]);
+      if (!status) {
+        return { ok: false, error: `Invalid status "${args[2]}".` };
       }
       return {
         ok: true,
-        command: {
-          group: "contact",
-          sub: "status",
-          workerId: args[1],
-          status,
-        },
+        command: { group: "member", sub: "status", memberId: args[1], status },
       };
     }
 
@@ -311,13 +232,18 @@ function parseContactArgs(args: string[]): TeamParseResult {
       if (args.length < 2) {
         return {
           ok: false,
-          error: "Usage: team contact heartbeat <workerId>",
-          helpText: CONTACT_HELP,
+          error: "Usage: team member heartbeat <memberId> [--evidence <text>]",
+          helpText: MEMBER_HELP,
         };
       }
       return {
         ok: true,
-        command: { group: "contact", sub: "heartbeat", workerId: args[1] },
+        command: {
+          group: "member",
+          sub: "heartbeat",
+          memberId: args[1],
+          evidence: readFlagValue(args, "--evidence"),
+        },
       };
     }
 
@@ -325,16 +251,17 @@ function parseContactArgs(args: string[]): TeamParseResult {
       if (args.length < 2) {
         return {
           ok: false,
-          error: "Usage: team contact terminate <workerId>",
-          helpText: CONTACT_HELP,
+          error: "Usage: team member terminate <memberId> [--reason <text>]",
+          helpText: MEMBER_HELP,
         };
       }
       return {
         ok: true,
         command: {
-          group: "contact",
+          group: "member",
           sub: "terminate",
-          workerId: args[1],
+          memberId: args[1],
+          reason: readFlagValue(args, "--reason"),
         },
       };
     }
@@ -342,8 +269,8 @@ function parseContactArgs(args: string[]): TeamParseResult {
     default:
       return {
         ok: false,
-        error: `Unknown contact subcommand: "${sub}"`,
-        helpText: CONTACT_HELP,
+        error: `Unknown member subcommand: "${sub}"`,
+        helpText: MEMBER_HELP,
       };
   }
 }
@@ -353,11 +280,7 @@ function parseTaskArgs(args: string[]): TeamParseResult {
   switch (sub) {
     case "create": {
       if (args.length < 3) {
-        return {
-          ok: false,
-          error: "Usage: team task create <taskId> <title>",
-          helpText: TASK_HELP,
-        };
+        return { ok: false, error: "Usage: team task create <taskId> <title>", helpText: TASK_HELP };
       }
       return {
         ok: true,
@@ -365,7 +288,7 @@ function parseTaskArgs(args: string[]): TeamParseResult {
           group: "task",
           sub: "create",
           taskId: args[1],
-          title: args[2],
+          title: args.slice(2).join(" "),
         },
       };
     }
@@ -375,25 +298,14 @@ function parseTaskArgs(args: string[]): TeamParseResult {
 
     case "show": {
       if (args.length < 2) {
-        return {
-          ok: false,
-          error: "Usage: team task show <taskId>",
-          helpText: TASK_HELP,
-        };
+        return { ok: false, error: "Usage: team task show <taskId>", helpText: TASK_HELP };
       }
-      return {
-        ok: true,
-        command: { group: "task", sub: "show", taskId: args[1] },
-      };
+      return { ok: true, command: { group: "task", sub: "show", taskId: args[1] } };
     }
 
     case "assign": {
       if (args.length < 3) {
-        return {
-          ok: false,
-          error: "Usage: team task assign <taskId> <workerId>",
-          helpText: TASK_HELP,
-        };
+        return { ok: false, error: "Usage: team task assign <taskId> <memberId>", helpText: TASK_HELP };
       }
       return {
         ok: true,
@@ -401,23 +313,16 @@ function parseTaskArgs(args: string[]): TeamParseResult {
           group: "task",
           sub: "assign",
           taskId: args[1],
-          workerId: args[2],
+          memberId: args[2],
         },
       };
     }
 
     case "start": {
       if (args.length < 2) {
-        return {
-          ok: false,
-          error: "Usage: team task start <taskId>",
-          helpText: TASK_HELP,
-        };
+        return { ok: false, error: "Usage: team task start <taskId>", helpText: TASK_HELP };
       }
-      return {
-        ok: true,
-        command: { group: "task", sub: "start", taskId: args[1] },
-      };
+      return { ok: true, command: { group: "task", sub: "start", taskId: args[1] } };
     }
 
     case "succeed": {
@@ -428,31 +333,20 @@ function parseTaskArgs(args: string[]): TeamParseResult {
           helpText: TASK_HELP,
         };
       }
-      let output: string | undefined;
-      for (let i = 2; i < args.length; i++) {
-        if (args[i] === "--output" && i + 1 < args.length) {
-          output = args[i + 1];
-          break;
-        }
-      }
       return {
         ok: true,
         command: {
           group: "task",
           sub: "succeed",
           taskId: args[1],
-          output,
+          output: readFlagValue(args, "--output"),
         },
       };
     }
 
     case "fail": {
       if (args.length < 3) {
-        return {
-          ok: false,
-          error: "Usage: team task fail <taskId> <error>",
-          helpText: TASK_HELP,
-        };
+        return { ok: false, error: "Usage: team task fail <taskId> <error>", helpText: TASK_HELP };
       }
       return {
         ok: true,
@@ -467,11 +361,7 @@ function parseTaskArgs(args: string[]): TeamParseResult {
 
     case "cancel": {
       if (args.length < 2) {
-        return {
-          ok: false,
-          error: "Usage: team task cancel <taskId> [reason]",
-          helpText: TASK_HELP,
-        };
+        return { ok: false, error: "Usage: team task cancel <taskId> [reason]", helpText: TASK_HELP };
       }
       return {
         ok: true,
@@ -493,183 +383,194 @@ function parseTaskArgs(args: string[]): TeamParseResult {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Service handlers — return CliEnvelope
-// ---------------------------------------------------------------------------
-export function handleContactCommand(
+export function handleCreateCommand(
+  state: TeamServiceState,
+  cmd: TeamCreateParsedCommand,
+  cwd?: string,
+): CliEnvelope {
+  state.roster = createTeamRosterState(cmd.teamId);
+  state.taskState = createSubAgentTeamState(cmd.teamId);
+  return successEnvelope({
+    tool: TOOL_NAME,
+    cwd,
+    extra: { command: "team create", teamId: cmd.teamId, result: state.roster },
+  });
+}
+
+export function handleMemberCommand(
   ports: TeamCliPorts,
   state: TeamServiceState,
-  cmd: TeamContactParsedCommand,
+  cmd: TeamMemberParsedCommand,
   cwd?: string,
 ): CliEnvelope {
   const base: SuccessEnvelopeInput = { tool: TOOL_NAME, cwd };
 
   switch (cmd.sub) {
     case "list": {
-      const summary = summarizeContactRegistry(state.contactRegistry);
-      return successEnvelope({ ...base, extra: { command: "contact list", result: summary } });
+      const summary = summarizeTeamRoster(state.roster);
+      const members = Object.values(state.roster.members)
+        .filter((member) => !cmd.role || member.role === cmd.role)
+        .filter((member) => !cmd.status || member.status === cmd.status)
+        .sort((left, right) => left.memberId.localeCompare(right.memberId));
+      return successEnvelope({
+        ...base,
+        extra: { command: "member list", result: { ...summary, members } },
+      });
     }
 
     case "show": {
-      const worker = lookupWorker(state.contactRegistry, cmd.workerId);
-      if (!worker) {
+      const member = lookupMember(state.roster, cmd.memberId);
+      if (!member) {
         return failureEnvelope({
           tool: TOOL_NAME,
           cwd,
-          errorCode: "UNKNOWN_WORKER",
-          error: `Worker "${cmd.workerId}" not found.`,
+          errorCode: "UNKNOWN_MEMBER",
+          error: `Member "${cmd.memberId}" not found.`,
         });
       }
-      return successEnvelope({ ...base, extra: { command: "contact show", workerId: cmd.workerId, result: worker } });
+      return successEnvelope({
+        ...base,
+        extra: { command: "member show", memberId: cmd.memberId, result: member },
+      });
     }
 
-    case "register": {
-      const event: ContactRegistryEvent = {
-        kind: "worker_registered",
-        eventId: `evt-${ports.newEventId("evt", cmd.workerId)}`,
-        workerId: cmd.workerId,
+    case "add": {
+      const event: TeamRosterEvent = {
+        kind: "member_added",
+        eventId: `evt-${ports.newEventId("evt", cmd.memberId)}`,
+        memberId: cmd.memberId,
         role: cmd.role,
-        workspace: cmd.workspace,
-        branch: cmd.branch,
-        imChannel: cmd.imChannel,
-        allowedActions: cmd.allowedActions,
+        channel: cmd.channel,
+        ...(cmd.metadata ? { metadata: cmd.metadata } : {}),
       };
-      const result = applyContactRegistryEvent(
-        state.contactRegistry,
-        event,
-      );
+      const result = applyTeamRosterEvent(state.roster, event);
       if (result.status === "applied") {
-        state.contactRegistry = result.state;
-        return successEnvelope({ ...base, extra: { command: "contact register", workerId: cmd.workerId } });
+        state.roster = result.state;
+        addTaskMemberIfMissing(ports, state, cmd.memberId);
+        return successEnvelope({
+          ...base,
+          extra: { command: "member add", memberId: cmd.memberId, result: result.state.members[cmd.memberId] },
+        });
       }
       return failureEnvelope({
         tool: TOOL_NAME,
         cwd,
-        errorCode: "REGISTER_FAILED",
-        error: `Register failed: ${result.status}`,
+        errorCode: "MEMBER_ADD_FAILED",
+        error: `Member add failed: ${result.status}`,
         details: result.status === "rejected" ? result.rejection : undefined,
       });
     }
 
     case "update": {
-      const allowedFields = [
-        "role",
-        "workspace",
-        "branch",
-        "runId",
-        "imChannel",
-        "ledgerId",
-        "ticket",
-        "currentTask",
-        "allowedActions",
-      ];
-      const patch: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(cmd.patch)) {
-        if (allowedFields.includes(key)) {
-          patch[key] = value;
-        }
-      }
-      if (Object.keys(patch).length === 0) {
+      const patch = filterMemberPatch(cmd.patch);
+      if (!patch) {
         return failureEnvelope({
           tool: TOOL_NAME,
           cwd,
           errorCode: "NO_VALID_FIELDS",
-          error: "No valid fields to update.",
+          error: "No valid member fields to update.",
         });
       }
-      const event: ContactRegistryEvent = {
-        kind: "worker_updated",
-        eventId: `evt-${ports.newEventId("evt", cmd.workerId)}-update`,
-        workerId: cmd.workerId,
+      const event: TeamRosterEvent = {
+        kind: "member_updated",
+        eventId: `evt-${ports.newEventId("evt", cmd.memberId)}-update`,
+        memberId: cmd.memberId,
         patch,
       };
-      const result = applyContactRegistryEvent(
-        state.contactRegistry,
-        event,
-      );
+      const result = applyTeamRosterEvent(state.roster, event);
       if (result.status === "applied") {
-        state.contactRegistry = result.state;
-        return successEnvelope({ ...base, extra: { command: "contact update", workerId: cmd.workerId } });
+        state.roster = result.state;
+        return successEnvelope({
+          ...base,
+          extra: { command: "member update", memberId: cmd.memberId, result: result.state.members[cmd.memberId] },
+        });
       }
       return failureEnvelope({
         tool: TOOL_NAME,
         cwd,
-        errorCode: "UPDATE_FAILED",
-        error: `Update failed: ${result.status}`,
+        errorCode: "MEMBER_UPDATE_FAILED",
+        error: `Member update failed: ${result.status}`,
         details: result.status === "rejected" ? result.rejection : undefined,
       });
     }
 
     case "status": {
-      const event: ContactRegistryEvent = {
-        kind: "worker_status_changed",
-        eventId: `evt-${ports.newEventId("evt", cmd.workerId)}-status`,
-        workerId: cmd.workerId,
+      const event: TeamRosterEvent = {
+        kind: "member_status_changed",
+        eventId: `evt-${ports.newEventId("evt", cmd.memberId)}-status`,
+        memberId: cmd.memberId,
         status: cmd.status,
       };
-      const result = applyContactRegistryEvent(
-        state.contactRegistry,
-        event,
-      );
-      if (result.status === "applied") {
-        state.contactRegistry = result.state;
-        return successEnvelope({ ...base, extra: { command: "contact status", workerId: cmd.workerId, status: cmd.status } });
+      const result = applyTeamRosterEvent(state.roster, event);
+      if (result.status === "applied" || result.status === "duplicate") {
+        state.roster = result.state;
+        if (cmd.status === "offline" || cmd.status === "terminated") {
+          markTaskMemberOffline(ports, state, cmd.memberId);
+        }
+        return successEnvelope({
+          ...base,
+          extra: { command: "member status", memberId: cmd.memberId, status: cmd.status },
+        });
       }
       return failureEnvelope({
         tool: TOOL_NAME,
         cwd,
-        errorCode: "STATUS_CHANGE_FAILED",
-        error: `Status change failed: ${result.status}`,
-        details:
-          result.status === "rejected" ? result.rejection :
-          result.status === "duplicate" ? "already at target status" :
-          undefined,
+        errorCode: "MEMBER_STATUS_FAILED",
+        error: `Member status failed: ${result.status}`,
+        details: result.status === "rejected" ? result.rejection : undefined,
       });
     }
 
     case "heartbeat": {
-      const event: ContactRegistryEvent = {
-        kind: "worker_heartbeat",
-        eventId: `evt-${ports.newEventId("evt", cmd.workerId)}-heartbeat`,
-        workerId: cmd.workerId,
+      const event: TeamRosterEvent = {
+        kind: "member_heartbeat",
+        eventId: `evt-${ports.newEventId("evt", cmd.memberId)}-heartbeat`,
+        memberId: cmd.memberId,
         timestamp: ports.nowIso(),
+        ...(cmd.evidence ? { evidence: cmd.evidence } : {}),
       };
-      const result = applyContactRegistryEvent(
-        state.contactRegistry,
-        event,
-      );
+      const result = applyTeamRosterEvent(state.roster, event);
       if (result.status === "applied") {
-        state.contactRegistry = result.state;
-        return successEnvelope({ ...base, extra: { command: "contact heartbeat", workerId: cmd.workerId, timestamp: event.timestamp } });
+        state.roster = result.state;
+        return successEnvelope({
+          ...base,
+          extra: {
+            command: "member heartbeat",
+            memberId: cmd.memberId,
+            timestamp: event.timestamp,
+          },
+        });
       }
       return failureEnvelope({
         tool: TOOL_NAME,
         cwd,
-        errorCode: "HEARTBEAT_FAILED",
-        error: `Heartbeat failed: ${result.status}`,
+        errorCode: "MEMBER_HEARTBEAT_FAILED",
+        error: `Member heartbeat failed: ${result.status}`,
         details: result.status === "rejected" ? result.rejection : undefined,
       });
     }
 
     case "terminate": {
-      const event: ContactRegistryEvent = {
-        kind: "worker_terminated",
-        eventId: `evt-${ports.newEventId("evt", cmd.workerId)}-terminate`,
-        workerId: cmd.workerId,
+      const event: TeamRosterEvent = {
+        kind: "member_terminated",
+        eventId: `evt-${ports.newEventId("evt", cmd.memberId)}-terminate`,
+        memberId: cmd.memberId,
+        reason: cmd.reason,
       };
-      const result = applyContactRegistryEvent(
-        state.contactRegistry,
-        event,
-      );
+      const result = applyTeamRosterEvent(state.roster, event);
       if (result.status === "applied" || result.status === "duplicate") {
-        state.contactRegistry = result.state;
-        return successEnvelope({ ...base, extra: { command: "contact terminate", workerId: cmd.workerId } });
+        state.roster = result.state;
+        markTaskMemberOffline(ports, state, cmd.memberId);
+        return successEnvelope({
+          ...base,
+          extra: { command: "member terminate", memberId: cmd.memberId },
+        });
       }
       return failureEnvelope({
         tool: TOOL_NAME,
         cwd,
-        errorCode: "TERMINATE_FAILED",
-        error: `Terminate failed: ${result.status}`,
+        errorCode: "MEMBER_TERMINATE_FAILED",
+        error: `Member terminate failed: ${result.status}`,
         details: result.status === "rejected" ? result.rejection : undefined,
       });
     }
@@ -692,27 +593,17 @@ export function handleTaskCommand(
         taskId: cmd.taskId,
         title: cmd.title,
       };
-      const result = applySubAgentTeamEvent(state.taskState, event);
-      if (result.status === "applied") {
-        state.taskState = result.state;
-        return successEnvelope({ ...base, extra: { command: "task create", taskId: cmd.taskId } });
-      }
-      return failureEnvelope({
-        tool: TOOL_NAME,
-        cwd,
-        errorCode: "TASK_CREATE_FAILED",
-        error: `Task create failed: ${result.status}`,
-        details:
-          result.status === "rejected" ? result.rejection :
-          result.status === "duplicate" ? "task already exists" :
-          undefined,
+      return applyTaskEvent(state, event, base, "TASK_CREATE_FAILED", {
+        command: "task create",
+        taskId: cmd.taskId,
       });
     }
 
-    case "list": {
-      const summary = summarizeSubAgentTeam(state.taskState);
-      return successEnvelope({ ...base, extra: { command: "task list", result: summary } });
-    }
+    case "list":
+      return successEnvelope({
+        ...base,
+        extra: { command: "task list", result: summarizeSubAgentTeam(state.taskState) },
+      });
 
     case "show": {
       const task = state.taskState.tasks[cmd.taskId];
@@ -724,27 +615,32 @@ export function handleTaskCommand(
           error: `Task "${cmd.taskId}" not found.`,
         });
       }
-      return successEnvelope({ ...base, extra: { command: "task show", taskId: cmd.taskId, result: task } });
+      return successEnvelope({
+        ...base,
+        extra: { command: "task show", taskId: cmd.taskId, result: task },
+      });
     }
 
     case "assign": {
+      if (!lookupMember(state.roster, cmd.memberId)) {
+        return failureEnvelope({
+          tool: TOOL_NAME,
+          cwd,
+          errorCode: "UNKNOWN_MEMBER",
+          error: `Member "${cmd.memberId}" not found.`,
+        });
+      }
+      addTaskMemberIfMissing(ports, state, cmd.memberId);
       const event: SubAgentTeamEvent = {
         kind: "task_assigned",
         eventId: `evt-${ports.newEventId("evt", cmd.taskId)}-assign`,
         taskId: cmd.taskId,
-        workerId: cmd.workerId,
+        workerId: cmd.memberId,
       };
-      const result = applySubAgentTeamEvent(state.taskState, event);
-      if (result.status === "applied") {
-        state.taskState = result.state;
-        return successEnvelope({ ...base, extra: { command: "task assign", taskId: cmd.taskId, workerId: cmd.workerId } });
-      }
-      return failureEnvelope({
-        tool: TOOL_NAME,
-        cwd,
-        errorCode: "TASK_ASSIGN_FAILED",
-        error: `Task assign failed: ${result.status}`,
-        details: result.status === "rejected" ? result.rejection : undefined,
+      return applyTaskEvent(state, event, base, "TASK_ASSIGN_FAILED", {
+        command: "task assign",
+        taskId: cmd.taskId,
+        memberId: cmd.memberId,
       });
     }
 
@@ -754,46 +650,22 @@ export function handleTaskCommand(
         eventId: `evt-${ports.newEventId("evt", cmd.taskId)}-start`,
         taskId: cmd.taskId,
       };
-      const result = applySubAgentTeamEvent(state.taskState, event);
-      if (result.status === "applied") {
-        state.taskState = result.state;
-        return successEnvelope({ ...base, extra: { command: "task start", taskId: cmd.taskId } });
-      }
-      return failureEnvelope({
-        tool: TOOL_NAME,
-        cwd,
-        errorCode: "TASK_START_FAILED",
-        error: `Task start failed: ${result.status}`,
-        details: result.status === "rejected" ? result.rejection : undefined,
+      return applyTaskEvent(state, event, base, "TASK_START_FAILED", {
+        command: "task start",
+        taskId: cmd.taskId,
       });
     }
 
     case "succeed": {
-      let output: unknown = undefined;
-      if (cmd.output) {
-        try {
-          output = JSON.parse(cmd.output);
-        } catch {
-          output = cmd.output;
-        }
-      }
       const event: SubAgentTeamEvent = {
         kind: "task_succeeded",
         eventId: `evt-${ports.newEventId("evt", cmd.taskId)}-succeed`,
         taskId: cmd.taskId,
-        output,
+        output: parseOptionalJson(cmd.output),
       };
-      const result = applySubAgentTeamEvent(state.taskState, event);
-      if (result.status === "applied") {
-        state.taskState = result.state;
-        return successEnvelope({ ...base, extra: { command: "task succeed", taskId: cmd.taskId } });
-      }
-      return failureEnvelope({
-        tool: TOOL_NAME,
-        cwd,
-        errorCode: "TASK_SUCCEED_FAILED",
-        error: `Task succeed failed: ${result.status}`,
-        details: result.status === "rejected" ? result.rejection : undefined,
+      return applyTaskEvent(state, event, base, "TASK_SUCCEED_FAILED", {
+        command: "task succeed",
+        taskId: cmd.taskId,
       });
     }
 
@@ -804,17 +676,9 @@ export function handleTaskCommand(
         taskId: cmd.taskId,
         error: cmd.error,
       };
-      const result = applySubAgentTeamEvent(state.taskState, event);
-      if (result.status === "applied") {
-        state.taskState = result.state;
-        return successEnvelope({ ...base, extra: { command: "task fail", taskId: cmd.taskId } });
-      }
-      return failureEnvelope({
-        tool: TOOL_NAME,
-        cwd,
-        errorCode: "TASK_FAIL_FAILED",
-        error: `Task fail failed: ${result.status}`,
-        details: result.status === "rejected" ? result.rejection : undefined,
+      return applyTaskEvent(state, event, base, "TASK_FAIL_FAILED", {
+        command: "task fail",
+        taskId: cmd.taskId,
       });
     }
 
@@ -825,25 +689,14 @@ export function handleTaskCommand(
         taskId: cmd.taskId,
         reason: cmd.reason,
       };
-      const result = applySubAgentTeamEvent(state.taskState, event);
-      if (result.status === "applied") {
-        state.taskState = result.state;
-        return successEnvelope({ ...base, extra: { command: "task cancel", taskId: cmd.taskId } });
-      }
-      return failureEnvelope({
-        tool: TOOL_NAME,
-        cwd,
-        errorCode: "TASK_CANCEL_FAILED",
-        error: `Task cancel failed: ${result.status}`,
-        details: result.status === "rejected" ? result.rejection : undefined,
+      return applyTaskEvent(state, event, base, "TASK_CANCEL_FAILED", {
+        command: "task cancel",
+        taskId: cmd.taskId,
       });
     }
   }
 }
 
-// ---------------------------------------------------------------------------
-// Top-level dispatch
-// ---------------------------------------------------------------------------
 export function executeTeamCommand(
   ports: TeamCliPorts,
   state: TeamServiceState,
@@ -862,27 +715,201 @@ export function executeTeamCommand(
   }
 
   const cmd = parsed.command;
-  if (cmd.group === "contact") {
-    return handleContactCommand(ports, state, cmd, cwd);
+  if (cmd.group === "create") {
+    return handleCreateCommand(state, cmd, cwd);
+  }
+  if (cmd.group === "member") {
+    return handleMemberCommand(ports, state, cmd, cwd);
   }
   return handleTaskCommand(ports, state, cmd, cwd);
 }
 
-// ---------------------------------------------------------------------------
-// Help text
-// ---------------------------------------------------------------------------
-export const CONTACT_HELP = `Usage: tiny-agent team contact <subcommand> [options]
+function applyTaskEvent(
+  state: TeamServiceState,
+  event: SubAgentTeamEvent,
+  base: SuccessEnvelopeInput,
+  errorCode: string,
+  successExtra: Record<string, unknown>,
+): CliEnvelope {
+  const result = applySubAgentTeamEvent(state.taskState, event);
+  if (result.status === "applied" || result.status === "duplicate") {
+    state.taskState = result.state;
+    return successEnvelope({ ...base, extra: successExtra });
+  }
+  return failureEnvelope({
+    tool: TOOL_NAME,
+    cwd: base.cwd,
+    errorCode,
+    error: `Task event failed: ${result.status}`,
+    details: result.rejection,
+  });
+}
 
-Contact subcommands:
-  list                              List all registered workers
-  show <workerId>                   Show worker details
-  register <wId> <role> <ws> <br> <ch> [actions...]
-                                    Register a new worker
-  update <workerId> --json <patch>  Update worker fields
-  status <workerId> <status>        Change worker status
+function addTaskMemberIfMissing(
+  ports: TeamCliPorts,
+  state: TeamServiceState,
+  memberId: string,
+): void {
+  if (state.taskState.workers[memberId]) {
+    return;
+  }
+  const result = applySubAgentTeamEvent(state.taskState, {
+    kind: "member_added",
+    eventId: `evt-${ports.newEventId("evt", memberId)}-task-member`,
+    workerId: memberId,
+  });
+  if (result.status === "applied") {
+    state.taskState = result.state;
+  }
+}
+
+function markTaskMemberOffline(
+  ports: TeamCliPorts,
+  state: TeamServiceState,
+  memberId: string,
+): void {
+  if (!state.taskState.workers[memberId]) {
+    return;
+  }
+  const result = applySubAgentTeamEvent(state.taskState, {
+    kind: "worker_offline",
+    eventId: `evt-${ports.newEventId("evt", memberId)}-task-offline`,
+    workerId: memberId,
+  });
+  if (result.status === "applied") {
+    state.taskState = result.state;
+  }
+}
+
+function parseStatus(value: string): TeamMemberStatus | undefined {
+  const statuses: TeamMemberStatus[] = [
+    "active",
+    "idle",
+    "stale",
+    "offline",
+    "terminated",
+  ];
+  return statuses.includes(value as TeamMemberStatus)
+    ? (value as TeamMemberStatus)
+    : undefined;
+}
+
+function readFlagValue(args: string[], flag: string): string | undefined {
+  const index = args.indexOf(flag);
+  if (index < 0 || index + 1 >= args.length) {
+    return undefined;
+  }
+  return args[index + 1];
+}
+
+type JsonFlagResult =
+  | { ok: true; value: Record<string, unknown> }
+  | { ok: false; error: string; helpText?: string };
+
+function parseJsonFlag(args: string[], flag: string): JsonFlagResult {
+  const raw = readFlagValue(args, flag);
+  if (!raw) {
+    return { ok: true, value: {} };
+  }
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return { ok: false, error: `${flag} must be a JSON object.` };
+    }
+    return { ok: true, value: value as Record<string, unknown> };
+  } catch {
+    return { ok: false, error: `Invalid JSON for ${flag}: could not parse.` };
+  }
+}
+
+type MetadataParseResult =
+  | { ok: true; metadata?: Record<string, string> }
+  | { ok: false; error: string; helpText?: string };
+
+function parseMetadataFlag(args: string[]): MetadataParseResult {
+  const raw = readFlagValue(args, "--metadata");
+  if (!raw) {
+    return { ok: true };
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { ok: false, error: "--metadata must be a JSON object." };
+    }
+    const metadata: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value !== "string") {
+        return {
+          ok: false,
+          error: `--metadata value for "${key}" must be a string.`,
+        };
+      }
+      metadata[key] = value;
+    }
+    return { ok: true, metadata };
+  } catch {
+    return { ok: false, error: "Invalid JSON for --metadata: could not parse." };
+  }
+}
+
+function filterMemberPatch(
+  patch: Record<string, unknown>,
+): Extract<TeamRosterEvent, { kind: "member_updated" }>["patch"] | undefined {
+  const output: Extract<TeamRosterEvent, { kind: "member_updated" }>["patch"] = {};
+
+  if (typeof patch.role === "string") output.role = patch.role;
+  if (typeof patch.channel === "string") output.channel = patch.channel;
+  if (typeof patch.runId === "string") output.runId = patch.runId;
+  if (typeof patch.currentTask === "string") output.currentTask = patch.currentTask;
+
+  if (patch.assignment && typeof patch.assignment === "object" && !Array.isArray(patch.assignment)) {
+    const assignment = patch.assignment as Record<string, unknown>;
+    if (typeof assignment.id === "string") {
+      output.assignment = {
+        id: assignment.id,
+        ...(typeof assignment.title === "string" ? { title: assignment.title } : {}),
+        ...(typeof assignment.status === "string" ? { status: assignment.status } : {}),
+      };
+    }
+  }
+
+  if (patch.metadata && typeof patch.metadata === "object" && !Array.isArray(patch.metadata)) {
+    const metadata: Record<string, string> = {};
+    for (const [key, value] of Object.entries(patch.metadata)) {
+      if (typeof value === "string") metadata[key] = value;
+    }
+    output.metadata = metadata;
+  }
+
+  return Object.keys(output).length > 0 ? output : undefined;
+}
+
+function parseOptionalJson(raw: string | undefined): unknown {
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return raw;
+  }
+}
+
+export const MEMBER_HELP = `Usage: tiny-agent team member <subcommand> [options]
+
+Member subcommands:
+  list [--role <role>] [--status <status>]
+                                    List team members
+  show <memberId>                   Show member details
+  add <memberId> <role> <channel> [--metadata <json>]
+                                    Add a team member
+  update <memberId> --json <patch>  Update role/channel/run/task/metadata
+  status <memberId> <status>        Change member status
                                     (active|idle|stale|offline|terminated)
-  heartbeat <workerId>              Record heartbeat (now)
-  terminate <workerId>              Terminate a worker
+  heartbeat <memberId> [--evidence <text>]
+                                    Record heartbeat using explicit clock port
+  terminate <memberId> [--reason <text>]
+                                    Terminate a member
 
 Options:
   --json                            Output JSON envelope (default)`;
@@ -893,7 +920,7 @@ Task subcommands:
   create <taskId> <title>           Create a new task
   list                              List all tasks and summary
   show <taskId>                     Show task details
-  assign <taskId> <workerId>        Assign task to worker
+  assign <taskId> <memberId>        Assign task to a team member
   start <taskId>                    Start task execution
   succeed <taskId> [--output <json>] Mark task as succeeded
   fail <taskId> <error>             Mark task as failed
@@ -905,12 +932,14 @@ Options:
 export const HELP_TEXT = `Usage: tiny-agent team <group> [options]
 
 Team subcommands:
-  team contact <subcommand>         Contact/worker directory management
+  team create <teamId>              Create/reset a lightweight team state
+  team member <subcommand>          Team roster management
   team task <subcommand>            Task lifecycle management
   team lifecycle <subcommand>       Run-scoped worker lease/reaper/shutdown
 
 Groups:
-  contact     Worker registration, lookup, status, heartbeat
+  create      Create a team identity for roster/task state
+  member      Add, lookup, status, heartbeat, terminate
   task        Task creation, assignment, execution, completion
   lifecycle   Worker lease, lifecycle-status, reaper, shutdown
 
@@ -919,19 +948,14 @@ Options:
   --help    Show this help or group help
 
 Examples:
-  tiny-agent team contact list
-  tiny-agent team contact register w1 coder /ws feat/x default
-  tiny-agent team contact status w1 active
+  tiny-agent team create team-p6
+  tiny-agent team member add w1 coder default --metadata '{"workspace":"/ws","branch":"codex/p6/01"}'
+  tiny-agent team member status w1 active
   tiny-agent team task create t1 "Inspect issue"
   tiny-agent team task assign t1 w1
-  tiny-agent team task start t1
-  tiny-agent team task succeed t1
   tiny-agent team lifecycle lifecycle-status w1 --run run-123
-  tiny-agent team lifecycle lease w1 --run run-123
-  tiny-agent team lifecycle reaper --run run-123
-  tiny-agent team lifecycle shutdown w1 --run run-123 --execute
 
 For group-specific help:
-  tiny-agent team contact --help
+  tiny-agent team member --help
   tiny-agent team task --help
   tiny-agent team lifecycle --help`;

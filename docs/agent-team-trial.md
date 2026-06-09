@@ -5,7 +5,7 @@
 See [subagent-team-operating-guide.md](subagent-team-operating-guide.md) for the authoritative operating guide. This document records trial plans and details.
 ## Boundary
 
-P6-01 到 P6-06 已合入 contact registry、directory store、team CLI 和 local worker launcher。这个文档记录 trial 操作层方案和当前状态：
+P6-01 到 P6-06 已合入 team roster、directory store、team CLI 和 local worker launcher。这个文档记录 trial 操作层方案和当前状态：
 
 - Runtime owns truth and effects: run state、transcript、environment events、PTY session、io_wait、tool review、model loop、recovery、CLI capability execution。
 - TUI owns projection and user control gestures: transcript display、loop/debug detail、PTY screen projection、risk/review display、user message entry、control request entry。
@@ -21,6 +21,8 @@ workspace: /Users/wangchaoqun/Documents/DeepSeek-agent-team/<ticket-slug>
 run:       run-team-<ticket-slug>-<timestamp> 或 worker runtime 生成的 run-*
 branch:    codex/team/<ticket-slug>
 ```
+
+注意：这是 trial 操作策略，不是 team roster 的必填 schema。当前产品模型只要求 team member 拥有 `memberId`、`role`、`channel` 和 `status`；workspace、branch、ledger 由 master 指令、metadata 或 handoff evidence 承载。
 
 推荐创建方式：
 
@@ -193,10 +195,10 @@ If any gate fails after merge, master reverts the merge and reports failure to t
 
 ## Ledger
 
-本 trial 的 problem ledger：
+本 trial 可按需绑定本地 problem ledger：
 
 ```text
-.complex-problems/L20260604-142908
+.complex-problems/<ledger-id>
 ```
 
-该目录被 `.gitignore` 排除，只作为本地调度 ledger。项目级长期知识记录在本文档。
+该目录被 `.gitignore` 排除，只作为本地调度 ledger。项目级长期知识记录在本文档，具体 ledger id 不写入产品文档。

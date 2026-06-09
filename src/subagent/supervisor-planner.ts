@@ -21,7 +21,7 @@ import {
   type WorkerLifecycleState,
 } from "./supervisor-lifecycle.js";
 
-import type { WorkerContact } from "./contact-registry.js";
+import type { TeamMember } from "./team-roster.js";
 
 // ---------------------------------------------------------------------------
 // Planner types
@@ -80,8 +80,8 @@ export interface PlannedAction {
 export interface PlannerSnapshot {
   /** The worker ID. */
   workerId: string;
-  /** Worker contact data from registry. */
-  contact: WorkerContact;
+  /** Worker member data from registry. */
+  member: TeamMember;
   /** Lifecycle input for computeLifecycleState. */
   lifecycleInput: LifecycleInput;
   /** Optional lease record for this worker. */
@@ -426,19 +426,19 @@ export function computeSupervisorPlan(
 }
 
 /**
- * Extract a worker snapshot from a WorkerContact, lifecycle input, and optional lease.
+ * Extract a worker snapshot from a TeamMember, lifecycle input, and optional lease.
  * Convenience helper that avoids manual assembly.
  */
 export function buildSnapshot(
-  contact: WorkerContact,
+  member: TeamMember,
   lifecycleInput: LifecycleInput,
   lease?: LeaseRecord,
   pid?: number,
   processStartTime?: string,
 ): PlannerSnapshot {
   return {
-    workerId: contact.workerId,
-    contact,
+    workerId: member.memberId,
+    member,
     lifecycleInput,
     lease,
     processExists: lifecycleInput.processExists,

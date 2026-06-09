@@ -12,8 +12,8 @@
 - 想理解工具执行边界：读 [Tool Call And Observation](tool-call-observation.md)，它定义 terminal/session tool、screen observation、`inputSeq` 和 terminal facts。
 - 想理解用户消息和外部事件：读 [IM CLI Transport](im-cli-transport.md) 和 [Environment Model](environment-model.md)。
 - 想理解 CLI 能力生态：读 [Skill CLI](skill-cli.md)、[Code Intelligence CLI](code-intelligence-cli.md) 和 [MCP CLI](mcp-cli.md)。
-- 想理解 sub-agent 管理域：读 [Sub-agent Team Domain](subagent-team.md)。
-- 想试运行多 agent ticket/workspace/branch 协作：读 [Agent Team Trial Plan](agent-team-trial.md)。
+- 想理解 sub-agent 管理域：读 [Sub-agent Team Domain](subagent-team.md) 和 [Subagent Team Operating Guide](subagent-team-operating-guide.md)。当前 team 是轻量 roster/task/lifecycle 控制面，workspace/git/ledger 由任务指令或 evidence 决定。
+- 想试运行多 agent ticket/workspace/branch 协作：读 [Agent Team Trial Plan](agent-team-trial.md)，但不要把 workspace/branch/ledger 当成 roster 必填字段。
 - 想理解 resume/replay/eval：读 [Recovery And Replay](recovery-replay.md)。
 - 想理解持久化与调试文件：读 [State Layout](state-layout.md) 和 [State Storage And File Locking](state-storage-locking.md)。
 - 想理解观察界面：读 [TUI](tui.md)。
@@ -56,6 +56,9 @@
       supervisor/
         lifecycle-events.jsonl
         snapshot.json
+      team/
+        roster.json
+        events.jsonl
       workers/
         <workerId>/
           state.json
@@ -67,7 +70,7 @@
           step-0000-thinking.trace.txt
 ```
 
-`state.json` 是最新 run snapshot；`transcript.jsonl` 是 append-only audit ledger；`session.json` 保存 `ModelContextSession` snapshot 以支持 resume；`im/`、`environment/`、`skill-runs/`、`supervisor/`、`workers/` 都是 run-scoped；`debug/prompts/` 和 `debug/thinking/` 保存不适合直接进入 transcript/model-context 的调试 payload；`runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log` 保存完整 raw PTY 输出。模型看到的 `screen.text` 是一屏 semantic viewport，raw log 通过 `screen.logRef.path` 追溯。
+`state.json` 是最新 run snapshot；`transcript.jsonl` 是 append-only audit ledger；`session.json` 保存 `ModelContextSession` snapshot 以支持 resume；`im/`、`environment/`、`skill-runs/`、`supervisor/`、`team/`、`workers/` 都是 run-scoped；`team/roster.json` 是轻量成员花名册 snapshot；`debug/prompts/` 和 `debug/thinking/` 保存不适合直接进入 transcript/model-context 的调试 payload；`runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log` 保存完整 raw PTY 输出。模型看到的 `screen.text` 是一屏 semantic viewport，raw log 通过 `screen.logRef.path` 追溯。
 
 ## Keeping Docs Current
 

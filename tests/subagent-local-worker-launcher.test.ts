@@ -13,19 +13,19 @@ import {
   type GitPort,
   type Clock,
   type IdGenerator,
-  type ContactStorePort,
+  type RosterStorePort,
   type WorkerProcessState,
   type WorkerStatePort,
   type WorkerLaunchEffects,
   type WorkerLaunchResult,
 } from "../src/subagent/local-worker-launcher.js";
 import {
-  createContactRegistryState,
-  applyContactRegistryEvent,
-  type ContactRegistryState,
-  type ContactRegistryResult,
-  type ContactRegistryEvent,
-} from "../src/subagent/contact-registry.js";
+  createTeamRosterState,
+  applyTeamRosterEvent,
+  type TeamRosterState,
+  type TeamRosterResult,
+  type TeamRosterEvent,
+} from "../src/subagent/team-roster.js";
 
 // ---------------------------------------------------------------------------
 // Fake port implementations
@@ -68,15 +68,15 @@ function fakeGitPort(success: boolean = true): GitPort {
   };
 }
 
-function fakeContactStorePort(
-  initialState?: ContactRegistryState,
-): ContactStorePort {
-  let state: ContactRegistryState =
-    initialState ?? createContactRegistryState("fake-registry");
+function fakeRosterStorePort(
+  initialState?: TeamRosterState,
+): RosterStorePort {
+  let state: TeamRosterState =
+    initialState ?? createTeamRosterState("fake-registry");
   return {
     load: async () => state,
-    apply: async (event: ContactRegistryEvent) => {
-      const result = applyContactRegistryEvent(state, event);
+    apply: async (event: TeamRosterEvent) => {
+      const result = applyTeamRosterEvent(state, event);
       if (result.status !== "rejected") {
         state = result.state;
       }
@@ -318,14 +318,14 @@ describe("port type shapes", () => {
       git: fakeGitPort(),
       clock: fakeClock("2026-01-01T00:00:00.000Z"),
       ids: fakeIdGenerator("test"),
-      contacts: fakeContactStorePort(),
+      roster: fakeRosterStorePort(),
       workerState: fakeWorkerStatePort(),
     };
     expect(effects.spawn).toBeDefined();
     expect(effects.git).toBeDefined();
     expect(effects.clock).toBeDefined();
     expect(effects.ids).toBeDefined();
-    expect(effects.contacts).toBeDefined();
+    expect(effects.roster).toBeDefined();
     expect(effects.workerState).toBeDefined();
   });
 });
@@ -377,7 +377,7 @@ const buildEffects = (overrides?: Partial<{
   git: fakeGitPort(overrides?.gitSuccess ?? true),
   clock: fakeClock(overrides?.clockISO ?? "2026-06-05T15:00:00.000Z"),
   ids: fakeIdGenerator("test"),
-  contacts: fakeContactStorePort(),
+  roster: fakeRosterStorePort(),
   workerState: fakeWorkerStatePort(overrides?.workerStateWrites),
 });
 
@@ -393,8 +393,8 @@ describe("launchLocalWorker", () => {
       expect(result.channel).toBe("worker-coder-1");
       expect(result.branch).toBe("feature/x");
       expect(result.spawnedPid).toBe(12345);
-      expect(result.contact.workerId).toBe("coder-1");
-      expect(result.contact.status).toBe("active");
+      expect(result.member.memberId).toBe("coder-1");
+      expect(result.member.status).toBe("active");
     }
   });
 
@@ -490,35 +490,35 @@ describe("launchLocalWorker", () => {
     }
   });
 
-  it("fails at contact_register stage when contact store throws", async () => {
+  it("fails at member_add stage when roster store throws", async () => {
     const plan = buildLaunchPlan();
     const effects = {
       ...buildEffects(),
-      contacts: {
-        load: async () => createContactRegistryState("fake"),
+      roster: {
+        load: async () => createTeamRosterState("fake"),
         apply: async () => { throw new Error("store write rejected"); },
       },
     };
     const result = await launchLocalWorker(plan, effects);
     expect(result.kind).toBe("launch_failure");
     if (result.kind === "launch_failure") {
-      expect(result.stage).toBe("contact_register");
+      expect(result.stage).toBe("member_add");
       expect(result.error).toContain("store write rejected");
       expect(result.evidence.registeredEventId).toBeDefined();
     }
   });
 
-  it("fails at contact_register stage when worker_registered is rejected", async () => {
+  it("fails at member_add stage when member_added is rejected", async () => {
     const plan = buildLaunchPlan();
     const effects = {
       ...buildEffects(),
-      contacts: {
-        load: async () => createContactRegistryState("fake"),
+      roster: {
+        load: async () => createTeamRosterState("fake"),
         apply: async () => ({
           status: "rejected" as const,
-          state: createContactRegistryState("fake"),
+          state: createTeamRosterState("fake"),
           rejection: {
-            code: "worker_exists" as const,
+            code: "member_exists" as const,
             message: "worker already registered",
           },
         }),
@@ -527,32 +527,32 @@ describe("launchLocalWorker", () => {
     const result = await launchLocalWorker(plan, effects);
     expect(result.kind).toBe("launch_failure");
     if (result.kind === "launch_failure") {
-      expect(result.stage).toBe("contact_register");
+      expect(result.stage).toBe("member_add");
       expect(result.error).toContain("already registered");
       expect(result.evidence.registeredEventId).toBeDefined();
     }
   });
 
-  it("fails at contact_update stage when worker_updated is rejected", async () => {
+  it("fails at member_update stage when member_updated is rejected", async () => {
     const plan = buildLaunchPlan();
     let callCount = 0;
     const effects = {
       ...buildEffects(),
-      contacts: {
-        load: async () => createContactRegistryState("fake"),
+      roster: {
+        load: async () => createTeamRosterState("fake"),
         apply: async () => {
           callCount++;
           if (callCount === 2) {
             return {
               status: "rejected" as const,
-              state: createContactRegistryState("fake"),
+              state: createTeamRosterState("fake"),
               rejection: {
-                code: "unknown_worker" as const,
+                code: "unknown_member" as const,
                 message: "worker not found for update",
               },
             };
           }
-          const state = createContactRegistryState("fake");
+          const state = createTeamRosterState("fake");
           return { status: "applied" as const, state };
         },
       },
@@ -560,20 +560,20 @@ describe("launchLocalWorker", () => {
     const result = await launchLocalWorker(plan, effects);
     expect(result.kind).toBe("launch_failure");
     if (result.kind === "launch_failure") {
-      expect(result.stage).toBe("contact_update");
+      expect(result.stage).toBe("member_update");
       expect(result.error).toContain("not found for update");
       expect(result.evidence.spawnResult).toBeDefined();
     }
   });
 
-  it("returns contact_update failure when worker launched but update fails", async () => {
+  it("returns member_update failure when worker launched but update fails", async () => {
     const plan = buildLaunchPlan();
     let callCount = 0;
     const effects = {
       ...buildEffects(),
-      contacts: {
-        load: async () => createContactRegistryState("fake"),
-        apply: async (event: ContactRegistryEvent) => {
+      roster: {
+        load: async () => createTeamRosterState("fake"),
+        apply: async (event: TeamRosterEvent) => {
           callCount++;
           if (callCount >= 2) {
             throw new Error("update rejected");
@@ -581,7 +581,7 @@ describe("launchLocalWorker", () => {
           // First call (register) succeeds
           return {
             status: "applied" as const,
-            state: createContactRegistryState("fake"),
+            state: createTeamRosterState("fake"),
           };
         },
       },
@@ -589,27 +589,27 @@ describe("launchLocalWorker", () => {
     const result = await launchLocalWorker(plan, effects);
     expect(result.kind).toBe("launch_failure");
     if (result.kind === "launch_failure") {
-      expect(result.stage).toBe("contact_update");
+      expect(result.stage).toBe("member_update");
       expect(result.error).toContain("update rejected");
       expect(result.evidence.runId).toBe("run-001");
       expect(result.evidence.spawnResult).toBeDefined();
     }
   });
 
-  it("fails at contact_status stage when status change is rejected", async () => {
+  it("fails at member_status stage when status change is rejected", async () => {
     const plan = buildLaunchPlan();
     let callCount = 0;
     const effects = {
       ...buildEffects(),
-      contacts: {
-        load: async () => createContactRegistryState("fake"),
-        apply: async (event: ContactRegistryEvent) => {
+      roster: {
+        load: async () => createTeamRosterState("fake"),
+        apply: async (event: TeamRosterEvent) => {
           callCount++;
           if (callCount === 3) {
             // Third call is status change — reject it
             return {
               status: "rejected" as const,
-              state: createContactRegistryState("fake"),
+              state: createTeamRosterState("fake"),
               rejection: {
                 code: "invalid_transition" as const,
                 message: "cannot set active on idle",
@@ -617,7 +617,7 @@ describe("launchLocalWorker", () => {
             };
           }
           // First two calls succeed
-          const state = createContactRegistryState("fake");
+          const state = createTeamRosterState("fake");
           return { status: "applied" as const, state };
         },
       },
@@ -625,23 +625,23 @@ describe("launchLocalWorker", () => {
     const result = await launchLocalWorker(plan, effects);
     expect(result.kind).toBe("launch_failure");
     if (result.kind === "launch_failure") {
-      expect(result.stage).toBe("contact_status");
+      expect(result.stage).toBe("member_status");
       expect(result.error).toContain("cannot set active on idle");
       expect(result.evidence.runId).toBe("run-001");
       expect(result.evidence.spawnResult).toBeDefined();
     }
   });
 
-  it("returns contact from registry in success result", async () => {
+  it("returns member from roster in success result", async () => {
     const plan = buildLaunchPlan();
     const effects = buildEffects();
     const result = await launchLocalWorker(plan, effects);
     expect(result.kind).toBe("launch_success");
     if (result.kind === "launch_success") {
-      expect(result.contact.workerId).toBe("coder-1");
-      expect(result.contact.workspace).toBe("/home/workspace");
-      expect(result.contact.branch).toBe("feature/x");
-      expect(result.contact.runId).toBe("run-001");
+      expect(result.member.memberId).toBe("coder-1");
+      expect(result.member.metadata?.workspace).toBe("/home/workspace");
+      expect(result.member.metadata?.branch).toBe("feature/x");
+      expect(result.member.runId).toBe("run-001");
     }
   });
   it("worker state includes terminal status fields in WorkerProcessState type", () => {

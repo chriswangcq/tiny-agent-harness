@@ -33,7 +33,7 @@ describe("sub-agent team FSM core", () => {
         title: "Inspect issue",
       },
       {
-        kind: "worker_registered",
+        kind: "member_added",
         eventId: "e2",
         workerId: "worker-1",
         label: "reviewer",
@@ -73,7 +73,7 @@ describe("sub-agent team FSM core", () => {
   it("records failures and releases assigned workers", () => {
     const running = applyAll(createSubAgentTeamState("team-a"), [
       { kind: "task_submitted", eventId: "e1", taskId: "task-1", title: "Run tests" },
-      { kind: "worker_registered", eventId: "e2", workerId: "worker-1" },
+      { kind: "member_added", eventId: "e2", workerId: "worker-1" },
       { kind: "task_assigned", eventId: "e3", taskId: "task-1", workerId: "worker-1" },
       { kind: "task_started", eventId: "e4", taskId: "task-1" },
     ]);
@@ -148,9 +148,9 @@ describe("sub-agent team FSM core", () => {
   it("rejects invalid assignment without mutating state", () => {
     const state = applyAll(createSubAgentTeamState("team-a"), [
       { kind: "task_submitted", eventId: "e1", taskId: "task-1", title: "Inspect" },
-      { kind: "worker_registered", eventId: "e2", workerId: "worker-1" },
+      { kind: "member_added", eventId: "e2", workerId: "worker-1" },
       { kind: "task_submitted", eventId: "e3", taskId: "task-2", title: "Build" },
-      { kind: "worker_registered", eventId: "e4", workerId: "worker-2" },
+      { kind: "member_added", eventId: "e4", workerId: "worker-2" },
       { kind: "task_assigned", eventId: "e5", taskId: "task-1", workerId: "worker-1" },
     ]);
 
@@ -169,7 +169,7 @@ describe("sub-agent team FSM core", () => {
   it("marks a busy worker offline and fails the active task", () => {
     const running = applyAll(createSubAgentTeamState("team-a"), [
       { kind: "task_submitted", eventId: "e1", taskId: "task-1", title: "Inspect" },
-      { kind: "worker_registered", eventId: "e2", workerId: "worker-1" },
+      { kind: "member_added", eventId: "e2", workerId: "worker-1" },
       { kind: "task_assigned", eventId: "e3", taskId: "task-1", workerId: "worker-1" },
       { kind: "task_started", eventId: "e4", taskId: "task-1" },
     ]);
@@ -196,8 +196,8 @@ describe("sub-agent team FSM core", () => {
     const state = applyAll(createSubAgentTeamState("team-a"), [
       { kind: "task_submitted", eventId: "e1", taskId: "task-1", title: "Inspect" },
       { kind: "task_submitted", eventId: "e2", taskId: "task-2", title: "Write" },
-      { kind: "worker_registered", eventId: "e3", workerId: "worker-2" },
-      { kind: "worker_registered", eventId: "e4", workerId: "worker-1" },
+      { kind: "member_added", eventId: "e3", workerId: "worker-2" },
+      { kind: "member_added", eventId: "e4", workerId: "worker-1" },
       { kind: "task_assigned", eventId: "e5", taskId: "task-1", workerId: "worker-2" },
       { kind: "task_started", eventId: "e6", taskId: "task-1" },
     ]);

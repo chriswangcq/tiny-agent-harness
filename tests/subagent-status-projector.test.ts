@@ -40,8 +40,8 @@ function makeConfig(overrides: Record<string, unknown> = {}) {
 
 describe("status projector", () => {
   it("classifies terminated worker", () => {
-    const contact = makeContact({ status: "terminated", lastHeartbeat: undefined, lastEvidence: undefined });
-    const input: ProjectorInput = { contact, config: makeConfig() };
+    const member = makeContact({ status: "terminated", lastHeartbeat: undefined, lastEvidence: undefined });
+    const input: ProjectorInput = { member, config: makeConfig() };
     const result = projectWorkerStatus(input);
 
     expect(result.status).toBe("terminated");
@@ -50,8 +50,8 @@ describe("status projector", () => {
   });
 
   it("classifies offline worker", () => {
-    const contact = makeContact({ status: "offline", lastHeartbeat: undefined });
-    const input: ProjectorInput = { contact, config: makeConfig() };
+    const member = makeContact({ status: "offline", lastHeartbeat: undefined });
+    const input: ProjectorInput = { member, config: makeConfig() };
     const result = projectWorkerStatus(input);
 
     expect(result.status).toBe("offline");
@@ -59,13 +59,13 @@ describe("status projector", () => {
   });
 
   it("classifies healthy active worker with recent heartbeat and evidence", () => {
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       lastHeartbeat: "2026-06-06T03:29:00.000Z",
       lastEvidence: "2026-06-06T03:28:00.000Z",
     });
     const input: ProjectorInput = {
-      contact,
+      member,
       config: makeConfig(),
       runSnapshot: { status: "running", lastStepAt: "2026-06-06T03:29:30.000Z" },
       imSnapshot: { lastImSentAt: "2026-06-06T03:27:00.000Z" },
@@ -81,12 +81,12 @@ describe("status projector", () => {
   });
 
   it("classifies idle healthy worker", () => {
-    const contact = makeContact({
+    const member = makeContact({
       status: "idle",
       lastHeartbeat: "2026-06-06T03:29:00.000Z",
       lastEvidence: "2026-06-06T03:28:00.000Z",
     });
-    const input: ProjectorInput = { contact, config: makeConfig() };
+    const input: ProjectorInput = { member, config: makeConfig() };
     const result = projectWorkerStatus(input);
 
     expect(result.status).toBe("idle");
@@ -94,12 +94,12 @@ describe("status projector", () => {
   });
 
   it("flags stale heartbeat", () => {
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       lastHeartbeat: "2026-06-06T03:20:00.000Z", // 10 min ago
       lastEvidence: "2026-06-06T03:20:00.000Z",
     });
-    const input: ProjectorInput = { contact, config: makeConfig() };
+    const input: ProjectorInput = { member, config: makeConfig() };
     const result = projectWorkerStatus(input);
 
     expect(result.status).toBe("degraded");
@@ -108,12 +108,12 @@ describe("status projector", () => {
   });
 
   it("flags missing heartbeat", () => {
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       lastHeartbeat: undefined,
       lastEvidence: "2026-06-06T03:28:00.000Z",
     });
-    const input: ProjectorInput = { contact, config: makeConfig() };
+    const input: ProjectorInput = { member, config: makeConfig() };
     const result = projectWorkerStatus(input);
 
     expect(result.status).toBe("degraded");
@@ -121,25 +121,25 @@ describe("status projector", () => {
   });
 
   it("flags missing evidence", () => {
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       lastHeartbeat: "2026-06-06T03:29:00.000Z",
       lastEvidence: undefined,
     });
-    const input: ProjectorInput = { contact, config: makeConfig() };
+    const input: ProjectorInput = { member, config: makeConfig() };
     const result = projectWorkerStatus(input);
 
     expect(result.riskFlags).toContain("missing_evidence");
   });
 
   it("flags IM silence", () => {
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       lastHeartbeat: "2026-06-06T03:29:00.000Z",
       lastEvidence: "2026-06-06T03:28:00.000Z",
     });
     const input: ProjectorInput = {
-      contact,
+      member,
       config: makeConfig(),
       imSnapshot: { lastImSentAt: "2026-06-06T03:10:00.000Z" }, // 20 min ago
     };
@@ -150,13 +150,13 @@ describe("status projector", () => {
   });
 
   it("flags run stall", () => {
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       lastHeartbeat: "2026-06-06T03:29:00.000Z",
       lastEvidence: "2026-06-06T03:28:00.000Z",
     });
     const input: ProjectorInput = {
-      contact,
+      member,
       config: makeConfig(),
       runSnapshot: { status: "waiting_for_io", lastStepAt: "2026-06-06T03:15:00.000Z" },
     };
@@ -167,13 +167,13 @@ describe("status projector", () => {
   });
 
   it("flags ledger stall", () => {
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       lastHeartbeat: "2026-06-06T03:29:00.000Z",
       lastEvidence: "2026-06-06T03:28:00.000Z",
     });
     const input: ProjectorInput = {
-      contact,
+      member,
       config: makeConfig(),
       ledgerSnapshot: {
         ledgerId: "L001",
@@ -187,13 +187,13 @@ describe("status projector", () => {
   });
 
   it("classifies stuck worker with multiple risk flags", () => {
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       lastHeartbeat: "2026-06-06T02:00:00.000Z", // 90 min ago
       lastEvidence: "2026-06-06T02:00:00.000Z",
     });
     const input: ProjectorInput = {
-      contact,
+      member,
       config: makeConfig(),
       runSnapshot: { status: "waiting_for_io", lastStepAt: "2026-06-06T02:00:00.000Z" },
       imSnapshot: { lastImSentAt: "2026-06-06T02:00:00.000Z" },
@@ -210,13 +210,13 @@ describe("status projector", () => {
   });
 
   it("classifies done worker (all work complete)", () => {
-    const contact = makeContact({
+    const member = makeContact({
       status: "idle",
       lastHeartbeat: "2026-06-06T03:28:00.000Z",
       lastEvidence: "2026-06-06T03:25:00.000Z",
     });
     const input: ProjectorInput = {
-      contact,
+      member,
       config: makeConfig(),
       runSnapshot: { status: "finished", lastStepAt: "2026-06-06T03:25:00.000Z" },
       imSnapshot: { lastImSentAt: "2026-06-06T03:27:00.000Z" },
@@ -235,13 +235,13 @@ describe("status projector", () => {
   // GAP 5: IM receive should not falsely signal done
   it("avoids false done from single IM event", () => {
     // Run is still active, just an IM was sent
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       lastHeartbeat: "2026-06-06T03:29:00.000Z",
       lastEvidence: "2026-06-06T03:28:00.000Z",
     });
     const input: ProjectorInput = {
-      contact,
+      member,
       config: makeConfig(),
       runSnapshot: { status: "running", lastStepAt: "2026-06-06T03:29:00.000Z" },
       imSnapshot: { lastImSentAt: "2026-06-06T03:29:30.000Z" }, // IM just sent
@@ -259,26 +259,26 @@ describe("status projector", () => {
   });
 
   it("returns unknown for worker with unrecognized status", () => {
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       lastHeartbeat: "2026-06-06T03:29:00.000Z",
       lastEvidence: "2026-06-06T03:28:00.000Z",
     });
     // Monkey-patch to an unrecognized status value
-    const weirdContact = { ...contact, status: "bogus" as never };
-    const input: ProjectorInput = { contact: weirdContact, config: makeConfig() };
+    const weirdContact = { ...member, status: "bogus" as never };
+    const input: ProjectorInput = { member: weirdContact, config: makeConfig() };
     const result = projectWorkerStatus(input);
 
     expect(result.status).toBe("unknown");
   });
 
   it("computes correct age from timestamps", () => {
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       lastHeartbeat: "2026-06-06T03:25:00.000Z",
     });
     const input: ProjectorInput = {
-      contact,
+      member,
       config: makeConfig({ now: "2026-06-06T03:30:00.000Z" }),
     };
     const result = projectWorkerStatus(input);
@@ -287,8 +287,8 @@ describe("status projector", () => {
   });
 
   it("handles missing optional snapshots gracefully", () => {
-    const contact = makeContact({ status: "active" });
-    const input: ProjectorInput = { contact, config: makeConfig() };
+    const member = makeContact({ status: "active" });
+    const input: ProjectorInput = { member, config: makeConfig() };
     const result = projectWorkerStatus(input);
 
     expect(result.status).toBeDefined();
@@ -296,14 +296,14 @@ describe("status projector", () => {
   });
 
   it("accepts lifecycle template to adjust thresholds", () => {
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       role: "master",
       lastHeartbeat: "2026-06-06T03:29:00.000Z",
       lastEvidence: "2026-06-06T03:28:00.000Z",
     });
     const input: ProjectorInput = {
-      contact,
+      member,
       config: makeConfig(),
       lifecycle: {
         role: "master",
@@ -317,13 +317,13 @@ describe("status projector", () => {
   });
 
   it("stale worker detected with tight lifecycle thresholds", () => {
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       lastHeartbeat: "2026-06-06T03:10:00.000Z", // 20 min ago
       lastEvidence: "2026-06-06T03:10:00.000Z",
     });
     const input: ProjectorInput = {
-      contact,
+      member,
       config: makeConfig(),
       lifecycle: {
         role: "coder",
@@ -343,9 +343,9 @@ describe("status projector", () => {
 // Age computation purity contract
 describe("purity contract", () => {
   it("produces same output for same inputs", () => {
-    const contact = makeContact({ status: "active" });
+    const member = makeContact({ status: "active" });
     const config = makeConfig();
-    const input: ProjectorInput = { contact, config };
+    const input: ProjectorInput = { member, config };
 
     const r1 = projectWorkerStatus(input);
     const r2 = projectWorkerStatus(input);
@@ -354,12 +354,12 @@ describe("purity contract", () => {
   });
 
   it("does not call Date.now (verified by deterministic age)", () => {
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       lastHeartbeat: "2026-06-06T03:00:00.000Z",
     });
     const config = makeConfig({ now: "2026-06-06T03:30:00.000Z" });
-    const result = projectWorkerStatus({ contact, config });
+    const result = projectWorkerStatus({ member, config });
 
     // Age should be exactly 30 minutes = 1,800,000 ms
     expect(result.evidence.heartbeat?.ageMs).toBe(1_800_000);
@@ -376,10 +376,10 @@ describe("GAP 1: transcriptSnapshot removed", () => {
     // This is a type-level test: if transcriptSnapshot still exists on
     // ProjectorInput, this compiles; if removed, it is a compile error.
     // Runtime test: passing transcriptSnapshot should not be required.
-    const contact = makeContact();
+    const member = makeContact();
     const config = makeConfig();
     // ProjectorInput should NOT require transcriptSnapshot
-    const input: ProjectorInput = { contact, config };
+    const input: ProjectorInput = { member, config };
     const result = projectWorkerStatus(input);
     expect(result.status).toBeDefined();
   });
@@ -395,11 +395,11 @@ describe("GAP 1: transcriptSnapshot removed", () => {
 describe("GAP 2: no Date constructor", () => {
   it("isoToMs rejects invalid ISO with 0 instead of NaN", () => {
     // Invalid ISO should produce 0 (or some safe default), not NaN.
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       lastHeartbeat: "not-a-date",
     });
-    const input: ProjectorInput = { contact, config: makeConfig() };
+    const input: ProjectorInput = { member, config: makeConfig() };
     const result = projectWorkerStatus(input);
 
     // Should not propagate NaN into ageMs
@@ -410,11 +410,11 @@ describe("GAP 2: no Date constructor", () => {
   });
 
   it("timestamp with weird format produces finite number", () => {
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       lastHeartbeat: "2026-06-06 03:00:00", // space instead of T
     });
-    const input: ProjectorInput = { contact, config: makeConfig() };
+    const input: ProjectorInput = { member, config: makeConfig() };
     const result = projectWorkerStatus(input);
 
     // Must not crash, must produce a finite ageMs or undefined
@@ -424,11 +424,11 @@ describe("GAP 2: no Date constructor", () => {
   });
 
   it("empty string timestamp handled", () => {
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       lastHeartbeat: "",
     });
-    const input: ProjectorInput = { contact, config: makeConfig() };
+    const input: ProjectorInput = { member, config: makeConfig() };
     const result = projectWorkerStatus(input);
 
     // Must not crash; empty string is effectively missing
@@ -442,24 +442,24 @@ describe("GAP 2: no Date constructor", () => {
 // GAP 3: Invalid/missing timestamp behaviour
 describe("GAP 3: invalid timestamp behaviour", () => {
   it("null timestamp is treated as missing", () => {
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       lastHeartbeat: null,
     });
-    const input: ProjectorInput = { contact, config: makeConfig() };
+    const input: ProjectorInput = { member, config: makeConfig() };
     const result = projectWorkerStatus(input);
     // null should be treated like undefined (missing)
     expect(result.riskFlags).toContain("missing_heartbeat");
     expect(result.evidence.heartbeat).toBeUndefined();
   });
 
-  it("undefined lastEvidence on active contact flags missing", () => {
-    const contact = makeContact({
+  it("undefined lastEvidence on active member flags missing", () => {
+    const member = makeContact({
       status: "active",
       lastHeartbeat: "2026-06-06T03:29:00.000Z",
       lastEvidence: undefined,
     });
-    const input: ProjectorInput = { contact, config: makeConfig() };
+    const input: ProjectorInput = { member, config: makeConfig() };
     const result = projectWorkerStatus(input);
 
     expect(result.riskFlags).toContain("missing_evidence");
@@ -467,16 +467,16 @@ describe("GAP 3: invalid timestamp behaviour", () => {
   });
 });
 
-// GAP 4: stale contact maps to degraded (not healthy)
+// GAP 4: stale member maps to degraded (not healthy)
 //        and no_contact risk flag is removed
-describe("GAP 4: stale contact semantics and no_contact removed", () => {
-  it("stale contact status maps to degraded, not healthy", () => {
-    const contact = makeContact({
+describe("GAP 4: stale member semantics and no_contact removed", () => {
+  it("stale member status maps to degraded, not healthy", () => {
+    const member = makeContact({
       status: "stale",
       lastHeartbeat: "2026-06-06T03:29:00.000Z",
       lastEvidence: "2026-06-06T03:28:00.000Z",
     });
-    const input: ProjectorInput = { contact, config: makeConfig() };
+    const input: ProjectorInput = { member, config: makeConfig() };
     const result = projectWorkerStatus(input);
 
     // Stale should NOT be "healthy"
@@ -488,8 +488,8 @@ describe("GAP 4: stale contact semantics and no_contact removed", () => {
     // If no_contact still exists on the union, prove it's removed.
     // Using a type assertion: we can't runtime-test a union exhaustively
     // but we can check that riskFlags array never contains "no_contact".
-    const contact = makeContact();
-    const input: ProjectorInput = { contact, config: makeConfig() };
+    const member = makeContact();
+    const input: ProjectorInput = { member, config: makeConfig() };
     const result = projectWorkerStatus(input);
     expect(result.riskFlags).not.toContain("no_contact");
   });
@@ -499,13 +499,13 @@ describe("GAP 4: stale contact semantics and no_contact removed", () => {
 describe("GAP 5: IM receive/send semantics", () => {
   it("imLastReceivedAt contributes to im_silence risk flag", () => {
     // Both sent and received are old -> im_silence
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       lastHeartbeat: "2026-06-06T03:29:00.000Z",
       lastEvidence: "2026-06-06T03:28:00.000Z",
     });
     const input: ProjectorInput = {
-      contact,
+      member,
       config: makeConfig(),
       imSnapshot: {
         lastImSentAt: "2026-06-06T03:10:00.000Z",
@@ -518,13 +518,13 @@ describe("GAP 5: IM receive/send semantics", () => {
 
   it("recent IM received but old sent still flags im_silence", () => {
     // Worker hasn't sent anything but has received recent user message
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       lastHeartbeat: "2026-06-06T03:29:00.000Z",
       lastEvidence: "2026-06-06T03:28:00.000Z",
     });
     const input: ProjectorInput = {
-      contact,
+      member,
       config: makeConfig(),
       imSnapshot: {
         lastImSentAt: "2026-06-06T03:10:00.000Z",
@@ -539,13 +539,13 @@ describe("GAP 5: IM receive/send semantics", () => {
 
   it("user IM received alone does not make worker done", () => {
     // Only IM, no run finished, no ledger clean
-    const contact = makeContact({
+    const member = makeContact({
       status: "active",
       lastHeartbeat: "2026-06-06T03:29:00.000Z",
       lastEvidence: "2026-06-06T03:28:00.000Z",
     });
     const input: ProjectorInput = {
-      contact,
+      member,
       config: makeConfig(),
       imSnapshot: {
         lastImSentAt: "2026-06-06T03:29:00.000Z",

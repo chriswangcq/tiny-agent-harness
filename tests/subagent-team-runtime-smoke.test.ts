@@ -10,17 +10,17 @@
 
 import { describe, expect, it } from "vitest";
 
-// P6-01: Contact registry
+// P6-01: Team roster
 import {
-  applyContactRegistryEvent,
-  createContactRegistryState,
-  lookupWorker,
-  listWorkersByRole,
-  listWorkersByStatus,
-  summarizeContactRegistry,
-  type ContactRegistryEvent,
-  type ContactRegistryState,
-} from "../src/subagent/contact-registry.js";
+  applyTeamRosterEvent,
+  createTeamRosterState,
+  lookupMember,
+  listMembersByRole,
+  listMembersByStatus,
+  summarizeTeamRoster,
+  type TeamRosterEvent,
+  type TeamRosterState,
+} from "../src/subagent/team-roster.js";
 
 // P6-02: Directory store
 import {
@@ -53,7 +53,7 @@ import {
   type ProjectorInput,
   type ProjectorConfig,
 } from "../src/subagent/status-projector.js";
-import type { WorkerContact } from "../src/subagent/contact-registry.js";
+import type { TeamMember } from "../src/subagent/team-roster.js";
 
 // P6-06: Handoff evidence
 import {
@@ -68,13 +68,13 @@ import {
 // Helpers
 // ===========================================================================
 
-function applyContactEvents(
-  state: ContactRegistryState,
-  events: ContactRegistryEvent[],
-): ContactRegistryState {
+function applyRosterEvents(
+  state: TeamRosterState,
+  events: TeamRosterEvent[],
+): TeamRosterState {
   return events.reduce((s, e) => {
-    const r = applyContactRegistryEvent(s, e);
-    if (r.status !== "applied") throw new Error(`contact ${e.eventId}: ${r.status}`);
+    const r = applyTeamRosterEvent(s, e);
+    if (r.status !== "applied") throw new Error(`roster ${e.eventId}: ${r.status}`);
     return r.state;
   }, state);
 }
@@ -90,19 +90,26 @@ function applyTeamEvents(
   }, state);
 }
 
-/** Build a minimal WorkerContact for projector input */
-function makeContact(overrides: Partial<WorkerContact> = {}): WorkerContact {
+/** Build a minimal TeamMember for projector input */
+function makeMember(
+  overrides: Partial<TeamMember> & { workerId?: string; ledgerId?: string } = {},
+): TeamMember {
+  const memberId = overrides.memberId ?? overrides.workerId ?? "coder-1";
+  const { workerId: _workerId, ledgerId: _ledgerId, memberId: _memberId, ...rest } = overrides;
   return {
-    workerId: "coder-1",
+    memberId,
     role: "coder",
-    workspace: "/ws/p6",
-    branch: "codex/p6/09",
-    imChannel: "p6-09",
-    allowedActions: ["read", "write", "test"],
+    channel: "p6-09",
+    metadata: {
+      workspace: "/ws/p6",
+      branch: "codex/p6/09",
+      allowedActions: "read,write,test",
+      ...(overrides.ledgerId ? { ledgerId: overrides.ledgerId } : {}),
+    },
     status: "active",
     lastHeartbeat: "2026-06-06T11:59:00.000Z",
     lastEvidence: "2026-06-06T11:58:00.000Z",
-    ...overrides,
+    ...rest,
   };
 }
 
@@ -136,33 +143,33 @@ function makeEvidence(overrides: Partial<WorkerHandoffEvidence> = {}): WorkerHan
 }
 
 // ===========================================================================
-// P6-01: Contact registry smoke
+// P6-01: Team roster smoke
 // ===========================================================================
 
-describe("P6-01 contact registry smoke", () => {
-  it("registers workers, supports lookup and summary", () => {
-    const state = applyContactEvents(createContactRegistryState("team-p6-09"), [
+describe("P6-01 team roster smoke", () => {
+  it("adds members, supports lookup and summary", () => {
+    const state = applyRosterEvents(createTeamRosterState("team-p6-09"), [
       {
-        kind: "worker_registered", eventId: "e1", workerId: "coder-1",
-        role: "coder", workspace: "/ws/p6-09", branch: "codex/p6/09",
-        imChannel: "p6-09", allowedActions: ["read", "write", "test"],
+        kind: "member_added", eventId: "e1", memberId: "coder-1",
+        role: "coder", channel: "p6-09",
+        metadata: { workspace: "/ws/p6-09", branch: "codex/p6/09" },
       },
       {
-        kind: "worker_registered", eventId: "e2", workerId: "reviewer-1",
-        role: "reviewer", workspace: "/ws/p6-09", branch: "codex/p6/09",
-        imChannel: "p6-09-review", allowedActions: ["read", "review"],
+        kind: "member_added", eventId: "e2", memberId: "reviewer-1",
+        role: "reviewer", channel: "p6-09-review",
+        metadata: { workspace: "/ws/p6-09", branch: "codex/p6/09" },
       },
     ]);
 
-    expect(lookupWorker(state, "coder-1")).toBeDefined();
-    expect(lookupWorker(state, "coder-1")!.role).toBe("coder");
-    expect(listWorkersByRole(state, "coder")).toHaveLength(1);
+    expect(lookupMember(state, "coder-1")).toBeDefined();
+    expect(lookupMember(state, "coder-1")!.role).toBe("coder");
+    expect(listMembersByRole(state, "coder")).toHaveLength(1);
     // Newly registered workers are idle by default
-    expect(listWorkersByStatus(state, "idle")).toHaveLength(2);
+    expect(listMembersByStatus(state, "idle")).toHaveLength(2);
 
-    const summary = summarizeContactRegistry(state);
-    expect(summary.totalWorkers).toBe(2);
-    expect(summary.workersByStatus.idle).toBe(2);
+    const summary = summarizeTeamRoster(state);
+    expect(summary.totalMembers).toBe(2);
+    expect(summary.membersByStatus.idle).toBe(2);
   });
 });
 
@@ -174,20 +181,20 @@ describe("P6-02 directory store smoke", () => {
   it("plans team directory layout", () => {
     const layout = planTeamDirectoryLayout("/home/project");
     expect(layout.teamDir).toBe("/home/project/team");
-    expect(layout.registryFile).toBe("/home/project/team/contact-registry.json");
+    expect(layout.rosterFile).toBe("/home/project/team/roster.json");
     expect(layout.eventsFile).toBe("/home/project/team/events.jsonl");
   });
 
-  it("creates valid snapshot from registry", () => {
-    const registry = createContactRegistryState("team-p6-09");
+  it("creates valid snapshot from roster", () => {
+    const roster = createTeamRosterState("team-p6-09");
     // API: createTeamDirectorySnapshot(state, now, createdAt?)
     const snapshot = createTeamDirectorySnapshot(
-      registry,
+      roster,
       "2026-06-06T12:00:00.000Z",
     );
     const validation = validateTeamDirectorySnapshot(snapshot);
     expect(validation.valid).toBe(true);
-    expect(snapshot.registryId).toBe("team-p6-09");
+    expect(snapshot.teamId).toBe("team-p6-09");
   });
 });
 
@@ -198,7 +205,7 @@ describe("P6-02 directory store smoke", () => {
 describe("P6-03 team FSM smoke", () => {
   it("runs full lifecycle: register → submit → assign → start → succeed", () => {
     const state = applyTeamEvents(createSubAgentTeamState("team-p6-09"), [
-      { kind: "worker_registered", eventId: "e1", workerId: "w1", label: "coder" },
+      { kind: "member_added", eventId: "e1", workerId: "w1", label: "coder" },
       { kind: "task_submitted", eventId: "e2", taskId: "t1", title: "Smoke test" },
       { kind: "task_assigned", eventId: "e3", taskId: "t1", workerId: "w1" },
       { kind: "task_started", eventId: "e4", taskId: "t1" },
@@ -218,7 +225,7 @@ describe("P6-03 team FSM smoke", () => {
 
   it("handles task failure", () => {
     const state = applyTeamEvents(createSubAgentTeamState("team-p6-09"), [
-      { kind: "worker_registered", eventId: "e1", workerId: "w1", label: "coder" },
+      { kind: "member_added", eventId: "e1", workerId: "w1", label: "coder" },
       { kind: "task_submitted", eventId: "e2", taskId: "t1", title: "Failing" },
       { kind: "task_assigned", eventId: "e3", taskId: "t1", workerId: "w1" },
       { kind: "task_started", eventId: "e4", taskId: "t1" },
@@ -233,7 +240,7 @@ describe("P6-03 team FSM smoke", () => {
 
   it("lists active assignments", () => {
     const state = applyTeamEvents(createSubAgentTeamState("team-p6-09"), [
-      { kind: "worker_registered", eventId: "e1", workerId: "w1", label: "coder" },
+      { kind: "member_added", eventId: "e1", workerId: "w1", label: "coder" },
       { kind: "task_submitted", eventId: "e2", taskId: "t1", title: "T1" },
       { kind: "task_assigned", eventId: "e3", taskId: "t1", workerId: "w1" },
       { kind: "task_started", eventId: "e4", taskId: "t1" },
@@ -311,17 +318,17 @@ describe("P6-04 worker launcher planning smoke", () => {
 describe("P6-05 status projector smoke", () => {
   it("classifies healthy worker", () => {
     const r = projectWorkerStatus({
-      contact: makeContact(),
+      member: makeMember(),
       config: makeConfig(),
     });
     // WorkerStatusProjection uses 'status' not 'code'
     expect(r.status).toBe("healthy");
-    expect(r.contactStatus).toBe("active");
+    expect(r.memberStatus).toBe("active");
   });
 
   it("detects stale heartbeat", () => {
     const r = projectWorkerStatus({
-      contact: makeContact({ lastHeartbeat: "2026-06-06T11:50:00.000Z" }),
+      member: makeMember({ lastHeartbeat: "2026-06-06T11:50:00.000Z" }),
       config: makeConfig(),
     });
     expect(r.status).toBe("degraded");
@@ -331,7 +338,7 @@ describe("P6-05 status projector smoke", () => {
 
   it("classifies terminated worker", () => {
     const r = projectWorkerStatus({
-      contact: makeContact({ status: "terminated" }),
+      member: makeMember({ status: "terminated" }),
       config: makeConfig(),
     });
     expect(r.status).toBe("terminated");
@@ -379,27 +386,27 @@ describe("P6-06 handoff evidence smoke", () => {
 // ===========================================================================
 
 describe("E2E runtime chain", () => {
-  it("chains: register contact → create team → plan launch → project status → record evidence", () => {
-    // 1. Contact registry
-    const registry = applyContactEvents(createContactRegistryState("team-p6-09"), [
+  it("chains: add member → create team → plan launch → project status → record evidence", () => {
+    // 1. Team roster
+    const roster = applyRosterEvents(createTeamRosterState("team-p6-09"), [
       {
-        kind: "worker_registered", eventId: "e1", workerId: "coder-1",
-        role: "coder", workspace: "/tmp/e2e-test", branch: "codex/p6/09",
-        imChannel: "p6-09", allowedActions: ["read", "write", "test"],
+        kind: "member_added", eventId: "e1", memberId: "coder-1",
+        role: "coder", channel: "p6-09",
+        metadata: { workspace: "/tmp/e2e-test", branch: "codex/p6/09" },
       },
     ]);
-    expect(lookupWorker(registry, "coder-1")).toBeDefined();
+    expect(lookupMember(roster, "coder-1")).toBeDefined();
 
     // 2. Directory store snapshot
     const snapshot = createTeamDirectorySnapshot(
-      registry,
+      roster,
       "2026-06-06T12:00:00.000Z",
     );
     expect(validateTeamDirectorySnapshot(snapshot).valid).toBe(true);
 
     // 3. Team FSM
     const teamState = applyTeamEvents(createSubAgentTeamState("team-p6-09"), [
-      { kind: "worker_registered", eventId: "te1", workerId: "coder-1", label: "coder" },
+      { kind: "member_added", eventId: "te1", workerId: "coder-1", label: "coder" },
       { kind: "task_submitted", eventId: "te2", taskId: "t1", title: "E2E task" },
       { kind: "task_assigned", eventId: "te3", taskId: "t1", workerId: "coder-1" },
       { kind: "task_started", eventId: "te4", taskId: "t1" },
@@ -424,19 +431,11 @@ describe("E2E runtime chain", () => {
 
     // 5. Status projector
     const proj = projectWorkerStatus({
-      contact: {
-        workerId: "coder-1",
-        role: "coder",
-        workspace: "/tmp/e2e-test",
-        branch: "codex/p6/09",
-        imChannel: "p6-09",
-        allowedActions: ["read", "write", "test"],
-        status: "active",
-        lastHeartbeat: "2026-06-06T11:59:00.000Z",
-        lastEvidence: "2026-06-06T11:58:00.000Z",
+      member: makeMember({
+        memberId: "coder-1",
         runId: plan.runId,
         ledgerId: "L20260606-153739",
-      },
+      }),
       config: {
         now: "2026-06-06T12:00:00.000Z",
         heartbeatMaxAgeMs: 300_000,

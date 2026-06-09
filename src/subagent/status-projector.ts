@@ -2,7 +2,7 @@
 // Derives worker status from explicit input snapshots.
 // No IO, no hidden clock reads, no ambient environment access, no side effects.
 
-import type { WorkerContact } from "./contact-registry.js";
+import type { TeamMember } from "./team-roster.js";
 
 // ---- Input types ----
 
@@ -53,7 +53,7 @@ export interface ProjectorConfig {
 }
 
 export interface ProjectorInput {
-  contact: WorkerContact;
+  member: TeamMember;
   runSnapshot?: RunSnapshot;
   imSnapshot?: ImSnapshot;
   ledgerSnapshot?: LedgerSnapshot;
@@ -104,7 +104,7 @@ export interface WorkerStatusProjection {
   evidence: EvidenceMap;
   riskFlags: RiskFlag[];
   projectedAt: string;
-  contactStatus: string;
+  memberStatus: string;
 }
 
 // ---- Pure helpers ----
@@ -145,7 +145,7 @@ function buildEvidenceItem(
 // ---- Main projector ----
 
 export function projectWorkerStatus(input: ProjectorInput): WorkerStatusProjection {
-  const { contact, config, runSnapshot, imSnapshot, ledgerSnapshot, lifecycle } = input;
+  const { member, config, runSnapshot, imSnapshot, ledgerSnapshot, lifecycle } = input;
   const now = config.now;
 
   const riskFlags: RiskFlag[] = [];
@@ -154,16 +154,16 @@ export function projectWorkerStatus(input: ProjectorInput): WorkerStatusProjecti
   // --- Evidence extraction ---
 
   // Heartbeat
-  if (contact.lastHeartbeat) {
-    evidence.heartbeat = buildEvidenceItem(contact.lastHeartbeat, now, "contact.lastHeartbeat");
-  } else if (contact.status !== "terminated" && contact.status !== "offline") {
+  if (member.lastHeartbeat) {
+    evidence.heartbeat = buildEvidenceItem(member.lastHeartbeat, now, "member.lastHeartbeat");
+  } else if (member.status !== "terminated" && member.status !== "offline") {
     riskFlags.push("missing_heartbeat");
   }
 
   // Last evidence
-  if (contact.lastEvidence) {
-    evidence.lastEvidence = buildEvidenceItem(contact.lastEvidence, now, "contact.lastEvidence");
-  } else if (contact.status !== "terminated" && contact.status !== "offline") {
+  if (member.lastEvidence) {
+    evidence.lastEvidence = buildEvidenceItem(member.lastEvidence, now, "member.lastEvidence");
+  } else if (member.status !== "terminated" && member.status !== "offline") {
     riskFlags.push("missing_evidence");
   }
 
@@ -221,48 +221,48 @@ export function projectWorkerStatus(input: ProjectorInput): WorkerStatusProjecti
   let status: WorkerStatusCode = "unknown";
   let reason = "";
 
-  const contactStatus = contact.status || "unknown";
+  const memberStatus = member.status || "unknown";
 
   // Priority: terminated > offline > done > stuck > degraded > idle > healthy > unknown
 
-  if (contactStatus === "terminated") {
+  if (memberStatus === "terminated") {
     status = "terminated";
-    reason = `Worker ${contact.workerId} is terminated.`;
-  } else if (contactStatus === "offline") {
+    reason = `Worker ${member.memberId} is terminated.`;
+  } else if (memberStatus === "offline") {
     status = "offline";
-    reason = `Worker ${contact.workerId} is offline.`;
+    reason = `Worker ${member.memberId} is offline.`;
   } else if (isDone(riskFlags, runSnapshot, ledgerSnapshot)) {
     status = "done";
-    reason = `Worker ${contact.workerId} appears to have completed all work.`;
+    reason = `Worker ${member.memberId} appears to have completed all work.`;
   } else if (riskFlags.length >= 3 &&
       (riskFlags.includes("stale_heartbeat") || riskFlags.includes("missing_heartbeat"))) {
     status = "stuck";
-    reason = `Worker ${contact.workerId} appears stuck: ${riskFlags.join(", ")}.`;
+    reason = `Worker ${member.memberId} appears stuck: ${riskFlags.join(", ")}.`;
   } else if (riskFlags.length > 0) {
     status = "degraded";
-    reason = `Worker ${contact.workerId} has risk flags: ${riskFlags.join(", ")}.`;
-  } else if (contactStatus === "stale") {
+    reason = `Worker ${member.memberId} has risk flags: ${riskFlags.join(", ")}.`;
+  } else if (memberStatus === "stale") {
     status = "degraded";
-    reason = `Worker ${contact.workerId} contact status is stale.`;
-  } else if (contactStatus === "idle") {
+    reason = `Worker ${member.memberId} member status is stale.`;
+  } else if (memberStatus === "idle") {
     status = "idle";
-    reason = `Worker ${contact.workerId} is idle.`;
-  } else if (contactStatus === "active") {
+    reason = `Worker ${member.memberId} is idle.`;
+  } else if (memberStatus === "active") {
     status = "healthy";
-    reason = `Worker ${contact.workerId} is healthy and active.`;
+    reason = `Worker ${member.memberId} is healthy and active.`;
   } else {
     status = "unknown";
-    reason = `Worker ${contact.workerId} status is unknown (contact status: ${contactStatus}).`;
+    reason = `Worker ${member.memberId} status is unknown (member status: ${memberStatus}).`;
   }
 
   return {
-    workerId: contact.workerId,
+    workerId: member.memberId,
     status,
     reason,
     evidence,
     riskFlags,
     projectedAt: now,
-    contactStatus,
+    memberStatus,
   };
 }
 
@@ -314,7 +314,7 @@ export interface ShutdownProjection {
 }
 
 export interface StaleRunReaperInput {
-  workers: WorkerContact[];
+  workers: TeamMember[];
   config: ProjectorConfig;
   /** Optional - only reap workers older than this threshold (ms) since last heartbeat */
   staleThresholdMs?: number;
@@ -348,8 +348,8 @@ export function identifyStaleWorkers(
 
 
   for (const worker of workers) {
-    const contactStatus = worker.status;
-    if (contactStatus === "terminated") continue;
+    const memberStatus = worker.status;
+    if (memberStatus === "terminated") continue;
 
 
     let ageMs = 0;
@@ -379,7 +379,7 @@ export function identifyStaleWorkers(
 
 
     staleEntries.push({
-      workerId: worker.workerId,
+      workerId: worker.memberId,
       lastHeartbeat: worker.lastHeartbeat,
       ageMs,
       reason,
@@ -401,7 +401,7 @@ export function identifyStaleWorkers(
 
 /** Pure derivation: compute unified shutdown projection from worker statuses. */
 export function deriveUnifiedShutdown(
-  workers: WorkerContact[],
+  workers: TeamMember[],
   runs: RunSnapshot[],
   shutdownPhase: ShutdownPhase,
   now: string,
