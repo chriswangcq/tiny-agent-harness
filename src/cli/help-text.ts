@@ -41,10 +41,13 @@ Team groups:
   team lifecycle <subcommand>   Run-scoped lease, lifecycle-status, reaper, shutdown
 
 Environment variables:
-  DEEPSEEK_API_KEY   (required) API key for DeepSeek
-  DEEPSEEK_BASE_URL  Base URL (default: https://api.deepseek.com/beta)
-  MODEL_NAME         Model name (default: deepseek-v4-pro)
+  DEEPSEEK_API_KEY   One-off override for providers.deepseek.apiKey
+  DEEPSEEK_BASE_URL  One-off override for providers.deepseek.baseUrl
+  MODEL_NAME         One-off override for providers.deepseek.model
   TAH_IM_CHANNEL     Default IM channel (default: "default")
+
+User config:
+  ~/.tiny-agent/config.json
 
 Most CLI subcommands accept --json for machine-readable output. Use --state-dir to override the product state root.
 `;

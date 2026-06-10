@@ -13,14 +13,26 @@ npm install
 npm run build
 ```
 
-把 DeepSeek API key 放到项目根目录的 `ak.txt`：
+把 DeepSeek API key 放到用户级配置文件：
 
 ```bash
-cd ~/Documents/DeepSeek
-printf '%s\n' 'your-deepseek-api-key' > ak.txt
+mkdir -p ~/.tiny-agent
+cat > ~/.tiny-agent/config.json <<'JSON'
+{
+  "schemaVersion": 1,
+  "providers": {
+    "deepseek": {
+      "apiKey": "your-deepseek-api-key",
+      "baseUrl": "https://api.deepseek.com/beta",
+      "model": "deepseek-v4-pro"
+    }
+  }
+}
+JSON
+chmod 600 ~/.tiny-agent/config.json
 ```
 
-`ak.txt` 已经在 `.gitignore` 里，不会被提交。也可以继续用环境变量 `DEEPSEEK_API_KEY`，但本地 demo 推荐直接放 `ak.txt`。
+也可以继续用环境变量 `DEEPSEEK_API_KEY` 做一次性 override；`DEEPSEEK_BASE_URL` 和 `MODEL_NAME` 也会覆盖配置文件中的 provider 设置。
 
 然后用一个命令启动前台 TUI。它会自动在后台启动 agent run，并把 runtime 状态写到 `~/.tiny-agent/projects/<projectId>/`，launcher 日志在其中的 `launcher/` 下：
 
@@ -74,7 +86,7 @@ npm link
 tiny-agent ui --channel default
 ```
 
-启动时会优先读取 `DEEPSEEK_API_KEY`，如果没有设置，再读取当前目录的 `ak.txt`。
+启动时会优先读取环境变量，然后读取 `~/.tiny-agent/config.json`。
 
 ## 核心设计理念
 

@@ -3,12 +3,16 @@
 ## 设计原则
 
 - **Home-scoped project store**：默认状态根是 `~/.tiny-agent/projects/<projectId>/`，项目源码目录不再自动创建 `.tiny-agent/`。
+- **User-scoped runtime config**：provider credentials 和默认模型配置放在 `~/.tiny-agent/config.json`，不放进项目源码目录，也不混入 project state。
 - **Run 自包含**：一个 run 的所有状态（IM、session、environment、skill-runs、team/supervisor/worker state）都在 `runs/run-<ts>/` 下，可独立归档、恢复和清理。
 - **Skills 项目公共**：技能定义是跨 run 共享的知识资产，放在项目级 `skills/` 下。
 
 ## 目录结构
 
 ```
+~/.tiny-agent/
+├── config.json                     # 用户级 runtime config；包含 provider credentials
+│
 ~/.tiny-agent/projects/<projectId>/
 ├── project.json                    # 项目级元数据
 │
@@ -64,6 +68,25 @@
 ```
 
 ## 各目录说明
+
+### `~/.tiny-agent/config.json`
+
+用户级 runtime 配置。它不是 run state，也不是 project state；同一用户的多个项目可以共用 provider 凭据和默认模型配置。
+
+```json
+{
+  "schemaVersion": 1,
+  "providers": {
+    "deepseek": {
+      "apiKey": "your-deepseek-api-key",
+      "baseUrl": "https://api.deepseek.com/beta",
+      "model": "deepseek-v4-pro"
+    }
+  }
+}
+```
+
+建议权限为 `0600`。启动时环境变量 `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL` 和 `MODEL_NAME` 会覆盖该文件中的 deepseek provider 设置，用于临时调试或 CI。
 
 ### `project.json`
 

@@ -38,6 +38,10 @@ import {
 } from "../model/context-window.js";
 import { HELP_TEXT } from "./help-text.js";
 import { StateRootResolver } from "../state/root.js";
+import {
+  loadDeepSeekRuntimeConfig,
+  missingDeepSeekApiKeyMessage,
+} from "./runtime-config.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -46,29 +50,6 @@ import { StateRootResolver } from "../state/root.js";
 function die(message: string): never {
   console.error(`[tiny-agent] ERROR: ${message}`);
   process.exit(1);
-}
-
-function resolveDeepSeekApiKey(): string | undefined {
-  const fromEnv = process.env.DEEPSEEK_API_KEY?.trim();
-  if (fromEnv) {
-    return fromEnv;
-  }
-
-  const akPath = path.resolve("ak.txt");
-  if (!fs.existsSync(akPath)) {
-    return undefined;
-  }
-
-  const fromFile = fs.readFileSync(akPath, "utf-8").trim();
-  return fromFile.length > 0 ? fromFile : undefined;
-}
-
-function missingApiKeyMessage(): string {
-  return (
-    "DeepSeek API key is required.\n" +
-    "  Put your key in ./ak.txt, then run tiny-agent again.\n" +
-    "  Or set DEEPSEEK_API_KEY in the environment."
-  );
 }
 
 function parseCliOptions(args: string[]): {
@@ -331,10 +312,10 @@ async function waitForNewLatestRun(options: {
 async function runUnifiedUi(args: string[]): Promise<void> {
   const { channel: parsedChannel, task, stateDir, resumeRunId } = parseCliOptions(args);
   const channel = parsedChannel ?? process.env.TAH_IM_CHANNEL ?? "default";
-  const apiKey = resolveDeepSeekApiKey();
+  const deepseek = loadDeepSeekRuntimeConfig();
 
-  if (!apiKey) {
-    die(missingApiKeyMessage());
+  if (!deepseek.apiKey) {
+    die(missingDeepSeekApiKeyMessage(deepseek.configPath));
   }
   if (task && resumeRunId) {
     die("tiny-agent ui accepts either --task or --resume, not both.");
@@ -389,7 +370,7 @@ async function runUnifiedUi(args: string[]): Promise<void> {
 
   const child = spawn(process.execPath, runArgs, {
     cwd: process.cwd(),
-    env: { ...process.env, DEEPSEEK_API_KEY: apiKey },
+    env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -577,13 +558,11 @@ async function main(): Promise<void> {
   }
 
   // --- Read env vars ---
-  const apiKey = resolveDeepSeekApiKey();
-  if (!apiKey) {
-    die(missingApiKeyMessage());
+  const deepseek = loadDeepSeekRuntimeConfig();
+  if (!deepseek.apiKey) {
+    die(missingDeepSeekApiKeyMessage(deepseek.configPath));
   }
 
-  const baseUrl = process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com/beta";
-  const modelName = process.env.MODEL_NAME ?? "deepseek-v4-pro";
   if (!channel) {
     channel = process.env.TAH_IM_CHANNEL ?? "default";
   }
@@ -598,9 +577,9 @@ async function main(): Promise<void> {
 
   // --- Wire up modules ---
   const model = new DeepSeekFimAdapter({
-    apiKey,
-    baseUrl,
-    model: modelName,
+    apiKey: deepseek.apiKey,
+    baseUrl: deepseek.baseUrl,
+    model: deepseek.model,
     thinkingMaxTokens: 4096,
     decisionMaxTokens: 2048,
   });
@@ -778,7 +757,7 @@ async function main(): Promise<void> {
   // --- Run ---
   console.log(`[tiny-agent] Run ${runId} ${resumeRunId ? "resumed" : "started"}`);
   console.log(`[tiny-agent] Task: ${task}`);
-  console.log(`[tiny-agent] Model: ${modelName} @ ${baseUrl}`);
+  console.log(`[tiny-agent] Model: ${deepseek.model} @ ${deepseek.baseUrl}`);
   console.log();
 
   try {

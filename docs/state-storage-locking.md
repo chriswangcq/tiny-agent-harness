@@ -13,8 +13,16 @@ Agent 从某个项目目录启动。默认情况下，所有 harness CLI 都把�
   runs/
   skills/
   launcher/
-  tmp/
+tmp/
 ```
+
+Provider credentials 和默认模型配置不属于 project state，放在用户级 runtime config：
+
+```text
+~/.tiny-agent/config.json
+```
+
+该文件建议权限为 `0600`。`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL` 和 `MODEL_NAME` 只作为一次性环境变量 override。
 
 `<projectId>` 由项目根目录 basename 和项目根绝对路径 sha256 短 hash 确定，例如 `tiny-agent-harness-4f2a1b7c9e01`。这样 runtime 状态不污染源码目录，同时同一项目的 `tiny-agent`、`im`、`skill`、`tui`、`mcp` 和 `team` 仍看到同一套状态。
 
