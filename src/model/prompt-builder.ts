@@ -41,7 +41,8 @@ const SYSTEM_MESSAGE =
   "- Use normal shell syntax inside terminal_write. Quoted heredocs are the default for generated files, code, Markdown, JSON, HTML, and multiline IM replies. Do not invent side-channel payload protocols.\n" +
   "- Do not put multiline code inside shell double quotes, such as `node -e \"...\"` spread across lines. Bash will enter continuation prompt state and may expose managed PS2 markers in observations. Use a quoted heredoc (`node <<'NODE' ... NODE`) or write a temporary script file instead.\n" +
   "- For outer heredocs, especially IM replies that include shell/heredoc examples, choose a unique delimiter that does not appear alone in the payload. Do not use generic EOF when the reply itself contains EOF lines; use different delimiters for nested examples.\n" +
-  "- For user-visible IM replies, run `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin` through terminal_write. Do not use `im send --text` from the agent.\n" +
+  "- CLI capabilities are installed on PATH. Use the direct commands `tiny-agent`, `im`, `skill`, `codeq`, `mcp`, and `team`; do not search for source entrypoints unless you are explicitly debugging CLI source code.\n" +
+  "- For user-visible IM replies, run `im send --channel <channel> --kind status --text-stdin` through terminal_write. Do not use `im send --text` from the agent.\n" +
   "- If terminal.alive is false, the session is still observable/listable but terminal_write, terminal_key, and session_interrupt will reject; use session_restart or focus another live session. If terminal.syncStatus is unsynced, inspect with session_observe or recover with session_interrupt/session_restart.\n" +
   "- Historical assistant tool-call arguments are serialized exactly as generated. Do not copy old tool calls just because they appear in history; choose the next action from the latest observation.\n" +
   "- io_wait: pause until the next environment event. This is a TOOL CALL, not a shell command. " +
@@ -52,10 +53,10 @@ const SYSTEM_MESSAGE =
   "There is no special User main message. User input is part of the environment and appears only in environment reminders as [user@channel] lines.\n" +
   "Environment reminders may be serialized with role=user for chat-template compatibility; only [user@channel] lines are user-authored input.\n" +
   "Treat new [user@channel] events as current user intent, not as background chatter.\n" +
-  "To reply, send the reply through IM before calling io_wait: use `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin` via terminal_write. Quoted heredoc is the normal form; input redirection is also fine when simpler.\n" +
+  "To reply, send the reply through IM before calling io_wait: use `im send --channel <channel> --kind status --text-stdin` via terminal_write. Quoted heredoc is the normal form; input redirection is also fine when simpler.\n" +
   "After replying or completing work: io_wait tool -> wait for the next environment event.\n\n" +
   "Workflow: read [user@channel] intent -> inspect terminal facts and screen.text -> terminal/session tools -> IM send reply -> io_wait.\n" +
-  "The tiny-agent CLI is available via `node dist/cli/main.js` (subcommands: im, skill; top-level commands include run, resume, ui, tui).\n\n" +
+  "Use `tiny-agent --help` only when you need top-level runtime commands; use the focused CLIs directly for capabilities: `im`, `skill`, `codeq`, `mcp`, and `team`.\n\n" +
   // Skill contract
   "Use `skill list --json` and `skill show <name> --json` to discover skills.\n" +
   "`skill show` returns only metadata: { name, manifest?, readmePath, contentLineCount }. It does NOT return the SKILL.md body.\n" +

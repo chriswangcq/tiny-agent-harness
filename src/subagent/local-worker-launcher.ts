@@ -229,15 +229,14 @@ export function planWorkerLaunch(
 
 /**
  * Build a spawn command for a worker launch plan.
- * The command runs `node dist/cli/main.js run` with the worker's channel
- * and task prompt.
+ * The command runs the installed `tiny-agent run` CLI with the worker's
+ * channel and task prompt.
  * Pure — no IO, no side effects.
  */
 export function buildSpawnCommand(
   plan: WorkerLaunchPlan,
 ): WorkerSpawnCommand {
   const args: string[] = [
-    "dist/cli/main.js",
     "run",
     "--channel",
     plan.channel,
@@ -250,7 +249,7 @@ export function buildSpawnCommand(
   }
 
   return {
-    command: "node",
+    command: "tiny-agent",
     args,
   };
 }

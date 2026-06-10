@@ -88,7 +88,7 @@ describe("P027 IM CLI Contract", () => {
 
   it("terminal_write 'im send --text ...' is INVALID (must use --text-stdin)", () => {
     const call = makeImSendWrite(
-      `node dist/cli/main.js im send --channel default --kind status --text "hello"\n`
+      `im send --channel default --kind status --text "hello"\n`
     );
     const result = validator.validate(call);
     expect(result.status).toBe("invalid");
@@ -99,7 +99,7 @@ describe("P027 IM CLI Contract", () => {
 
   it("terminal_write 'im send --text-stdin' is VALID", () => {
     const call = makeImSendWrite(
-      `node dist/cli/main.js im send --channel default --kind status --text-stdin <<'IM'\nreport\nIM\n`
+      `im send --channel default --kind status --text-stdin <<'IM'\nreport\nIM\n`
     );
     const result = validator.validate(call);
     expect(result.status).toBe("valid");

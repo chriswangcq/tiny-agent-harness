@@ -380,15 +380,25 @@ function parseOptionalNonNegativeInteger(
 }
 
 function validateTerminalWriteText(text: string): string | undefined {
+  if (usesDeprecatedMainJsCli(text)) {
+    return (
+      "Invalid terminal_write arguments: tiny-agent CLI capabilities are installed on PATH. " +
+      "Use direct commands such as `tiny-agent`, `im`, `skill`, `codeq`, `mcp`, and `team` instead of `node dist/cli/main.js ...`."
+    );
+  }
   if (usesImSendTextArgument(text)) {
     return (
       "Invalid terminal_write arguments: agent IM replies must use " +
-      "`node dist/cli/main.js im send --channel <channel> --kind status --text-stdin`. " +
+      "`im send --channel <channel> --kind status --text-stdin`. " +
       "Use stdin forms such as a quoted heredoc or input redirection instead of shell arguments. " +
       "Do not use `im send --text` from the agent."
     );
   }
   return undefined;
+}
+
+function usesDeprecatedMainJsCli(text: string): boolean {
+  return /(?:^|[\s;&|])node\s+(?:\.\/)?dist\/cli\/main\.js(?:\s|$)/u.test(text);
 }
 
 function usesImSendTextArgument(text: string): boolean {

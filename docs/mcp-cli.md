@@ -32,7 +32,7 @@ mcp call <server> <tool> [--args-json '<json>']
 也可以通过统一入口：
 
 ```bash
-node dist/cli/main.js mcp list --json
+mcp list --json
 tiny-agent mcp list --json
 ```
 

@@ -270,7 +270,7 @@ describe("ManagedTerminalRuntime", () => {
         kind: "terminal_write",
         expectedInputSeq: 0,
         text:
-          "node dist/cli/main.js im send --channel default --kind status --text-stdin <<'IM'\n" +
+          "im send --channel default --kind status --text-stdin <<'IM'\n" +
           "body\n" +
           "IM\n",
       },
@@ -278,7 +278,7 @@ describe("ManagedTerminalRuntime", () => {
     setTimeout(() => {
       ptyMock.spawned[0]?.emit(
         [
-          "$ node dist/cli/main.js im send --channel default --kind status --text-stdin <<'IM'",
+          "$ im send --channel default --kind status --text-stdin <<'IM'",
           ...Array.from({ length: 60 }, (_, index) => `> line-${index}`),
           "ok=true",
           "id=agent-1",
@@ -318,7 +318,7 @@ describe("ManagedTerminalRuntime", () => {
       request: {
         kind: "terminal_write",
         expectedInputSeq: 0,
-        text: "node dist/cli/main.js im send --channel default --text-stdin\n",
+        text: "im send --channel default --text-stdin\n",
       },
     });
     setTimeout(() => {

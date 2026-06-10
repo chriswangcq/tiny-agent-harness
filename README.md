@@ -11,6 +11,7 @@
 ```bash
 npm install
 npm run build
+npm link
 ```
 
 把 DeepSeek API key 放到用户级配置文件：
@@ -38,52 +39,40 @@ chmod 600 ~/.tiny-agent/config.json
 
 ```bash
 cd ~/Documents/DeepSeek
-node dist/cli/main.js ui --channel default
+tiny-agent ui --channel default
 ```
 
 进入 TUI 后按 `m` 输入第一条真实任务，agent 会从同一个 `default` channel 收到消息并开始执行。不需要先 `im post hello`。`im post` 只用于注入用户消息；agent 回复走 `im send` 写入 outbox。
 
-如果已经执行过 `npm link`，也可以写成短命令：
-
-```bash
-tiny-agent ui --channel default
-```
-
 如果想跳过 IM 等待，启动时直接给任务：
 
 ```bash
-node dist/cli/main.js ui --channel default --task "fix the failing tests"
+tiny-agent ui --channel default --task "fix the failing tests"
 ```
 
 如果要恢复已有 run 并直接打开 TUI：
 
 ```bash
-node dist/cli/main.js ui --channel default --resume run-1780009628684
-node dist/cli/main.js ui --channel default --resume latest
+tiny-agent ui --channel default --resume run-1780009628684
+tiny-agent ui --channel default --resume latest
 ```
 
 也可以用两个终端分开调试。第一个终端启动 run：
 
 ```bash
-node dist/cli/main.js run --channel default
+tiny-agent run --channel default
 ```
 
 第二个终端打开 TUI：
 
 ```bash
-node dist/cli/main.js tui --run latest --channel default
+tiny-agent tui --run latest --channel default
 ```
 
-如果想使用 `tiny-agent`、`im`、`skill`、`codeq` 这些短命令，需要先在本仓库执行一次：
+如果之后改了源码并重新构建，`npm link` 会继续指向当前仓库，不需要反复安装：
 
 ```bash
-npm link
-```
-
-之后可以写成：
-
-```bash
-tiny-agent ui --channel default
+npm run build
 ```
 
 启动时会优先读取环境变量，然后读取 `~/.tiny-agent/config.json`。

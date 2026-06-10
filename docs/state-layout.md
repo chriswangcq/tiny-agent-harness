@@ -140,7 +140,7 @@ Managed PTY 启动时会把当前 run 信息注入 shell 环境，供 agent 在 
 | `TAH_TRANSCRIPT_PATH` | 当前 run transcript JSONL |
 | `TAH_ENVIRONMENT_EVENTS_PATH` | 当前 run environment events JSONL |
 
-因此 agent 在 PTY 中执行 `node dist/cli/main.js im send ...` 或 `node dist/cli/main.js skill ...` 时，不需要额外传 `--state-dir`；显式传入 `--state-dir` 仍然用于人工调试或跨 run 操作。
+因此 agent 在 PTY 中执行 `im send ...`、`skill ...`、`codeq ...`、`mcp ...` 或 `team ...` 时，不需要额外传 `--state-dir`；显式传入 `--state-dir` 仍然用于人工调试或跨 run 操作。
 
 ### PTY session 生命周期
 

@@ -198,8 +198,9 @@ describe("planWorkerLaunch", () => {
   it("includes spawn command in plan", () => {
     const plan = planWorkerLaunch(baseParams);
     expect(plan.spawnCommand).toBeDefined();
-    expect(plan.spawnCommand.command).toBe("node");
-    expect(plan.spawnCommand.args).toContain("dist/cli/main.js");
+    expect(plan.spawnCommand.command).toBe("tiny-agent");
+    expect(plan.spawnCommand.args).toContain("run");
+    expect(plan.spawnCommand.args).not.toContain("dist/cli/main.js");
   });
 });
 
@@ -229,11 +230,10 @@ describe("buildSpawnCommand", () => {
     spawnCommand: { command: "", args: [] },
   };
 
-  it("builds a spawn command with node and main.js", () => {
+  it("builds a spawn command with the installed tiny-agent CLI", () => {
     const cmd = buildSpawnCommand(basePlan);
-    expect(cmd.command).toBe("node");
+    expect(cmd.command).toBe("tiny-agent");
     expect(cmd.args).toEqual([
-      "dist/cli/main.js",
       "run",
       "--channel",
       "worker-coder-1",
@@ -246,8 +246,8 @@ describe("buildSpawnCommand", () => {
 
   it("includes run flag for run subcommand", () => {
     const cmd = buildSpawnCommand(basePlan);
-    expect(cmd.args[0]).toBe("dist/cli/main.js");
-    expect(cmd.args[1]).toBe("run");
+    expect(cmd.command).toBe("tiny-agent");
+    expect(cmd.args[0]).toBe("run");
   });
 
   it("includes channel argument", () => {
@@ -353,9 +353,8 @@ const buildLaunchPlan = (): WorkerLaunchPlan => ({
       "/root/runs/run-001/workers/coder-1/output.log",
   },
   spawnCommand: {
-    command: "node",
+    command: "tiny-agent",
     args: [
-      "dist/cli/main.js",
       "run",
       "--channel",
       "worker-coder-1",
@@ -416,7 +415,7 @@ describe("launchLocalWorker", () => {
           spawnedPid: 12345,
           status: "running",
           startedAt: "2026-06-05T15:00:01.000Z",
-          command: "node",
+          command: "tiny-agent",
           args: plan.spawnCommand.args,
           cwd: "/home/workspace",
         },

@@ -58,6 +58,9 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("screen.logRef.path");
     expect(prompt.messages[0]!.content).toContain("im send --channel");
     expect(prompt.messages[0]!.content).toContain("--text-stdin");
+    expect(prompt.messages[0]!.content).toContain("CLI capabilities are installed on PATH");
+    expect(prompt.messages[0]!.content).toContain("`tiny-agent`, `im`, `skill`, `codeq`, `mcp`, and `team`");
+    expect(prompt.messages[0]!.content).toContain("use the focused CLIs directly");
     expect(prompt.messages[0]!.content).toContain("io_wait");
     expect(prompt.messages[0]!.content).toContain("Thinking is reasoning-only");
     expect(prompt.messages[0]!.content).toContain("There is no model-level final turn");
@@ -72,6 +75,8 @@ describe("PromptBuilder", () => {
     );
     expect(prompt.messages[0]!.content).not.toContain(["stash", "_file"].join(""));
     expect(prompt.messages[0]!.content).not.toContain("tiny-agent file");
+    expect(prompt.messages[0]!.content).not.toContain("node dist/cli/main.js");
+    expect(prompt.messages[0]!.content).not.toContain("dist/cli/main.js");
     expect(prompt.messages[0]!.content).not.toContain("subcommands: im, file, skill");
     expect(prompt.messages[0]!.content).not.toContain("file materialize");
     expect(prompt.messages[0]!.content).not.toContain(["output", "Tail"].join(""));

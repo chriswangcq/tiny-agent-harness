@@ -67,7 +67,7 @@ describe("ToolCallValidator terminal input tools", () => {
       makeCall("terminal_write", {
         expectedInputSeq: 1,
         text:
-          "node dist/cli/main.js im send --channel default --kind status --text-stdin <<'IM'\n" +
+          "im send --channel default --kind status --text-stdin <<'IM'\n" +
           "Done.\n" +
           "IM\n",
       }),
@@ -80,8 +80,7 @@ describe("ToolCallValidator terminal input tools", () => {
     const result = new ToolCallValidator().validate(
       makeCall("terminal_write", {
         expectedInputSeq: 1,
-        text:
-          "node dist/cli/main.js im send --channel default --kind status --text 'hello'\n",
+        text: "im send --channel default --kind status --text 'hello'\n",
       }),
     );
 
@@ -90,6 +89,22 @@ describe("ToolCallValidator terminal input tools", () => {
       expect(result.observation.message).toContain("--text-stdin");
       expect(result.observation.message).toContain("quoted heredoc");
       expect(result.observation.message).not.toContain("reply.md");
+    }
+  });
+
+  it("rejects deprecated dist main entrypoint usage", () => {
+    const result = new ToolCallValidator().validate(
+      makeCall("terminal_write", {
+        expectedInputSeq: 1,
+        text: "node dist/cli/main.js im send --channel default --kind status --text-stdin <<'IM'\nDone.\nIM\n",
+      }),
+    );
+
+    expect(result.status).toBe("invalid");
+    if (result.status === "invalid") {
+      expect(result.observation.message).toContain("installed on PATH");
+      expect(result.observation.message).toContain("`im`");
+      expect(result.observation.message).toContain("dist/cli/main.js");
     }
   });
 

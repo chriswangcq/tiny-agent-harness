@@ -1237,7 +1237,7 @@ describe("RunOrchestrator", () => {
       name: "terminal_write",
       arguments: {
         expectedInputSeq: 1,
-        text: "node dist/cli/main.js im send --channel default --kind status --text-stdin <<'EOF'\nreport\nEOF\n",
+        text: "im send --channel default --kind status --text-stdin <<'EOF'\nreport\nEOF\n",
       },
     };
     const wait: IoWaitRequest = {
@@ -1252,7 +1252,7 @@ describe("RunOrchestrator", () => {
       result: "ok",
       returnedToPrompt: false,
       screen: {
-        text: "node dist/cli/main.js im send --ch",
+        text: "im send --ch",
         rows: 24,
         cols: 80,
         truncated: false,
