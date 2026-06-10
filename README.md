@@ -42,7 +42,7 @@ cd ~/Documents/DeepSeek
 tiny-agent ui --channel default
 ```
 
-进入 TUI 后按 `m` 输入第一条真实任务，agent 会从同一个 `default` channel 收到消息并开始执行。不需要先 `im post hello`。`im post` 只用于注入用户消息；agent 回复走 `im send` 写入 outbox。
+进入 TUI 后按 `m` 输入第一条真实任务，agent 会从同一个 `default` channel 收到消息并开始执行。不需要先 `tiny-agent im post hello`。`tiny-agent im post` 只用于注入用户消息；agent 回复走 `tiny-agent im send` 写入 outbox。
 
 如果想跳过 IM 等待，启动时直接给任务：
 
@@ -102,8 +102,8 @@ npm run build
 - **`io_wait` 是一等决策**：等待用户消息或外部事件不是 `sleep`，而是 run state machine 中可记录、可恢复、可回放的 `waiting_for_io` 状态。
 - **Environment 的 one-shot event 和 persistent fact 分层**：新事件只消费一次；active skill run 这类仍然成立的事实会持续提醒，直到状态关闭。
 - **Skill CLI 有生命周期闭环**：skill 可发现、可执行、可保持 active、可 close；agent 可以按需把 skill run 转入 review pending，复盘后把 lessons 追加到 skill 附件。
-- **Code Intelligence CLI 作为语义查询层**：LSP 能力不进入 harness 内核，而是通过 `codeq` CLI 暴露给 agent，用来查询 diagnostics、symbols、definition、references 和 hover。
-- **MCP 作为 CLI 能力接入**：MCP server registry、tools listing 和 tool call 都通过 `mcp` CLI 完成，agent 仍然只是在 terminal session 里执行命令。
+- **Code Intelligence CLI 作为语义查询层**：LSP 能力不进入 harness 内核，而是通过 `tiny-agent codeq` 暴露给 agent，用来查询 diagnostics、symbols、definition、references 和 hover。
+- **MCP 作为 CLI 能力接入**：MCP server registry、tools listing 和 tool call 都通过 `tiny-agent mcp` 完成，agent 仍然只是在 terminal session 里执行命令。
 - **Sub-agent team 先做成纯状态域**：`src/subagent` 提供 task/worker FSM、幂等事件和 summary helper，后续可接 MCP、云端队列或本地 worker runtime。
 - **Recovery / replay 是纯事实摘要**：resume 安全诊断、replay case 和 eval summary 从显式 state/transcript/session snapshot 构造，不自动重放副作用。
 - **TUI 以 view model 播放 agent loop**：`TranscriptReader` 读 JSONL，`ViewModelBuilder` 纯逻辑归一化事件，renderer 只负责展示 conversation 和 loop frame。
@@ -125,21 +125,21 @@ npm run build
 
 ## Code Intelligence CLI
 
-`codeq` 是仓库内置的代码智能 CLI，用来把 LSP / language server 的语义能力暴露给 coding agent。它不是模型可见的新 tool，也不改变 “能力以 CLI 进入 terminal/session 边界” 的核心约束；agent 使用它时，本质上仍然是在 managed terminal session 里运行普通命令。
+`tiny-agent codeq` 是仓库内置的代码智能子命令，用来把 LSP / language server 的语义能力暴露给 coding agent。它不是模型可见的新 tool，也不改变 “能力以 CLI 进入 terminal/session 边界” 的核心约束；agent 使用它时，本质上仍然是在 managed terminal session 里运行普通命令。
 
 当前实现提供只读的 TypeScript / JavaScript 查询能力：
 
 ```bash
-codeq diagnostics --workspace --json
-codeq symbols src/run/orchestrator.ts --json
-codeq definition src/run/orchestrator.ts:37:18 --json
-codeq references src/run/orchestrator.ts:37:18 --json
-codeq hover src/run/orchestrator.ts:37:18 --json
+tiny-agent codeq diagnostics --workspace --json
+tiny-agent codeq symbols src/run/orchestrator.ts --json
+tiny-agent codeq definition src/run/orchestrator.ts:37:18 --json
+tiny-agent codeq references src/run/orchestrator.ts:37:18 --json
+tiny-agent codeq hover src/run/orchestrator.ts:37:18 --json
 ```
 
-它解决的是 `rg` 和直接读文件不擅长的问题：某个 symbol 的真实定义、引用点、文件结构化 symbol、hover 类型信息，以及 language server 已经知道的诊断。`codeq` 输出统一 JSON envelope、稳定错误码、受限结果数量和短 preview，避免把大段 language server 输出直接塞回 prompt。
+它解决的是 `rg` 和直接读文件不擅长的问题：某个 symbol 的真实定义、引用点、文件结构化 symbol、hover 类型信息，以及 language server 已经知道的诊断。`tiny-agent codeq` 输出统一 JSON envelope、稳定错误码、受限结果数量和短 preview，避免把大段 language server 输出直接塞回 prompt。
 
-当前实现保持 stateless：每次命令启动 language server、执行一次查询、关闭退出。这样会比 daemon 慢一些，但状态清楚、可复现、容易写测试，也不会在 harness 内部引入隐藏的长期索引状态。等启动成本真的成为问题，再引入显式的 `codeq server start/status/restart/stop` daemon 模式。
+当前实现保持 stateless：每次命令启动 language server、执行一次查询、关闭退出。这样会比 daemon 慢一些，但状态清楚、可复现、容易写测试，也不会在 harness 内部引入隐藏的长期索引状态。等启动成本真的成为问题，再引入显式的 `tiny-agent codeq server start/status/restart/stop` daemon 模式。
 
 这个方向的详细契约见 [Code Intelligence CLI](docs/code-intelligence-cli.md)。
 
@@ -149,7 +149,7 @@ codeq hover src/run/orchestrator.ts:37:18 --json
 - Agent 的交互动作收敛为 terminal/session tool call；普通文本生成直接走 paced heredoc/命令，不再保留额外的文件暂存旁路。
 - 主模型层使用 DeepSeek V4 FIM two-pass：先生成 thinking，再生成 native tool-call decision。
 - 用户消息收发通过 IM CLI 处理，不把 stdin/stdout 作为核心通信边界。
-- MCP、memory、skills、sub-agent 等能力都通过 CLI 暴露，再由 terminal session 调用。Skills 通过 `skill` CLI 发现和执行。
+- MCP、memory、skills、sub-agent 等能力都通过 `tiny-agent <capability>` 子命令暴露，再由 terminal session 调用。Skills 通过 `tiny-agent skill` 发现和执行。
 - Harness 内部提供 PTY session manager，用来管理长期会话、一屏观察、日志持久化和中断恢复。
 - Environment 统一建模外部事件，每轮 Agent loop 消费为 system reminder，`io_wait` 等待 environment 事件。
 - Tool review 模块预留为执行前审核入口，demo 阶段默认 approve。

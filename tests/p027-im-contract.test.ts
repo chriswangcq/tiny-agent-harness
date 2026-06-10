@@ -75,7 +75,7 @@ describe("P027 IM CLI Contract", () => {
     expect(STATIC_TOOL_CATALOG.some(t => t.name === "io_wait")).toBe(false);
   });
 
-  // -- im send --text-stdin audit boundary (real validator) --
+  // -- tiny-agent im send --text-stdin audit boundary (real validator) --
   const validator = new ToolCallValidator();
 
   function makeImSendWrite(text: string): InternalToolCall {
@@ -86,9 +86,9 @@ describe("P027 IM CLI Contract", () => {
     };
   }
 
-  it("terminal_write 'im send --text ...' is INVALID (must use --text-stdin)", () => {
+  it("terminal_write 'tiny-agent im send --text ...' is INVALID (must use --text-stdin)", () => {
     const call = makeImSendWrite(
-      `im send --channel default --kind status --text "hello"\n`
+      `tiny-agent im send --channel default --kind status --text "hello"\n`
     );
     const result = validator.validate(call);
     expect(result.status).toBe("invalid");
@@ -97,9 +97,9 @@ describe("P027 IM CLI Contract", () => {
     }
   });
 
-  it("terminal_write 'im send --text-stdin' is VALID", () => {
+  it("terminal_write 'tiny-agent im send --text-stdin' is VALID", () => {
     const call = makeImSendWrite(
-      `im send --channel default --kind status --text-stdin <<'IM'\nreport\nIM\n`
+      `tiny-agent im send --channel default --kind status --text-stdin <<'IM'\nreport\nIM\n`
     );
     const result = validator.validate(call);
     expect(result.status).toBe("valid");

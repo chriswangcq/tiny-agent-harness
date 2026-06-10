@@ -117,13 +117,13 @@ export async function runSkill(argv: string[]): Promise<void> {
     }
     case "show": {
       const name = positional[0];
-      if (!name) die("skill show requires <name>");
+      if (!name) die("tiny-agent skill show requires <name>");
       output(cli.handleShow(name), jsonMode);
       break;
     }
     case "run": {
       const name = positional[0];
-      if (!name) die("skill run requires <name>");
+      if (!name) die("tiny-agent skill run requires <name>");
       const argsJson = positional[1];
       const args = argsJson ? JSON.parse(argsJson) : undefined;
       output(cli.handleRun(name, args), jsonMode);
@@ -135,7 +135,7 @@ export async function runSkill(argv: string[]): Promise<void> {
     }
     case "close": {
       const skillRunId = positional[0];
-      if (!skillRunId) die("skill close requires <skillRunId>");
+      if (!skillRunId) die("tiny-agent skill close requires <skillRunId>");
       const review = (flags["review"] ?? "none") as "none" | "required";
       if (review !== "none" && review !== "required") {
         die("--review must be 'none' or 'required'");
@@ -155,37 +155,37 @@ export async function runSkill(argv: string[]): Promise<void> {
     }
     case "review-complete": {
       const skillRunId = positional[0];
-      if (!skillRunId) die("skill review-complete requires <skillRunId>");
+      if (!skillRunId) die("tiny-agent skill review-complete requires <skillRunId>");
       const reviewJson = positional[1];
-      if (!reviewJson) die("skill review-complete requires JSON review data");
+      if (!reviewJson) die("tiny-agent skill review-complete requires JSON review data");
       const reviewData = JSON.parse(reviewJson) as { summary: string; lessons: string[] };
       output(cli.handleReviewComplete(skillRunId, reviewData), jsonMode);
       break;
     }
     case "install": {
       const sourcePath = positional[0];
-      if (!sourcePath) die("skill install requires <source-path>");
+      if (!sourcePath) die("tiny-agent skill install requires <source-path>");
       const name = positional[1];
       output(cli.handleInstall(sourcePath, name || undefined), jsonMode);
       break;
     }
     case "validate": {
       const name = positional[0];
-      if (!name) die("skill validate requires <name>");
+      if (!name) die("tiny-agent skill validate requires <name>");
       output(cli.handleValidate(name), jsonMode);
       break;
     }
     default:
       die(
-        "Usage: skill <list|show|run|status|close|review-complete|validate|install> [options]\n" +
-          "  skill list [--json]\n" +
-          "  skill show <name> [--json]\n" +
-          "  skill run <name> [--json '<args>']\n" +
-          "  skill status [--active] [--json]\n" +
-          "  skill close <skillRunId> --review none|required [--json '<summary>']\n" +
-          "  skill review-complete <skillRunId> --json '<review>'\n" +
-          "  skill validate <name> [--json]\n" +
-          "  skill install <source-path> [<name>] [--json]",
+        "Usage: tiny-agent skill <list|show|run|status|close|review-complete|validate|install> [options]\n" +
+          "  tiny-agent skill list [--json]\n" +
+          "  tiny-agent skill show <name> [--json]\n" +
+          "  tiny-agent skill run <name> [--json '<args>']\n" +
+          "  tiny-agent skill status [--active] [--json]\n" +
+          "  tiny-agent skill close <skillRunId> --review none|required [--json '<summary>']\n" +
+          "  tiny-agent skill review-complete <skillRunId> --json '<review>'\n" +
+          "  tiny-agent skill validate <name> [--json]\n" +
+          "  tiny-agent skill install <source-path> [<name>] [--json]",
       );
   }
 }

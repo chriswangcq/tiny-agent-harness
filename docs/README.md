@@ -28,7 +28,7 @@
 - Observation 是 bounded human glance：模型看到最多一屏 `screen.text`、terminal facts、`returnedToPrompt` 和 log path；完整输出留在 session log。
 - Terminal facts 包含 best-effort `foregroundProcess`。它是调试和决策线索，不是可靠的路由判定。
 - FIM prompt 这类大调试 payload 会写到 run 目录下的 `debug/prompts/`，transcript/model output 只保留 `promptRef`。streamed thinking progress 写到 `debug/thinking/`，最终 `model_output_received` 只保留 `traceRef`。
-- `mcp` 是 CLI 能力，不是新的模型可见 tool；agent 通过 terminal/session 工具执行 `mcp add/list/tools/call`。
+- `tiny-agent mcp` 是 CLI 能力，不是新的模型可见 tool；agent 通过 terminal/session 工具执行 `tiny-agent mcp add/list/tools/call`。
 - `subagent` 当前是轻量 team 控制面：roster/task/lifecycle domain 保持纯函数，CLI adapter 负责 project-scoped 落盘和通过 run-scoped IM 派发任务；local worker launcher 仍是显式请求的可选 adapter。
 
 ## Durable Artifacts

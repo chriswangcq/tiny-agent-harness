@@ -56,11 +56,11 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("terminal.inputSeq");
     expect(prompt.messages[0]!.content).toContain("screen.text");
     expect(prompt.messages[0]!.content).toContain("screen.logRef.path");
-    expect(prompt.messages[0]!.content).toContain("im send --channel");
+    expect(prompt.messages[0]!.content).toContain("tiny-agent im send --channel");
     expect(prompt.messages[0]!.content).toContain("--text-stdin");
     expect(prompt.messages[0]!.content).toContain("CLI capabilities are installed on PATH");
-    expect(prompt.messages[0]!.content).toContain("`tiny-agent`, `im`, `skill`, `codeq`, `mcp`, and `team`");
-    expect(prompt.messages[0]!.content).toContain("use the focused CLIs directly");
+    expect(prompt.messages[0]!.content).toContain("`tiny-agent im`, `tiny-agent skill`, `tiny-agent codeq`, `tiny-agent mcp`, and `tiny-agent team`");
+    expect(prompt.messages[0]!.content).toContain("use capability subcommands through the same entrypoint");
     expect(prompt.messages[0]!.content).toContain("io_wait");
     expect(prompt.messages[0]!.content).toContain("Thinking is reasoning-only");
     expect(prompt.messages[0]!.content).toContain("There is no model-level final turn");
@@ -285,7 +285,7 @@ describe("PromptBuilder", () => {
     const systemContent = prompt.messages[0]!.content;
 
     // Assert new contract is present
-    expect(systemContent).toContain("skill show");
+    expect(systemContent).toContain("tiny-agent skill show");
     expect(systemContent).toContain("readmePath");
     expect(systemContent).toContain("contentLineCount");
     expect(systemContent).toContain("sed -n '1,30p'");

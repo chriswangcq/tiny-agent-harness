@@ -7,10 +7,10 @@ This guide documents the current lightweight team control plane. The team layer 
 Create a team, add members, assign work, and observe lifecycle facts.
 
 ```text
-team create <teamId>
-  -> team member add/update/status/heartbeat/terminate
-  -> team task create/assign/start/succeed/fail/cancel
-  -> team lifecycle lease/reaper/shutdown for run-scoped worker processes
+tiny-agent team create <teamId>
+  -> tiny-agent team member add/update/status/heartbeat/terminate
+  -> tiny-agent team task create/assign/start/succeed/fail/cancel
+  -> tiny-agent team lifecycle lease/reaper/shutdown for run-scoped worker processes
 ```
 
 Workspace layout, git branch policy, child ledgers, and QA protocol are instructions sent to workers through IM or metadata/evidence submitted by workers. They are not required fields in the team roster schema.
@@ -130,8 +130,8 @@ Run-scoped team state and lifecycle facts:
 
 1. Create or select a team.
 2. Add members with role and channel only.
-3. Bind active worker runs back to roster members with `team member update <memberId> --json '{"runId":"run-..."}'`.
-4. Send concrete instructions with `team task assign`; it dispatches through IM and records sent/failed.
+3. Bind active worker runs back to roster members with `tiny-agent team member update <memberId> --json '{"runId":"run-..."}'`.
+4. Send concrete instructions with `tiny-agent team task assign`; it dispatches through IM and records sent/failed.
 5. Include workspace/git/ledger requirements inside the assignment text when needed.
 6. Record optional facts as metadata or handoff evidence after they exist.
 7. Use lifecycle lease/heartbeat/reaper/shutdown for worker processes.

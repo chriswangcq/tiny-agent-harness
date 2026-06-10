@@ -61,7 +61,7 @@ TUI
 | 模型上下文层 | `src/model/context-session.ts`、`src/model/context-window.ts`、`src/model/prompt-builder.ts` | 本地有状态 FIM context wrapper：接收 incremental context item，负责 prompt message 渲染、context compaction、snapshot/restore。 |
 | 工具执行层 | `src/tools`、`src/bash` | 静态 terminal/session tool catalog、tool validation、review boundary、PTY-backed terminal session 和 observation。 |
 | 外部事件层 | `src/environment`、`src/im` | IM 消息、terminal/skill/environment events、`io_wait`、事件消费游标和 factual reminder。 |
-| 能力 CLI 层 | `src/skill`、`src/code-intel`、`src/cli` | skill discovery/run/review，`codeq` LSP 查询，`im` mock transport，用户命令入口。 |
+| 能力 CLI 层 | `src/skill`、`src/code-intel`、`src/cli` | `tiny-agent skill` discovery/run/review，`tiny-agent codeq` LSP 查询，`tiny-agent im` mock transport，用户命令入口。 |
 | 可观察层 | `src/transcript`、`src/tui`、`src/state` | transcript/state 持久化、文件锁、JSONL ledger、TUI transcript player、debugger domain 和 view model。 |
 | 评估与治理层 | `src/run/recovery.ts`、`src/run/replay.ts`、`src/tools/policy.ts`、`src/subagent` | resume/replay/eval case、模型协议诊断、tool policy reviewer 和 sub-agent team FSM 基础域。 |
 
@@ -95,7 +95,7 @@ task / environment reminder
 
 2. **所有交互能力共享 terminal/session 边界**
 
-   `skill run ...`、`codeq diagnostics ...`、`npm test`、`git`、MCP CLI 调用，本质上都是 terminal session 中的一条命令。生成文件、IM 回复和报告通过 heredoc、stdin redirection 或项目内 CLI 完成。它们共享 tool review、session log、one-screen observation 和 transcript。
+   `tiny-agent skill run ...`、`tiny-agent codeq diagnostics ...`、`npm test`、`git`、MCP CLI 调用，本质上都是 terminal session 中的一条命令。生成文件、IM 回复和报告通过 heredoc、stdin redirection 或项目内 CLI 完成。它们共享 tool review、session log、one-screen observation 和 transcript。
 
 3. **`io_wait` 是状态机决策**
 
@@ -174,18 +174,18 @@ level-0 session output noise 造成 wake storm；用户消息固定归一到 lev
 `src/skill` 将 skills 设计为普通 CLI 能力，而不是 harness 内置工具。agent 使用 skill 的方式仍然是：
 
 ```bash
-skill list --json
-skill show coding-review --json
-skill run coding-review --json '{"path":"src"}'
-skill close <skillRunId> --review none --json '<summary>'
-skill close <skillRunId> --review required --json '<summary>'
-skill review-complete <skillRunId> --json '<review>'
-skill validate coding-review --json
+tiny-agent skill list --json
+tiny-agent skill show coding-review --json
+tiny-agent skill run coding-review --json '{"path":"src"}'
+tiny-agent skill close <skillRunId> --review none --json '<summary>'
+tiny-agent skill close <skillRunId> --review required --json '<summary>'
+tiny-agent skill review-complete <skillRunId> --json '<review>'
+tiny-agent skill validate coding-review --json
 ```
 
-`skill show` 只返回元数据（`name`, `manifest?`, `readmePath`, `contentLineCount`），不返回 SKILL.md 正文。读取正文需由 agent 在终端对 `readmePath` 执行 `sed -n` 等 shell 命令分段获取。
+`tiny-agent skill show` 只返回元数据（`name`, `manifest?`, `readmePath`, `contentLineCount`），不返回 SKILL.md 正文。读取正文需由 agent 在终端对 `readmePath` 执行 `sed -n` 等 shell 命令分段获取。
 
-当前 runtime 没有内置 `skill install` 子命令；skill package 的放置、同步或远程安装
+当前 runtime 没有内置 `tiny-agent skill install` 子命令；skill package 的放置、同步或远程安装
 属于外层分发问题。agent runtime 只审计通过 terminal/session 执行的 discovery、
 run、close、review-complete 和 validate。
 
@@ -195,19 +195,19 @@ run、close、review-complete 和 validate。
 
 ### 4.6 Code Intelligence CLI
 
-`src/code-intel` 提供 `codeq` CLI，把 TypeScript / JavaScript 的 LSP 能力暴露给 agent。它不是新 tool，agent 调用它仍然是 bash 命令：
+`src/code-intel` 提供 `tiny-agent codeq` 子命令，把 TypeScript / JavaScript 的 LSP 能力暴露给 agent。它不是新 tool，agent 调用它仍然是 bash 命令：
 
 ```bash
-codeq diagnostics --workspace --json
-codeq symbols src/run/orchestrator.ts --json
-codeq definition src/run/orchestrator.ts:37:18 --json
-codeq references src/run/orchestrator.ts:37:18 --json
-codeq hover src/run/orchestrator.ts:37:18 --json
+tiny-agent codeq diagnostics --workspace --json
+tiny-agent codeq symbols src/run/orchestrator.ts --json
+tiny-agent codeq definition src/run/orchestrator.ts:37:18 --json
+tiny-agent codeq references src/run/orchestrator.ts:37:18 --json
+tiny-agent codeq hover src/run/orchestrator.ts:37:18 --json
 ```
 
-`codeq` 补齐 `rg` 和直接读文件不擅长的语义查询能力，例如真实定义、引用点、document symbols、hover 类型信息和 language server diagnostics。当前实现保持 stateless，每次命令启动 language server 或 compiler fallback，执行查询后关闭。
+`tiny-agent codeq` 补齐 `rg` 和直接读文件不擅长的语义查询能力，例如真实定义、引用点、document symbols、hover 类型信息和 language server diagnostics。当前实现保持 stateless，每次命令启动 language server 或 compiler fallback，执行查询后关闭。
 
-当前 `codeq` 是只读查询 CLI，`--apply` 会被解析层拒绝。未来如果增加 rename 或
+当前 `tiny-agent codeq` 是只读查询子命令，`--apply` 会被解析层拒绝。未来如果增加 rename 或
 code action，也应先以 dry-run `WorkspaceEdit` 摘要形式进入 terminal/session
 review，再由 agent 用普通补丁流程落盘。
 
@@ -291,7 +291,7 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 `src/subagent/lifecycle-runtime-adapter.ts` 是纯 adapter，接收显式 `TeamSnapshot`（含 `rosterState` 与 `processExistence?: Record<string, boolean>`）和注入 port（时钟、事件追加、进程 shutdown、roster event），提供 `recordHeartbeat`、`enumerateWorkers`、`runReaper`、`requestShutdown`。它内部调用 `supervisor-lifecycle.ts` 的纯决策函数（`interpretHeartbeat`、`evaluateLease`、`computeLifecycleState`、`decideReaperAction`）来推导 `WorkerLifecycleState`（healthy / stale / expired / grace_period / shutdown / terminated / missing_process / unknown）。
 
-CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-agent team --help` 暴露 `team create|member|task|lifecycle`。普通 team 命令的 effect boundary 在 `src/subagent/team-cli-adapter.ts`；lifecycle 命令的 effect boundary 在 `src/subagent/lifecycle-cli-adapter.ts`，不绕过 run-scoped team state 和 supervisor JSONL。
+CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-agent team --help` 暴露 `tiny-agent team create|member|task|lifecycle`。普通 team 命令的 effect boundary 在 `src/subagent/team-cli-adapter.ts`；lifecycle 命令的 effect boundary 在 `src/subagent/lifecycle-cli-adapter.ts`，不绕过 run-scoped team state 和 supervisor JSONL。
 
 **Reaper shutdown chain**: the `runReaper` adapter function identifies stale active workers (heartbeat age past threshold, member status not `terminated` or `offline`). For each stale worker it emits a `shutdown_requested` lifecycle event, attempts graceful shutdown, then records `shutdown_completed` or `shutdown_failed`. Successful shutdown marks the roster member status `terminated`. This unified chain ensures stale workers are cleanly retired and do not accumulate in the team snapshot.
 
@@ -432,7 +432,7 @@ CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-
 | 长任务友好 | PTY session 支持 timeout 后继续运行、poll、interactive PTY input、interrupt 和 restart。 |
 | 可审计 | tool review 位于所有 terminal/session request 前，未来可接权限策略和人工审批。 |
 | 可进化 skill | agent 可以按需触发复盘，把 lessons 写回 skill 附件，形成经验沉淀闭环。 |
-| 代码理解能力不污染内核 | LSP 能力通过 `codeq` CLI 暴露，不改变能力通过 terminal/session 边界进入 harness 的约束。 |
+| 代码理解能力不污染内核 | LSP 能力通过 `tiny-agent codeq` 暴露，不改变能力通过 terminal/session 边界进入 harness 的约束。 |
 | 测试保护状态边界 | 测试重点落在状态转移、CLI、锁、JSONL、validator 和 view model。 |
 
 ## 9. 当前风险与短板
@@ -454,7 +454,7 @@ CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-
 短期应优先确保：
 
 1. `npm run typecheck`、`npm run build`、`npm test` 持续通过。
-2. `tiny-agent`、`im`、`skill`、`mcp`、`codeq` 的 bin 入口都能从 build 后产物运行。
+2. `tiny-agent` 主 bin 以及 `tiny-agent im/skill/mcp/codeq/team` 子命令都能从 build 后产物运行。
 3. `~/.tiny-agent/projects/<projectId>/` project state root 与 `runs/<runId>/` run-scoped state 使用统一 resolver/env 注入规则。
 4. README、design docs、system prompt 与实现保持一致。
 
@@ -474,7 +474,7 @@ CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-
 
 ### 10.3 把 CLI 能力生态收敛成统一契约
 
-`skill`、`codeq`、`im` 已经展示了模式：
+`tiny-agent skill`、`tiny-agent codeq`、`tiny-agent im` 已经展示了模式：
 
 ```text
 capability as CLI

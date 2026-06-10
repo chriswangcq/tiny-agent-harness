@@ -358,3 +358,34 @@ describe("MCP CLI real output envelope", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Real CLI boundary tests — Code Intelligence
+// ---------------------------------------------------------------------------
+describe("Code intelligence CLI real output envelope", () => {
+  it("success: codeq capabilities is routed through tiny-agent", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "codeq-env-test-"));
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [join(process.cwd(), "dist/cli/main.js"), "codeq", "capabilities", "--json"],
+        {
+          cwd: tmp,
+          encoding: "utf8",
+          timeout: 15_000,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      const env = result.stdout && result.stdout.trim()
+        ? JSON.parse(result.stdout.trim()) as Record<string, unknown>
+        : null;
+      expect(env).not.toBeNull();
+      expect(env!.ok).toBe(true);
+      expect(env!.tool).toBe("codeq");
+      expect(env!.version).toBeDefined();
+      expect(env!.query).toMatchObject({ command: "capabilities" });
+    } finally {
+      if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});

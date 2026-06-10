@@ -1,10 +1,10 @@
 # Code Intelligence CLI Design
 
-本文记录 tiny-agent-harness 的 code intelligence CLI 设计与当前实现。这个 CLI 名为 `codeq`，含义是 code query。
+本文记录 tiny-agent-harness 的 code intelligence CLI 设计与当前实现。这个能力通过 `tiny-agent codeq` 暴露，`codeq` 含义是 code query。
 
 ## Decision
 
-`codeq` 是一个普通 CLI，不是 harness 内置 tool，也不是模型可见的新工具。
+`tiny-agent codeq` 是一个普通 CLI 子命令，不是 harness 内置 tool，也不是模型可见的新工具。
 
 它继续遵守当前边界：
 
@@ -16,10 +16,10 @@ External capabilities: called as CLI commands through terminal_write when the cu
 Agent 如果需要代码智能，本质上仍然是在 PTY 里确认 shell prompt 后执行：
 
 ```bash
-codeq diagnostics --workspace --json
-codeq symbols src/run/orchestrator.ts --json
-codeq definition src/run/orchestrator.ts:37:18 --json
-codeq references src/run/orchestrator.ts:37:18 --json
+tiny-agent codeq diagnostics --workspace --json
+tiny-agent codeq symbols src/run/orchestrator.ts --json
+tiny-agent codeq definition src/run/orchestrator.ts:37:18 --json
+tiny-agent codeq references src/run/orchestrator.ts:37:18 --json
 ```
 
 这样 LSP 能力会经过现有 PTY session、tool review、observation、transcript 和 log path，不会绕过审计边界。
@@ -34,7 +34,7 @@ codeq references src/run/orchestrator.ts:37:18 --json
 - 这个文件里有哪些结构化 symbol？
 - language server 已经知道哪些诊断？
 
-`codeq` 给 agent 一个低噪声、结构化、可截断的代码理解入口。它不负责替 agent 思考，也不负责自动改代码。
+`tiny-agent codeq` 给 agent 一个低噪声、结构化、可截断的代码理解入口。它不负责替 agent 思考，也不负责自动改代码。
 
 ## Responsibilities
 
@@ -53,7 +53,7 @@ ServerProcess
   does not own: business interpretation of results
 
 ManagedTerminalRuntime
-  owns: running `codeq ...` as one shell command
+  owns: running `tiny-agent codeq ...` as one shell command
   owns: command return code, output window, session log
 
 RunOrchestrator
@@ -64,7 +64,7 @@ RunOrchestrator
 The important split:
 
 ```text
-codeq asks the language server for facts.
+tiny-agent codeq asks the language server for facts.
 The agent decides what to do with those facts.
 ```
 
@@ -81,7 +81,7 @@ The agent decides what to do with those facts.
 - 把 hover、diagnostic、references 的大输出原样塞回 prompt
 - 替代 `rg`、`tsc --noEmit`、`vitest` 或人工阅读
 
-`codeq` 是代码理解辅助，不是新的执行层。
+`tiny-agent codeq` 是代码理解辅助，不是新的执行层。
 
 ## First Version Scope
 
@@ -94,13 +94,13 @@ typescript-language-server --stdio
 当前实现的只读命令：
 
 ```text
-codeq capabilities --json
-codeq diagnostics [path] --json
-codeq diagnostics --workspace --json
-codeq symbols <path> --json
-codeq definition <location> --json
-codeq references <location> --json
-codeq hover <location> --json
+tiny-agent codeq capabilities --json
+tiny-agent codeq diagnostics [path] --json
+tiny-agent codeq diagnostics --workspace --json
+tiny-agent codeq symbols <path> --json
+tiny-agent codeq definition <location> --json
+tiny-agent codeq references <location> --json
+tiny-agent codeq hover <location> --json
 ```
 
 当前版本只读。`rename` 和 `code-actions` 仍然只保留设计契约，不默认实现写入。
@@ -132,7 +132,7 @@ CLI 对用户和 agent 暴露 human-friendly location：
 示例：
 
 ```bash
-codeq definition src/run/orchestrator.ts:37:18 --json
+tiny-agent codeq definition src/run/orchestrator.ts:37:18 --json
 ```
 
 ## JSON Envelope
@@ -208,7 +208,7 @@ output_truncated
 ### capabilities
 
 ```bash
-codeq capabilities --json
+tiny-agent codeq capabilities --json
 ```
 
 ```json
@@ -231,8 +231,8 @@ codeq capabilities --json
 ### diagnostics
 
 ```bash
-codeq diagnostics --workspace --json
-codeq diagnostics src/run/orchestrator.ts --json
+tiny-agent codeq diagnostics --workspace --json
+tiny-agent codeq diagnostics src/run/orchestrator.ts --json
 ```
 
 ```json
@@ -270,7 +270,7 @@ Ordering:
 ### symbols
 
 ```bash
-codeq symbols src/run/orchestrator.ts --json
+tiny-agent codeq symbols src/run/orchestrator.ts --json
 ```
 
 ```json
@@ -311,7 +311,7 @@ Default output should preserve hierarchy. Add `--flat` later only if needed.
 ### definition
 
 ```bash
-codeq definition src/run/orchestrator.ts:37:18 --json
+tiny-agent codeq definition src/run/orchestrator.ts:37:18 --json
 ```
 
 ```json
@@ -338,8 +338,8 @@ If there are multiple definitions, return all up to `--max-results`.
 ### references
 
 ```bash
-codeq references src/run/orchestrator.ts:37:18 --json
-codeq references src/run/orchestrator.ts:37:18 --include-declaration --json
+tiny-agent codeq references src/run/orchestrator.ts:37:18 --json
+tiny-agent codeq references src/run/orchestrator.ts:37:18 --include-declaration --json
 ```
 
 ```json
@@ -368,7 +368,7 @@ codeq references src/run/orchestrator.ts:37:18 --include-declaration --json
 ### hover
 
 ```bash
-codeq hover src/run/orchestrator.ts:37:18 --json
+tiny-agent codeq hover src/run/orchestrator.ts:37:18 --json
 ```
 
 ```json
@@ -393,16 +393,16 @@ Hover output must be capped by byte length. If the LSP server returns long docs,
 
 ## Edit Commands
 
-Edit-producing commands are not implemented in the current CLI. `codeq` is
+Edit-producing commands are not implemented in the current CLI. `tiny-agent codeq` is
 read-only today; `--apply` is rejected instead of being treated as a hidden
 mutation path.
 
 Future edit-planning commands can start as dry-run planners:
 
 ```text
-codeq prepare-rename <location> --json
-codeq rename <location> <new-name> --dry-run --json
-codeq code-actions <path-or-range> --json
+tiny-agent codeq prepare-rename <location> --json
+tiny-agent codeq rename <location> <new-name> --dry-run --json
+tiny-agent codeq code-actions <path-or-range> --json
 ```
 
 Future implementation rule:
@@ -413,9 +413,9 @@ No command writes files unless a later product decision adds an explicit apply
 mode with policy review.
 ```
 
-If an apply mode is added later, codeq should emit the exact `WorkspaceEdit`
+If an apply mode is added later, `tiny-agent codeq` should emit the exact `WorkspaceEdit`
 summary before writing, and the agent's terminal/session request still goes
-through tool review. For the tiny-agent-harness first pass, keep codeq
+through tool review. For the tiny-agent-harness first pass, keep `tiny-agent codeq`
 read-only and let the agent apply edits through the normal patch workflow.
 
 Dry-run rename output:
@@ -474,10 +474,10 @@ This is acceptable for the first implementation because correctness and clear st
 If startup cost becomes painful, add an explicit daemon mode rather than silently keeping background processes alive.
 
 ```text
-codeq server start --workspace . --json
-codeq server status --json
-codeq server restart --json
-codeq server stop --json
+tiny-agent codeq server start --workspace . --json
+tiny-agent codeq server status --json
+tiny-agent codeq server restart --json
+tiny-agent codeq server stop --json
 ```
 
 Daemon state should live under:
@@ -678,7 +678,7 @@ Do not make tests depend on a user's editor, global VS Code install, or existing
 
 ### Phase 1: read-only TypeScript CLI
 
-- Done: add `codeq` binary.
+- Done: add `tiny-agent codeq` subcommand.
 - Done: add stateless LSP client.
 - Done: support `capabilities`, `symbols`, `definition`, `references`, `hover`.
 - Done: support `diagnostics <path>` via LSP publish diagnostics.
@@ -699,7 +699,7 @@ Do not make tests depend on a user's editor, global VS Code install, or existing
 
 ### Phase 4: explicit daemon
 
-- Add `codeq server start/status/restart/stop`.
+- Add `tiny-agent codeq server start/status/restart/stop`.
 - Persist daemon state and logs under `~/.tiny-agent/projects/<projectId>/code-intel/`.
 - Include daemon state in every result.
 - Keep stateless mode as the default unless the user asks for daemon mode.
@@ -715,7 +715,7 @@ Do not make tests depend on a user's editor, global VS Code install, or existing
 Recommended prompt guidance for future agent instructions:
 
 ```text
-Use codeq when semantic code navigation is cheaper or safer than reading by grep:
+Use `tiny-agent codeq` when semantic code navigation is cheaper or safer than reading by grep:
 - definition/reference questions
 - symbol maps for large files
 - hover/type questions
@@ -727,12 +727,12 @@ Prefer rg and direct file reads for:
 - confirming exact source text
 - simple local edits
 
-Treat codeq output as evidence, not authority. If applying edits, inspect the target file and verify with typecheck/tests.
+Treat `tiny-agent codeq` output as evidence, not authority. If applying edits, inspect the target file and verify with typecheck/tests.
 ```
 
 ## Open Questions
 
 - Should TypeScript v1 use `typescript-language-server` only, or allow a direct `tsserver` backend when LSP diagnostics are weak?
-- Should `codeq diagnostics --workspace` eventually use LSP pull diagnostics instead of the current `tsc --noEmit --pretty false` fallback?
+- Should `tiny-agent codeq diagnostics --workspace` eventually use LSP pull diagnostics instead of the current `tsc --noEmit --pretty false` fallback?
 - Should previews include absolute file paths, workspace-relative paths, or both?
 - Should daemon mode ever become default for TUI sessions, or stay opt-in forever?

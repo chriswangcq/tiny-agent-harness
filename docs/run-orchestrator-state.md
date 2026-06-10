@@ -2,7 +2,7 @@
 
 本文记录 tiny-agent-harness 第一版 run loop、agent run state、effect 和 event 协议。
 
-> Current implementation note: tiny-agent has no model-level `final` turn. User-visible replies are delivered by running `im send --text-stdin` through the current PTY session, then returning to `io_wait` to wait for the next environment event. Text that appears only in thinking is not delivered to the user.
+> Current implementation note: tiny-agent has no model-level `final` turn. User-visible replies are delivered by running `tiny-agent im send --text-stdin` through the current PTY session, then returning to `io_wait` to wait for the next environment event. Text that appears only in thinking is not delivered to the user.
 
 ## Design Principles
 
@@ -113,7 +113,7 @@ type AgentRunState = {
 model output -> optional tool validation -> optional tool review -> optional tool execution -> observation
 ```
 
-如果任务已经完成，模型仍然不直接返回用户可见正文；Agent 应通过 current PTY session 调用 `im send --text-stdin` 发送用户可见答复，然后返回 `io_wait`，让 run 等待下一条用户消息或环境事件。`im post` 只用于外部/本地 demo 注入用户消息，不能作为 agent 回复出口。所有 Agent 回复都应走 `im send --text-stdin`；普通文本回复可以直接用 quoted heredoc，例如 `im send --text-stdin <<'IM' ... IM`，也可以在更简单时使用 `< reply.md` stdin redirection。发送后用 `session_observe` 确认 shell prompt/成功输出再 `io_wait`。如果最近一次 IM send 的 PTY observation 尚未回到 shell prompt，orchestrator 会把 `io_wait` 转成 recoverable observation，要求模型先 observe。所有 `terminal_write` PTY 输入都会由 runtime 保护性 pacing；生成文件、代码、HTML、JSON 等文本 payload 使用 shell-native heredoc/redirection，不再保留 staged bytes 旁路。
+如果任务已经完成，模型仍然不直接返回用户可见正文；Agent 应通过 current PTY session 调用 `tiny-agent im send --text-stdin` 发送用户可见答复，然后返回 `io_wait`，让 run 等待下一条用户消息或环境事件。`tiny-agent im post` 只用于外部/本地 demo 注入用户消息，不能作为 agent 回复出口。所有 Agent 回复都应走 `tiny-agent im send --text-stdin`；普通文本回复可以直接用 quoted heredoc，例如 `tiny-agent im send --text-stdin <<'IM' ... IM`，也可以在更简单时使用 `< reply.md` stdin redirection。发送后用 `session_observe` 确认 shell prompt/成功输出再 `io_wait`。如果最近一次 IM send 的 PTY observation 尚未回到 shell prompt，orchestrator 会把 `io_wait` 转成 recoverable observation，要求模型先 observe。所有 `terminal_write` PTY 输入都会由 runtime 保护性 pacing；生成文件、代码、HTML、JSON 等文本 payload 使用 shell-native heredoc/redirection，不再保留 staged bytes 旁路。
 
 ## Model Turn
 
@@ -188,14 +188,14 @@ type ActiveSkillRunSummary = {
 `running` 表示 skill 上下文仍然 active，不一定表示 shell process 仍在运行。关闭必须由 agent 显式运行：
 
 ```bash
-skill close <skillRunId> --review none --json '<summary>'
-skill close <skillRunId> --review required --json '<summary>'
+tiny-agent skill close <skillRunId> --review none --json '<summary>'
+tiny-agent skill close <skillRunId> --review required --json '<summary>'
 ```
 
 如果 close 时选择 `--review required`，SkillRunState 进入 `review_pending`，并生成 `review-task.txt`。这个 review task 会持续进入 system reminder，直到 agent 运行：
 
 ```bash
-skill review-complete <skillRunId> --json '<review>'
+tiny-agent skill review-complete <skillRunId> --json '<review>'
 ```
 
 完成复盘后，经验教训追加到 skill 附件，例如：

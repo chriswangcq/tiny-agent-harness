@@ -1237,7 +1237,7 @@ describe("RunOrchestrator", () => {
       name: "terminal_write",
       arguments: {
         expectedInputSeq: 1,
-        text: "im send --channel default --kind status --text-stdin <<'EOF'\nreport\nEOF\n",
+        text: "tiny-agent im send --channel default --kind status --text-stdin <<'EOF'\nreport\nEOF\n",
       },
     };
     const wait: IoWaitRequest = {
@@ -1252,7 +1252,7 @@ describe("RunOrchestrator", () => {
       result: "ok",
       returnedToPrompt: false,
       screen: {
-        text: "im send --ch",
+        text: "tiny-agent im send --ch",
         rows: 24,
         cols: 80,
         truncated: false,

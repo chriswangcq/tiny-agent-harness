@@ -16,12 +16,12 @@ External capabilities: called as CLI commands through terminal_write when the cu
 所以 skill 的入口是一个普通命令：
 
 ```bash
-skill list --json
-skill show coding-review --json
-skill run coding-review --json '{"path":"src"}'
+tiny-agent skill list --json
+tiny-agent skill show coding-review --json
+tiny-agent skill run coding-review --json '{"path":"src"}'
 ```
 
-Agent 如果想使用 skill，本质上是在 PTY 里确认 shell prompt 后执行 `skill ...`。因此 skill 执行前仍然经过 tool review，执行结果也通过 PTY observation 返回。
+Agent 如果想使用 skill，本质上是在 PTY 里确认 shell prompt 后执行 `tiny-agent skill ...`。因此 skill 执行前仍然经过 tool review，执行结果也通过 PTY observation 返回。
 
 ## Responsibilities
 
@@ -31,7 +31,7 @@ Skill CLI
   does not own: agent loop, model prompting, tool review, PTY session runtime
 
 ManagedTerminalRuntime
-  owns: running `skill ...` as a shell command
+  owns: running `tiny-agent skill ...` as a shell command
   owns: return code, incremental output, session log
 
 RunOrchestrator
@@ -50,7 +50,7 @@ RunOrchestrator
 - 让 skill 绕过 PTY session manager
 - 让 skill 绕过 tool review
 - 自动安装远程 skill
-- 让模型直接调用 `skill` SDK
+- 让模型直接调用 skill SDK
 
 如果未来要做 self-evolving skill，也应该先产出候选文件，再由用户或审核模块确认启用。
 
@@ -111,8 +111,8 @@ type SkillManifest = {
 - `description`: 给 agent 搜索和理解用途的短描述。
 - `version`: skill 自身版本，不影响 harness 协议。
 - `tags`: 搜索标签。
-- `entry`: `skill run <name>` 时执行的命令，默认可以是 `bin/run`。
-- `argsSchema`: `skill run --json` 的参数约束。
+- `entry`: `tiny-agent skill run <name>` 时执行的命令，默认可以是 `bin/run`。
+- `argsSchema`: `tiny-agent skill run --json` 的参数约束。
 - `outputContract`: 输出约定，第一版只作为文档提示，不作为 harness 强约束。
 
 示例：
@@ -143,15 +143,15 @@ type SkillManifest = {
 属于后续产品面。
 
 ```text
-skill list --json
-skill show <name> --json
-skill run <name> --json '<args>'
-skill status --active --json
-skill close <skillRunId> --review none --json '<summary>'
-skill close <skillRunId> --review required --json '<summary>'
-skill review-complete <skillRunId> --json '<review>'
-skill install <source-path> [<name>] --json
-skill validate <name> --json
+tiny-agent skill list --json
+tiny-agent skill show <name> --json
+tiny-agent skill run <name> --json '<args>'
+tiny-agent skill status --active --json
+tiny-agent skill close <skillRunId> --review none --json '<summary>'
+tiny-agent skill close <skillRunId> --review required --json '<summary>'
+tiny-agent skill review-complete <skillRunId> --json '<review>'
+tiny-agent skill install <source-path> [<name>] --json
+tiny-agent skill validate <name> --json
 ```
 
 ### install
@@ -159,8 +159,8 @@ skill validate <name> --json
 将一个本地 skill 目录安装到 skills root。
 
 ```bash
-skill install /path/to/skill-dir --json
-skill install /path/to/skill-dir custom-name --json
+tiny-agent skill install /path/to/skill-dir --json
+tiny-agent skill install /path/to/skill-dir custom-name --json
 ```
 
 规则：
@@ -176,7 +176,7 @@ skill install /path/to/skill-dir custom-name --json
 列出本地可用 skill。
 
 ```bash
-skill list --json
+tiny-agent skill list --json
 ```
 
 输出：
@@ -198,7 +198,7 @@ skill list --json
 展示单个 skill 的元数据（不返回正文内容）。
 
 ```bash
-skill show coding-review --json
+tiny-agent skill show coding-review --json
 ```
 
 输出：
@@ -216,7 +216,7 @@ skill show coding-review --json
 }
 ```
 
-`skill show` 不返回正文内容。读取正文需通过 terminal 对 `readmePath` 执行分页命令：
+`tiny-agent skill show` 不返回正文内容。读取正文需通过 terminal 对 `readmePath` 执行分页命令：
 
 ```bash
 # 先看行数（配合 contentLineCount 判断是否需要分页）
@@ -233,7 +233,7 @@ sed -n '31,60p' <readmePath>
 执行 skill。
 
 ```bash
-skill run coding-review --json '{"path":"src"}'
+tiny-agent skill run coding-review --json '{"path":"src"}'
 ```
 
 执行语义：
@@ -243,8 +243,8 @@ skill run coding-review --json '{"path":"src"}'
 3. 创建一个 durable skill run record，状态为 `running`。
 4. 在 skill 目录内执行 `entry`。
 5. 参数通过 stdin 或环境变量传入 entry，第一版推荐 stdin。
-6. entry 的 stdout/stderr 直接成为 `skill run` 的 stdout/stderr，同时写入 `execution.txt`。
-7. entry 的 exit code 成为 `skill run` 的 exit code，并写入 `state.json`。
+6. entry 的 stdout/stderr 直接成为 `tiny-agent skill run` 的 stdout/stderr，同时写入 `execution.txt`。
+7. entry 的 exit code 成为 `tiny-agent skill run` 的 exit code，并写入 `state.json`。
 
 因此 harness 不需要特殊 observation。它只会看到普通 bash 命令：
 
@@ -256,7 +256,7 @@ skill run coding-review --json '{"path":"src"}'
 }
 ```
 
-同时 `skill run` 应该输出 `skillRunId`，方便 agent 后续 close：
+同时 `tiny-agent skill run` 应该输出 `skillRunId`，方便 agent 后续 close：
 
 ```json
 {
@@ -269,14 +269,14 @@ skill run coding-review --json '{"path":"src"}'
 }
 ```
 
-这里的 `running` 表示 skill 上下文仍然对 agent active，不一定表示 OS 进程还在运行。entry 命令可能已经完成，但 skill run 直到 `skill close` 前都持续出现在 system reminder 里。
+这里的 `running` 表示 skill 上下文仍然对 agent active，不一定表示 OS 进程还在运行。entry 命令可能已经完成，但 skill run 直到 `tiny-agent skill close` 前都持续出现在 system reminder 里。
 
 ### status
 
 列出 active skill runs。
 
 ```bash
-skill status --active --json
+tiny-agent skill status --active --json
 ```
 
 输出：
@@ -302,7 +302,7 @@ skill status --active --json
 关闭一个 active skill run。
 
 ```bash
-skill close skillrun-2026-05-25-001 --review none --json '{"summary":"Used coding-review to check src changes."}'
+tiny-agent skill close skillrun-2026-05-25-001 --review none --json '{"summary":"Used coding-review to check src changes."}'
 ```
 
 如果不需要复盘：
@@ -318,7 +318,7 @@ skill close skillrun-2026-05-25-001 --review none --json '{"summary":"Used codin
 如果需要复盘：
 
 ```bash
-skill close skillrun-2026-05-25-001 --review required --json '{"summary":"Review found reusable test checklist gaps."}'
+tiny-agent skill close skillrun-2026-05-25-001 --review required --json '{"summary":"Review found reusable test checklist gaps."}'
 ```
 
 CLI 不直接把 run 从 reminder 里移除，而是创建 review task：
@@ -339,7 +339,7 @@ CLI 不直接把 run 从 reminder 里移除，而是创建 review task：
 完成复盘，并把经验教训写回 skill 附件。
 
 ```bash
-skill review-complete skillrun-2026-05-25-001 --json '{
+tiny-agent skill review-complete skillrun-2026-05-25-001 --json '{
   "summary": "The review skill should always inspect tests before proposing final confidence.",
   "lessons": [
     "When code changes touch run state, check transition tests and transcript persistence together."
@@ -370,7 +370,7 @@ skill review-complete skillrun-2026-05-25-001 --json '{
 校验 skill 包结构，方便 agent 或用户调试。
 
 ```bash
-skill validate coding-review --json
+tiny-agent skill validate coding-review --json
 ```
 
 输出：
@@ -420,14 +420,14 @@ Skill CLI 不直接写 AgentRunState 的主生命周期，但它维护自己的 
 当 agent 运行：
 
 ```bash
-skill run coding-review --json '{"path":"src"}'
+tiny-agent skill run coding-review --json '{"path":"src"}'
 ```
 
 事件流是：
 
 ```text
 terminal_write action starts
-skill process runs inside the current PTY session
+tiny-agent skill process runs inside the current PTY session
 terminal screen observation returns or requires session_observe
 ManagedTerminalRuntime returns TerminalObservation through the tool-result path
 Skill CLI state keeps skillRun status as running until close
@@ -507,8 +507,8 @@ Active skill reminder:
 2. 不插入 `closed`。
 3. 不插入完整执行日志，只插入路径、return code、状态和 review task 路径。
 4. 如果 active skill 太多，保留最新 active runs，并汇总旧的数量。
-5. Agent 完成使用后应该显式运行 `skill close`。
-6. 如果 `review_pending` 存在，Agent 应该先阅读 review task，再运行 `skill review-complete`。
+5. Agent 完成使用后应该显式运行 `tiny-agent skill close`。
+6. 如果 `review_pending` 存在，Agent 应该先阅读 review task，再运行 `tiny-agent skill review-complete`。
 
 ## Self Evolving Skills
 
@@ -517,9 +517,9 @@ Active skill reminder:
 后续可以加：
 
 ```text
-skill propose <name> --json '<proposal>'
-skill diff <proposal-id> --json
-skill accept <proposal-id> --json
+tiny-agent skill propose <name> --json '<proposal>'
+tiny-agent skill diff <proposal-id> --json
+tiny-agent skill accept <proposal-id> --json
 ```
 
 建议流程：
@@ -528,7 +528,7 @@ skill accept <proposal-id> --json
 2. Agent 生成 skill proposal 到 `~/.tiny-agent/projects/<projectId>/skills/proposals/`。
 3. Tool review 或用户审核 proposal。
 4. 通过后移动到 `~/.tiny-agent/projects/<projectId>/skills/<name>/`。
-5. `skill list` 才能发现它。
+5. `tiny-agent skill list` 才能发现它。
 
 这样避免 agent 自动写入一个看似权威但没有审核过的能力。
 
@@ -540,9 +540,9 @@ skill accept <proposal-id> --json
 
 ```text
 All external capabilities are available through terminal/session tool calls after the agent has inspected the terminal output.
-Use `skill list --json`, `skill show <name> --json`, and `skill validate <name> --json`
+Use `tiny-agent skill list --json`, `tiny-agent skill show <name> --json`, and `tiny-agent skill validate <name> --json`
 to discover reusable local skills.
-Run a skill with `skill run <name> --json '<args>'`.
+Run a skill with `tiny-agent skill run <name> --json '<args>'`.
 ```
 
 Agent 需要具体 skill 时，再通过 bash 自己查。
@@ -555,15 +555,15 @@ Agent 需要具体 skill 时，再通过 bash 自己查。
 
 - `~/.tiny-agent/projects/<projectId>/skills` 作为默认 skill root
 - `~/.tiny-agent/projects/<projectId>/runs/<runId>/skill-runs` 作为当前 run 的 skill run root（agent PTY 中通过 `TAH_SKILL_RUNS_DIR` 注入）
-- `skill install <source-path> [<name>] --json` 将本地 skill 目录复制到 skills root。安装前校验 SKILL.md 存在且目标名称不冲突。
-- `skill list --json`
-- `skill show <name> --json`
-- `skill run <name> --json '<args>'`
-- `skill status --active --json`
-- `skill close <skillRunId> --review none|required --json '<summary>'`
-- `skill review-complete <skillRunId> --json '<review>'`
-- `skill install <source-path> [<name>] --json`
-- `skill validate <name> --json`
+- `tiny-agent skill install <source-path> [<name>] --json` 将本地 skill 目录复制到 skills root。安装前校验 SKILL.md 存在且目标名称不冲突。
+- `tiny-agent skill list --json`
+- `tiny-agent skill show <name> --json`
+- `tiny-agent skill run <name> --json '<args>'`
+- `tiny-agent skill status --active --json`
+- `tiny-agent skill close <skillRunId> --review none|required --json '<summary>'`
+- `tiny-agent skill review-complete <skillRunId> --json '<review>'`
+- `tiny-agent skill install <source-path> [<name>] --json`
+- `tiny-agent skill validate <name> --json`
 - `SKILL.md` 必须存在
 - `skill.json` 可选
 - `entry` 可选，没有 entry 的 skill 只能 show，不能 run

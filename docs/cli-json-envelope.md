@@ -2,7 +2,7 @@
 
 ## Purpose
 
-All capability CLIs (im, skill, mcp, codeq) produce machine-readable JSON output through standardized success and failure envelopes. Agents parse capability results through terminal/session boundaries without special-casing every command.
+All capability subcommands (`tiny-agent im`, `tiny-agent skill`, `tiny-agent mcp`, `tiny-agent codeq`) produce machine-readable JSON output through standardized success and failure envelopes. Agents parse capability results through terminal/session boundaries without special-casing every command.
 
 ## Convention
 
@@ -54,11 +54,11 @@ Every JSON line written to stdout is one envelope:
 
 ### codeq (Code Intelligence CLI)
 
-codeq has its own established envelope format (`CodeIntelSuccess<T>` / `CodeIntelFailure`) defined in `src/code-intel/types.ts`. It is read-only for now and compatible with this convention: it uses `ok`, `tool`, `version`, `cwd`, `error` fields matching the standard shape.
+`tiny-agent codeq` has its own established envelope format (`CodeIntelSuccess<T>` / `CodeIntelFailure`) defined in `src/code-intel/types.ts`. It is read-only for now and compatible with this convention: it uses `ok`, `tool`, `version`, `cwd`, `error` fields matching the standard shape.
 
 ### listen-mode commands
 
-`im listen --json` streams individual message JSON objects line-by-line rather than a single envelope. This is by design for streaming use cases.
+`tiny-agent im listen --json` streams individual message JSON objects line-by-line rather than a single envelope. This is by design for streaming use cases.
 
 ## Backward Compatibility
 

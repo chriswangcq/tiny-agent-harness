@@ -8,12 +8,12 @@
 
 ```text
 User
-  -> im CLI
+  -> tiny-agent im
   -> UserMessageTransport
   -> RunOrchestrator
   -> Agent
   -> UserMessageTransport
-  -> im CLI
+  -> tiny-agent im
   -> User
 ```
 
@@ -23,8 +23,8 @@ User
 
 ```text
 ImCliTransport
-  owns: receive user messages through im CLI
-  owns: send agent messages through im CLI
+  owns: receive user messages through tiny-agent im
+  owns: send agent messages through tiny-agent im
   owns: message cursor / ack
 
 RunOrchestrator
@@ -49,27 +49,27 @@ Terminal/session tools remain the PTY-visible delivery path; prepared file/messa
 Recommended command shape:
 
 ```bash
-im recv --channel default --cursor <cursor> --json
-im send --channel default --kind status --text-stdin
-im ack --channel default --message-id <id>
-im post --channel default --run latest --from user --text "fix the failing test"
+tiny-agent im recv --channel default --cursor <cursor> --json
+tiny-agent im send --channel default --kind status --text-stdin
+tiny-agent im ack --channel default --message-id <id>
+tiny-agent im post --channel default --run latest --from user --text "fix the failing test"
 ```
 
-In the terminal/session agent flow, `--text-stdin` is the required stdin path for all agent-authored replies. A quoted heredoc is valid for normal text replies, including Markdown, Chinese/emoji-heavy content, tables, generated reports, and multiline summaries, e.g. `im send --kind status --text-stdin <<'IM' ... IM`. Input redirection (`im send --kind status --text-stdin < reply.md`) remains valid when it makes the command simpler. `--text` remains a CLI convenience for humans and scripts, but the agent should not use it.
+In the terminal/session agent flow, `--text-stdin` is the required stdin path for all agent-authored replies. A quoted heredoc is valid for normal text replies, including Markdown, Chinese/emoji-heavy content, tables, generated reports, and multiline summaries, e.g. `tiny-agent im send --kind status --text-stdin <<'IM' ... IM`. Input redirection (`tiny-agent im send --kind status --text-stdin < reply.md`) remains valid when it makes the command simpler. `--text` remains a CLI convenience for humans and scripts, but the agent should not use it.
 
 For interactive local demos:
 
 ```bash
-im post --channel default --from user --text "fix the failing test"
-im listen --channel default
+tiny-agent im post --channel default --from user --text "fix the failing test"
+tiny-agent im listen --channel default
 ```
 
 `post` and `listen` are demo helpers. `post` only injects user-authored inbox messages; agent-visible replies must use `send` so they go to outbox and cannot be consumed again as user input. Reserved sender labels such as `assistant`, `agent`, `system`, and `tool` are rejected for `post`.
 
 Path resolution:
 
-- `im ... --run latest` writes to `~/.tiny-agent/projects/<projectId>/runs/<latestRunId>/im/` for the current project.
-- Inside an agent PTY, `TAH_IM_DIR` is injected, so `im send/recv` defaults to the current run.
+- `tiny-agent im ... --run latest` writes to `~/.tiny-agent/projects/<projectId>/runs/<latestRunId>/im/` for the current project.
+- Inside an agent PTY, `TAH_IM_DIR` is injected, so `tiny-agent im send/recv` defaults to the current run.
 - If neither run nor `TAH_IM_DIR` exists, the CLI falls back to project-level `~/.tiny-agent/projects/<projectId>/im/` for pre-run demos.
 
 ## Message Schema
@@ -133,7 +133,7 @@ type ReceivedUserMessages = {
 };
 ```
 
-The first implementation can use child-process calls to the `im` CLI.
+The first implementation can use child-process calls to `tiny-agent im`.
 
 ## Run Startup
 
@@ -181,7 +181,7 @@ Current version:
 - agent 可主动提交 `io_wait` 等待后续环境事件。
 - while in `waiting_for_io`, do not call the model or execute terminal actions。
 - 任意满足 `minLevel` 的新 environment event 都可以唤醒 wait；用户消息默认 level `100`。
-- keep the run alive across user-visible replies by sending status through `im send` and then returning to `io_wait`。
+- keep the run alive across user-visible replies by sending status through `tiny-agent im send` and then returning to `io_wait`。
 - stop only on failed or cancelled run state。
 - send error details when the run fails。
 
@@ -203,7 +203,7 @@ User messages are `EnvironmentEvent { kind: "user_message_received", source: "im
 Suggested CLI behavior:
 
 ```bash
-im recv --channel default --cursor <cursor> --json --wait
+tiny-agent im recv --channel default --cursor <cursor> --json --wait
 ```
 
 When a new message arrives:
@@ -216,7 +216,7 @@ When a new message arrives:
 
 ## Local Mock Storage
 
-For demo, `im` can be backed by local JSONL files:
+For demo, `tiny-agent im` can be backed by local JSONL files:
 
 ```text
 ~/.tiny-agent/projects/<projectId>/
@@ -244,14 +244,14 @@ The run-scoped path is the normal agent path. The fallback exists only for expli
 
 ## Error Handling
 
-If `im recv` fails before a run starts:
+If `tiny-agent im recv` fails before a run starts:
 
 ```text
 run does not start
 CLI exits with error
 ```
 
-If a user-visible `im send --kind status` delivery fails:
+If a user-visible `tiny-agent im send --kind status` delivery fails:
 
 ```text
 run records a recoverable observation or fails according to the calling boundary

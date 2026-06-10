@@ -24,7 +24,7 @@ Provider credentials 和默认模型配置不属于 project state，放在用户
 
 该文件建议权限为 `0600`。`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL` 和 `MODEL_NAME` 只作为一次性环境变量 override。
 
-`<projectId>` 由项目根目录 basename 和项目根绝对路径 sha256 短 hash 确定，例如 `tiny-agent-harness-4f2a1b7c9e01`。这样 runtime 状态不污染源码目录，同时同一项目的 `tiny-agent`、`im`、`skill`、`tui`、`mcp` 和 `team` 仍看到同一套状态。
+`<projectId>` 由项目根目录 basename 和项目根绝对路径 sha256 短 hash 确定，例如 `tiny-agent-harness-4f2a1b7c9e01`。这样 runtime 状态不污染源码目录，同时同一项目的 `tiny-agent` 主入口及其 `im`、`skill`、`tui`、`mcp`、`team` 子命令仍看到同一套状态。
 
 当前实现进一步把 run 产生的可变状态全部收敛到 `runs/<runId>/`：IM inbox/outbox、environment events、PTY session log、skill-runs、model context 和 debug artifacts 都随 run 自包含。项目级目录只保留共享 skill definitions、run 容器、启动器日志、锁和临时文件。
 
@@ -67,10 +67,10 @@ Resolver 不自动发现、读取或迁移项目内 `.tiny-agent/project.json`�
 tiny-agent       # run orchestrator, agent run state, terminal/session tool execution
 tiny-agent ui    # one-command launcher: start/resume run and attach TUI
 tiny-agent tui   # transcript / state player
-im               # local mock user-message transport
-skill            # local skill discovery, run, close, review-complete
-mcp              # local MCP registry/call CLI, invoked through terminal/session tools
-codeq            # local code intelligence query CLI, invoked through terminal/session tools
+tiny-agent im               # local mock user-message transport
+tiny-agent skill            # local skill discovery, run, close, review-complete
+tiny-agent mcp              # local MCP registry/call CLI, invoked through terminal/session tools
+tiny-agent codeq            # local code intelligence query CLI, invoked through terminal/session tools
 ```
 
 不需要 build 成独立 CLI 的部分：
@@ -382,10 +382,10 @@ Environment 是 run-scoped 外部事件 ledger。它统一建模 IM、新用户�
 
 写入者：
 
-- `im` CLI append `user_message_received`
+- `tiny-agent im` append `user_message_received`
 - ManagedTerminalRuntime append `session_output_changed`、`session_returned_to_prompt`、`session_exited` 等 session 事件
-- `skill` CLI append `skill_run_started`、`skill_run_closed`、`skill_review_pending`、`skill_review_completed`
-- `mcp` CLI 可 append MCP registry/tool-call 相关事件
+- `tiny-agent skill` append `skill_run_started`、`skill_run_closed`、`skill_review_pending`、`skill_review_completed`
+- `tiny-agent mcp` 可 append MCP registry/tool-call 相关事件
 
 文件：
 
@@ -412,7 +412,7 @@ cursor 不能在 reminder 入 transcript 之前提前移动。`io_wait` 统一�
 
 ### IM
 
-`im` CLI 负责本地 mock channel。
+`tiny-agent im` 负责本地 mock channel。
 
 文件：
 
@@ -428,11 +428,11 @@ runs/<runId>/im/cursors/<channel>.cursor
 run-<runId>.im-channel-<channel>.lock
 ```
 
-`im post --run latest` 会写入最新 run 的 IM inbox；如果 PTY 已注入 `TAH_IM_DIR`，agent 在 shell 里执行 `im send/recv` 会自动落到当前 run。`im listen` 不能长期持锁。它只能循环短暂读文件，然后 sleep / wait。
+`tiny-agent im post --run latest` 会写入最新 run 的 IM inbox；如果 PTY 已注入 `TAH_IM_DIR`，agent 在 shell 里执行 `tiny-agent im send/recv` 会自动落到当前 run。`tiny-agent im listen` 不能长期持锁。它只能循环短暂读文件，然后 sleep / wait。
 
 ### Skill
 
-`skill` CLI 负责 skill discovery 和 skill run lifecycle。
+`tiny-agent skill` 负责 skill discovery 和 skill run lifecycle。
 
 文件：
 
@@ -450,7 +450,7 @@ run-<runId>.skill-run-<skillRunId>.lock
 skills.registry.lock
 ```
 
-`skill run` 不长期持 `skill-run` 写锁：
+`tiny-agent skill run` 不长期持 `skill-run` 写锁：
 
 1. 获取锁创建 state=`running`。
 2. 释放锁。
@@ -470,7 +470,7 @@ run-<runId>.skill-run-<id>.lock -> skills.registry.lock -> run-<runId>.environme
 
 ### MCP Registry
 
-`mcp` CLI 负责 run-scoped MCP server registry 和 MCP tool invocation。它不是 model-visible provider tool；agent 只能通过 PTY 中的 `mcp ...` 命令使用它。
+`tiny-agent mcp` 负责 run-scoped MCP server registry 和 MCP tool invocation。它不是 model-visible provider tool；agent 只能通过 PTY 中的 `tiny-agent mcp ...` 命令使用它。
 
 文件：
 
@@ -485,7 +485,7 @@ run-<runId>.mcp-registry.lock
 run-<runId>.environment.events.lock
 ```
 
-`mcp add/remove/list/tools/call` 读取 `TAH_STATE_DIR`。在 agent PTY 内，`TAH_STATE_DIR` 等于当前 run dir，因此 registry 默认随 run 打包；人工调试可以显式传 `--state-dir`。
+`tiny-agent mcp add/remove/list/tools/call` 读取 `TAH_STATE_DIR`。在 agent PTY 内，`TAH_STATE_DIR` 等于当前 run dir，因此 registry 默认随 run 打包；人工调试可以显式传 `--state-dir`。
 
 ## Deadlock Avoidance
 
@@ -537,7 +537,7 @@ latest pointer lock
 1. 扫描 `locks/`，标记过期锁。
 2. 如果某个 run state 是 `running` 但 run lease 过期，TUI 展示 `stale`。
 3. 如果某个 session state 是 `running` 但 owner run 已 stale，标记 session `terminated`，原因 `owner_lost`。
-4. 如果某个 skill run 长期 `running` 且没有 owner，可以由 `skill status --active --json` 报告 `staleCandidate: true`，但不自动 close。
+4. 如果某个 skill run 长期 `running` 且没有 owner，可以由 `tiny-agent skill status --active --json` 报告 `staleCandidate: true`，但不自动 close。
 
 第一版不要自动删除 state。只 append recovery event 或更新明确 owner_lost 的 snapshot。
 
@@ -554,12 +554,12 @@ src/state/jsonl.ts      # locked append/read by offset
 
 然后按这个顺序接 CLI：
 
-1. `im`：最小 JSONL inbox/outbox，验证锁和 append。
-2. `skill`：接 state root、skill-run lock、environment event。
+1. `tiny-agent im`：最小 JSONL inbox/outbox，验证锁和 append。
+2. `tiny-agent skill`：接 state root、skill-run lock、environment event。
 3. `tiny-agent`：接真实 file-backed Environment、run lease、latest pointer。
 4. `tiny-agent tui`：只读 state，不拿写锁。
 
-这个顺序能最快验证文件锁，因为 `im post`、`skill run`、`tiny-agent` 会同时写 environment ledger。
+这个顺序能最快验证文件锁，因为 `tiny-agent im post`、`tiny-agent skill run`、`tiny-agent` 会同时写 environment ledger。
 
 ## Non Goals
 

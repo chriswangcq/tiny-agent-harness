@@ -488,6 +488,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (firstArg === "codeq") {
+    const { runCodeIntelCli } = await import("../code-intel/cli.js");
+    process.exitCode = await runCodeIntelCli(process.argv.slice(3));
+    return;
+  }
+
   if (firstArg === "mcp") {
     const { runMcpCli } = await import("../mcp/cli.js");
     process.exitCode = await runMcpCli(process.argv.slice(3));

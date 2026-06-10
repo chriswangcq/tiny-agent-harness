@@ -383,15 +383,22 @@ function validateTerminalWriteText(text: string): string | undefined {
   if (usesDeprecatedMainJsCli(text)) {
     return (
       "Invalid terminal_write arguments: tiny-agent CLI capabilities are installed on PATH. " +
-      "Use direct commands such as `tiny-agent`, `im`, `skill`, `codeq`, `mcp`, and `team` instead of `node dist/cli/main.js ...`."
+      "Use `tiny-agent <subcommand> ...` instead of `node dist/cli/main.js ...`."
+    );
+  }
+  const standaloneCapability = usesStandaloneCapabilityCli(text);
+  if (standaloneCapability) {
+    return (
+      "Invalid terminal_write arguments: capability CLIs are exposed through one product entrypoint. " +
+      `Use \`tiny-agent ${standaloneCapability} ...\` instead of bare \`${standaloneCapability} ...\`.`
     );
   }
   if (usesImSendTextArgument(text)) {
     return (
       "Invalid terminal_write arguments: agent IM replies must use " +
-      "`im send --channel <channel> --kind status --text-stdin`. " +
+      "`tiny-agent im send --channel <channel> --kind status --text-stdin`. " +
       "Use stdin forms such as a quoted heredoc or input redirection instead of shell arguments. " +
-      "Do not use `im send --text` from the agent."
+      "Do not use `tiny-agent im send --text` from the agent."
     );
   }
   return undefined;
@@ -399,6 +406,13 @@ function validateTerminalWriteText(text: string): string | undefined {
 
 function usesDeprecatedMainJsCli(text: string): boolean {
   return /(?:^|[\s;&|])node\s+(?:\.\/)?dist\/cli\/main\.js(?:\s|$)/u.test(text);
+}
+
+function usesStandaloneCapabilityCli(
+  text: string,
+): "im" | "skill" | "codeq" | "mcp" | "team" | undefined {
+  const match = /(?:^|[\n;&|])\s*(im|skill|codeq|mcp|team)(?:\s|$)/u.exec(text);
+  return match?.[1] as "im" | "skill" | "codeq" | "mcp" | "team" | undefined;
 }
 
 function usesImSendTextArgument(text: string): boolean {
@@ -412,7 +426,7 @@ function usesImSendTextStdin(text: string): boolean {
 }
 
 function usesImSend(text: string): boolean {
-  return /(?:^|[\s;&|])(?:node\s+\S+\s+)?im\s+send(?:\s|$)/u.test(text);
+  return /(?:^|[\s;&|])tiny-agent\s+im\s+send(?:\s|$)/u.test(text);
 }
 
 function isToolName(value: string): value is ToolName {

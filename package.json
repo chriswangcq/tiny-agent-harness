@@ -5,17 +5,12 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "tiny-agent": "dist/cli/main.js",
-    "im": "dist/cli/im-entry.js",
-    "skill": "dist/cli/skill-entry.js",
-    "codeq": "dist/code-intel/cli.js",
-    "mcp": "dist/cli/mcp-entry.js",
-    "team": "dist/cli/team-entry.js"
+    "tiny-agent": "dist/cli/main.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/cli/main.js",
     "audit:model-cache": "node scripts/model-cache-audit.mjs",
-    "codeq": "node --loader ts-node/esm src/code-intel/cli.ts",
+    "codeq": "node --loader ts-node/esm src/cli/main.ts codeq",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

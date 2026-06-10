@@ -145,14 +145,14 @@ export async function runMcpCli(
   const cmd = finalArgv[0];
 
   if (!cmd || cmd === "--help") {
-    deps.stdout.write(`Usage: mcp [--json] <command> [args...] [--json]
+    deps.stdout.write(`Usage: tiny-agent mcp [--json] <command> [args...] [--json]
 
 Commands:
-  add <name> <command> [-- <server-args...>]  Register an MCP server
-  remove <name>                                Remove an MCP server
-  list                                        List registered servers
-  tools <server>                              List tools from a server
-  call <server> <tool> [--args-json '<json>'] Call a tool
+  tiny-agent mcp add <name> <command> [-- <server-args...>]  Register an MCP server
+  tiny-agent mcp remove <name>                                Remove an MCP server
+  tiny-agent mcp list                                         List registered servers
+  tiny-agent mcp tools <server>                               List tools from a server
+  tiny-agent mcp call <server> <tool> [--args-json '<json>']  Call a tool
 `);
     return 0;
   }
@@ -166,7 +166,7 @@ Commands:
       const name = remaining[1];
       const command = remaining[2];
       if (!name || !command) {
-        writeStderrError(deps, "Usage: mcp add <name> <command> [-- <args...>]");
+        writeStderrError(deps, "Usage: tiny-agent mcp add <name> <command> [-- <args...>]");
         return 1;
       }
 
@@ -185,7 +185,7 @@ Commands:
     case "remove": {
       const name = remaining[1];
       if (!name) {
-        writeStderrError(deps, "Usage: mcp remove <name>");
+        writeStderrError(deps, "Usage: tiny-agent mcp remove <name>");
         return 1;
       }
       const removed = await registry.remove(name);
@@ -202,7 +202,7 @@ Commands:
     case "tools": {
       const serverName = remaining[1];
       if (!serverName) {
-        writeStderrError(deps, "Usage: mcp tools <server>");
+        writeStderrError(deps, "Usage: tiny-agent mcp tools <server>");
         return 1;
       }
       const config = registry.get(serverName);
@@ -237,7 +237,7 @@ Commands:
       if (!serverName || !toolName) {
         writeStderrError(
           deps,
-          "Usage: mcp call <server> <tool> [--args-json '<json>']",
+          "Usage: tiny-agent mcp call <server> <tool> [--args-json '<json>']",
         );
         return 1;
       }

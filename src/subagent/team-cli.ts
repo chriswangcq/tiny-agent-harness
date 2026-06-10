@@ -138,7 +138,7 @@ export function parseTeamArgs(args: string[]): TeamParseResult {
   const group = args[0];
   if (group === "create") {
     if (args.length < 2) {
-      return { ok: false, error: "Usage: team create <teamId>", helpText: HELP_TEXT };
+      return { ok: false, error: "Usage: tiny-agent team create <teamId>", helpText: HELP_TEXT };
     }
     return { ok: true, command: { group: "create", teamId: args[1] } };
   }
@@ -178,7 +178,7 @@ function parseMemberArgs(args: string[]): TeamParseResult {
 
     case "show": {
       if (args.length < 2) {
-        return { ok: false, error: "Usage: team member show <memberId>", helpText: MEMBER_HELP };
+        return { ok: false, error: "Usage: tiny-agent team member show <memberId>", helpText: MEMBER_HELP };
       }
       return { ok: true, command: { group: "member", sub: "show", memberId: args[1] } };
     }
@@ -187,7 +187,7 @@ function parseMemberArgs(args: string[]): TeamParseResult {
       if (args.length < 4) {
         return {
           ok: false,
-          error: "Usage: team member add <memberId> <role> <channel> [--metadata <json>]",
+          error: "Usage: tiny-agent team member add <memberId> <role> <channel> [--metadata <json>]",
           helpText: MEMBER_HELP,
         };
       }
@@ -212,7 +212,7 @@ function parseMemberArgs(args: string[]): TeamParseResult {
       if (args.length < 2) {
         return {
           ok: false,
-          error: "Usage: team member update <memberId> --json <patch>",
+          error: "Usage: tiny-agent team member update <memberId> --json <patch>",
           helpText: MEMBER_HELP,
         };
       }
@@ -235,7 +235,7 @@ function parseMemberArgs(args: string[]): TeamParseResult {
       if (args.length < 3) {
         return {
           ok: false,
-          error: "Usage: team member status <memberId> <status>",
+          error: "Usage: tiny-agent team member status <memberId> <status>",
           helpText: MEMBER_HELP,
         };
       }
@@ -253,7 +253,7 @@ function parseMemberArgs(args: string[]): TeamParseResult {
       if (args.length < 2) {
         return {
           ok: false,
-          error: "Usage: team member heartbeat <memberId> [--evidence <text>]",
+          error: "Usage: tiny-agent team member heartbeat <memberId> [--evidence <text>]",
           helpText: MEMBER_HELP,
         };
       }
@@ -272,7 +272,7 @@ function parseMemberArgs(args: string[]): TeamParseResult {
       if (args.length < 2) {
         return {
           ok: false,
-          error: "Usage: team member terminate <memberId> [--reason <text>]",
+          error: "Usage: tiny-agent team member terminate <memberId> [--reason <text>]",
           helpText: MEMBER_HELP,
         };
       }
@@ -301,7 +301,7 @@ function parseTaskArgs(args: string[]): TeamParseResult {
   switch (sub) {
     case "create": {
       if (args.length < 3) {
-        return { ok: false, error: "Usage: team task create <taskId> <title>", helpText: TASK_HELP };
+        return { ok: false, error: "Usage: tiny-agent team task create <taskId> <title>", helpText: TASK_HELP };
       }
       return {
         ok: true,
@@ -319,7 +319,7 @@ function parseTaskArgs(args: string[]): TeamParseResult {
 
     case "show": {
       if (args.length < 2) {
-        return { ok: false, error: "Usage: team task show <taskId>", helpText: TASK_HELP };
+        return { ok: false, error: "Usage: tiny-agent team task show <taskId>", helpText: TASK_HELP };
       }
       return { ok: true, command: { group: "task", sub: "show", taskId: args[1] } };
     }
@@ -328,7 +328,7 @@ function parseTaskArgs(args: string[]): TeamParseResult {
       if (args.length < 3) {
         return {
           ok: false,
-          error: "Usage: team task assign <taskId> <memberId> [--text <instruction>|--text-stdin]",
+          error: "Usage: tiny-agent team task assign <taskId> <memberId> [--text <instruction>|--text-stdin]",
           helpText: TASK_HELP,
         };
       }
@@ -346,7 +346,7 @@ function parseTaskArgs(args: string[]): TeamParseResult {
 
     case "start": {
       if (args.length < 2) {
-        return { ok: false, error: "Usage: team task start <taskId>", helpText: TASK_HELP };
+        return { ok: false, error: "Usage: tiny-agent team task start <taskId>", helpText: TASK_HELP };
       }
       return { ok: true, command: { group: "task", sub: "start", taskId: args[1] } };
     }
@@ -355,7 +355,7 @@ function parseTaskArgs(args: string[]): TeamParseResult {
       if (args.length < 2) {
         return {
           ok: false,
-          error: "Usage: team task succeed <taskId> [--output <json>]",
+          error: "Usage: tiny-agent team task succeed <taskId> [--output <json>]",
           helpText: TASK_HELP,
         };
       }
@@ -372,7 +372,7 @@ function parseTaskArgs(args: string[]): TeamParseResult {
 
     case "fail": {
       if (args.length < 3) {
-        return { ok: false, error: "Usage: team task fail <taskId> <error>", helpText: TASK_HELP };
+        return { ok: false, error: "Usage: tiny-agent team task fail <taskId> <error>", helpText: TASK_HELP };
       }
       return {
         ok: true,
@@ -387,7 +387,7 @@ function parseTaskArgs(args: string[]): TeamParseResult {
 
     case "cancel": {
       if (args.length < 2) {
-        return { ok: false, error: "Usage: team task cancel <taskId> [reason]", helpText: TASK_HELP };
+        return { ok: false, error: "Usage: tiny-agent team task cancel <taskId> [reason]", helpText: TASK_HELP };
       }
       return {
         ok: true,
@@ -920,7 +920,7 @@ function defaultTaskInstruction(
     `Channel: ${member.channel}`,
     "",
     "Work in your current tiny-agent session. Keep changes scoped to the task instructions you were given.",
-    "Report progress, blockers, and final evidence back through IM using `im send --text-stdin`.",
+    "Report progress, blockers, and final evidence back through IM using `tiny-agent im send --text-stdin`.",
   ].join("\n");
 }
 
@@ -1171,10 +1171,10 @@ Options:
 export const HELP_TEXT = `Usage: tiny-agent team <group> [options]
 
 Team subcommands:
-  team create <teamId>              Create/reset a lightweight team state
-  team member <subcommand>          Team roster management
-  team task <subcommand>            Task lifecycle management
-  team lifecycle <subcommand>       Run-scoped worker lease/reaper/shutdown
+  tiny-agent team create <teamId>              Create/reset a lightweight team state
+  tiny-agent team member <subcommand>          Team roster management
+  tiny-agent team task <subcommand>            Task lifecycle management
+  tiny-agent team lifecycle <subcommand>       Run-scoped worker lease/reaper/shutdown
 
 Groups:
   create      Create a team identity for roster/task state

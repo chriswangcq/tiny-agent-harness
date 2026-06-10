@@ -131,12 +131,12 @@ function isImSubcommand(value: string | undefined): value is
 
 function imUsage(): string {
   return (
-    "Usage: im <post|recv|send|ack|listen> [options]\n" +
-    "  im post --channel <ch> --text <text> [--from <user-label>] [--run <runId|latest>] [--json]\n" +
-    "  im recv --channel <ch> [--cursor <cursor>] [--json]\n" +
-    "  im send --channel <ch> --kind <status|error> (--text <text>|--text-stdin) [--run-id <id>] [--json]\n" +
-    "  im ack --channel <ch> --message-id <id> [--json]\n" +
-    "  im listen --channel <ch> [--cursor <cursor>] [--json]"
+    "Usage: tiny-agent im <post|recv|send|ack|listen> [options]\n" +
+    "  tiny-agent im post --channel <ch> --text <text> [--from <user-label>] [--run <runId|latest>] [--json]\n" +
+    "  tiny-agent im recv --channel <ch> [--cursor <cursor>] [--json]\n" +
+    "  tiny-agent im send --channel <ch> --kind <status|error> (--text <text>|--text-stdin) [--run-id <id>] [--json]\n" +
+    "  tiny-agent im ack --channel <ch> --message-id <id> [--json]\n" +
+    "  tiny-agent im listen --channel <ch> [--cursor <cursor>] [--json]"
   );
 }
 
@@ -230,11 +230,11 @@ async function cmdPost(
 ): Promise<void> {
   const channel = flags["channel"];
   const text = flags["text"];
-  if (!channel || !text) die("im post requires --channel and --text");
+  if (!channel || !text) die("tiny-agent im post requires --channel and --text");
   const from = flags["from"];
   if (from && RESERVED_POST_SENDERS.has(from.toLowerCase())) {
     die(
-      `im post creates user inbox messages; use im send for agent replies instead of --from ${from}`,
+      `tiny-agent im post creates user inbox messages; use tiny-agent im send for agent replies instead of --from ${from}`,
       "IM_POST_RESERVED_SENDER",
     );
   }
@@ -260,7 +260,7 @@ async function cmdRecv(
   json: boolean,
 ): Promise<void> {
   const channel = flags["channel"];
-  if (!channel) die("im recv requires --channel");
+  if (!channel) die("tiny-agent im recv requires --channel");
 
   const cursor = flags["cursor"] ?? transport.readCursorSync(channel);
   const result = await transport.receive({
@@ -268,7 +268,7 @@ async function cmdRecv(
     cursor,
   });
   if (result.cursorFound === false) {
-    die(`im recv cursor was not found: ${cursor}`, "IM_CURSOR_NOT_FOUND");
+    die(`tiny-agent im recv cursor was not found: ${cursor}`, "IM_CURSOR_NOT_FOUND");
   }
 
   output(
@@ -296,11 +296,11 @@ async function cmdSend(
   const channel = (boundChannel && rawChannel !== boundChannel) ? boundChannel : rawChannel;
   const kind = flags["kind"] as "status" | "error" | undefined;
   if (flags["text"] !== undefined && textStdin) {
-    die("im send accepts either --text or --text-stdin, not both");
+    die("tiny-agent im send accepts either --text or --text-stdin, not both");
   }
   const text = flags["text"] ?? (textStdin ? await readStdinText(stdin) : undefined);
   if (!channel || !kind || text === undefined || text.length === 0) {
-    die("im send requires --channel, --kind, and --text or --text-stdin");
+    die("tiny-agent im send requires --channel, --kind, and --text or --text-stdin");
   }
   if (!["status", "error"].includes(kind)) {
     die("--kind must be one of: status, error");
@@ -337,7 +337,7 @@ async function cmdAck(
 ): Promise<void> {
   const channel = flags["channel"];
   const messageId = flags["message-id"];
-  if (!channel || !messageId) die("im ack requires --channel and --message-id");
+  if (!channel || !messageId) die("tiny-agent im ack requires --channel and --message-id");
 
   await transport.ack({ channel, messageId });
 
@@ -350,7 +350,7 @@ async function cmdListen(
   json: boolean,
 ): Promise<void> {
   const channel = flags["channel"];
-  if (!channel) die("im listen requires --channel");
+  if (!channel) die("tiny-agent im listen requires --channel");
 
   let cursor = flags["cursor"] ?? transport.readCursorSync(channel);
 
@@ -366,7 +366,7 @@ async function cmdListen(
   while (true) {
     const result = await transport.receive({ channel, cursor });
     if (result.cursorFound === false) {
-      die(`im listen cursor was not found: ${cursor}`, "IM_CURSOR_NOT_FOUND");
+      die(`tiny-agent im listen cursor was not found: ${cursor}`, "IM_CURSOR_NOT_FOUND");
     }
 
     for (const msg of result.messages) {

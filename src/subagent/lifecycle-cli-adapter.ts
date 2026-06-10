@@ -1,6 +1,6 @@
 // Run-scoped lifecycle CLI adapter.
 //
-// This is the effect boundary for `team lifecycle ...`: it reads durable
+// This is the effect boundary for `tiny-agent team lifecycle ...`: it reads durable
 // run-scoped team/supervisor state, wires those facts into the pure runtime
 // adapter, and performs real process shutdown through injected ports.
 
@@ -362,7 +362,7 @@ function parseLifecycleAdapterArgs(args: string[]): ParseResult {
   switch (subcommand) {
     case "lifecycle-status": {
       if (!common.positionals[0]) {
-        return usage("Usage: team lifecycle lifecycle-status <workerId> [--run <runId>]");
+        return usage("Usage: tiny-agent team lifecycle lifecycle-status <workerId> [--run <runId>]");
       }
       return {
         ok: true,
@@ -376,7 +376,7 @@ function parseLifecycleAdapterArgs(args: string[]): ParseResult {
     }
     case "lease": {
       if (!common.positionals[0]) {
-        return usage("Usage: team lifecycle lease <workerId> [--run <runId>] [--expiry-ms <ms>]");
+        return usage("Usage: tiny-agent team lifecycle lease <workerId> [--run <runId>] [--expiry-ms <ms>]");
       }
       return {
         ok: true,
@@ -401,7 +401,7 @@ function parseLifecycleAdapterArgs(args: string[]): ParseResult {
       };
     case "shutdown": {
       if (!common.positionals[0]) {
-        return usage("Usage: team lifecycle shutdown <workerId> [--run <runId>] [--execute] [--reason <text>]");
+        return usage("Usage: tiny-agent team lifecycle shutdown <workerId> [--run <runId>] [--execute] [--reason <text>]");
       }
       return {
         ok: true,

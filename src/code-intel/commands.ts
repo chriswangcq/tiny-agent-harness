@@ -156,7 +156,7 @@ export function parseCodeIntelArgv(argv: string[]): CodeIntelCommand {
       const workspace = rest.includes("--workspace");
       const path = rest.find((arg) => !arg.startsWith("--"));
       if (!workspace && !path) {
-        throw new Error("Usage: codeq diagnostics <path> --json OR codeq diagnostics --workspace --json");
+        throw new Error("Usage: tiny-agent codeq diagnostics <path> --json OR tiny-agent codeq diagnostics --workspace --json");
       }
       return { kind: "diagnostics", path, workspace };
     }
@@ -182,14 +182,14 @@ export function parseCodeIntelArgv(argv: string[]): CodeIntelCommand {
     }
     default:
       throw new Error(
-        "Usage: codeq <capabilities|diagnostics|symbols|definition|references|hover> ... --json",
+        "Usage: tiny-agent codeq <capabilities|diagnostics|symbols|definition|references|hover> ... --json",
       );
   }
 }
 
 function rejectWriteFlags(args: string[]): void {
   if (args.includes("--apply")) {
-    throw new Error("codeq is read-only; --apply is not supported");
+    throw new Error("tiny-agent codeq is read-only; --apply is not supported");
   }
 }
 
@@ -241,7 +241,7 @@ function commandToQuery(command: CodeIntelCommand): CodeIntelQuery {
 function requiredPositional(command: string, rest: string[]): string {
   const value = rest.find((arg) => !arg.startsWith("--"));
   if (!value) {
-    throw new Error(`Usage: codeq ${command} <target> --json`);
+    throw new Error(`Usage: tiny-agent codeq ${command} <target> --json`);
   }
   return value;
 }

@@ -105,7 +105,7 @@
 
 ### `skills/` — 项目公共
 
-技能定义目录。每个技能一个子目录，包含 `SKILL.md` 等文件。agent 可以通过 `skill list` / `skill show` 发现和使用这些技能。技能定义跨 run 共享，可以在多个 run 中反复使用和迭代。
+技能定义目录。每个技能一个子目录，包含 `SKILL.md` 等文件。agent 可以通过 `tiny-agent skill list` / `tiny-agent skill show` 发现和使用这些技能。技能定义跨 run 共享，可以在多个 run 中反复使用和迭代。
 
 ### `runs/run-<ts>/` — Run 自包含
 
@@ -124,7 +124,7 @@
 
 ### PTY 启动环境变量
 
-Managed PTY 启动时会把当前 run 信息注入 shell 环境，供 agent 在 bash 内调用 `im`、`skill` 等 CLI 时自动落到当前 run：
+Managed PTY 启动时会把当前 run 信息注入 shell 环境，供 agent 在 bash 内调用 `tiny-agent im`、`tiny-agent skill` 等子命令时自动落到当前 run：
 
 | 环境变量 | 含义 |
 |----------|------|
@@ -140,7 +140,7 @@ Managed PTY 启动时会把当前 run 信息注入 shell 环境，供 agent 在 
 | `TAH_TRANSCRIPT_PATH` | 当前 run transcript JSONL |
 | `TAH_ENVIRONMENT_EVENTS_PATH` | 当前 run environment events JSONL |
 
-因此 agent 在 PTY 中执行 `im send ...`、`skill ...`、`codeq ...`、`mcp ...` 或 `team ...` 时，不需要额外传 `--state-dir`；显式传入 `--state-dir` 仍然用于人工调试或跨 run 操作。
+因此 agent 在 PTY 中执行 `tiny-agent im send ...`、`tiny-agent skill ...`、`tiny-agent codeq ...`、`tiny-agent mcp ...` 或 `tiny-agent team ...` 时，不需要额外传 `--state-dir`；显式传入 `--state-dir` 仍然用于人工调试或跨 run 操作。
 
 ### PTY session 生命周期
 
