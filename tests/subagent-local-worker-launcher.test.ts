@@ -1,14 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  planRunScopedWorkerPaths,
+  planTeamScopedWorkerPaths,
   planWorkerLaunch,
   buildSpawnCommand,
   launchLocalWorker,
-  DEFAULT_WORKERS_DIR,
   type WorkerLaunchPlan,
   type WorkerLaunchParams,
-  type RunScopedWorkerPaths,
-  type WorkerSpawnCommand,
   type SpawnPort,
   type GitPort,
   type Clock,
@@ -100,47 +97,23 @@ function fakeWorkerStatePort(
 // ---------------------------------------------------------------------------
 
 describe("worker path planner", () => {
-  it("computes run-scoped worker paths from state root, runId, workerId", () => {
-    const paths = planRunScopedWorkerPaths("/root", "run-abc", "worker-1");
-    expect(paths.runWorkerDir).toBe(
-      "/root/runs/run-abc/workers/worker-1"
-    );
-    expect(paths.runWorkerStateFile).toBe(
-      "/root/runs/run-abc/workers/worker-1/state.json"
-    );
-    expect(paths.runWorkerLogFile).toBe(
-      "/root/runs/run-abc/workers/worker-1/output.log"
-    );
-  });
-
-  it("uses DEFAULT_WORKERS_DIR constant in paths", () => {
-    expect(DEFAULT_WORKERS_DIR).toBe("runs");
-    const paths = planRunScopedWorkerPaths("/root", "run-abc", "w1");
-    expect(paths.runWorkerDir).toContain("runs");
-  });
-
-  it("produces distinct paths for different workers within same run", () => {
-    const a = planRunScopedWorkerPaths("/root", "run-abc", "worker-1");
-    const b = planRunScopedWorkerPaths("/root", "run-abc", "worker-2");
-    expect(a.runWorkerDir).not.toBe(b.runWorkerDir);
-    expect(a.runWorkerStateFile).not.toBe(b.runWorkerStateFile);
-  });
-
-  it("strips trailing slashes from state root", () => {
-    const paths = planRunScopedWorkerPaths("/root/", "run-abc", "w1");
-    expect(paths.runWorkerDir).toBe(
-      "/root/runs/run-abc/workers/w1"
-    );
-  });
-
-  it("handles nested paths in state root", () => {
-    const paths = planRunScopedWorkerPaths(
-      "/home/user/projects/my-app",
+  it("computes active team-scoped worker paths", () => {
+    const paths = planTeamScopedWorkerPaths(
+      "/root",
+      "team-main",
+      "coder-1",
       "run-001",
-      "coder-1"
     );
-    expect(paths.runWorkerDir).toBe(
-      "/home/user/projects/my-app/runs/run-001/workers/coder-1"
+
+    expect(paths.workerDir).toBe("/root/teams/team-main/members/coder-1");
+    expect(paths.workerStateFile).toBe(
+      "/root/teams/team-main/members/coder-1/state.json"
+    );
+    expect(paths.workerLogFile).toBe(
+      "/root/teams/team-main/members/coder-1/output.log"
+    );
+    expect(paths.teamRunRefFile).toBe(
+      "/root/teams/team-main/runs/run-001.json"
     );
   });
 });
@@ -152,7 +125,10 @@ describe("worker path planner", () => {
 describe("planWorkerLaunch", () => {
   const baseParams: WorkerLaunchParams = {
     stateRoot: "/home/project",
+    teamId: "team-main",
+    memberId: "coder-1",
     runId: "run-001",
+    assignmentId: "assignment-001",
     workerId: "coder-1",
     workspace: "/home/workspace",
     branch: "feature/x",
@@ -166,7 +142,10 @@ describe("planWorkerLaunch", () => {
   it("returns a complete WorkerLaunchPlan with all fields", () => {
     const plan = planWorkerLaunch(baseParams);
     expect(plan.workerId).toBe("coder-1");
+    expect(plan.teamId).toBe("team-main");
+    expect(plan.memberId).toBe("coder-1");
     expect(plan.runId).toBe("run-001");
+    expect(plan.assignmentId).toBe("assignment-001");
     expect(plan.stateRoot).toBe("/home/project");
     expect(plan.workspace).toBe("/home/workspace");
     expect(plan.branch).toBe("feature/x");
@@ -177,13 +156,16 @@ describe("planWorkerLaunch", () => {
     expect(plan.createdAt).toBe("2026-06-05T15:00:00.000Z");
   });
 
-  it("computes run-scoped worker paths in the plan", () => {
+  it("computes team-scoped worker paths in the plan", () => {
     const plan = planWorkerLaunch(baseParams);
-    expect(plan.paths.runWorkerDir).toBe(
-      "/home/project/runs/run-001/workers/coder-1"
+    expect(plan.paths.teamMemberDir).toBe(
+      "/home/project/teams/team-main/members/coder-1"
     );
-    expect(plan.paths.runWorkerStateFile).toContain("state.json");
-    expect(plan.paths.runWorkerLogFile).toContain("output.log");
+    expect(plan.paths.teamMemberStateFile).toContain("state.json");
+    expect(plan.paths.teamMemberLogFile).toContain("output.log");
+    expect(plan.paths.teamRunRefFile).toBe(
+      "/home/project/teams/team-main/runs/run-001.json"
+    );
   });
 
   it("uses stateRoot for path computation, not workspace", () => {
@@ -191,8 +173,8 @@ describe("planWorkerLaunch", () => {
       ...baseParams,
       workspace: "/different/workspace",
     });
-    expect(plan.paths.runWorkerDir).toContain("/home/project");
-    expect(plan.paths.runWorkerDir).not.toContain("/different/workspace");
+    expect(plan.paths.workerDir).toContain("/home/project");
+    expect(plan.paths.workerDir).not.toContain("/different/workspace");
   });
 
   it("includes spawn command in plan", () => {
@@ -211,7 +193,10 @@ describe("planWorkerLaunch", () => {
 describe("buildSpawnCommand", () => {
   const basePlan: WorkerLaunchPlan = {
     workerId: "coder-1",
+    teamId: "team-main",
+    memberId: "coder-1",
     runId: "run-001",
+    assignmentId: "assignment-001",
     stateRoot: "/home/project",
     workspace: "/home/workspace",
     branch: "feature/x",
@@ -221,11 +206,21 @@ describe("buildSpawnCommand", () => {
     taskPrompt: "Do something useful",
     createdAt: "2026-06-05T15:00:00.000Z",
     paths: {
-      runWorkerDir: "/root/runs/run-001/workers/coder-1",
-      runWorkerStateFile:
-        "/root/runs/run-001/workers/coder-1/state.json",
-      runWorkerLogFile:
-        "/root/runs/run-001/workers/coder-1/output.log",
+      teamId: "team-main",
+      memberId: "coder-1",
+      runId: "run-001",
+      workerDir: "/root/teams/team-main/members/coder-1",
+      workerStateFile:
+        "/root/teams/team-main/members/coder-1/state.json",
+      workerLogFile:
+        "/root/teams/team-main/members/coder-1/output.log",
+      runRefFile: "/root/teams/team-main/runs/run-001.json",
+      teamMemberDir: "/root/teams/team-main/members/coder-1",
+      teamMemberStateFile:
+        "/root/teams/team-main/members/coder-1/state.json",
+      teamMemberLogFile:
+        "/root/teams/team-main/members/coder-1/output.log",
+      teamRunRefFile: "/root/teams/team-main/runs/run-001.json",
     },
     spawnCommand: { command: "", args: [] },
   };
@@ -235,8 +230,6 @@ describe("buildSpawnCommand", () => {
     expect(cmd.command).toBe("tiny-agent");
     expect(cmd.args).toEqual([
       "run",
-      "--channel",
-      "worker-coder-1",
       "--state-dir",
       "/home/project",
       "--task",
@@ -250,11 +243,10 @@ describe("buildSpawnCommand", () => {
     expect(cmd.args[0]).toBe("run");
   });
 
-  it("includes channel argument", () => {
+  it("does not include a run channel argument", () => {
     const cmd = buildSpawnCommand(basePlan);
-    const channelIdx = cmd.args.indexOf("--channel");
-    expect(channelIdx).toBeGreaterThan(-1);
-    expect(cmd.args[channelIdx + 1]).toBe("worker-coder-1");
+    expect(cmd.args).not.toContain("--channel");
+    expect(cmd.args).not.toContain("worker-coder-1");
   });
 
   it("includes task argument", () => {
@@ -262,9 +254,9 @@ describe("buildSpawnCommand", () => {
       ...basePlan,
       taskPrompt: "Review PR #42",
     });
-    const taskIdx = cmd.args.indexOf("--task");
-    expect(taskIdx).toBeGreaterThan(-1);
-    expect(cmd.args[taskIdx + 1]).toBe("Review PR #42");
+    const assignmentIdx = cmd.args.indexOf("--task");
+    expect(assignmentIdx).toBeGreaterThan(-1);
+    expect(cmd.args[assignmentIdx + 1]).toBe("Review PR #42");
   });
 
   it("omits --task when taskPrompt is empty string", () => {
@@ -336,7 +328,10 @@ describe("port type shapes", () => {
 
 const buildLaunchPlan = (): WorkerLaunchPlan => ({
   workerId: "coder-1",
+  teamId: "team-main",
+  memberId: "coder-1",
   runId: "run-001",
+  assignmentId: "assignment-001",
   stateRoot: "/root",
   workspace: "/home/workspace",
   branch: "feature/x",
@@ -346,18 +341,26 @@ const buildLaunchPlan = (): WorkerLaunchPlan => ({
   taskPrompt: "Fix the failing tests in auth module",
   createdAt: "2026-06-05T15:00:00.000Z",
   paths: {
-    runWorkerDir: "/root/runs/run-001/workers/coder-1",
-    runWorkerStateFile:
-      "/root/runs/run-001/workers/coder-1/state.json",
-    runWorkerLogFile:
-      "/root/runs/run-001/workers/coder-1/output.log",
+    teamId: "team-main",
+    memberId: "coder-1",
+    runId: "run-001",
+    workerDir: "/root/teams/team-main/members/coder-1",
+    workerStateFile:
+      "/root/teams/team-main/members/coder-1/state.json",
+    workerLogFile:
+      "/root/teams/team-main/members/coder-1/output.log",
+    runRefFile: "/root/teams/team-main/runs/run-001.json",
+    teamMemberDir: "/root/teams/team-main/members/coder-1",
+    teamMemberStateFile:
+      "/root/teams/team-main/members/coder-1/state.json",
+    teamMemberLogFile:
+      "/root/teams/team-main/members/coder-1/output.log",
+    teamRunRefFile: "/root/teams/team-main/runs/run-001.json",
   },
   spawnCommand: {
     command: "tiny-agent",
     args: [
       "run",
-      "--channel",
-      "worker-coder-1",
       "--state-dir",
       "/root",
       "--task",
@@ -397,7 +400,7 @@ describe("launchLocalWorker", () => {
     }
   });
 
-  it("writes run-scoped worker process state after spawn succeeds", async () => {
+  it("writes team-scoped worker process state after spawn succeeds", async () => {
     const plan = buildLaunchPlan();
     const workerStateWrites: Array<{ path: string; state: WorkerProcessState }> = [];
     const effects = buildEffects({ workerStateWrites });
@@ -407,10 +410,13 @@ describe("launchLocalWorker", () => {
     expect(result.kind).toBe("launch_success");
     expect(workerStateWrites).toEqual([
       {
-        path: plan.paths.runWorkerStateFile,
+        path: plan.paths.workerStateFile,
         state: {
           workerId: "coder-1",
+          teamId: "team-main",
+          memberId: "coder-1",
           runId: "run-001",
+          assignmentId: "assignment-001",
           pid: 12345,
           spawnedPid: 12345,
           status: "running",

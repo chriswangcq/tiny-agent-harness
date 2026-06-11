@@ -1,12 +1,11 @@
 // ─── Team Dashboard View Model ────────────────────────────────────
 //
-// Pure function that accepts team/contact/task/run/merge/QA summary
+// Pure function that accepts team/contact/assignment/run/merge/QA summary
 // domain data and produces structured rows/sections/selection suitable
 // for TUI rendering.
 //
 // No IO. No side effects. No runtime. Observer/control surface only.
 
-import type { SubAgentTeamSummary } from "../subagent/team.js";
 import type { TeamRosterSummary } from "../subagent/team-roster.js";
 import type { MasterReviewChecklist } from "../subagent/merge-protocol.js";
 
@@ -21,9 +20,21 @@ export type TeamDashboardRun = {
   error?: string;
 };
 
+export type TeamDashboardAssignmentSummary = {
+  teamId: string;
+  totalAssignments: number;
+  totalWorkers: number;
+  assignmentsByStatus: Record<string, number>;
+  workersByStatus: Record<string, number>;
+  activeAssignments: Array<{
+    assignmentId: string;
+    workerId: string;
+  }>;
+};
+
 /** Pure input for the team dashboard view model builder. */
 export type TeamDashboardInput = {
-  teamSummary: SubAgentTeamSummary;
+  teamSummary: TeamDashboardAssignmentSummary;
   rosterSummary: TeamRosterSummary;
   runSummaries: TeamDashboardRun[];
   mergeChecklist: MasterReviewChecklist | null;
@@ -48,7 +59,7 @@ export type TeamDashboardRow = {
 export type TeamDashboardSectionKind =
   | "team-overview"
   | "team-roster"
-  | "active-tasks"
+  | "active-assignments"
   | "run-status"
   | "merge-qa"
   | "supervisor-lifecycle";
@@ -134,7 +145,7 @@ function memberStatusRowStatus(
   }
 }
 
-function taskStatusRowStatus(
+function assignmentStatusRowStatus(
   status: string,
 ): DashboardRowStatus {
   switch (status) {
@@ -178,20 +189,20 @@ function runStatusRowStatus(
 // ─── Section Builders ─────────────────────────────────────────────
 
 function buildTeamOverviewSection(
-  team: SubAgentTeamSummary,
+  team: TeamDashboardAssignmentSummary,
 ): TeamDashboardSection {
   const rows: TeamDashboardRow[] = [
     { text: `Team: ${team.teamId}`, status: "info" },
-    { text: `Total Tasks: ${team.totalTasks}`, status: "info" },
+    { text: `Total Assignments: ${team.totalAssignments}`, status: "info" },
     { text: `Total Workers: ${team.totalWorkers}`, status: "info" },
   ];
 
-  // Task status breakdown
-  for (const [status, count] of Object.entries(team.tasksByStatus ?? {})) {
+  // Assignment status breakdown
+  for (const [status, count] of Object.entries(team.assignmentsByStatus ?? {})) {
     if (count === 0) continue;
     rows.push({
-      text: `  Tasks ${status}: ${count}`,
-      status: taskStatusRowStatus(status),
+      text: `  Assignments ${status}: ${count}`,
+      status: assignmentStatusRowStatus(status),
     });
   }
 
@@ -248,8 +259,8 @@ function buildTeamRosterSection(
   };
 }
 
-function buildActiveTasksSection(
-  team: SubAgentTeamSummary,
+function buildActiveAssignmentsSection(
+  team: TeamDashboardAssignmentSummary,
 ): TeamDashboardSection {
   const rows: TeamDashboardRow[] = [];
 
@@ -257,9 +268,9 @@ function buildActiveTasksSection(
     rows.push({ text: `Active Assignments: ${team.activeAssignments.length}`, status: "info" });
     for (const assignment of team.activeAssignments) {
       rows.push({
-        text: `  ${assignment.taskId} → ${assignment.workerId}`,
+        text: `  ${assignment.assignmentId} -> ${assignment.workerId}`,
         status: "info",
-        key: `task:${assignment.taskId}`,
+        key: `assignment:${assignment.assignmentId}`,
       });
     }
   } else {
@@ -267,8 +278,8 @@ function buildActiveTasksSection(
   }
 
   return {
-    kind: "active-tasks",
-    title: "Active Tasks",
+    kind: "active-assignments",
+    title: "Active Assignments",
     rows,
     selectable: true,
   };
@@ -427,7 +438,7 @@ export function buildTeamDashboardViewModel(
 
   sections.push(buildTeamOverviewSection(input.teamSummary));
   sections.push(buildTeamRosterSection(input.rosterSummary));
-  sections.push(buildActiveTasksSection(input.teamSummary));
+  sections.push(buildActiveAssignmentsSection(input.teamSummary));
   sections.push(buildRunStatusSection(input.runSummaries));
 
   if (input.supervisorLifecycle) {

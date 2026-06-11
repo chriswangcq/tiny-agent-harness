@@ -2,8 +2,12 @@ export type CodeIntelCommand =
   | { kind: "capabilities" }
   | { kind: "diagnostics"; path?: string; workspace: boolean }
   | { kind: "symbols"; path: string }
+  | { kind: "workspace-symbols"; query: string }
   | { kind: "definition"; location: SourceLocation }
   | { kind: "references"; location: SourceLocation; includeDeclaration: boolean }
+  | { kind: "implementations"; location: SourceLocation }
+  | { kind: "incoming-calls"; location: SourceLocation }
+  | { kind: "outgoing-calls"; location: SourceLocation }
   | { kind: "hover"; location: SourceLocation };
 
 export type SourceLocation = {
@@ -53,8 +57,12 @@ export type CodeIntelQuery =
   | { command: "capabilities" }
   | { command: "diagnostics"; path?: string; workspace: boolean }
   | { command: "symbols"; path: string }
+  | { command: "workspace-symbols"; query: string }
   | { command: "definition"; location: SourceLocation }
   | { command: "references"; location: SourceLocation; includeDeclaration: boolean }
+  | { command: "implementations"; location: SourceLocation }
+  | { command: "incoming-calls"; location: SourceLocation }
+  | { command: "outgoing-calls"; location: SourceLocation }
   | { command: "hover"; location: SourceLocation };
 
 export type CodeIntelErrorCode =
@@ -131,6 +139,37 @@ export type CodeIntelLocationResult = {
   preview?: string;
 };
 
+export type CodeIntelSymbolLocation = {
+  name: string;
+  kind: string;
+  path: string;
+  uri: string;
+  range?: SourceRange;
+  containerName?: string;
+  preview?: string;
+};
+
+export type CodeIntelCallHierarchyItem = {
+  name: string;
+  kind: string;
+  path: string;
+  uri: string;
+  range: SourceRange;
+  selectionRange: SourceRange;
+  detail?: string;
+  preview?: string;
+};
+
+export type CodeIntelIncomingCall = {
+  from: CodeIntelCallHierarchyItem;
+  fromRanges: SourceRange[];
+};
+
+export type CodeIntelOutgoingCall = {
+  to: CodeIntelCallHierarchyItem;
+  fromRanges: SourceRange[];
+};
+
 export type CodeIntelHoverContent = {
   kind: "markdown" | "plaintext";
   value: string;
@@ -142,6 +181,10 @@ export type CodeIntelBackend = {
     diagnostics: CodeIntelDiagnostic[];
   }>;
   symbols(path: string): Promise<{ path: string; symbols: CodeIntelSymbol[] }>;
+  workspaceSymbols(query: string): Promise<{
+    query: string;
+    symbols: CodeIntelSymbolLocation[];
+  }>;
   definition(location: SourceLocation): Promise<{
     definitions: CodeIntelLocationResult[];
   }>;
@@ -149,6 +192,17 @@ export type CodeIntelBackend = {
     location: SourceLocation;
     includeDeclaration: boolean;
   }): Promise<{ references: CodeIntelLocationResult[] }>;
+  implementations(location: SourceLocation): Promise<{
+    implementations: CodeIntelLocationResult[];
+  }>;
+  incomingCalls(location: SourceLocation): Promise<{
+    items: CodeIntelCallHierarchyItem[];
+    incomingCalls: CodeIntelIncomingCall[];
+  }>;
+  outgoingCalls(location: SourceLocation): Promise<{
+    items: CodeIntelCallHierarchyItem[];
+    outgoingCalls: CodeIntelOutgoingCall[];
+  }>;
   hover(location: SourceLocation): Promise<{
     contents: CodeIntelHoverContent[];
     range?: SourceRange;

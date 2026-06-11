@@ -11,7 +11,7 @@ TUI 是 observer / control surface，不是 harness 核心状态机。
 ```text
 RunOrchestrator owns agent loop.
 TranscriptStore owns run events.
-ManagedTerminalRuntime owns PTY sessions.
+TerminalHost owns PTY sessions through a supervisor-recorded child process.
 Environment owns environment events and persistent reminder facts.
 SkillRunStore owns skill run lifecycle.
 
@@ -46,7 +46,7 @@ TUI reads those facts and renders them.
 1. TUI 是 transcript player，不是第二个 run orchestrator。
 2. TUI 的可恢复状态只能是 UI 状态，例如当前 focus、scroll offset、follow mode。
 3. 所有业务事实都来自 transcript、state snapshot、session log、environment、skill run state。
-4. 用户输入不能直接塞进模型上下文，必须通过 IM transport 或已有控制端口。
+4. 用户输入不能直接塞进模型上下文，必须通过 public IM 或已有控制端口。
 5. PTY 输出默认只显示一屏 screen / excerpt，完整内容通过 log path 翻页。
 6. TUI 退出不停止 run；run 停止也不要求 TUI 退出。
 7. 第一版以清楚可调试为目标，不追求华丽动画。
@@ -68,19 +68,19 @@ TUI reads those facts and renders them.
 推荐入口：
 
 ```bash
-tiny-agent ui --channel default
-tiny-agent ui --channel default --task "fix tests"
-tiny-agent ui --channel default --resume latest
-tiny-agent ui --channel default --resume run-2026-05-25T20-00-00Z
+tiny-agent ui
+tiny-agent ui --task "fix tests"
+tiny-agent ui --resume latest
+tiny-agent ui --resume run-2026-05-25T20-00-00Z
 tiny-agent tui --run latest
 tiny-agent tui --run run-2026-05-25T20-00-00Z
 ```
 
 语义：
 
-- `tiny-agent ui --channel default`: 后台启动 run，等待第一条 IM 消息，同时打开 live TUI。
-- `tiny-agent ui --channel default --task "fix tests"`: 后台启动 run 并直接注入初始任务，同时打开 live TUI。
-- `tiny-agent ui --channel default --resume <runId|latest>`: 恢复已有 run，并把 TUI attach 到恢复后的 run。
+- `tiny-agent ui`: 后台启动 run，创建默认 public IM run binding，等待第一条用户消息，同时打开 live TUI。
+- `tiny-agent ui --task "fix tests"`: 后台启动 run 并直接注入初始任务，同时打开 live TUI。
+- `tiny-agent ui --resume <runId|latest>`: 恢复已有 run，并把 TUI attach 到恢复后的 run。
 - `tiny-agent tui --run latest`: 只 attach 到最近 run，不启动或恢复 run。
 - 当前 TUI 默认 live tail transcript；完整 replay speed control 仍是后续能力。
 
@@ -90,16 +90,12 @@ TUI 只读这些 durable artifacts：
 
 ```text
 .tiny-agent/
+  mcp-servers.json
   runs/
     <runId>/
       state.json
       transcript.jsonl
       session.json
-      im/
-        default.inbox.jsonl
-        default.outbox.jsonl
-        cursors/
-          default.cursor
       environment/
         events.jsonl
       sessions/
@@ -115,11 +111,14 @@ TUI 只读这些 durable artifacts：
           step-0000-thinking.prompt.txt
         thinking/
           step-0000-thinking.trace.txt
-      mcp-servers.json
   skills/
     <skill>/
       attachments/
         lessons.md
+  im/
+    pairs/
+    channels/
+    run-bindings/
 ```
 
 Optional convenience pointer:
@@ -148,11 +147,11 @@ Optional convenience pointer:
 ```mermaid
 flowchart TD
   User["User"] --> TUI["TUI"]
-  TUI --> IM["IM CLI / transport"]
+  TUI --> IM["Public IM CLI / service"]
   IM --> ENV["Environment"]
   ENV --> ORCH["RunOrchestrator"]
-  ORCH --> MODEL["DeepSeek FIM Adapter"]
-  ORCH --> BASH["ManagedTerminalRuntime"]
+  ORCH --> MODEL["ModelGateway process"]
+  ORCH --> BASH["TerminalHost process"]
   ORCH --> TR["TranscriptStore"]
   BASH --> SLOG["Run-scoped session logs"]
   ORCH --> STATE["state.json"]
@@ -168,12 +167,12 @@ TUI 读：
 - transcript events
 - latest run state
 - run-scoped session log facts / fixed PTY viewport projections
-- IM inbox/outbox
+- public IM channel logs through projection-safe reads
 - active skill run state
 
 TUI 写：
 
-- user message through IM transport
+- user message through public IM endpoint pair
 - optional control request through existing control boundary
 - UI local preferences only
 
@@ -412,7 +411,7 @@ run=run-123 status=waiting_for_io step=7 cwd=/repo model=deepseek-v4-pro session
 message> _
 ```
 
-发送后写入 IM transport，而不是直接调用模型。
+发送后写入 public IM，而不是直接调用模型。
 
 输入栏使用真实终端光标定位到文本末尾，避免中文输入法候选窗远离输入点。普通 Enter 发送消息，Shift+Enter 在输入框内插入换行。
 
@@ -583,7 +582,7 @@ m -> type message -> Enter
 执行：
 
 ```text
-TUI -> ImCliTransport.sendUserMessage / im CLI -> EnvironmentEvent(user_message_received)
+TUI -> PublicImService.postMessage / im CLI -> EnvironmentEvent(user_message_received)
 ```
 
 Agent 下一轮通过 environment reminder 看到它。
@@ -756,7 +755,7 @@ It does not:
 
 ### Inputs (explicit, typed)
 
-- `TeamDashboardInput` with `SubAgentTeamSummary`, `ContactRegistrySummary`,
+- `TeamDashboardInput` with `TeamDashboardAssignmentSummary`, `TeamRosterSummary`,
   `TeamDashboardRun[]`, optional `MasterReviewChecklist`, optional QA summary,
   optional `SupervisorLifecycleInput`
 
@@ -790,17 +789,17 @@ All fields are pure projections — callers pre-compute freshness, reaper flags,
 reasons, and audit summaries. The view-model performs no fs/process/screen/Date
 reads.
 
-### Run-Scoped Lifecycle Audit Projection
+### Team-Scoped Lifecycle Audit Projection
 
 `src/tui/lifecycle-audit-projection.ts` provides the adapter from durable
-run-scoped lifecycle state to the dashboard's `auditEvents` projection:
+team-scoped lifecycle state to the dashboard's `auditEvents` projection:
 
 - `projectLifecycleAuditEvents(events)` maps typed `SupervisorLifecycleEvent[]`
   into `LifecycleAuditEventItem[]`.
-- `readRunLifecycleAuditProjection({ runDir, previousState })` tails
-  `<runDir>/supervisor/lifecycle-events.jsonl` by byte offset and accumulates a
+- `readTeamLifecycleAuditProjection({ teamDir, previousState })` tails
+  `<teamDir>/supervisor/lifecycle-events.jsonl` by byte offset and accumulates a
   bounded `state.auditEvents` list.
-- `RunLifecycleAuditReader` keeps the offset state across TUI poll cycles.
+- `TeamLifecycleAuditReader` keeps the offset state across TUI poll cycles.
 
 The reader validates lifecycle events and reports malformed/invalid JSONL lines
 without blocking valid events. It does not decide stale workers or execute

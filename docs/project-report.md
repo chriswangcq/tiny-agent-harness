@@ -33,7 +33,7 @@
 User / IM
   |
   v
-ImCliTransport  ->  Environment  ->  system reminder
+PublicImService / run binding  ->  Environment  ->  system reminder
   |                    ^
   v                    |
 RunOrchestrator <-> AgentRunState
@@ -41,9 +41,9 @@ RunOrchestrator <-> AgentRunState
   |                    v
   |              TranscriptStore
   |
-  +-> DeepSeekFimAdapter
+  +-> ModelGateway process
   |
-  +-> ToolCallValidator -> ToolReviewer -> ManagedTerminalRuntime
+  +-> ToolCallValidator -> ToolReviewer -> TerminalHost process
                                       |
                                       v
                          CLI capabilities: skill / codeq / git / tests / MCP
@@ -59,7 +59,7 @@ TUI
 | 模型适配层 | `src/model` | DeepSeek V4 FIM two-pass、native tool-call frame 解析、`ModelTurn` 归一化、prompt 构造。 |
 | 运行编排层 | `src/run` | agent run 状态机、effect 选择、事件驱动状态转移、run lifecycle。 |
 | 模型上下文层 | `src/model/context-session.ts`、`src/model/context-window.ts`、`src/model/prompt-builder.ts` | 本地有状态 FIM context wrapper：接收 incremental context item，负责 prompt message 渲染、context compaction、snapshot/restore。 |
-| 工具执行层 | `src/tools`、`src/bash` | 静态 terminal/session tool catalog、tool validation、review boundary、PTY-backed terminal session 和 observation。 |
+| 工具执行层 | `src/tools`、`src/terminal-host`、`src/bash` | 静态 terminal/session tool catalog、tool validation、review boundary、TerminalHost 进程、PTY-backed terminal session 和 observation。 |
 | 外部事件层 | `src/environment`、`src/im` | IM 消息、terminal/skill/environment events、`io_wait`、事件消费游标和 factual reminder。 |
 | 能力 CLI 层 | `src/skill`、`src/code-intel`、`src/cli` | `tiny-agent skill` discovery/run/review，`tiny-agent codeq` LSP 查询，`tiny-agent im` mock transport，用户命令入口。 |
 | 可观察层 | `src/transcript`、`src/tui`、`src/state` | transcript/state 持久化、文件锁、JSONL ledger、TUI transcript player、debugger domain 和 view model。 |
@@ -75,13 +75,14 @@ TUI
 task / environment reminder
   -> ModelContextSession
   -> PromptBuilder
-  -> DeepSeekFimAdapter thinking pass
-  -> DeepSeekFimAdapter decision pass
+  -> ModelGateway process
+  -> provider adapter thinking pass
+  -> provider adapter decision pass
   -> ModelTurn
   -> AgentRunState.nextEffect()
   -> ToolCallValidator
   -> ToolReviewer
-  -> ManagedTerminalRuntime
+  -> TerminalHost process
   -> TerminalObservation | SessionListObservation
   -> TranscriptStore
   -> next model step
@@ -103,7 +104,7 @@ task / environment reminder
 
 4. **大输出外化到日志**
 
-   Active target design 中，Observation 只返回当前 terminal viewport 的一屏 `screen.text`、terminal facts、`returnedToPrompt` 和 log path。完整输出由 session log 保存，agent 需要更多细节时再通过 bash 使用 `tail`、`sed`、`rg` 查看。FIM prompt 和 streamed thinking 这类大调试 payload 分别通过 `debug/prompts/`、`debug/thinking/` artifact 外置，transcript/history 只保留 `promptRef` / `traceRef`。
+   Active target design 中，Observation 返回 bounded visual window 的 `screen.text`、`screen.window`、terminal facts、`returnedToPrompt` 和 log path。附近 semantic scrollback 可用 `session_observe` 的 `startLine` / `lineCount` 翻页；完整 raw 输出由 session log 保存，agent 需要搜索或精确 raw 历史时再通过 bash 使用 `tail`、`sed`、`rg` 查看。FIM prompt 和 streamed thinking 这类大调试 payload 分别通过 `debug/prompts/`、`debug/thinking` artifact 外置，transcript/history 只保留 `promptRef` / `traceRef`。
 
 5. **执行轨迹可播放**
 
@@ -151,7 +152,7 @@ Decision pass 允许的 function name 是：
 
 timeout 只释放 agent focus，不 kill 进程；长任务可以继续运行，后续通过 `session_observe`、`terminal_write` / `terminal_key`、`session_interrupt` 或 `session_restart` 管理。runtime 还会在 session load 时附带 best-effort `foregroundProcess`，并在 stale `inputSeq` rejection 前尽量刷新一次 PTY 输出，让 agent 拿到新的 prompt facts。
 
-### 4.4 Environment 与 IM Transport
+### 4.4 Environment 与 Public IM
 
 `src/environment` 是外部世界事件模型。IM 新消息、terminal session 状态、命令完成/超时、skill run started/closed/review pending/review completed 都应进入 `EnvironmentEvent`。
 
@@ -200,12 +201,16 @@ run、close、review-complete 和 validate。
 ```bash
 tiny-agent codeq diagnostics --workspace --json
 tiny-agent codeq symbols src/run/orchestrator.ts --json
+tiny-agent codeq workspace-symbols RunOrchestrator --json
 tiny-agent codeq definition src/run/orchestrator.ts:37:18 --json
 tiny-agent codeq references src/run/orchestrator.ts:37:18 --json
+tiny-agent codeq implementations src/run/orchestrator.ts:37:18 --json
+tiny-agent codeq incoming-calls src/run/orchestrator.ts:37:18 --json
+tiny-agent codeq outgoing-calls src/run/orchestrator.ts:37:18 --json
 tiny-agent codeq hover src/run/orchestrator.ts:37:18 --json
 ```
 
-`tiny-agent codeq` 补齐 `rg` 和直接读文件不擅长的语义查询能力，例如真实定义、引用点、document symbols、hover 类型信息和 language server diagnostics。当前实现保持 stateless，每次命令启动 language server 或 compiler fallback，执行查询后关闭。
+`tiny-agent codeq` 补齐 `rg` 和直接读文件不擅长的语义查询能力，例如真实定义、引用点、实现点、call hierarchy、document/workspace symbols、hover 类型信息和 language server diagnostics。当前实现保持 stateless，每次命令启动 language server 或 compiler fallback，执行查询后关闭。
 
 当前 `tiny-agent codeq` 是只读查询子命令，`--apply` 会被解析层拒绝。未来如果增加 rename 或
 code action，也应先以 dry-run `WorkspaceEdit` 摘要形式进入 terminal/session
@@ -218,7 +223,7 @@ review，再由 agent 用普通补丁流程落盘。
 核心思路是：
 
 - run state、session history、session state、skill run state 属于 snapshot JSON
-- transcript、environment events、IM inbox/outbox 属于 append-only JSONL
+- transcript、environment events、public IM channel messages 属于 append-only JSONL
 - bash output、skill execution output 和 run debug prompt artifact 属于可按路径 inspect 的文件
 - 写 snapshot 和 ledger 时使用文件锁，reader 通过 offset / idempotency 处理并发
 
@@ -267,16 +272,15 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 ### 4.12 Sub-agent Team Domain
 
-`src/subagent` 当前是 sub-agent team 的轻量控制面：核心仍是本地域模型，但已经有 project-scoped CLI adapter 负责 team snapshot 落盘，并通过 run-scoped IM inbox 派发 task assignment。它提供：
+`src/subagent` 当前是 sub-agent team 的轻量控制面：核心是 project-scoped roster/lifecycle 模型。team adapter 负责 team roster snapshot 落盘，不再拥有 task FSM 或 IM dispatch。派工由上层显式调用 public IM，例如 `tiny-agent im post --from user:main --to member:<teamId>/<memberId> --text ...` 完成；worker run 通过 `tiny-agent im bind --run-id <runId> --self member:<teamId>/<memberId> --peer user:main` 关联 endpoint pair。它提供：
 
-- `SubAgentTeamState`：task / worker / applied event ids。
-- `applySubAgentTeamEvent(...)`：纯 FSM reducer，处理 submit/register/assign/dispatch/start/succeed/fail/cancel/offline。
-- `team-cli-adapter.ts`：显式 fs / clock / id / IM ports，从 project-scoped team event stream 投影当前 state，执行命令，先 append `team/events.jsonl`，再写回 `team/state.json` snapshot。
-- `task_dispatch_requested`、`task_dispatch_sent`、`task_dispatch_failed`：记录 master 通过 IM 给 worker 派发指令的可观察链路。
-- invalid transition rejection codes 和 duplicate event id no-op。
-- `summarizeSubAgentTeam(...)` / `listActiveSubAgentAssignments(...)` 给未来 TUI、CLI、MCP、cloud adapter 消费。
+- `TeamRosterState`：member / status / run binding / assignment label / applied event ids。
+- `applyTeamRosterEvent(...)`：纯 FSM reducer，处理 add/update/status/heartbeat/terminate。
+- `team-cli-adapter.ts`：显式 fs / clock / id ports，从 project-scoped team event stream 投影当前 roster，执行命令，先 append `teams/<teamId>/events.jsonl`，再写回 `teams/<teamId>/state.json` snapshot。
+- `team_created`、`roster_event`：team directory 的唯一事件类型；旧 `task_event` 被拒绝。
+- `summarizeTeamRoster(...)` / `lookupMember(...)` / role/status 列表 helper 给 TUI、CLI、MCP、cloud adapter 消费。
 
-这个边界让未来 “subagent team 管理服务” 可以先复用可测状态机，再在外层接进 MCP、云端队列或本地 worker launcher。workspace、branch、ledger 仍通过 IM 指令、metadata 或 handoff evidence 表达，不成为 roster schema 的必填字段。`team/events.jsonl` 是 team 事实源和 canonical read source，`team/state.json` 是由事件流写出的 projection snapshot。
+这个边界让未来 “subagent team 管理服务” 可以先复用可测 roster 状态机，再在外层接进 MCP、云端队列、本地 worker launcher 或 IM。workspace、branch、ledger 仍通过 IM 指令、metadata 或 handoff evidence 表达，不成为 roster schema 的必填字段。`teams/<teamId>/events.jsonl` 是 team 事实源和 canonical read source，`teams/<teamId>/state.json` 是由事件流写出的 roster projection snapshot。
 
 
 ### 4.13 Subagent Lifecycle Runtime 与可观察性
@@ -285,13 +289,13 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 #### Supervisor store
 
-`src/subagent/supervisor-store.ts` 定义 supervisor lifecycle 事件类型（`member_added`、`member_status_changed`、`member_heartbeat`、`member_terminated`、`lease_*`、`heartbeat_recorded`、`shutdown_*`、`reaper_*`）和 run-scoped 路径规划。事件按 append-only JSONL 写入 `~/.tiny-agent/projects/<projectId>/runs/<runId>/supervisor/lifecycle-events.jsonl`，snapshot 写入 `supervisor/snapshot.json`。
+`src/subagent/supervisor-store.ts` 定义 supervisor lifecycle 事件类型（`member_added`、`member_status_changed`、`member_heartbeat`、`member_terminated`、`lease_*`、`heartbeat_recorded`、`shutdown_*`、`reaper_*`）和 active team-scoped 路径规划。事件按 append-only JSONL 写入 `~/.tiny-agent/projects/<projectId>/teams/<teamId>/supervisor/lifecycle-events.jsonl`，snapshot 写入 `supervisor/snapshot.json`。
 
 #### Lifecycle runtime adapter
 
 `src/subagent/lifecycle-runtime-adapter.ts` 是纯 adapter，接收显式 `TeamSnapshot`（含 `rosterState` 与 `processExistence?: Record<string, boolean>`）和注入 port（时钟、事件追加、进程 shutdown、roster event），提供 `recordHeartbeat`、`enumerateWorkers`、`runReaper`、`requestShutdown`。它内部调用 `supervisor-lifecycle.ts` 的纯决策函数（`interpretHeartbeat`、`evaluateLease`、`computeLifecycleState`、`decideReaperAction`）来推导 `WorkerLifecycleState`（healthy / stale / expired / grace_period / shutdown / terminated / missing_process / unknown）。
 
-CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-agent team --help` 暴露 `tiny-agent team create|member|task|lifecycle`。普通 team 命令的 effect boundary 在 `src/subagent/team-cli-adapter.ts`；lifecycle 命令的 effect boundary 在 `src/subagent/lifecycle-cli-adapter.ts`，不绕过 run-scoped team state 和 supervisor JSONL。
+CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-agent team --help` 暴露 `tiny-agent team create|member|lifecycle`，派工通过 `tiny-agent im post`。普通 team 命令的 effect boundary 在 `src/subagent/team-cli-adapter.ts`；lifecycle 命令的 effect boundary 在 `src/subagent/lifecycle-cli-adapter.ts`。新的 ownership model 要求 lifecycle write path 显式绑定 `teamId`，不能从 run id 隐式猜 team。
 
 **Reaper shutdown chain**: the `runReaper` adapter function identifies stale active workers (heartbeat age past threshold, member status not `terminated` or `offline`). For each stale worker it emits a `shutdown_requested` lifecycle event, attempts graceful shutdown, then records `shutdown_completed` or `shutdown_failed`. Successful shutdown marks the roster member status `terminated`. This unified chain ensures stale workers are cleanly retired and do not accumulate in the team snapshot.
 
@@ -303,11 +307,11 @@ CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-
 
 #### Worker 进程状态
 
-`src/subagent/local-worker-launcher.ts` 的 `planRunScopedWorkerPaths` 定义 run-scoped worker 目录：`~/.tiny-agent/projects/<projectId>/runs/<runId>/workers/<workerId>/`，包含 `state.json`（worker 运行状态）和 `output.log`（worker 输出日志）。Process existence 在 spawn 成功后由 launcher 写入，后续被 lifecycle adapter 读取为 `TeamSnapshot.processExistence`。`src/subagent/supervisor-lifecycle.ts` 的 `ProcessTableEntry`（pid / workerId / startTime / exists）是 lifecycle 决策层可见的进程快照契约。
+`src/subagent/local-worker-launcher.ts` 的 active `planTeamScopedWorkerPaths` 定义 team member worker 目录：`~/.tiny-agent/projects/<projectId>/teams/<teamId>/members/<memberId>/`，包含 `state.json`（worker 运行状态）和 `output.log`（worker 输出日志），并通过 `teams/<teamId>/runs/<runId>.json` 记录 team-owned run reference。Process existence 在 spawn 成功后由 launcher 写入，后续被 lifecycle adapter 读取为 `TeamSnapshot.processExistence`。`src/subagent/supervisor-lifecycle.ts` 的 `ProcessTableEntry`（pid / workerId / startTime / exists）是 lifecycle 决策层可见的进程快照契约。
 
 #### TUI lifecycle audit projection（display projection）
 
-`src/tui/lifecycle-audit-projection.ts` 的 `RunLifecycleAuditReader` 以 byte offset 方式 tail `~/.tiny-agent/projects/<projectId>/runs/<runId>/supervisor/lifecycle-events.jsonl`，校验 supervisor lifecycle 事件，返回 `state.auditEvents`。纯函数 `projectLifecycleAuditEvents()` 负责 typed event-to-display mapping，产出 TUI view model 可用的 `auditEvents`。
+`src/tui/lifecycle-audit-projection.ts` 的 `TeamLifecycleAuditReader` 读取 active team supervisor audit source：`~/.tiny-agent/projects/<projectId>/teams/<teamId>/supervisor/lifecycle-events.jsonl`。纯函数 `projectLifecycleAuditEvents()` 负责 typed event-to-display mapping，产出 TUI view model 可用的 `auditEvents`。
 
 **这是 display projection chain，不是 orchestrator**：audit reader 从 durable lifecycle-events.jsonl 读取事实，纯 projection 函数将事件映射为显示行（severity / row key / bounded text），TUI renderer 渲染。整条链不拥有 agent 状态，不参与模型决策，也不直接改写 supervisor lifecycle 事件。
 
@@ -388,7 +392,7 @@ CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-
 
 3. **测试覆盖关键骨架**
 
-   当前测试覆盖 run state、environment、validator、terminal session、skill discovery/store/CLI、state lock/jsonl/root、code-intel、IM transport、TUI view model 等关键边界。
+   当前测试覆盖 run state、environment、validator、terminal session、skill discovery/store/CLI、state lock/jsonl/root、code-intel、public IM、TUI view model 等关键边界。
 
 4. **文档驱动明显**
 

@@ -17,6 +17,40 @@ describe("XtermTerminalScreenBuffer", () => {
     expect(screen.text).not.toContain("hello world");
     expect(screen.text).toContain("line-2");
     expect(screen.text.split("\n")).toHaveLength(4);
+    expect(screen.window).toMatchObject({
+      startLine: 0,
+      endLine: 4,
+      totalLines: 4,
+      hasOlder: false,
+      hasNewer: false,
+    });
+    buffer.dispose();
+  });
+
+  it("pages by 0-based visual line cursor", async () => {
+    const buffer = new XtermTerminalScreenBuffer({ rows: 4, cols: 10 });
+
+    buffer.write("line-0\r\nline-1\r\nline-2\r\nline-3\r\nline-4\r\nline-5");
+
+    const latest = await buffer.snapshot();
+    expect(latest.text).toContain("line-5");
+    expect(latest.window).toMatchObject({
+      startLine: 2,
+      endLine: 6,
+      totalLines: 6,
+      hasOlder: true,
+      hasNewer: false,
+    });
+
+    const firstPage = await buffer.snapshot({ startLine: 0, lineCount: 3 });
+    expect(firstPage.text.split("\n")).toEqual(["line-0", "line-1", "line-2"]);
+    expect(firstPage.window).toMatchObject({
+      startLine: 0,
+      endLine: 3,
+      totalLines: 6,
+      hasOlder: false,
+      hasNewer: true,
+    });
     buffer.dispose();
   });
 

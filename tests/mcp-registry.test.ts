@@ -46,6 +46,24 @@ describe("McpRegistryStore", () => {
     expect(list[0].command).toBe("echo");
   });
 
+  it("preserves remote server config", async () => {
+    const dir = path.join(tmpBase, "remote");
+    const store = new McpRegistryStore(dir);
+    await store.add({
+      name: "remote",
+      type: "http",
+      url: "https://api.example.test/mcp",
+      headers: { Authorization: "Bearer secret" },
+    });
+    const config = store.get("remote");
+    expect(config).toEqual({
+      name: "remote",
+      type: "http",
+      url: "https://api.example.test/mcp",
+      headers: { Authorization: "Bearer secret" },
+    });
+  });
+
   it("get returns config or undefined", async () => {
     const dir = path.join(tmpBase, "get");
     const store = new McpRegistryStore(dir);

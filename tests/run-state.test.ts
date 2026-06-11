@@ -180,6 +180,46 @@ describe("AgentRunState transitions", () => {
     expect(state.data.updatedAt).toBe(NOW);
   });
 
+  it("create preserves explicit team ownership metadata", () => {
+    const state = AgentRunState.create({
+      runId: "run-worker-1",
+      task: "implement task",
+      cwd: "/tmp",
+      transcriptPath: "/tmp/transcript.jsonl",
+      now: NOW,
+      team: {
+        teamId: "team-alpha",
+        memberId: "coder-1",
+        role: "worker",
+        taskId: "task-1",
+      },
+    });
+
+    expect(state.data.team).toEqual({
+      teamId: "team-alpha",
+      memberId: "coder-1",
+      role: "worker",
+      taskId: "task-1",
+    });
+  });
+
+  it("keeps ordinary and legacy runs without team metadata valid", () => {
+    expect(createState().data.team).toBeUndefined();
+
+    const legacy = new AgentRunState({
+      runId: "legacy-run",
+      status: "created",
+      task: "legacy task",
+      cwd: "/tmp",
+      createdAt: NOW,
+      updatedAt: NOW,
+      stepIndex: 0,
+      transcriptPath: "/tmp/transcript.jsonl",
+    });
+
+    expect(legacy.data.team).toBeUndefined();
+  });
+
   it("created + run_started -> running", () => {
     const running = toRunning(initial);
     expect(running.status).toBe("running");

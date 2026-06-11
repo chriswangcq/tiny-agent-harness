@@ -36,13 +36,14 @@ describe("envelope helpers", () => {
     it("returns ok:true with tool and version", () => {
       const result = successEnvelope({
         tool: "im",
-        extra: { id: "msg-001", channel: "test" },
+        extra: { id: "msg-001", from: "user:main", to: "member:team-p6/coder-1" },
       });
       expect(result.ok).toBe(true);
       expect(result.tool).toBe("im");
       expect(result.version).toBe(CAPABILITY_VERSIONS.im);
       expect((result as Record<string, unknown>).id).toBe("msg-001");
-      expect((result as Record<string, unknown>).channel).toBe("test");
+      expect((result as Record<string, unknown>).from).toBe("user:main");
+      expect((result as Record<string, unknown>).to).toBe("member:team-p6/coder-1");
     });
 
     it("includes cwd when provided", () => {
@@ -67,7 +68,8 @@ describe("envelope helpers", () => {
         tool: "im",
         extra: {
           ok: true,
-          channel: "default",
+          from: "user:main",
+          to: "member:team-p6/coder-1",
           count: 3,
           messages: [{ id: "m1", text: "hello" }],
         },
@@ -119,23 +121,36 @@ describe("envelope helpers", () => {
 // Real CLI boundary tests — IM
 // ---------------------------------------------------------------------------
 describe("IM CLI real output envelope", () => {
-  it("success: im post produces envelope with tool, version, ok, id, channel", () => {
+  it("success: im post produces envelope with tool, version, ok, id, and endpoints", () => {
     const tmp = mkdtempSync(join(tmpdir(), "im-env-test-"));
     try {
-      const result = runCli(["im", "post", "--json", "--channel", "test", "--text", "hello", "--state-dir", tmp]);
+      const result = runCli([
+        "im",
+        "post",
+        "--json",
+        "--from",
+        "user:main",
+        "--to",
+        "member:team-p6/coder-1",
+        "--text",
+        "hello",
+        "--state-dir",
+        tmp,
+      ]);
       const env = result.stdout as Record<string, unknown> | null;
       expect(env).not.toBeNull();
       expect(env!.ok).toBe(true);
       expect(env!.tool).toBe("im");
       expect(env!.version).toBeDefined();
       expect(env!.id).toBeDefined();
-      expect(env!.channel).toBe("test");
+      expect(env!.from).toBe("user:main");
+      expect(env!.to).toBe("member:team-p6/coder-1");
     } finally {
       if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
     }
   });
 
-  it("error: im post without channel produces failure envelope on stderr", () => {
+  it("error: im post without endpoints produces failure envelope on stderr", () => {
     const result = runCli(["im", "post", "--json"]);
     const stderr = result.stderr as Record<string, unknown> | null;
     expect(stderr).not.toBeNull();
@@ -149,14 +164,37 @@ describe("IM CLI real output envelope", () => {
   it("success: im recv produces envelope with tool, ok, messages", () => {
     const tmp = mkdtempSync(join(tmpdir(), "im-env-test-"));
     try {
-      runCli(["im", "post", "--json", "--channel", "test", "--text", "hi", "--state-dir", tmp]);
-      const result = runCli(["im", "recv", "--json", "--channel", "test", "--state-dir", tmp]);
+      runCli([
+        "im",
+        "post",
+        "--json",
+        "--from",
+        "user:main",
+        "--to",
+        "member:team-p6/coder-1",
+        "--text",
+        "hi",
+        "--state-dir",
+        tmp,
+      ]);
+      const result = runCli([
+        "im",
+        "recv",
+        "--json",
+        "--as",
+        "member:team-p6/coder-1",
+        "--with",
+        "user:main",
+        "--state-dir",
+        tmp,
+      ]);
       const env = result.stdout as Record<string, unknown> | null;
       expect(env).not.toBeNull();
       expect(env!.ok).toBe(true);
       expect(env!.tool).toBe("im");
       expect(env!.version).toBeDefined();
-      expect(env!.channel).toBe("test");
+      expect(env!.as).toBe("member:team-p6/coder-1");
+      expect(env!.with).toBe("user:main");
       expect(env!.count).toBeGreaterThanOrEqual(1);
       expect(Array.isArray(env!.messages)).toBe(true);
     } finally {
@@ -166,7 +204,7 @@ describe("IM CLI real output envelope", () => {
 });
 
 describe("Team CLI real output envelope", () => {
-  it("persists team state and dispatches task assignment into run-scoped IM inbox", () => {
+  it("persists team roster state and uses IM for work instructions", () => {
     const tmp = mkdtempSync(join(tmpdir(), "team-env-test-"));
     try {
       expect(runCli(["team", "create", "team-p6", "--state-dir", tmp]).stdout)
@@ -174,6 +212,8 @@ describe("Team CLI real output envelope", () => {
       expect(
         runCli([
           "team",
+          "--team",
+          "team-p6",
           "member",
           "add",
           "coder-1",
@@ -186,6 +226,8 @@ describe("Team CLI real output envelope", () => {
       expect(
         runCli([
           "team",
+          "--team",
+          "team-p6",
           "member",
           "update",
           "coder-1",
@@ -195,20 +237,11 @@ describe("Team CLI real output envelope", () => {
           tmp,
         ]).stdout,
       ).toMatchObject({ ok: true, tool: "team" });
-      expect(
-        runCli([
-          "team",
-          "task",
-          "create",
-          "ticket-1",
-          "Fix dispatch",
-          "--state-dir",
-          tmp,
-        ]).stdout,
-      ).toMatchObject({ ok: true, tool: "team" });
 
-      const assigned = runCli([
+      const removedTaskCommand = runCli([
         "team",
+        "--team",
+        "team-p6",
         "task",
         "assign",
         "ticket-1",
@@ -219,59 +252,86 @@ describe("Team CLI real output envelope", () => {
         tmp,
       ]).stdout as Record<string, unknown>;
 
-      expect(assigned).toMatchObject({
-        ok: true,
+      expect(removedTaskCommand).toMatchObject({
+        ok: false,
         tool: "team",
-        dispatch: {
-          status: "sent",
-          taskId: "ticket-1",
-          memberId: "coder-1",
-          channel: "worker-channel",
-          runId: "run-worker-1",
-        },
+        errorCode: "PARSE_ERROR",
       });
 
-      const inboxPath = join(
-        tmp,
-        "runs",
-        "run-worker-1",
+      expect(
+        runCli([
+          "im",
+          "bind",
+          "--json",
+          "--state-dir",
+          tmp,
+          "--run-id",
+          "run-worker-1",
+          "--self",
+          "member:team-p6/coder-1",
+          "--peer",
+          "user:main",
+          "--kind",
+          "a2user",
+        ]).stdout,
+      ).toMatchObject({ ok: true, tool: "im" });
+
+      expect(
+        runCli([
+          "im",
+          "post",
+          "--json",
+          "--state-dir",
+          tmp,
+          "--from",
+          "user:main",
+          "--to",
+          "member:team-p6/coder-1",
+          "--text",
+          "Please fix dispatch and report evidence.",
+        ]).stdout,
+      ).toMatchObject({
+        ok: true,
+        tool: "im",
+        from: "user:main",
+        to: "member:team-p6/coder-1",
+      });
+
+      const runMessages = runCli([
         "im",
-        "worker-channel.inbox.jsonl",
-      );
-      const inbox = readFileSync(inboxPath, "utf-8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as Record<string, unknown>);
-      expect(inbox).toHaveLength(1);
-      expect(inbox[0]).toMatchObject({
-        channel: "worker-channel",
+        "run-recv",
+        "--json",
+        "--state-dir",
+        tmp,
+        "--run-id",
+        "run-worker-1",
+      ]).stdout as Record<string, any>;
+      expect(runMessages).toMatchObject({ ok: true, tool: "im", count: 1 });
+      expect(runMessages.messages[0]).toMatchObject({
+        from: "user:main",
+        to: "member:team-p6/coder-1",
         role: "user",
         text: "Please fix dispatch and report evidence.",
       });
 
       const teamState = JSON.parse(
-        readFileSync(join(tmp, "team", "state.json"), "utf-8"),
+        readFileSync(join(tmp, "teams", "team-p6", "state.json"), "utf-8"),
       ) as Record<string, any>;
-      expect(teamState.taskState.tasks["ticket-1"].dispatch.status).toBe("sent");
+      expect(teamState).not.toHaveProperty("taskState");
+      expect(teamState.roster.members["coder-1"]).toMatchObject({
+        memberId: "coder-1",
+        runId: "run-worker-1",
+      });
 
-      const teamEvents = readFileSync(join(tmp, "team", "events.jsonl"), "utf-8")
+      const teamEvents = readFileSync(join(tmp, "teams", "team-p6", "events.jsonl"), "utf-8")
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line) as Record<string, any>);
       expect(teamEvents.map((event) => event.kind)).toEqual([
         "team_created",
         "roster_event",
-        "task_event",
         "roster_event",
-        "task_event",
-        "task_event",
-        "task_event",
-        "task_event",
       ]);
-      expect(teamEvents.at(-1)).toMatchObject({
-        kind: "task_event",
-        event: { kind: "task_dispatch_sent" },
-      });
     } finally {
       if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
     }

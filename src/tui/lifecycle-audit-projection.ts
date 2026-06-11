@@ -1,9 +1,9 @@
-// Run-scoped lifecycle audit projection for TUI/team dashboard display.
+// Team-scoped lifecycle audit projection for TUI/team dashboard display.
 //
 // Pure projection maps durable supervisor lifecycle events to
 // SupervisorLifecycleInput.auditEvents. The reader below is an adapter boundary:
-// it tails runs/<runId>/supervisor/lifecycle-events.jsonl by byte
-// offset and never performs reaper/shutdown decisions or process effects.
+// it tails teams/<teamId>/supervisor/lifecycle-events.jsonl by byte offset and
+// never performs reaper/shutdown decisions or process effects.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -27,14 +27,14 @@ export type LifecycleAuditProjectionResult = {
   state: LifecycleAuditProjectionState;
 };
 
-export type ReadRunLifecycleAuditProjectionInput = {
-  runDir: string;
+export type ReadTeamLifecycleAuditProjectionInput = {
+  teamDir: string;
   previousState?: LifecycleAuditProjectionState;
   maxEvents?: number;
 };
 
-export type RunLifecycleAuditReaderOptions = {
-  runDir: string;
+export type TeamLifecycleAuditReaderOptions = {
+  teamDir: string;
   maxEvents?: number;
 };
 
@@ -44,14 +44,14 @@ export function projectLifecycleAuditEvents(
   return events.map(projectLifecycleAuditEvent);
 }
 
-export function readRunLifecycleAuditProjection(
-  input: ReadRunLifecycleAuditProjectionInput,
+export function readTeamLifecycleAuditProjection(
+  input: ReadTeamLifecycleAuditProjectionInput,
 ): LifecycleAuditProjectionResult {
   const previousState = input.previousState ?? {
     byteOffset: 0,
     auditEvents: [],
   };
-  const filePath = path.join(input.runDir, "supervisor", "lifecycle-events.jsonl");
+  const filePath = path.join(input.teamDir, "supervisor", "lifecycle-events.jsonl");
   const readResult = readLifecycleJsonlSince(filePath, previousState.byteOffset);
   const validEvents: SupervisorLifecycleEvent[] = [];
   const parseErrors = [...readResult.errors];
@@ -83,23 +83,23 @@ export function readRunLifecycleAuditProjection(
   };
 }
 
-export class RunLifecycleAuditReader {
+export class TeamLifecycleAuditReader {
   private state: LifecycleAuditProjectionState = {
     byteOffset: 0,
     auditEvents: [],
   };
 
-  private readonly runDir: string;
+  private readonly teamDir: string;
   private readonly maxEvents: number;
 
-  constructor(options: RunLifecycleAuditReaderOptions) {
-    this.runDir = options.runDir;
+  constructor(options: TeamLifecycleAuditReaderOptions) {
+    this.teamDir = options.teamDir;
     this.maxEvents = positiveInteger(options.maxEvents) ?? DEFAULT_MAX_EVENTS;
   }
 
   read(): LifecycleAuditProjectionResult {
-    const result = readRunLifecycleAuditProjection({
-      runDir: this.runDir,
+    const result = readTeamLifecycleAuditProjection({
+      teamDir: this.teamDir,
       previousState: this.state,
       maxEvents: this.maxEvents,
     });

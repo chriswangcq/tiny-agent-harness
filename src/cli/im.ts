@@ -1,57 +1,72 @@
 import * as crypto from "node:crypto";
-import * as fs from "node:fs";
 import * as path from "node:path";
-import { ImCliTransport } from "../im/transport.js";
-import { failureEnvelope, successEnvelope } from "./envelope.js";
+import {
+  PublicImService,
+  createNodeImStore,
+  type PublicImPairKind,
+  type PublicImMessageKind,
+} from "../im/index.js";
 import { StateRootResolver } from "../state/root.js";
+import { failureEnvelope, successEnvelope } from "./envelope.js";
 
 type StdinSource = AsyncIterable<string | Buffer | Uint8Array>;
 
+type ParsedArgs = {
+  flags: Record<string, string>;
+  positional: string[];
+};
+
+type ImSubcommand =
+  | "pair"
+  | "bind"
+  | "post"
+  | "send"
+  | "recv"
+  | "ack"
+  | "run-recv"
+  | "run-ack"
+  | "listen";
+
+type RunImOptions = {
+  stdin?: StdinSource;
+};
+
 function die(message: string, errorCode = "IM_ERROR"): never {
   const env = failureEnvelope({ tool: "im", errorCode, error: message });
-  process.stderr.write(JSON.stringify(env) + "\n");
+  process.stderr.write(`${JSON.stringify(env)}\n`);
   process.exit(1);
 }
 
-const RESERVED_POST_SENDERS = new Set(["agent", "assistant", "system", "tool"]);
-
-type ImTarget = {
-  baseDir: string;
-  runId?: string;
-  target: "explicit_state" | "env_im_dir" | "global_state" | "run";
-};
-
-function parseArgs(argv: string[]): { flags: Record<string, string>; positional: string[] } {
+function parseArgs(argv: string[]): ParsedArgs {
   const flags: Record<string, string> = {};
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
-    if (arg.startsWith("--") && i + 1 < argv.length) {
-      flags[arg.slice(2)] = argv[++i]!;
-    } else {
-      positional.push(arg);
+    if (arg.startsWith("--")) {
+      const key = arg.slice(2);
+      const value = argv[i + 1];
+      if (value === undefined || value.startsWith("--")) {
+        flags[key] = "true";
+      } else {
+        flags[key] = value;
+        i += 1;
+      }
+      continue;
     }
+    positional.push(arg);
   }
   return { flags, positional };
 }
 
-function hasFlag(argv: string[], name: string): boolean {
-  return argv.includes(`--${name}`);
-}
-
-function output(data: unknown, json: boolean): void {
+function output(data: Record<string, unknown>, json: boolean): void {
   if (json) {
-    const raw = data as Record<string, unknown>;
-    const isError = raw.ok === false;
-    const envelope = isError
-      ? failureEnvelope({ tool: "im", errorCode: (raw.errorCode as string) ?? "IM_ERROR", error: String(raw.error ?? "unknown error") })
-      : successEnvelope({ tool: "im", extra: { ...raw } });
-    process.stdout.write(JSON.stringify(envelope) + "\n");
-  } else {
-    const lines = flatten(data);
-    for (const line of lines) {
-      process.stdout.write(line + "\n");
-    }
+    const envelope = successEnvelope({ tool: "im", extra: data });
+    process.stdout.write(`${JSON.stringify(envelope)}\n`);
+    return;
+  }
+
+  for (const line of flatten(data)) {
+    process.stdout.write(`${line}\n`);
   }
 }
 
@@ -61,10 +76,12 @@ function flatten(data: unknown, prefix = ""): string[] {
     return data.flatMap((item, i) => flatten(item, `${prefix}[${i}]`));
   }
   if (typeof data === "object") {
-    return Object.entries(data as Record<string, unknown>).flatMap(([k, v]) => {
-      const key = prefix ? `${prefix}.${k}` : k;
-      if (typeof v === "object" && v !== null) return flatten(v, key);
-      return [`${key}=${String(v)}`];
+    return Object.entries(data as Record<string, unknown>).flatMap(([key, value]) => {
+      const nextKey = prefix ? `${prefix}.${key}` : key;
+      if (typeof value === "object" && value !== null) {
+        return flatten(value, nextKey);
+      }
+      return [`${nextKey}=${String(value)}`];
     });
   }
   return [prefix ? `${prefix}=${String(data)}` : String(data)];
@@ -72,121 +89,119 @@ function flatten(data: unknown, prefix = ""): string[] {
 
 export async function runIm(
   argv: string[],
-  options: { stdin?: StdinSource } = {},
+  options: RunImOptions = {},
 ): Promise<void> {
   const subcommand = argv[0];
   const rest = argv.slice(1);
-  const jsonMode = hasFlag(rest, "json");
-  const textStdin = hasFlag(rest, "text-stdin");
-  const { flags } = parseArgs(rest.filter((a) => a !== "--json" && a !== "--text-stdin"));
+  const parsed = parseArgs(rest);
+  const jsonMode = parsed.flags.json === "true";
+  const textStdin = parsed.flags["text-stdin"] === "true";
+  delete parsed.flags.json;
+  delete parsed.flags["text-stdin"];
 
   if (!isImSubcommand(subcommand)) {
     die(imUsage());
   }
 
-  const target = resolveImTarget(flags);
-  const transport = new ImCliTransport({ baseDir: target.baseDir });
+  const stateRoot = resolveStateDir(parsed.flags["state-dir"]);
+  delete parsed.flags["state-dir"];
+  const service = createCliPublicImService();
 
-  switch (subcommand) {
-    case "post":
-      await cmdPost(transport, flags, jsonMode, target);
-      break;
-    case "recv":
-      await cmdRecv(transport, flags, jsonMode);
-      break;
-    case "send":
-      await cmdSend(
-        transport,
-        flags,
-        jsonMode,
-        textStdin,
-        options.stdin ?? (process.stdin as unknown as StdinSource),
-      );
-      break;
-    case "ack":
-      await cmdAck(transport, flags, jsonMode);
-      break;
-    case "listen":
-      await cmdListen(transport, flags, jsonMode);
-      break;
-    default:
-      subcommand satisfies never;
+  try {
+    switch (subcommand) {
+      case "pair":
+        await cmdPair(service, stateRoot, parsed.flags, jsonMode);
+        break;
+      case "bind":
+        await cmdBind(service, stateRoot, parsed.flags, jsonMode);
+        break;
+      case "post":
+        await cmdPost(service, stateRoot, parsed.flags, jsonMode);
+        break;
+      case "send":
+        await cmdSend(
+          service,
+          stateRoot,
+          parsed.flags,
+          jsonMode,
+          textStdin,
+          options.stdin ?? (process.stdin as unknown as StdinSource),
+        );
+        break;
+      case "recv":
+        await cmdRecv(service, stateRoot, parsed.flags, jsonMode);
+        break;
+      case "ack":
+        await cmdAck(service, stateRoot, parsed.flags, jsonMode);
+        break;
+      case "run-recv":
+        await cmdRunRecv(service, stateRoot, parsed.flags, jsonMode);
+        break;
+      case "run-ack":
+        await cmdRunAck(service, stateRoot, parsed.flags, jsonMode);
+        break;
+      case "listen":
+        await cmdListen(service, stateRoot, parsed.flags, jsonMode);
+        break;
+      default:
+        subcommand satisfies never;
+    }
+  } catch (error) {
+    if (error instanceof Error && /^process\.exit /.test(error.message)) {
+      throw error;
+    }
+    die(error instanceof Error ? error.message : String(error));
   }
 }
 
-function isImSubcommand(value: string | undefined): value is
-  | "post"
-  | "recv"
-  | "send"
-  | "ack"
-  | "listen" {
+function createCliPublicImService(): PublicImService {
+  return new PublicImService({
+    store: createNodeImStore(),
+    clock: { nowIso: () => new Date().toISOString() },
+    ids: {
+      newMessageId: (seed) => {
+        const scope = seed.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "");
+        return `im-${scope}-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
+      },
+    },
+  });
+}
+
+function isImSubcommand(value: string | undefined): value is ImSubcommand {
   return (
+    value === "pair" ||
+    value === "bind" ||
     value === "post" ||
-    value === "recv" ||
     value === "send" ||
+    value === "recv" ||
     value === "ack" ||
+    value === "run-recv" ||
+    value === "run-ack" ||
     value === "listen"
   );
 }
 
 function imUsage(): string {
   return (
-    "Usage: tiny-agent im <post|recv|send|ack|listen> [options]\n" +
-    "  tiny-agent im post --channel <ch> --text <text> [--from <user-label>] [--run <runId|latest>] [--json]\n" +
-    "  tiny-agent im recv --channel <ch> [--cursor <cursor>] [--json]\n" +
-    "  tiny-agent im send --channel <ch> --kind <status|error> (--text <text>|--text-stdin) [--run-id <id>] [--json]\n" +
-    "  tiny-agent im ack --channel <ch> --message-id <id> [--json]\n" +
-    "  tiny-agent im listen --channel <ch> [--cursor <cursor>] [--json]"
+    "Usage: tiny-agent im <pair|bind|post|send|recv|ack|run-recv|run-ack|listen> [options]\n" +
+    "  tiny-agent im pair --a <endpoint> --b <endpoint> [--kind <kind>] [--json]\n" +
+    "  tiny-agent im bind --run-id <id> --self <endpoint> --peer <endpoint> [--kind <kind>] [--json]\n" +
+    "  tiny-agent im post --from <endpoint> --to <endpoint> --text <text> [--json]\n" +
+    "  tiny-agent im send --from <endpoint> --to <endpoint> --kind <status|error> (--text <text>|--text-stdin) [--json]\n" +
+    "  tiny-agent im recv --as <endpoint> --with <endpoint> [--cursor <id>] [--json]\n" +
+    "  tiny-agent im ack --as <endpoint> --with <endpoint> --message-id <id> [--json]\n" +
+    "  tiny-agent im run-recv --run-id <id> [--json]\n" +
+    "  tiny-agent im run-ack --run-id <id> --peer <endpoint> --message-id <id> [--json]\n" +
+    "  tiny-agent im listen --as <endpoint> --with <endpoint> [--cursor <id>] [--json]"
   );
-}
-
-function resolveImTarget(flags: Record<string, string>): ImTarget {
-  const explicitStateDir = flags["state-dir"];
-  const run = flags["run"];
-
-  if (!run && !explicitStateDir && process.env.TAH_IM_DIR) {
-    return {
-      baseDir: process.env.TAH_IM_DIR,
-      target: "env_im_dir",
-    };
-  }
-
-  const stateDir = resolveStateDir(explicitStateDir);
-
-  if (run) {
-    const runId = resolveRunId(stateDir, run);
-    return {
-      baseDir: path.join(stateDir, "runs", runId, "im"),
-      runId,
-      target: "run",
-    };
-  }
-
-  if (explicitStateDir) {
-    return {
-      baseDir: path.join(stateDir, "im"),
-      target: "explicit_state",
-    };
-  }
-
-  const latestRunId = readLatestRunId(stateDir);
-  if (latestRunId) {
-    return {
-      baseDir: path.join(stateDir, "runs", latestRunId, "im"),
-      runId: latestRunId,
-      target: "run",
-    };
-  }
-
-  return {
-    baseDir: path.join(stateDir, "im"),
-    target: "global_state",
-  };
 }
 
 function resolveStateDir(explicitStateDir: string | undefined): string {
   if (explicitStateDir) {
     return path.resolve(explicitStateDir);
+  }
+  if (process.env.TAH_IM_STATE_DIR) {
+    return path.resolve(process.env.TAH_IM_STATE_DIR);
   }
   if (process.env.TAH_STATE_DIR) {
     return path.resolve(process.env.TAH_STATE_DIR);
@@ -194,87 +209,115 @@ function resolveStateDir(explicitStateDir: string | undefined): string {
   return new StateRootResolver().resolve().stateDir;
 }
 
-function resolveRunId(stateDir: string, run: string): string {
-  if (run !== "latest") {
-    return run;
-  }
-  const latestRunId = readLatestRunId(stateDir);
-  if (!latestRunId) {
-    die(`No latest run found under ${path.join(stateDir, "runs")}`);
-  }
-  return latestRunId;
+async function cmdPair(
+  service: PublicImService,
+  stateRoot: string,
+  flags: Record<string, string>,
+  json: boolean,
+): Promise<void> {
+  const a = requiredFlag(flags, "a", "tiny-agent im pair requires --a and --b");
+  const b = requiredFlag(flags, "b", "tiny-agent im pair requires --a and --b");
+  const pair = await service.createPair({
+    stateRoot,
+    a,
+    b,
+    kind: flags.kind as PublicImPairKind | undefined,
+  });
+  output({ pair, stateRoot }, json);
 }
 
-function readLatestRunId(stateDir: string): string | undefined {
-  const latestPath = path.join(stateDir, "runs", "latest.json");
-  if (!fs.existsSync(latestPath)) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(fs.readFileSync(latestPath, "utf-8")) as {
-      runId?: unknown;
-    };
-    return typeof parsed.runId === "string" && parsed.runId.length > 0
-      ? parsed.runId
-      : undefined;
-  } catch {
-    return undefined;
-  }
+async function cmdBind(
+  service: PublicImService,
+  stateRoot: string,
+  flags: Record<string, string>,
+  json: boolean,
+): Promise<void> {
+  const runId = requiredFlag(flags, "run-id", "tiny-agent im bind requires --run-id");
+  const self = requiredFlag(flags, "self", "tiny-agent im bind requires --self");
+  const peer = requiredFlag(flags, "peer", "tiny-agent im bind requires --peer");
+  const binding = await service.bindRun({
+    stateRoot,
+    runId,
+    self,
+    peer,
+    kind: flags.kind as PublicImPairKind | undefined,
+  });
+  output({ binding, stateRoot }, json);
 }
 
 async function cmdPost(
-  transport: ImCliTransport,
+  service: PublicImService,
+  stateRoot: string,
   flags: Record<string, string>,
   json: boolean,
-  target: ImTarget,
 ): Promise<void> {
-  const channel = flags["channel"];
-  const text = flags["text"];
-  if (!channel || !text) die("tiny-agent im post requires --channel and --text");
-  const from = flags["from"];
-  if (from && RESERVED_POST_SENDERS.has(from.toLowerCase())) {
-    die(
-      `tiny-agent im post creates user inbox messages; use tiny-agent im send for agent replies instead of --from ${from}`,
-      "IM_POST_RESERVED_SENDER",
-    );
+  const from = requiredFlag(flags, "from", "tiny-agent im post requires --from");
+  const to = requiredFlag(flags, "to", "tiny-agent im post requires --to");
+  const text = requiredFlag(flags, "text", "tiny-agent im post requires --text");
+  const message = await service.postMessage({
+    stateRoot,
+    from,
+    to,
+    text,
+    metadata: { source: "cli" },
+  });
+  output({ message, id: message.id, from: message.from, to: message.to }, json);
+}
+
+async function cmdSend(
+  service: PublicImService,
+  stateRoot: string,
+  flags: Record<string, string>,
+  json: boolean,
+  textStdin: boolean,
+  stdin: StdinSource,
+): Promise<void> {
+  const from = requiredFlag(flags, "from", "tiny-agent im send requires --from");
+  const to = requiredFlag(flags, "to", "tiny-agent im send requires --to");
+  const kind = requiredFlag(flags, "kind", "tiny-agent im send requires --kind") as PublicImMessageKind;
+  if (kind !== "status" && kind !== "error") {
+    die("--kind must be one of: status, error");
+  }
+  if (flags.text !== undefined && textStdin) {
+    die("tiny-agent im send accepts either --text or --text-stdin, not both");
+  }
+  const text = flags.text ?? (textStdin ? await readStdinText(stdin) : undefined);
+  if (text === undefined || text.length === 0) {
+    die("tiny-agent im send requires --text or --text-stdin");
   }
 
-  const id = `msg-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
-  const message = {
-    id,
-    channel,
-    role: "user" as const,
+  const message = await service.sendMessage({
+    stateRoot,
+    from,
+    to,
+    kind,
     text,
-    createdAt: new Date().toISOString(),
-    metadata: from ? { from } : undefined,
-  };
-
-  await transport.post(message);
-
-  output({ ok: true, id, channel, target: target.target, runId: target.runId }, json);
+    metadata: { source: "cli" },
+  });
+  output({ message, id: message.id, from: message.from, to: message.to, kind }, json);
 }
 
 async function cmdRecv(
-  transport: ImCliTransport,
+  service: PublicImService,
+  stateRoot: string,
   flags: Record<string, string>,
   json: boolean,
 ): Promise<void> {
-  const channel = flags["channel"];
-  if (!channel) die("tiny-agent im recv requires --channel");
-
-  const cursor = flags["cursor"] ?? transport.readCursorSync(channel);
-  const result = await transport.receive({
-    channel,
-    cursor,
+  const as = requiredFlag(flags, "as", "tiny-agent im recv requires --as");
+  const withEndpoint = requiredFlag(flags, "with", "tiny-agent im recv requires --with");
+  const result = await service.receiveForPair({
+    stateRoot,
+    as,
+    with: withEndpoint,
+    cursor: flags.cursor,
   });
   if (result.cursorFound === false) {
-    die(`tiny-agent im recv cursor was not found: ${cursor}`, "IM_CURSOR_NOT_FOUND");
+    die(`tiny-agent im recv cursor was not found: ${flags.cursor}`, "IM_CURSOR_NOT_FOUND");
   }
-
   output(
     {
-      ok: true,
-      channel,
+      as,
+      with: withEndpoint,
       count: result.messages.length,
       nextCursor: result.nextCursor,
       messages: result.messages,
@@ -283,80 +326,75 @@ async function cmdRecv(
   );
 }
 
-async function cmdSend(
-  transport: ImCliTransport,
-  flags: Record<string, string>,
-  json: boolean,
-  textStdin: boolean,
-  stdin: StdinSource,
-): Promise<void> {
-  const rawChannel = flags["channel"];
-  // Auto-correct channel to match bound run channel (prevents IM channel drift)
-  const boundChannel = process.env.TAH_RUN_CHANNEL;
-  const channel = (boundChannel && rawChannel !== boundChannel) ? boundChannel : rawChannel;
-  const kind = flags["kind"] as "status" | "error" | undefined;
-  if (flags["text"] !== undefined && textStdin) {
-    die("tiny-agent im send accepts either --text or --text-stdin, not both");
-  }
-  const text = flags["text"] ?? (textStdin ? await readStdinText(stdin) : undefined);
-  if (!channel || !kind || text === undefined || text.length === 0) {
-    die("tiny-agent im send requires --channel, --kind, and --text or --text-stdin");
-  }
-  if (!["status", "error"].includes(kind)) {
-    die("--kind must be one of: status, error");
-  }
-
-  const id = `agent-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
-  const message = {
-    id,
-    channel,
-    role: "agent" as const,
-    kind,
-    text,
-    runId: flags["run-id"],
-    createdAt: new Date().toISOString(),
-  };
-
-  await transport.send(message);
-
-  output({ ok: true, id, channel, kind }, json);
-}
-
-async function readStdinText(stdin: StdinSource): Promise<string> {
-  let text = "";
-  for await (const chunk of stdin) {
-    text += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
-  }
-  return text;
-}
-
 async function cmdAck(
-  transport: ImCliTransport,
+  service: PublicImService,
+  stateRoot: string,
   flags: Record<string, string>,
   json: boolean,
 ): Promise<void> {
-  const channel = flags["channel"];
-  const messageId = flags["message-id"];
-  if (!channel || !messageId) die("tiny-agent im ack requires --channel and --message-id");
+  const as = requiredFlag(flags, "as", "tiny-agent im ack requires --as");
+  const withEndpoint = requiredFlag(flags, "with", "tiny-agent im ack requires --with");
+  const messageId = requiredFlag(flags, "message-id", "tiny-agent im ack requires --message-id");
+  await service.ackPair({
+    stateRoot,
+    as,
+    with: withEndpoint,
+    messageId,
+  });
+  output({ as, with: withEndpoint, messageId }, json);
+}
 
-  await transport.ack({ channel, messageId });
+async function cmdRunRecv(
+  service: PublicImService,
+  stateRoot: string,
+  flags: Record<string, string>,
+  json: boolean,
+): Promise<void> {
+  const runId = requiredFlag(flags, "run-id", "tiny-agent im run-recv requires --run-id");
+  const result = await service.receiveForRun({ stateRoot, runId });
+  output(
+    {
+      runId: result.runId,
+      self: result.self,
+      count: result.messages.length,
+      nextCursors: result.nextCursors,
+      messages: result.messages,
+    },
+    json,
+  );
+}
 
-  output({ ok: true, channel, messageId }, json);
+async function cmdRunAck(
+  service: PublicImService,
+  stateRoot: string,
+  flags: Record<string, string>,
+  json: boolean,
+): Promise<void> {
+  const runId = requiredFlag(flags, "run-id", "tiny-agent im run-ack requires --run-id");
+  const peer = requiredFlag(flags, "peer", "tiny-agent im run-ack requires --peer");
+  const messageId = requiredFlag(flags, "message-id", "tiny-agent im run-ack requires --message-id");
+  await service.ackRunChannel({
+    stateRoot,
+    runId,
+    peer,
+    messageId,
+  });
+  output({ runId, peer, messageId }, json);
 }
 
 async function cmdListen(
-  transport: ImCliTransport,
+  service: PublicImService,
+  stateRoot: string,
   flags: Record<string, string>,
   json: boolean,
 ): Promise<void> {
-  const channel = flags["channel"];
-  if (!channel) die("tiny-agent im listen requires --channel");
-
-  let cursor = flags["cursor"] ?? transport.readCursorSync(channel);
+  const as = requiredFlag(flags, "as", "tiny-agent im listen requires --as");
+  const withEndpoint = requiredFlag(flags, "with", "tiny-agent im listen requires --with");
+  let cursor = flags.cursor;
 
   if (!json) {
-    process.stdout.write(`[im] Listening on channel: ${channel}\n`);
-    process.stdout.write(`[im] Press Ctrl+C to stop\n`);
+    process.stdout.write(`[im] Listening as ${as} with ${withEndpoint}\n`);
+    process.stdout.write("[im] Press Ctrl+C to stop\n");
   }
 
   const onExit = () => process.exit(0);
@@ -364,18 +402,21 @@ async function cmdListen(
   process.on("SIGTERM", onExit);
 
   while (true) {
-    const result = await transport.receive({ channel, cursor });
+    const result = await service.receiveForPair({
+      stateRoot,
+      as,
+      with: withEndpoint,
+      cursor,
+    });
     if (result.cursorFound === false) {
       die(`tiny-agent im listen cursor was not found: ${cursor}`, "IM_CURSOR_NOT_FOUND");
     }
 
-    for (const msg of result.messages) {
+    for (const message of result.messages) {
       if (json) {
-        process.stdout.write(JSON.stringify(msg) + "\n");
+        process.stdout.write(`${JSON.stringify(message)}\n`);
       } else {
-        process.stdout.write(
-          `[${msg.createdAt}] ${msg.role}: ${msg.text}\n`,
-        );
+        process.stdout.write(`[${message.createdAt}] ${message.from}: ${message.text}\n`);
       }
     }
 
@@ -385,4 +426,24 @@ async function cmdListen(
 
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
+}
+
+function requiredFlag(
+  flags: Record<string, string>,
+  name: string,
+  message: string,
+): string {
+  const value = flags[name];
+  if (value === undefined || value.length === 0 || value === "true") {
+    die(message);
+  }
+  return value;
+}
+
+async function readStdinText(stdin: StdinSource): Promise<string> {
+  let text = "";
+  for await (const chunk of stdin) {
+    text += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+  }
+  return text;
 }

@@ -2,31 +2,36 @@ export const HELP_TEXT = `tiny-agent — AI agent harness with terminal/session 
 
 Usage:
   tiny-agent <task>                                   Run with inline task
-  tiny-agent run --channel <ch> [--task <task>]       Run, optionally wait for IM
+  tiny-agent run [--task <task>]                      Run, optionally wait for IM
   tiny-agent run --resume <runId|latest>              Resume an existing run
   tiny-agent resume <runId|latest>                    Resume an existing run
-  tiny-agent ui  --channel <ch> [--task <task>]       Run + TUI in one command
-  tiny-agent ui  --channel <ch> --resume <runId|latest>
+  tiny-agent ui  [--task <task>]                      Run + TUI in one command
+  tiny-agent ui  --resume <runId|latest>
                                                         Resume + TUI in one command
   tiny-agent tui --run <runId|latest>                 Attach TUI to existing run
   tiny-agent im  <subcommand> [options]               IM message operations
   tiny-agent skill <subcommand> [options]             Skill management
   tiny-agent codeq <subcommand> [options]             Read-only code intelligence queries
   tiny-agent mcp  <subcommand> [options]              MCP server interaction
-  tiny-agent team <group> [options]                   Team member/task/lifecycle control
+  tiny-agent team <group> [options]                   Team member/lifecycle control
   tiny-agent --help                                   Show this help
 
 IM subcommands:
-  tiny-agent im post   --channel <ch> --text <text> [--run <runId|latest>]
-                                                 Inject user message to inbox
-  tiny-agent im recv   --channel <ch> [--cursor <id>]
-                                                 Receive user messages from inbox
-  tiny-agent im send   --channel <ch> --text <t>|--text-stdin --kind <k>
-                                                 Send agent message to outbox
-  tiny-agent im ack    --channel <ch> --message-id <id>
-                                                 Acknowledge (advance cursor)
-  tiny-agent im listen --channel <ch> [--cursor <id>]
-                                                 Poll for new messages
+  tiny-agent im pair   --a <endpoint> --b <endpoint> [--kind <kind>]
+                                                 Create/read a public endpoint pair
+  tiny-agent im bind   --run-id <id> --self <endpoint> --peer <endpoint>
+                                                 Bind a run to a public IM pair
+  tiny-agent im post   --from <endpoint> --to <endpoint> --text <text>
+                                                 Inject a user message
+  tiny-agent im recv   --as <endpoint> --with <endpoint> [--cursor <id>]
+                                                 Receive messages for an endpoint pair
+  tiny-agent im send   --from <endpoint> --to <endpoint> --kind <status|error>
+                                                 Send an agent message
+  tiny-agent im ack    --as <endpoint> --with <endpoint> --message-id <id>
+                                                 Acknowledge an endpoint-pair cursor
+  tiny-agent im run-recv --run-id <id>            Receive messages from all run bindings
+  tiny-agent im run-ack  --run-id <id> --peer <endpoint> --message-id <id>
+                                                 Acknowledge one run-bound peer channel
 
 Skill subcommands:
   tiny-agent skill list                          List available skills
@@ -41,14 +46,17 @@ Skill subcommands:
 Team groups:
   tiny-agent team create <teamId>          Create/reset lightweight team state
   tiny-agent team member <subcommand>      Team roster management
-  tiny-agent team task <subcommand>        Task lifecycle; assign dispatches instructions via IM
   tiny-agent team lifecycle <subcommand>   Run-scoped lease, lifecycle-status, reaper, shutdown
+
+Work dispatch:
+  tiny-agent im post --from user:main --to member:<team>/<member> --text <text>
+                                            Send work instructions through public IM
 
 Environment variables:
   DEEPSEEK_API_KEY   One-off override for providers.deepseek.apiKey
   DEEPSEEK_BASE_URL  One-off override for providers.deepseek.baseUrl
   MODEL_NAME         One-off override for providers.deepseek.model
-  TAH_IM_CHANNEL     Default IM channel (default: "default")
+  TAH_STATE_DIR      Override product state root
 
 User config:
   ~/.tiny-agent/config.json

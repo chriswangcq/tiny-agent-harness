@@ -1,13 +1,19 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 import type {
   BackendInfo,
   CodeIntelBackend,
+  CodeIntelCallHierarchyItem,
   CodeIntelDiagnostic,
   CodeIntelHoverContent,
+  CodeIntelIncomingCall,
   CodeIntelLimits,
   CodeIntelLocationResult,
+  CodeIntelOutgoingCall,
   CodeIntelSymbol,
+  CodeIntelSymbolLocation,
   SourceLocation,
+  SourceRange,
 } from "../types.js";
 import {
   detectLanguageId,
@@ -22,12 +28,17 @@ import { readPreview, truncateText } from "../preview.js";
 import { ensureFileExists, resolveCommand } from "../workspace.js";
 import { LspClient } from "./client.js";
 import type {
+  LspCallHierarchyIncomingCall,
+  LspCallHierarchyItem,
+  LspCallHierarchyOutgoingCall,
   LspDiagnostic,
   LspDocumentSymbol,
   LspHover,
   LspLocation,
   LspLocationLink,
+  LspRange,
   LspSymbolInformation,
+  LspWorkspaceSymbol,
 } from "./protocol.js";
 
 const TYPESCRIPT_CAPABILITIES = [
@@ -35,17 +46,24 @@ const TYPESCRIPT_CAPABILITIES = [
   "definition",
   "references",
   "documentSymbol",
+  "workspaceSymbol",
+  "implementation",
+  "callHierarchy",
   "hover",
 ];
+const TYPESCRIPT_SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx"]);
+const WORKSPACE_FILE_SCAN_LIMIT = 5000;
 
 export class TypeScriptLspBackend implements CodeIntelBackend {
   private client?: LspClient;
+  private readonly openedDocuments = new Set<string>();
 
   constructor(
     private readonly options: {
       workspaceRoot: string;
       serverCommand: string[];
       initializationOptions?: unknown;
+      workspaceFiles?: string[];
       limits: CodeIntelLimits;
     },
   ) {}
@@ -105,6 +123,36 @@ export class TypeScriptLspBackend implements CodeIntelBackend {
     };
   }
 
+  async workspaceSymbols(query: string): Promise<{
+    query: string;
+    symbols: CodeIntelSymbolLocation[];
+  }> {
+    await this.ensureStarted();
+    this.openWorkspaceFiles();
+
+    let symbols: CodeIntelSymbolLocation[] = [];
+    try {
+      const result = await this.client!.request("workspace/symbol", { query });
+      symbols = this.normalizeSymbolLocations(result);
+    } catch (error) {
+      if (!isRecoverableWorkspaceSymbolError(error)) {
+        throw error;
+      }
+    }
+
+    if (symbols.length === 0) {
+      symbols = await this.collectDocumentSymbols(query);
+    }
+
+    return {
+      query,
+      symbols: symbols.slice(
+        0,
+        this.options.limits.maxResults,
+      ),
+    };
+  }
+
   async definition(location: SourceLocation): Promise<{
     definitions: CodeIntelLocationResult[];
   }> {
@@ -138,6 +186,68 @@ export class TypeScriptLspBackend implements CodeIntelBackend {
 
     return {
       references: this.normalizeLocations(result).slice(0, this.options.limits.maxResults),
+    };
+  }
+
+  async implementations(location: SourceLocation): Promise<{
+    implementations: CodeIntelLocationResult[];
+  }> {
+    const absolutePath = this.resolveFile(location.path);
+    await this.ensureStarted();
+    this.openTextDocument(absolutePath);
+
+    const result = await this.client!.request("textDocument/implementation", {
+      textDocument: { uri: toFileUri(absolutePath) },
+      position: toLspPosition(location),
+    });
+
+    return {
+      implementations: this.normalizeLocations(result).slice(
+        0,
+        this.options.limits.maxResults,
+      ),
+    };
+  }
+
+  async incomingCalls(location: SourceLocation): Promise<{
+    items: CodeIntelCallHierarchyItem[];
+    incomingCalls: CodeIntelIncomingCall[];
+  }> {
+    const items = await this.prepareCallHierarchy(location);
+    const incomingCalls: CodeIntelIncomingCall[] = [];
+    for (const item of items) {
+      const result = await this.client!.request("callHierarchy/incomingCalls", {
+        item,
+      });
+      incomingCalls.push(...this.normalizeIncomingCalls(result));
+    }
+
+    return {
+      items: items
+        .map((item) => this.normalizeCallHierarchyItem(item))
+        .filter((item): item is CodeIntelCallHierarchyItem => item !== undefined),
+      incomingCalls: incomingCalls.slice(0, this.options.limits.maxResults),
+    };
+  }
+
+  async outgoingCalls(location: SourceLocation): Promise<{
+    items: CodeIntelCallHierarchyItem[];
+    outgoingCalls: CodeIntelOutgoingCall[];
+  }> {
+    const items = await this.prepareCallHierarchy(location);
+    const outgoingCalls: CodeIntelOutgoingCall[] = [];
+    for (const item of items) {
+      const result = await this.client!.request("callHierarchy/outgoingCalls", {
+        item,
+      });
+      outgoingCalls.push(...this.normalizeOutgoingCalls(result));
+    }
+
+    return {
+      items: items
+        .map((item) => this.normalizeCallHierarchyItem(item))
+        .filter((item): item is CodeIntelCallHierarchyItem => item !== undefined),
+      outgoingCalls: outgoingCalls.slice(0, this.options.limits.maxResults),
     };
   }
 
@@ -193,7 +303,19 @@ export class TypeScriptLspBackend implements CodeIntelBackend {
     await this.client.initialize({
       processId: process.pid,
       rootUri: toFileUri(this.options.workspaceRoot),
-      capabilities: {},
+      capabilities: {
+        textDocument: {
+          callHierarchy: {},
+          definition: { linkSupport: true },
+          documentSymbol: { hierarchicalDocumentSymbolSupport: true },
+          hover: { contentFormat: ["markdown", "plaintext"] },
+          implementation: { linkSupport: true },
+          references: {},
+        },
+        workspace: {
+          symbol: {},
+        },
+      },
       initializationOptions: this.options.initializationOptions ?? {},
       workspaceFolders: [
         {
@@ -205,6 +327,10 @@ export class TypeScriptLspBackend implements CodeIntelBackend {
   }
 
   private openTextDocument(absolutePath: string): void {
+    if (this.openedDocuments.has(absolutePath)) {
+      return;
+    }
+
     const text = fs.readFileSync(absolutePath, "utf-8");
     this.client!.notify("textDocument/didOpen", {
       textDocument: {
@@ -214,6 +340,34 @@ export class TypeScriptLspBackend implements CodeIntelBackend {
         text,
       },
     });
+    this.openedDocuments.add(absolutePath);
+  }
+
+  private openWorkspaceFiles(): void {
+    let openedSourceFile = false;
+    for (const workspaceFile of this.options.workspaceFiles ?? []) {
+      const absolutePath = resolveWorkspacePath(
+        this.options.workspaceRoot,
+        workspaceFile,
+      );
+      if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isFile()) {
+        continue;
+      }
+
+      this.openTextDocument(absolutePath);
+      if (isTypeScriptSourceFile(absolutePath)) {
+        openedSourceFile = true;
+      }
+    }
+
+    if (openedSourceFile) {
+      return;
+    }
+
+    const sourceFile = findFirstWorkspaceSourceFile(this.options.workspaceRoot);
+    if (sourceFile) {
+      this.openTextDocument(sourceFile);
+    }
   }
 
   private resolveFile(requestedPath: string): string {
@@ -244,6 +398,221 @@ export class TypeScriptLspBackend implements CodeIntelBackend {
           preview,
         };
       });
+  }
+
+  private normalizeSymbolLocations(result: unknown): CodeIntelSymbolLocation[] {
+    if (!Array.isArray(result)) {
+      return [];
+    }
+
+    return result
+      .map((value) => this.normalizeSymbolLocation(value))
+      .filter((value): value is CodeIntelSymbolLocation => value !== undefined);
+  }
+
+  private normalizeSymbolLocation(value: unknown): CodeIntelSymbolLocation | undefined {
+    if (!isObject(value) || typeof value.name !== "string" || typeof value.kind !== "number") {
+      return undefined;
+    }
+
+    const symbol = value as LspSymbolInformation | LspWorkspaceSymbol;
+    const location = symbol.location as { uri?: unknown; range?: unknown };
+    if (!isObject(location) || typeof location.uri !== "string") {
+      return undefined;
+    }
+
+    let absolutePath: string;
+    try {
+      absolutePath = fromFileUri(location.uri);
+    } catch {
+      return undefined;
+    }
+
+    const range = isLspRange(location.range)
+      ? fromLspRange(location.range)
+      : undefined;
+    let preview: string | undefined;
+    if (range) {
+      try {
+        preview = readPreview(absolutePath, range, this.options.limits.previewLines);
+      } catch {
+        preview = undefined;
+      }
+    }
+
+    return {
+      name: symbol.name,
+      kind: symbolKindName(symbol.kind),
+      path: workspaceRelativePath(this.options.workspaceRoot, absolutePath),
+      uri: location.uri,
+      range,
+      containerName: symbol.containerName,
+      preview,
+    };
+  }
+
+  private async prepareCallHierarchy(
+    location: SourceLocation,
+  ): Promise<LspCallHierarchyItem[]> {
+    const absolutePath = this.resolveFile(location.path);
+    await this.ensureStarted();
+    this.openTextDocument(absolutePath);
+
+    const result = await this.client!.request("textDocument/prepareCallHierarchy", {
+      textDocument: { uri: toFileUri(absolutePath) },
+      position: toLspPosition(location),
+    });
+
+    if (!Array.isArray(result)) {
+      return [];
+    }
+
+    return result.filter(isCallHierarchyItem);
+  }
+
+  private normalizeIncomingCalls(result: unknown): CodeIntelIncomingCall[] {
+    if (!Array.isArray(result)) {
+      return [];
+    }
+
+    return result
+      .map((value) => {
+        if (!isObject(value) || !isCallHierarchyItem(value.from)) {
+          return undefined;
+        }
+        const call = value as LspCallHierarchyIncomingCall;
+        const from = this.normalizeCallHierarchyItem(call.from);
+        if (!from) {
+          return undefined;
+        }
+        return {
+          from,
+          fromRanges: normalizeRanges(call.fromRanges),
+        };
+      })
+      .filter((value): value is CodeIntelIncomingCall => value !== undefined);
+  }
+
+  private normalizeOutgoingCalls(result: unknown): CodeIntelOutgoingCall[] {
+    if (!Array.isArray(result)) {
+      return [];
+    }
+
+    return result
+      .map((value) => {
+        if (!isObject(value) || !isCallHierarchyItem(value.to)) {
+          return undefined;
+        }
+        const call = value as LspCallHierarchyOutgoingCall;
+        const to = this.normalizeCallHierarchyItem(call.to);
+        if (!to) {
+          return undefined;
+        }
+        return {
+          to,
+          fromRanges: normalizeRanges(call.fromRanges),
+        };
+      })
+      .filter((value): value is CodeIntelOutgoingCall => value !== undefined);
+  }
+
+  private normalizeCallHierarchyItem(
+    item: LspCallHierarchyItem,
+  ): CodeIntelCallHierarchyItem | undefined {
+    let absolutePath: string;
+    try {
+      absolutePath = fromFileUri(item.uri);
+    } catch {
+      return undefined;
+    }
+
+    const range = fromLspRange(item.range);
+    let preview: string | undefined;
+    try {
+      preview = readPreview(absolutePath, range, this.options.limits.previewLines);
+    } catch {
+      preview = undefined;
+    }
+
+    return {
+      name: item.name,
+      kind: symbolKindName(item.kind),
+      path: workspaceRelativePath(this.options.workspaceRoot, absolutePath),
+      uri: item.uri,
+      range,
+      selectionRange: fromLspRange(item.selectionRange),
+      detail: item.detail,
+      preview,
+    };
+  }
+
+  private async collectDocumentSymbols(
+    query: string,
+  ): Promise<CodeIntelSymbolLocation[]> {
+    const symbols: CodeIntelSymbolLocation[] = [];
+    const files = findWorkspaceSourceFiles(this.options.workspaceRoot);
+    for (const file of files) {
+      if (symbols.length >= this.options.limits.maxResults) {
+        break;
+      }
+
+      this.openTextDocument(file);
+      const result = await this.client!.request("textDocument/documentSymbol", {
+        textDocument: { uri: toFileUri(file) },
+      });
+      symbols.push(
+        ...this.documentSymbolsToLocations(file, normalizeSymbols(result), query),
+      );
+    }
+
+    return symbols;
+  }
+
+  private documentSymbolsToLocations(
+    absolutePath: string,
+    symbols: CodeIntelSymbol[],
+    query: string,
+    containerName?: string,
+  ): CodeIntelSymbolLocation[] {
+    const normalizedQuery = query.toLowerCase();
+    const results: CodeIntelSymbolLocation[] = [];
+    for (const symbol of symbols) {
+      if (symbol.name.toLowerCase().includes(normalizedQuery)) {
+        let preview: string | undefined;
+        try {
+          preview = readPreview(
+            absolutePath,
+            symbol.selectionRange ?? symbol.range,
+            this.options.limits.previewLines,
+          );
+        } catch {
+          preview = undefined;
+        }
+
+        results.push({
+          name: symbol.name,
+          kind: symbol.kind,
+          path: workspaceRelativePath(this.options.workspaceRoot, absolutePath),
+          uri: toFileUri(absolutePath),
+          range: symbol.selectionRange ?? symbol.range,
+          containerName,
+          preview,
+        });
+      }
+
+      if (symbol.children) {
+        results.push(
+          ...this.documentSymbolsToLocations(
+            absolutePath,
+            symbol.children,
+            query,
+            symbol.name,
+          ),
+        );
+      }
+    }
+
+    return results;
   }
 
   private normalizeDiagnostic(
@@ -355,6 +724,16 @@ function normalizeLocationLike(value: unknown): LspLocation | undefined {
   return undefined;
 }
 
+function normalizeRanges(ranges: unknown): SourceRange[] {
+  if (!Array.isArray(ranges)) {
+    return [];
+  }
+
+  return ranges
+    .filter(isLspRange)
+    .map((range) => fromLspRange(range));
+}
+
 function normalizeHoverContents(
   contents: LspHover["contents"],
   maxOutputBytes: number,
@@ -381,6 +760,15 @@ function normalizeHoverContents(
   }));
 }
 
+function isRecoverableWorkspaceSymbolError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("No Project") ||
+    message.includes("workspace/symbol") ||
+    message.includes("not supported")
+  );
+}
+
 function normalizeDiagnosticSeverity(
   severity: number | undefined,
 ): CodeIntelDiagnostic["severity"] {
@@ -401,8 +789,90 @@ function isDocumentSymbol(value: unknown): value is LspDocumentSymbol {
   return isObject(value) && isObject(value.selectionRange);
 }
 
+function isCallHierarchyItem(value: unknown): value is LspCallHierarchyItem {
+  return (
+    isObject(value) &&
+    typeof value.name === "string" &&
+    typeof value.kind === "number" &&
+    typeof value.uri === "string" &&
+    isLspRange(value.range) &&
+    isLspRange(value.selectionRange)
+  );
+}
+
+function isLspRange(value: unknown): value is LspRange {
+  return (
+    isObject(value) &&
+    isObject(value.start) &&
+    isObject(value.end) &&
+    typeof value.start.line === "number" &&
+    typeof value.start.character === "number" &&
+    typeof value.end.line === "number" &&
+    typeof value.end.character === "number"
+  );
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function findFirstWorkspaceSourceFile(workspaceRoot: string): string | undefined {
+  return findWorkspaceSourceFiles(workspaceRoot, 1)[0];
+}
+
+function findWorkspaceSourceFiles(
+  workspaceRoot: string,
+  maxFiles = WORKSPACE_FILE_SCAN_LIMIT,
+): string[] {
+  const ignoredDirectories = new Set([
+    ".git",
+    ".tiny-agent",
+    "coverage",
+    "dist",
+    "node_modules",
+  ]);
+  const pending = [workspaceRoot];
+  const matches: string[] = [];
+  let visited = 0;
+
+  while (
+    pending.length > 0 &&
+    visited < WORKSPACE_FILE_SCAN_LIMIT &&
+    matches.length < maxFiles
+  ) {
+    const current = pending.shift()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      visited += 1;
+      const entryPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (!ignoredDirectories.has(entry.name)) {
+          pending.push(entryPath);
+        }
+        continue;
+      }
+
+      if (entry.isFile() && isTypeScriptSourceFile(entryPath)) {
+        matches.push(entryPath);
+        if (matches.length >= maxFiles) {
+          break;
+        }
+      }
+    }
+  }
+
+  return matches;
+}
+
+function isTypeScriptSourceFile(filePath: string): boolean {
+  return TYPESCRIPT_SOURCE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
 
 function symbolKindName(kind: number): string {

@@ -39,34 +39,34 @@ chmod 600 ~/.tiny-agent/config.json
 
 ```bash
 cd ~/Documents/DeepSeek
-tiny-agent ui --channel default
+tiny-agent ui
 ```
 
-进入 TUI 后按 `m` 输入第一条真实任务，agent 会从同一个 `default` channel 收到消息并开始执行。不需要先 `tiny-agent im post hello`。`tiny-agent im post` 只用于注入用户消息；agent 回复走 `tiny-agent im send` 写入 outbox。
+进入 TUI 后按 `m` 输入第一条真实任务。TUI 会通过 public IM 把消息发到当前 run 的默认 endpoint pair，agent 收到消息后开始执行。不需要先 `tiny-agent im post hello`。`tiny-agent im post` 只用于从外部注入用户消息；agent 回复走 endpoint-based `tiny-agent im send --text-stdin`。
 
-如果想跳过 IM 等待，启动时直接给任务：
+如果想跳过等待，启动时直接给任务：
 
 ```bash
-tiny-agent ui --channel default --task "fix the failing tests"
+tiny-agent ui --task "fix the failing tests"
 ```
 
 如果要恢复已有 run 并直接打开 TUI：
 
 ```bash
-tiny-agent ui --channel default --resume run-1780009628684
-tiny-agent ui --channel default --resume latest
+tiny-agent ui --resume run-1780009628684
+tiny-agent ui --resume latest
 ```
 
 也可以用两个终端分开调试。第一个终端启动 run：
 
 ```bash
-tiny-agent run --channel default
+tiny-agent run
 ```
 
 第二个终端打开 TUI：
 
 ```bash
-tiny-agent tui --run latest --channel default
+tiny-agent tui --run latest
 ```
 
 如果之后改了源码并重新构建，`npm link` 会继续指向当前仓库，不需要反复安装：
@@ -84,7 +84,7 @@ npm run build
 - **决策和副作用分离**：`AgentRunState.nextEffect()` 只决定下一步应该发生什么；`RunOrchestrator` 负责调用模型、校验工具、审核工具、执行 terminal/session 工具、等待 IO、写 transcript。
 - **FIM 是受约束的 step generator**：DeepSeek V4 FIM 被拆成 thinking pass 和 decision pass。Decision pass 只允许生成一个 native tool-call frame，并被归一化为 `ModelTurn`。
 - **外部世界事件化**：IM 消息、terminal session 状态、命令完成/超时、skill run 状态统一进入 `Environment`。模型每轮看到的是被消费过的 factual reminder，而不是隐藏的可变状态。
-- **日志是主要调试接口**：Observation 只返回当前 terminal 的一屏 `screen.text`、terminal facts 和 log path；完整输出写入 session log，run 事件写入 transcript JSONL。FIM prompt 和 streamed thinking progress 这类大调试 payload 写入 run debug artifacts，并在 transcript/history 里保留 `promptRef` / `traceRef`。大上下文靠路径回看，不靠一次性塞进 prompt。
+- **日志是主要调试接口**：Observation 返回 bounded visual window 的 `screen.text`、`screen.window`、terminal facts 和 log path；附近历史可用 `session_observe` 翻页，完整 raw 输出写入 session log，run 事件写入 transcript JSONL。FIM prompt 和 streamed thinking progress 这类大调试 payload 写入 run debug artifacts，并在 transcript/history 里保留 `promptRef` / `traceRef`。大上下文靠路径回看，不靠一次性塞进 prompt。
 - **失败也进入回路**：无效模型输出、tool validation 失败、review 拒绝都会转成 recoverable observation，让 agent 下一轮自我修正，而不是立刻把 run 打死。
 - **复盘由 agent 判断触发**：skill 执行结束后不是固定进入复盘流程，而是由 agent 根据输出、失败模式、风险和任务结果决定是否 `close --review required`。Harness 只提供状态机和记录位置。
 - **审阅先于执行**：所有 terminal/session tool request 在执行前经过 `ToolReviewer`。当前 demo 可以默认 approve，但边界已经为人工审核、策略审核、权限分级和安全审计留好入口。
@@ -95,15 +95,15 @@ npm run build
 
 - **DeepSeek V4 native tool-call FIM**：decision pass 使用 DeepSeek V4 native tool-call special token 边界，但仍由 harness 手工解析和归一化，不依赖 provider-native tool calling。
 - **Terminal/session tool catalog**：模型通过 `terminal_write`、`terminal_key` 操作 current session，通过 `session_observe`、`session_focus`、`session_interrupt`、`session_restart`、`session_terminate` 管理 PTY。普通文本 heredoc 不需要额外 payload 协议。
-- **Managed PTY runtime**：基于 `node-pty` 管理长期 session，维护 current session、terminal facts、`inputSeq`、best-effort `foregroundProcess` 和一屏 observation。
+- **Managed PTY runtime**：基于 `node-pty` 管理长期 session，维护 current session、terminal facts、`inputSeq`、best-effort `foregroundProcess` 和 bounded visual observation。
 - **长任务不会被误杀**：timeout 只释放 agent focus，不 kill 进程。Agent 后续可以 poll 新输出、发送交互输入、中断或重启 session。
-- **可恢复 run artifacts**：每个 run 产出 `state.json`、`transcript.jsonl`、`session.json`、run-scoped `im/`、`environment/`、`skill-runs/`、`debug/prompts/`、`debug/thinking/` 和 PTY session logs。`tiny-agent resume <runId|latest>` 会恢复 agent-loop history 并创建新的 PTY process tree。
+- **可恢复 run artifacts**：每个 run 产出 `state.json`、`transcript.jsonl`、`session.json`、`environment/`、`skill-runs/`、`debug/prompts/`、`debug/thinking/` 和 PTY session logs。public IM 是 project-scoped 服务，通过 `im/run-bindings/` 关联 run 与 endpoint pair。`tiny-agent resume <runId|latest>` 会恢复 agent-loop history 并创建新的 PTY process tree。
 - **agent-loop context compaction**：上下文窗口只压缩 agent-loop history，system prompt/tool contract 不参与压缩。默认在 history prompt 约 700k token 时写入 `history_compacted` 事件并保留最近尾部。
 - **`io_wait` 是一等决策**：等待用户消息或外部事件不是 `sleep`，而是 run state machine 中可记录、可恢复、可回放的 `waiting_for_io` 状态。
 - **Environment 的 one-shot event 和 persistent fact 分层**：新事件只消费一次；active skill run 这类仍然成立的事实会持续提醒，直到状态关闭。
 - **Skill CLI 有生命周期闭环**：skill 可发现、可执行、可保持 active、可 close；agent 可以按需把 skill run 转入 review pending，复盘后把 lessons 追加到 skill 附件。
-- **Code Intelligence CLI 作为语义查询层**：LSP 能力不进入 harness 内核，而是通过 `tiny-agent codeq` 暴露给 agent，用来查询 diagnostics、symbols、definition、references 和 hover。
-- **MCP 作为 CLI 能力接入**：MCP server registry、tools listing 和 tool call 都通过 `tiny-agent mcp` 完成，agent 仍然只是在 terminal session 里执行命令。
+- **Code Intelligence CLI 作为语义查询层**：LSP 能力不进入 harness 内核，而是通过 `tiny-agent codeq` 暴露给 agent，用来查询 diagnostics、symbols、workspace symbols、definition、references、implementations、call hierarchy 和 hover。
+- **MCP 作为 CLI 能力接入**：MCP server registry、tools listing 和 tool call 都通过 `tiny-agent mcp` 完成，支持 stdio server、Streamable HTTP remote server 和 legacy HTTP+SSE server；agent 仍然只是在 terminal session 里执行命令。
 - **Sub-agent team 先做成纯状态域**：`src/subagent` 提供 task/worker FSM、幂等事件和 summary helper，后续可接 MCP、云端队列或本地 worker runtime。
 - **Recovery / replay 是纯事实摘要**：resume 安全诊断、replay case 和 eval summary 从显式 state/transcript/session snapshot 构造，不自动重放副作用。
 - **TUI 以 view model 播放 agent loop**：`TranscriptReader` 读 JSONL，`ViewModelBuilder` 纯逻辑归一化事件，renderer 只负责展示 conversation 和 loop frame。
@@ -116,7 +116,7 @@ npm run build
 - **可审计的自动化执行层**：terminal/session tool request 都进入 request + review + observation 链路，实际 workspace 写入仍通过 shell 内 CLI 或 heredoc 完成，天然适合接人工审批、权限策略、危险命令拦截和企业审计。
 - **CLI 生态的 agent OS 雏形**：只要能力能做成 CLI，就能被 agent 使用，同时仍共享同一套 session、日志、审核和 TUI 观察机制。
 - **技能系统可自我进化**：skill run 的 active/review/lessons 流程为经验沉淀留了位置。agent 可以根据 skill 执行结果判断是否复盘，把成功/失败模式沉淀进 skill 附件，未来再汇总为 skill 级别的改进。
-- **更自然的人机协作**：IM transport 和 `io_wait` 可以扩展出多轮协作、用户确认、取消指令、外部 webhook 唤醒等能力。
+- **更自然的人机协作**：project-scoped public IM 和 `io_wait` 可以扩展出多轮协作、用户确认、取消指令、外部 webhook 唤醒等能力。
 - **异步工作流和后台任务**：session manager 已经支持长运行进程、poll 和 interrupt，适合承载 dev server、test watcher、REPL、后台 job 等 coding agent 常见场景。
 - **多模型/多 provider 适配**：orchestrator 只消费 `ModelTurn`，DeepSeek FIM 是当前主路径；未来可以接其它模型 adapter，只要保持 decision 归一化协议。
 - **评估和可观测性平台**：transcript 记录 thinking、decision、validation、review、tool execution、observation，后续可以做 step 级 eval、trace 可视化和 regression replay。
@@ -132,12 +132,16 @@ npm run build
 ```bash
 tiny-agent codeq diagnostics --workspace --json
 tiny-agent codeq symbols src/run/orchestrator.ts --json
+tiny-agent codeq workspace-symbols RunOrchestrator --json
 tiny-agent codeq definition src/run/orchestrator.ts:37:18 --json
 tiny-agent codeq references src/run/orchestrator.ts:37:18 --json
+tiny-agent codeq implementations src/run/orchestrator.ts:37:18 --json
+tiny-agent codeq incoming-calls src/run/orchestrator.ts:37:18 --json
+tiny-agent codeq outgoing-calls src/run/orchestrator.ts:37:18 --json
 tiny-agent codeq hover src/run/orchestrator.ts:37:18 --json
 ```
 
-它解决的是 `rg` 和直接读文件不擅长的问题：某个 symbol 的真实定义、引用点、文件结构化 symbol、hover 类型信息，以及 language server 已经知道的诊断。`tiny-agent codeq` 输出统一 JSON envelope、稳定错误码、受限结果数量和短 preview，避免把大段 language server 输出直接塞回 prompt。
+它解决的是 `rg` 和直接读文件不擅长的问题：某个 symbol 的真实定义、引用点、实现点、调用层级、文件或 workspace 结构化 symbol、hover 类型信息，以及 language server 已经知道的诊断。`tiny-agent codeq` 输出统一 JSON envelope、稳定错误码、受限结果数量和短 preview，避免把大段 language server 输出直接塞回 prompt。
 
 当前实现保持 stateless：每次命令启动 language server、执行一次查询、关闭退出。这样会比 daemon 慢一些，但状态清楚、可复现、容易写测试，也不会在 harness 内部引入隐藏的长期索引状态。等启动成本真的成为问题，再引入显式的 `tiny-agent codeq server start/status/restart/stop` daemon 模式。
 
@@ -148,9 +152,9 @@ tiny-agent codeq hover src/run/orchestrator.ts:37:18 --json
 - Agent ReAct loop 独立实现。
 - Agent 的交互动作收敛为 terminal/session tool call；普通文本生成直接走 paced heredoc/命令，不再保留额外的文件暂存旁路。
 - 主模型层使用 DeepSeek V4 FIM two-pass：先生成 thinking，再生成 native tool-call decision。
-- 用户消息收发通过 IM CLI 处理，不把 stdin/stdout 作为核心通信边界。
+- 用户消息收发通过 public IM CLI 处理，不把 stdin/stdout 作为核心通信边界。
 - MCP、memory、skills、sub-agent 等能力都通过 `tiny-agent <capability>` 子命令暴露，再由 terminal session 调用。Skills 通过 `tiny-agent skill` 发现和执行。
-- Harness 内部提供 PTY session manager，用来管理长期会话、一屏观察、日志持久化和中断恢复。
+- Harness 内部提供 PTY session manager，用来管理长期会话、bounded visual observation、日志持久化和中断恢复。
 - Environment 统一建模外部事件，每轮 Agent loop 消费为 system reminder，`io_wait` 等待 environment 事件。
 - Tool review 模块预留为执行前审核入口，demo 阶段默认 approve。
 - TUI 读取 transcript/state/logs，把 agent loop 作为可观察、可回放的执行过程展示出来。
@@ -163,7 +167,7 @@ tiny-agent codeq hover src/run/orchestrator.ts:37:18 --json
 - [Model Visible Tool Catalog](docs/model-visible-tool-catalog.md)
 - [Code Intelligence CLI](docs/code-intelligence-cli.md)
 - [DeepSeek V4 Native Tool-Call FIM Adapter](docs/deepseek-fim-adapter.md)
-- [IM CLI Transport](docs/im-cli-transport.md)
+- [Public IM](docs/public-im.md)
 - [Environment Model](docs/environment-model.md)
 - [Skill CLI](docs/skill-cli.md)
 - [MCP CLI](docs/mcp-cli.md)

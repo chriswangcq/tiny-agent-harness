@@ -1,6 +1,6 @@
 # Sub-agent Team Domain
 
-本文记录 `src/subagent` 的当前边界。这里的 team 是轻量控制平面：管理成员、任务、worker process lifecycle 和合并评审输入，不强制规定 workspace/git/ledger 策略。
+本文记录 `src/subagent` 的当前边界。这里的 team 是轻量控制平面：管理成员、worker process lifecycle 和合并评审输入，不拥有任务 FSM，也不强制规定 workspace/git/ledger 策略。
 
 ## Decision
 
@@ -8,8 +8,7 @@ Sub-agent team 仍然优先保持纯状态域。它的核心不是“替 master 
 
 ```text
 member roster events -> TeamRosterState
-task events          -> SubAgentTeamState
-task dispatch        -> run-scoped IM inbox + task dispatch events
+work instructions    -> public IM endpoint pair
 lifecycle events     -> supervisor/lifecycle-events.jsonl
 display projections  -> TUI team dashboard
 ```
@@ -66,13 +65,11 @@ Valid transitions：
 
 ## Directory Store
 
-`src/subagent/directory-store.ts` stores project/run-scoped team snapshots through explicit filesystem ports.
+`src/subagent/directory-store.ts` stores active project-scoped `teams/<teamId>/` snapshots through explicit filesystem ports.
 
 ```text
-~/.tiny-agent/projects/<projectId>/team/state.json
-~/.tiny-agent/projects/<projectId>/team/events.jsonl
-~/.tiny-agent/projects/<projectId>/runs/<runId>/team/state.json
-~/.tiny-agent/projects/<projectId>/runs/<runId>/team/events.jsonl
+~/.tiny-agent/projects/<projectId>/teams/<teamId>/state.json
+~/.tiny-agent/projects/<projectId>/teams/<teamId>/events.jsonl
 ```
 
 Snapshot:
@@ -84,46 +81,31 @@ type TeamDirectorySnapshot = {
   createdAt: string;
   updatedAt: string;
   roster: TeamRosterState;
-  taskState: SubAgentTeamState;
 };
 ```
 
-`createTeamDirectorySnapshot(roster, taskState, now, createdAt?)` takes explicit time input. `readTeamDirectory` and `writeTeamDirectory` take an injected `FsPort`; the core module performs no hidden IO.
+`createTeamDirectorySnapshot(roster, now, createdAt?)` takes explicit time input. `readTeamDirectory` and `writeTeamDirectory` take an injected `FsPort`; the core module performs no hidden IO.
 
-`team/events.jsonl` is now the append-only project/run-scoped fact stream:
+`team/events.jsonl` is now the append-only project-scoped fact stream:
 
 ```text
 team_created
 roster_event -> TeamRosterEvent
-task_event   -> SubAgentTeamEvent
 ```
 
 `team/events.jsonl` is the canonical source for reads. `team/state.json` is a snapshot projection written after event append for inspection and recovery, but `readTeamDirectory` replays a valid event stream first and only falls back to the snapshot when no event stream exists. Malformed event lines fail replay instead of silently producing a partial state.
 
-## Team Task FSM
+## Work Dispatch
 
-`src/subagent/team.ts` tracks tasks and assignment lifecycle. It still uses `workerId` internally for task execution targets because lifecycle/process management is worker-oriented.
+The team module does not provide task subcommands. Work instructions are explicit public IM messages sent to a member endpoint:
 
-Task status:
-
-```text
-queued -> assigned -> running -> succeeded
-queued -> cancelled
-assigned/running -> failed
-assigned/running -> cancelled
+```bash
+tiny-agent im pair --a user:main --b member:<teamId>/<memberId> --kind a2a
+tiny-agent im bind --run-id <runId> --self member:<teamId>/<memberId> --peer user:main --kind a2a
+tiny-agent im post --from user:main --to member:<teamId>/<memberId> --text "<instruction>"
 ```
 
-Reducers remain pure and idempotent by `eventId`.
-
-Assignment dispatch is explicit:
-
-```text
-task_assigned
-task_dispatch_requested
-task_dispatch_sent | task_dispatch_failed
-```
-
-`task assign` builds a `UserMessage` for the assigned member's channel. The adapter posts that message to the member run's IM inbox, then records sent/failed back into `taskState.tasks[taskId].dispatch`. A member needs a `runId` for dispatch because IM inboxes are run-scoped; channel-only targeting is ambiguous once multiple workers exist.
+If the instruction needs a durable label, store it as `TeamMember.assignment` with `tiny-agent team --team <teamId> member update <memberId> --json <patch>`. The roster records observable member facts; it does not mirror or acknowledge IM delivery.
 
 ## Team CLI
 
@@ -132,23 +114,18 @@ Current CLI surface:
 ```bash
 tiny-agent team create <teamId>
 
-tiny-agent team member list [--role <role>] [--status <status>]
-tiny-agent team member show <memberId>
-tiny-agent team member add <memberId> <role> <channel> [--metadata <json>]
-tiny-agent team member update <memberId> --json <patch>
-tiny-agent team member status <memberId> <status>
-tiny-agent team member heartbeat <memberId> [--evidence <text>]
-tiny-agent team member terminate <memberId> [--reason <text>]
+tiny-agent team --team <teamId> member list [--role <role>] [--status <status>]
+tiny-agent team --team <teamId> member show <memberId>
+tiny-agent team --team <teamId> member add <memberId> <role> <channel> [--metadata <json>]
+tiny-agent team --team <teamId> member update <memberId> --json <patch>
+tiny-agent team --team <teamId> member status <memberId> <status>
+tiny-agent team --team <teamId> member heartbeat <memberId> [--evidence <text>]
+tiny-agent team --team <teamId> member terminate <memberId> [--reason <text>]
 
-tiny-agent team task create <taskId> <title>
-tiny-agent team task assign <taskId> <memberId> [--text <instruction>|--text-stdin]
-tiny-agent team task start <taskId>
-tiny-agent team task succeed <taskId> [--output <json>]
-tiny-agent team task fail <taskId> <error>
-tiny-agent team task cancel <taskId> [reason]
+tiny-agent im post --from user:main --to member:<teamId>/<memberId> --text "<instruction>"
 ```
 
-There is no compatibility path for removed roster command names. For non-lifecycle team commands, create a team first; state is stored under the project state root, not process-local memory.
+There is no compatibility path for removed roster command names. For non-lifecycle team commands, create a team first and pass `--team <teamId>`; state is stored under the project state root, not process-local memory.
 
 ## Local Worker Launcher
 
@@ -195,7 +172,7 @@ It provides:
 - `runReaper`
 - `requestShutdown`
 
-The worker lifecycle layer keeps `workerId` in supervisor events because it manages worker processes under `runs/<runId>/workers/<workerId>/`.
+The worker lifecycle layer keeps `workerId` in supervisor events for historical event compatibility. Active process state lives under `teams/<teamId>/members/<memberId>/`, and the agent execution is a run referenced from `teams/<teamId>/runs/<runId>.json`.
 
 ## Status Projector
 

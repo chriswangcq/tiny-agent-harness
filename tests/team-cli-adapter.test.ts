@@ -1,21 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   createInMemoryFsPort,
-  planTeamDirectoryLayout,
-  readTeamDirectoryEvents,
+  planTeamScopedDirectoryLayout,
   readTeamDirectory,
+  readTeamDirectoryEvents,
 } from "../src/subagent/directory-store.js";
 import {
   executeTeamAdapterCommand,
   type TeamCliAdapterPorts,
 } from "../src/subagent/team-cli-adapter.js";
-import type { UserMessage } from "../src/types/environment.js";
 
-function fakePorts(): TeamCliAdapterPorts & {
-  posted: Array<{ stateRoot: string; runId: string; message: UserMessage }>;
-} {
+function fakePorts(): TeamCliAdapterPorts {
   let counter = 0;
-  const posted: Array<{ stateRoot: string; runId: string; message: UserMessage }> = [];
   return {
     fs: createInMemoryFsPort(),
     nowIso: () => "2026-06-08T12:00:00.000Z",
@@ -23,158 +19,96 @@ function fakePorts(): TeamCliAdapterPorts & {
       counter += 1;
       return `${prefix}-${seed}-${counter.toString().padStart(3, "0")}`;
     },
-    newMessageId: (prefix, seed) => {
-      counter += 1;
-      return `${prefix}-${seed}-${counter.toString().padStart(3, "0")}`;
-    },
-    im: {
-      async postUserMessage(input) {
-        posted.push(input);
-      },
-    },
-    posted,
   };
 }
 
 describe("team CLI adapter", () => {
-  it("persists team commands and dispatches task assignments through run-scoped IM", async () => {
+  it("persists roster commands under explicit project-scoped team state", async () => {
     const ports = fakePorts();
     const stateRoot = "/state";
 
     await executeTeamAdapterCommand(ports, ["create", "team-p6"], { stateRoot });
     await executeTeamAdapterCommand(
       ports,
-      ["member", "add", "coder-1", "coder", "worker-channel"],
+      ["--team", "team-p6", "member", "add", "coder-1", "coder", "worker-channel"],
       { stateRoot },
     );
     await executeTeamAdapterCommand(
-      ports,
-      ["member", "update", "coder-1", "--json", '{"runId":"run-worker-1"}'],
-      { stateRoot },
-    );
-    await executeTeamAdapterCommand(
-      ports,
-      ["task", "create", "ticket-1", "Fix dispatch"],
-      { stateRoot },
-    );
-
-    const assigned = await executeTeamAdapterCommand(
       ports,
       [
-        "task",
-        "assign",
-        "ticket-1",
+        "--team",
+        "team-p6",
+        "member",
+        "update",
         "coder-1",
-        "--text",
-        "Please fix dispatch and report evidence.",
+        "--json",
+        '{"runId":"run-worker-1","assignment":{"id":"a1","title":"Fix dispatch","status":"assigned"}}',
       ],
       { stateRoot },
     );
 
-    expect(assigned.ok).toBe(true);
-    expect(ports.posted).toHaveLength(1);
-    expect(ports.posted[0]).toMatchObject({
-      stateRoot,
-      runId: "run-worker-1",
-      message: {
-        channel: "worker-channel",
-        role: "user",
-        text: "Please fix dispatch and report evidence.",
-        metadata: {
-          from: "team",
-          teamId: "team-p6",
-          taskId: "ticket-1",
-          memberId: "coder-1",
-        },
-      },
-    });
-
     const snapshot = await readTeamDirectory(
       ports.fs,
-      planTeamDirectoryLayout(stateRoot),
+      planTeamScopedDirectoryLayout(stateRoot, "team-p6"),
     );
-    expect(snapshot.taskState.tasks["ticket-1"]?.dispatch).toMatchObject({
-      channel: "worker-channel",
+    expect(snapshot).not.toHaveProperty("taskState");
+    expect(snapshot.roster.members["coder-1"]).toMatchObject({
       memberId: "coder-1",
-      status: "sent",
-      sentAt: "2026-06-08T12:00:00.000Z",
+      role: "coder",
+      channel: "worker-channel",
+      runId: "run-worker-1",
+      assignment: {
+        id: "a1",
+        title: "Fix dispatch",
+        status: "assigned",
+      },
     });
 
     const events = await readTeamDirectoryEvents(
       ports.fs,
-      planTeamDirectoryLayout(stateRoot),
+      planTeamScopedDirectoryLayout(stateRoot, "team-p6"),
     );
     expect(events.parseErrors).toEqual([]);
     expect(events.validEvents.map((event) => event.kind)).toEqual([
       "team_created",
       "roster_event",
-      "task_event",
       "roster_event",
-      "task_event",
-      "task_event",
-      "task_event",
-      "task_event",
     ]);
-    expect(events.validEvents.map((event) => event.kind === "task_event" ? event.event.kind : event.kind))
-      .toEqual([
-        "team_created",
-        "roster_event",
-        "member_added",
-        "roster_event",
-        "task_submitted",
-        "task_assigned",
-        "task_dispatch_requested",
-        "task_dispatch_sent",
-      ]);
   });
 
-  it("records dispatch failure when a member has no run id", async () => {
+  it("rejects removed task commands instead of dispatching implicitly", async () => {
     const ports = fakePorts();
     const stateRoot = "/state";
 
     await executeTeamAdapterCommand(ports, ["create", "team-p6"], { stateRoot });
-    await executeTeamAdapterCommand(
+    const result = await executeTeamAdapterCommand(
       ports,
-      ["member", "add", "coder-1", "coder", "worker-channel"],
-      { stateRoot },
-    );
-    await executeTeamAdapterCommand(
-      ports,
-      ["task", "create", "ticket-1", "Fix dispatch"],
+      ["--team", "team-p6", "task", "assign", "ticket-1", "coder-1"],
       { stateRoot },
     );
 
-    const assigned = await executeTeamAdapterCommand(
-      ports,
-      ["task", "assign", "ticket-1", "coder-1"],
-      { stateRoot },
-    );
-
-    expect(assigned.ok).toBe(false);
-    if (!assigned.ok) {
-      expect(assigned.errorCode).toBe("TEAM_DISPATCH_TARGET_MISSING");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errorCode).toBe("PARSE_ERROR");
+      expect(result.error).toContain("Use tiny-agent im post");
     }
-    expect(ports.posted).toHaveLength(0);
-
-    const snapshot = await readTeamDirectory(
-      ports.fs,
-      planTeamDirectoryLayout(stateRoot),
-    );
-    expect(snapshot.taskState.tasks["ticket-1"]?.dispatch).toMatchObject({
-      status: "failed",
-      error: expect.stringContaining("has no runId"),
-    });
-    const events = await readTeamDirectoryEvents(
-      ports.fs,
-      planTeamDirectoryLayout(stateRoot),
-    );
-    expect(events.validEvents.at(-1)).toMatchObject({
-      kind: "task_event",
-      event: { kind: "task_dispatch_failed" },
-    });
   });
 
-  it("requires team creation before member or task commands", async () => {
+  it("requires team creation before member commands", async () => {
+    const ports = fakePorts();
+    const result = await executeTeamAdapterCommand(
+      ports,
+      ["--team", "team-p6", "member", "add", "coder-1", "coder", "worker-channel"],
+      { stateRoot: "/state" },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errorCode).toBe("TEAM_STATE_NOT_FOUND");
+    }
+  });
+
+  it("requires explicit team id for non-create commands", async () => {
     const ports = fakePorts();
     const result = await executeTeamAdapterCommand(
       ports,
@@ -184,7 +118,8 @@ describe("team CLI adapter", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.errorCode).toBe("TEAM_STATE_NOT_FOUND");
+      expect(result.errorCode).toBe("TEAM_ID_REQUIRED");
+      expect(result.error).toContain("--team");
     }
   });
 });

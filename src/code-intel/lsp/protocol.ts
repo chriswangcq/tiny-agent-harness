@@ -69,7 +69,35 @@ export type LspDocumentSymbol = {
 export type LspSymbolInformation = {
   name: string;
   kind: number;
+  containerName?: string;
   location: LspLocation;
+};
+
+export type LspWorkspaceSymbol = {
+  name: string;
+  kind: number;
+  containerName?: string;
+  location: LspLocation | { uri: string };
+};
+
+export type LspCallHierarchyItem = {
+  name: string;
+  kind: number;
+  uri: string;
+  range: LspRange;
+  selectionRange: LspRange;
+  detail?: string;
+  data?: unknown;
+};
+
+export type LspCallHierarchyIncomingCall = {
+  from: LspCallHierarchyItem;
+  fromRanges: LspRange[];
+};
+
+export type LspCallHierarchyOutgoingCall = {
+  to: LspCallHierarchyItem;
+  fromRanges: LspRange[];
 };
 
 export type LspHover = {

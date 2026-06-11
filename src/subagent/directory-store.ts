@@ -1,4 +1,4 @@
-// Durable team roster store — project/run scoped paths, JSON snapshot schema,
+// Durable team roster store — team scoped paths, JSON snapshot schema,
 // and explicit filesystem ports.
 //
 // No direct IO, no side effects in core logic. All filesystem access goes
@@ -10,19 +10,13 @@ import {
   type TeamRosterState,
 } from "./team-roster.js";
 import type { TeamRosterEvent } from "./team-roster.js";
-import {
-  applySubAgentTeamEvent,
-  createSubAgentTeamState,
-  type SubAgentTeamState,
-} from "./team.js";
-import type { SubAgentTeamEvent } from "./team.js";
 
 // ---------------------------------------------------------------------------
 // Path planner — pure functions
 // ---------------------------------------------------------------------------
 
 /** Team directory relative to the product state root. */
-export const DEFAULT_TEAM_DIR = "team";
+export const DEFAULT_TEAMS_DIR = "teams";
 
 /** Project-scoped team directory layout. */
 export type TeamDirectoryLayout = {
@@ -32,36 +26,44 @@ export type TeamDirectoryLayout = {
   runsDir: string;
 };
 
-/** Run-scoped team directory layout under runs/<runId>/team/. */
-export type RunScopedTeamPaths = {
-  runTeamDir: string;
-  runStateFile: string;
-  runEventsFile: string;
+/** Active team-scoped directory layout under teams/<teamId>/. */
+export type TeamScopedDirectoryLayout = TeamDirectoryLayout & {
+  teamId: string;
+  membersDir: string;
 };
 
-export function planTeamDirectoryLayout(
+export type TeamRunReferencePath = {
+  teamId: string;
+  runId: string;
+  runRefFile: string;
+};
+
+export function planTeamScopedDirectoryLayout(
   stateRoot: string,
-): TeamDirectoryLayout {
+  teamId: string,
+): TeamScopedDirectoryLayout {
   const root = stateRoot.replace(/\/+$/, "");
-  const teamDir = `${root}/${DEFAULT_TEAM_DIR}`;
+  const teamDir = `${root}/${DEFAULT_TEAMS_DIR}/${teamId}`;
   return {
+    teamId,
     teamDir,
     stateFile: `${teamDir}/state.json`,
     eventsFile: `${teamDir}/events.jsonl`,
     runsDir: `${teamDir}/runs`,
+    membersDir: `${teamDir}/members`,
   };
 }
 
-export function planRunScopedTeamPaths(
+export function planTeamRunReferencePath(
   stateRoot: string,
+  teamId: string,
   runId: string,
-): RunScopedTeamPaths {
-  const root = stateRoot.replace(/\/+$/, "");
-  const runTeamDir = `${root}/runs/${runId}/team`;
+): TeamRunReferencePath {
+  const layout = planTeamScopedDirectoryLayout(stateRoot, teamId);
   return {
-    runTeamDir,
-    runStateFile: `${runTeamDir}/state.json`,
-    runEventsFile: `${runTeamDir}/events.jsonl`,
+    teamId,
+    runId,
+    runRefFile: `${layout.runsDir}/${runId}.json`,
   };
 }
 
@@ -78,7 +80,6 @@ export type TeamDirectorySnapshot = {
   createdAt: string;
   updatedAt: string;
   roster: TeamRosterState;
-  taskState: SubAgentTeamState;
 };
 
 export type SnapshotValidationResult = {
@@ -101,14 +102,6 @@ export type TeamDirectoryEvent =
       teamId: string;
       kind: "roster_event";
       event: TeamRosterEvent;
-    }
-  | {
-      schemaVersion: typeof DIRECTORY_EVENT_VERSION;
-      eventId: string;
-      timestamp: string;
-      teamId: string;
-      kind: "task_event";
-      event: SubAgentTeamEvent;
     };
 
 export type TeamDirectoryEventValidationResult = {
@@ -129,7 +122,6 @@ export type ReadTeamDirectoryEventsResult = {
 
 export function createTeamDirectorySnapshot(
   roster: TeamRosterState,
-  taskState: SubAgentTeamState,
   now: string,
   createdAt?: string,
 ): TeamDirectorySnapshot {
@@ -139,7 +131,6 @@ export function createTeamDirectorySnapshot(
     createdAt: createdAt ?? now,
     updatedAt: now,
     roster,
-    taskState,
   };
 }
 
@@ -186,25 +177,6 @@ export function validateTeamDirectorySnapshot(
     }
   }
 
-  if (!s.taskState || typeof s.taskState !== "object") {
-    errors.push("Missing or invalid taskState");
-  } else {
-    const taskState = s.taskState as Record<string, unknown>;
-    if (typeof taskState.teamId !== "string") {
-      errors.push("taskState.teamId is missing or not a string");
-    } else if (taskState.teamId !== s.teamId) {
-      errors.push(
-        `taskState.teamId "${taskState.teamId}" does not match snapshot teamId "${s.teamId}"`,
-      );
-    }
-    if (!taskState.tasks || typeof taskState.tasks !== "object") {
-      errors.push("taskState.tasks is missing or not an object");
-    }
-    if (!taskState.workers || typeof taskState.workers !== "object") {
-      errors.push("taskState.workers is missing or not an object");
-    }
-  }
-
   return { valid: errors.length === 0, errors };
 }
 
@@ -230,15 +202,11 @@ export function validateTeamDirectoryEvent(
   if (typeof e.teamId !== "string" || e.teamId.length === 0) {
     errors.push("Missing or invalid teamId");
   }
-  if (
-    e.kind !== "team_created" &&
-    e.kind !== "roster_event" &&
-    e.kind !== "task_event"
-  ) {
+  if (e.kind !== "team_created" && e.kind !== "roster_event") {
     errors.push(`Unsupported kind: ${String(e.kind)}`);
   }
 
-  if ((e.kind === "roster_event" || e.kind === "task_event") && !e.event) {
+  if (e.kind === "roster_event" && !e.event) {
     errors.push("Missing event payload");
   }
 
@@ -335,7 +303,6 @@ export function replayTeamDirectoryEvents(
   events: TeamDirectoryEvent[],
 ): TeamDirectorySnapshot {
   let roster: TeamRosterState | undefined;
-  let taskState: SubAgentTeamState | undefined;
   let teamId: string | undefined;
   let createdAt: string | undefined;
   let updatedAt: string | undefined;
@@ -344,13 +311,12 @@ export function replayTeamDirectoryEvents(
     if (event.kind === "team_created") {
       teamId = event.teamId;
       roster = createTeamRosterState(event.teamId);
-      taskState = createSubAgentTeamState(event.teamId);
       createdAt ??= event.timestamp;
       updatedAt = event.timestamp;
       continue;
     }
 
-    if (!roster || !taskState || !teamId) {
+    if (!roster || !teamId) {
       throw new Error(
         `Cannot replay ${event.kind} before team_created (${event.eventId})`,
       );
@@ -362,28 +328,18 @@ export function replayTeamDirectoryEvents(
       );
     }
 
-    if (event.kind === "roster_event") {
-      const result = applyTeamRosterEvent(roster, event.event);
-      if (result.status === "rejected") {
-        throw new Error(
-          `Roster replay rejected ${event.eventId}: ${result.rejection.code}: ${result.rejection.message}`,
-        );
-      }
-      roster = result.state;
-    } else {
-      const result = applySubAgentTeamEvent(taskState, event.event);
-      if (result.status === "rejected") {
-        throw new Error(
-          `Task replay rejected ${event.eventId}: ${result.rejection.code}: ${result.rejection.message}`,
-        );
-      }
-      taskState = result.state;
+    const result = applyTeamRosterEvent(roster, event.event);
+    if (result.status === "rejected") {
+      throw new Error(
+        `Roster replay rejected ${event.eventId}: ${result.rejection.code}: ${result.rejection.message}`,
+      );
     }
+    roster = result.state;
 
     updatedAt = event.timestamp;
   }
 
-  if (!teamId || !roster || !taskState || !createdAt || !updatedAt) {
+  if (!teamId || !roster || !createdAt || !updatedAt) {
     throw new Error("Cannot replay team directory events: missing team_created");
   }
 
@@ -393,7 +349,6 @@ export function replayTeamDirectoryEvents(
     createdAt,
     updatedAt,
     roster,
-    taskState,
   };
 }
 

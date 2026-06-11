@@ -16,13 +16,29 @@ export type TerminalScreenBufferSize = {
 export type TerminalScreenBufferSnapshot = TerminalScreenBufferSize & {
   text: string;
   hasScrollback: boolean;
+  window: TerminalScreenBufferWindow;
 };
 
 export interface TerminalScreenBuffer {
   write(chunk: string): void;
-  snapshot(): Promise<TerminalScreenBufferSnapshot>;
+  snapshot(options?: TerminalScreenBufferSnapshotOptions): Promise<TerminalScreenBufferSnapshot>;
   dispose(): void;
 }
+
+export type TerminalScreenBufferSnapshotOptions = {
+  startLine?: number;
+  lineCount?: number;
+};
+
+export type TerminalScreenBufferWindow = {
+  startLine: number;
+  endLine: number;
+  totalLines: number;
+  cols: number;
+  rows: number;
+  hasOlder: boolean;
+  hasNewer: boolean;
+};
 
 export class XtermTerminalScreenBuffer implements TerminalScreenBuffer {
   private readonly terminal: import("@xterm/headless").Terminal;
@@ -56,19 +72,37 @@ export class XtermTerminalScreenBuffer implements TerminalScreenBuffer {
     this.pendingOutput += filtered.output;
   }
 
-  async snapshot(): Promise<TerminalScreenBufferSnapshot> {
+  async snapshot(
+    options: TerminalScreenBufferSnapshotOptions = {},
+  ): Promise<TerminalScreenBufferSnapshot> {
     await this.flushPendingOutput();
     const buffer = this.terminal.buffer.active;
+    const totalLines = Math.max(0, buffer.length);
+    const lineCount = positiveInteger(options.lineCount) ?? this.terminal.rows;
+    const startLine =
+      options.startLine === undefined
+        ? Math.max(0, totalLines - lineCount)
+        : clamp(Math.floor(options.startLine), 0, totalLines);
+    const endLine = Math.min(totalLines, startLine + lineCount);
     const lines: string[] = [];
-    for (let row = 0; row < this.terminal.rows; row += 1) {
-      const line = buffer.getLine(buffer.baseY + row);
+    for (let row = startLine; row < endLine; row += 1) {
+      const line = buffer.getLine(row);
       lines.push(line?.translateToString(true, 0, this.terminal.cols) ?? "");
     }
     return {
       rows: this.terminal.rows,
       cols: this.terminal.cols,
       text: lines.join("\n"),
-      hasScrollback: buffer.baseY > 0,
+      hasScrollback: startLine > 0 || endLine < totalLines,
+      window: {
+        startLine,
+        endLine,
+        totalLines,
+        cols: this.terminal.cols,
+        rows: this.terminal.rows,
+        hasOlder: startLine > 0,
+        hasNewer: endLine < totalLines,
+      },
     };
   }
 
@@ -101,8 +135,12 @@ export class XtermTerminalScreenBuffer implements TerminalScreenBuffer {
   }
 }
 
-function positiveInteger(value: number): number | undefined {
-  if (!Number.isFinite(value)) return undefined;
+function positiveInteger(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value)) return undefined;
   const integer = Math.floor(value);
   return integer > 0 ? integer : undefined;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(value, max));
 }

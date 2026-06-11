@@ -98,14 +98,14 @@ completions in the same session.
 ## Boundary
 
 ```text
-IM transport / skill lifecycle / terminal session facts
+Public IM / skill lifecycle / terminal session facts
   -> EnvironmentEvent
   -> Environment reminder
   -> ModelContextSession
   -> PromptBuilder
 
 terminal/session tool execution
-  -> ManagedTerminalRuntime
+  -> TerminalHost
   -> TerminalObservation | SessionListObservation
   -> model-context observation item
   -> selected session EnvironmentEvent facts

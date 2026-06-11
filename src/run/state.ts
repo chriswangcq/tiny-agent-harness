@@ -26,6 +26,7 @@ export class AgentRunState {
     cwd: string;
     transcriptPath: string;
     now?: string;
+    team?: AgentRunStateData["team"];
   }): AgentRunState {
     const now = params.now ?? new Date().toISOString();
     return new AgentRunState({
@@ -37,6 +38,7 @@ export class AgentRunState {
       updatedAt: now,
       stepIndex: 0,
       transcriptPath: params.transcriptPath,
+      team: params.team,
     });
   }
 

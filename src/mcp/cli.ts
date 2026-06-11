@@ -1,9 +1,10 @@
 import * as path from "node:path";
 import { failureEnvelope, successEnvelope } from "../cli/envelope.js";
-import { McpJsonRpcClient } from "./client.js";
-import { ProcessMcpTransport } from "./process-transport.js";
+import { McpJsonRpcClient, type McpRemoteServerConfig, type McpServerConfig } from "./client.js";
+import { redactSensitive } from "./redaction.js";
 import { McpRegistryStore } from "./registry.js";
 import { StateRootResolver } from "../state/root.js";
+import { createMcpTransport } from "./transport-factory.js";
 
 export interface McpCliDeps {
   stdout: { write(text: string): unknown };
@@ -120,12 +121,129 @@ function writeStderrError(deps: McpCliDeps, message: string, errorCode = "MCP_ER
   deps.stderr.write(JSON.stringify(env) + "\n");
 }
 
+type ParseRemoteAddResult =
+  | { ok: true; config: McpRemoteServerConfig }
+  | { ok: false; error: string };
+
+function parseRemoteAddArgs(args: string[]): ParseRemoteAddResult {
+  let url: string | undefined;
+  let type: "http" | "sse" = "http";
+  let protocolVersion: string | undefined;
+  const headers: Record<string, string> = {};
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    switch (arg) {
+      case "--url": {
+        const value = args[i + 1];
+        if (!value || value.startsWith("--")) {
+          return { ok: false, error: "Missing value for --url" };
+        }
+        url = value;
+        i += 1;
+        break;
+      }
+      case "--header":
+      case "-H": {
+        const value = args[i + 1];
+        if (!value || value.startsWith("--")) {
+          return { ok: false, error: `Missing value for ${arg}` };
+        }
+        const parsed = parseHeader(value);
+        if (!parsed) {
+          return { ok: false, error: `Invalid header: ${value}` };
+        }
+        headers[parsed.name] = parsed.value;
+        i += 1;
+        break;
+      }
+      case "--transport": {
+        const value = args[i + 1];
+        if (value !== "http" && value !== "sse") {
+          return { ok: false, error: "--transport must be http or sse" };
+        }
+        type = value;
+        i += 1;
+        break;
+      }
+      case "--http": {
+        type = "http";
+        break;
+      }
+      case "--sse": {
+        type = "sse";
+        break;
+      }
+      case "--protocol-version": {
+        const value = args[i + 1];
+        if (!value || value.startsWith("--")) {
+          return { ok: false, error: "Missing value for --protocol-version" };
+        }
+        protocolVersion = value;
+        i += 1;
+        break;
+      }
+      default:
+        return { ok: false, error: `Unknown remote MCP option: ${arg}` };
+    }
+  }
+
+  if (!url) {
+    return { ok: false, error: "Remote MCP server requires --url <url>" };
+  }
+
+  try {
+    const parsedUrl = new URL(url);
+    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+      return { ok: false, error: "Remote MCP --url must use http or https" };
+    }
+  } catch {
+    return { ok: false, error: `Invalid URL: ${url}` };
+  }
+
+  return {
+    ok: true,
+    config: {
+      type,
+      url,
+      ...(Object.keys(headers).length > 0 ? { headers } : {}),
+      ...(protocolVersion ? { protocolVersion } : {}),
+    },
+  };
+}
+
+function parseHeader(value: string): { name: string; value: string } | undefined {
+  const colon = value.indexOf(":");
+  if (colon <= 0) return undefined;
+  const name = value.slice(0, colon).trim();
+  const headerValue = value.slice(colon + 1).trim();
+  if (!name || !headerValue) return undefined;
+  return { name, value: headerValue };
+}
+
+function shouldParseRemoteAdd(argsBeforeSeparator: string[]): boolean {
+  return argsBeforeSeparator.includes("--url");
+}
+
+function redactServers(servers: McpServerConfig[]): McpServerConfig[] {
+  return redactSensitive(servers) as McpServerConfig[];
+}
+
+function protocolVersionForConfig(config: McpServerConfig): string | undefined {
+  if (config.type === "http" || config.type === "sse") {
+    if (config.protocolVersion) return config.protocolVersion;
+    return config.type === "http" ? "2025-03-26" : undefined;
+  }
+  return undefined;
+}
+
 function resolveStateDir(deps: McpCliDeps, override?: string): string {
   if (override) return path.resolve(deps.cwd, override);
+  if (deps.env.TAH_PROJECT_STATE_DIR) return path.resolve(deps.cwd, deps.env.TAH_PROJECT_STATE_DIR);
   if (deps.env.TAH_STATE_DIR) return path.resolve(deps.cwd, deps.env.TAH_STATE_DIR);
   const homeDir = deps.env.HOME ?? deps.env.USERPROFILE ?? path.join(deps.cwd, ".home");
   return new StateRootResolver({
-    env: { ...deps.env, TAH_STATE_DIR: undefined },
+    env: { ...deps.env, TAH_PROJECT_STATE_DIR: undefined, TAH_STATE_DIR: undefined },
     cwd: () => deps.cwd,
     homeDir: () => homeDir,
   }).resolve().stateDir;
@@ -149,6 +267,7 @@ export async function runMcpCli(
 
 Commands:
   tiny-agent mcp add <name> <command> [-- <server-args...>]  Register an MCP server
+  tiny-agent mcp add <name> --url <url> [--header 'Name: Value'] [--transport http|sse]
   tiny-agent mcp remove <name>                                Remove an MCP server
   tiny-agent mcp list                                         List registered servers
   tiny-agent mcp tools <server>                               List tools from a server
@@ -164,14 +283,36 @@ Commands:
   switch (cmd) {
     case "add": {
       const name = remaining[1];
-      const command = remaining[2];
-      if (!name || !command) {
-        writeStderrError(deps, "Usage: tiny-agent mcp add <name> <command> [-- <args...>]");
+      if (!name) {
+        writeStderrError(deps, "Usage: tiny-agent mcp add <name> <command> [-- <args...>] OR tiny-agent mcp add <name> --url <url> [--header 'Name: Value']");
         return 1;
       }
 
       // Support -- separator: args after -- become server args
       const dashIdx = remaining.indexOf("--", 3);
+      const addArgs = dashIdx !== -1 ? remaining.slice(2, dashIdx) : remaining.slice(2);
+
+      if (shouldParseRemoteAdd(addArgs)) {
+        if (dashIdx !== -1) {
+          writeStderrError(deps, "Remote MCP add does not accept server args after --");
+          return 1;
+        }
+        const parsed = parseRemoteAddArgs(addArgs);
+        if (!parsed.ok) {
+          writeStderrError(deps, parsed.error);
+          return 1;
+        }
+        await registry.add({ name, ...parsed.config });
+        writeStdout(deps, { ok: true, name }, finalJsonMode);
+        break;
+      }
+
+      const command = remaining[2];
+      if (!command) {
+        writeStderrError(deps, "Usage: tiny-agent mcp add <name> <command> [-- <args...>]");
+        return 1;
+      }
+
       const args =
         dashIdx !== -1
           ? remaining.slice(dashIdx + 1) // everything after --
@@ -195,7 +336,7 @@ Commands:
 
     case "list": {
       const servers = registry.list();
-      writeStdout(deps, { ok: true, servers }, finalJsonMode);
+      writeStdout(deps, { ok: true, servers: redactServers(servers) }, finalJsonMode);
       break;
     }
 
@@ -211,12 +352,21 @@ Commands:
         return 1;
       }
 
-      const transport = new ProcessMcpTransport(
-        config.command,
-        config.args,
-        config.env,
+      let transport;
+      try {
+        transport = createMcpTransport(config);
+      } catch (e) {
+        writeStderrError(
+          deps,
+          e instanceof Error ? e.message : String(e),
+        );
+        return 1;
+      }
+      const client = new McpJsonRpcClient(
+        transport,
+        30_000,
+        { protocolVersion: protocolVersionForConfig(config) },
       );
-      const client = new McpJsonRpcClient(transport);
       try {
         await client.initialize();
         const result = await client.listTools();
@@ -225,6 +375,12 @@ Commands:
           { ok: true, ...(result as Record<string, unknown>) },
           finalJsonMode,
         );
+      } catch (e) {
+        writeStderrError(
+          deps,
+          e instanceof Error ? e.message : String(e),
+        );
+        return 1;
       } finally {
         client.disconnect();
       }
@@ -258,12 +414,21 @@ Commands:
         return 1;
       }
 
-      const transport = new ProcessMcpTransport(
-        config.command,
-        config.args,
-        config.env,
+      let transport;
+      try {
+        transport = createMcpTransport(config);
+      } catch (e) {
+        writeStderrError(
+          deps,
+          e instanceof Error ? e.message : String(e),
+        );
+        return 1;
+      }
+      const client = new McpJsonRpcClient(
+        transport,
+        30_000,
+        { protocolVersion: protocolVersionForConfig(config) },
       );
-      const client = new McpJsonRpcClient(transport);
       try {
         await client.initialize();
         const result = await client.callTool(toolName, toolArgs);
@@ -272,6 +437,12 @@ Commands:
           { ok: true, ...(result as Record<string, unknown>) },
           finalJsonMode,
         );
+      } catch (e) {
+        writeStderrError(
+          deps,
+          e instanceof Error ? e.message : String(e),
+        );
+        return 1;
       } finally {
         client.disconnect();
       }

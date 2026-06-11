@@ -2,7 +2,7 @@
 
 本文记录 tiny-agent-harness 第一版 run loop、agent run state、effect 和 event 协议。
 
-> Current implementation note: tiny-agent has no model-level `final` turn. User-visible replies are delivered by running `tiny-agent im send --text-stdin` through the current PTY session, then returning to `io_wait` to wait for the next environment event. Text that appears only in thinking is not delivered to the user.
+> Current implementation note: tiny-agent has no model-level `final` turn. User-visible replies are delivered by running endpoint-based `tiny-agent im send --text-stdin` through the current PTY session, then returning to `io_wait` to wait for the next environment event. Text that appears only in thinking is not delivered to the user.
 
 ## Design Principles
 
@@ -18,15 +18,18 @@
 ```text
 RunOrchestrator
   owns: loop, side effects, IO boundaries
-  calls: DeepSeekFimAdapter, Environment, ToolReviewer, ManagedTerminalRuntime, ImCliTransport, TranscriptStore
+  calls: ModelGateway-backed ModelPort, Environment, ToolReviewer, TerminalHost-backed TerminalPort, PublicImService run binding poller, TranscriptStore
 
 AgentRunState
   owns: status, step index, transcript pointers, pending tool call/review, pending IO wait
   references: active skill run reminder state through Environment / SkillRunStore
   exposes: nextEffect(), apply(event)
 
+ModelGateway
+  owns: default run ModelPort process boundary and provider isolation
+
 DeepSeekFimAdapter
-  owns: two FIM completions per model step and conversion into ModelTurn
+  owns: DeepSeek provider implementation details inside the ModelGateway process
 
 ModelContextSession
   owns: model-visible context items, FIM message rendering, context-window compaction, snapshot/restore
@@ -35,8 +38,8 @@ ModelContextSession
 PromptBuilder
   owns: DeepSeek v4 chat-template compatible message serialization
 
-ImCliTransport
-  owns: user message receive/send through im CLI
+PublicImService / run IM binding
+  owns: endpoint pair creation, run binding, user message polling, and agent reply delivery through im CLI
 
 Environment
   owns: latest external events and consumed-event cursors
@@ -48,8 +51,11 @@ ToolCallValidator
 ToolReviewer
   owns: approve/reject decision before execution
 
+TerminalHost
+  owns: terminal sessions and observations in a supervisor-recorded child process
+
 ManagedTerminalRuntime
-  owns: terminal sessions and observations
+  owns: PTY/session implementation details inside the TerminalHost process
 
 TranscriptStore
   owns: append-only run events on disk
@@ -113,7 +119,15 @@ type AgentRunState = {
 model output -> optional tool validation -> optional tool review -> optional tool execution -> observation
 ```
 
-如果任务已经完成，模型仍然不直接返回用户可见正文；Agent 应通过 current PTY session 调用 `tiny-agent im send --text-stdin` 发送用户可见答复，然后返回 `io_wait`，让 run 等待下一条用户消息或环境事件。`tiny-agent im post` 只用于外部/本地 demo 注入用户消息，不能作为 agent 回复出口。所有 Agent 回复都应走 `tiny-agent im send --text-stdin`；普通文本回复可以直接用 quoted heredoc，例如 `tiny-agent im send --text-stdin <<'IM' ... IM`，也可以在更简单时使用 `< reply.md` stdin redirection。发送后用 `session_observe` 确认 shell prompt/成功输出再 `io_wait`。如果最近一次 IM send 的 PTY observation 尚未回到 shell prompt，orchestrator 会把 `io_wait` 转成 recoverable observation，要求模型先 observe。所有 `terminal_write` PTY 输入都会由 runtime 保护性 pacing；生成文件、代码、HTML、JSON 等文本 payload 使用 shell-native heredoc/redirection，不再保留 staged bytes 旁路。
+如果任务已经完成，模型仍然不直接返回用户可见正文；Agent 应通过 current PTY session 调用 endpoint-based `tiny-agent im send --text-stdin` 发送用户可见答复，然后返回 `io_wait`，让 run 等待下一条用户消息或环境事件。`tiny-agent im post` 只用于外部/本地 demo 注入用户消息，不能作为 agent 回复出口。所有 Agent 回复都应走 public IM；普通文本回复可以直接用 quoted heredoc，例如：
+
+```bash
+tiny-agent im send --from "$TAH_IM_SELF_ENDPOINT" --to "$TAH_IM_USER_ENDPOINT" --kind status --text-stdin <<'IM'
+Done.
+IM
+```
+
+也可以在更简单时使用 `< reply.md` stdin redirection。发送后用 `session_observe` 确认 shell prompt/成功输出再 `io_wait`。如果最近一次 IM send 的 PTY observation 尚未回到 shell prompt，orchestrator 会把 `io_wait` 转成 recoverable observation，要求模型先 observe。所有 `terminal_write` PTY 输入都会由 runtime 保护性 pacing；生成文件、代码、HTML、JSON 等文本 payload 使用 shell-native heredoc/redirection，不再保留 staged bytes 旁路。
 
 ## Model Turn
 
@@ -803,7 +817,8 @@ environment_reminder | tool_call | observation | io_wait_call
   -> ModelContextSession.append(...)
   -> ModelContextSession.compactIfNeeded(...)
   -> ModelContextSession.prepareModelTurn(...)
-  -> DeepSeekFimAdapter.generateTurn(...)
+  -> ModelGateway.generateTurn(...)
+  -> DeepSeekFimAdapter.generateTurn(...) inside the model-gateway process
 ```
 
 The important boundary is ownership: `RunOrchestrator` does not own prompt history arrays, does not call `PromptBuilder` directly, and does not decide the context-window rewrite. It executes effects and records events; `ModelContextSession` owns the model-visible timeline and returns the next model messages.

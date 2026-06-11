@@ -3,42 +3,50 @@ import * as path from "node:path";
 import { TuiController } from "../tui/controller.js";
 import type { TuiControllerOptions } from "../tui/controller.js";
 import { StateRootResolver } from "../state/root.js";
+import {
+  DEFAULT_RUN_USER_ENDPOINT,
+  createRunImSelfEndpoint,
+} from "../im/index.js";
 
 export type TuiControllerOptionInput = {
   runDir: string;
   runsDir: string;
-  channel?: string;
+  stateRoot: string;
+  runId: string;
   env?: Record<string, string | undefined>;
 };
 
 export function buildTuiControllerOptions(
   input: TuiControllerOptionInput,
 ): TuiControllerOptions {
+  const selfEndpoint =
+    input.env?.TAH_IM_SELF_ENDPOINT ?? createRunImSelfEndpoint(input.runId);
+  const userEndpoint =
+    input.env?.TAH_IM_USER_ENDPOINT ?? DEFAULT_RUN_USER_ENDPOINT;
   return {
     runDir: input.runDir,
     runsDir: input.runsDir,
-    imBaseDir: path.join(input.runDir, "im"),
-    channel: input.channel ?? input.env?.TAH_IM_CHANNEL ?? "default",
+    stateRoot: input.stateRoot,
+    runId: input.runId,
+    selfEndpoint,
+    userEndpoint,
   };
 }
 
 export function runTui(args: string[]): void {
   // Parse --run flag
   let runId: string | undefined;
-  let channel: string | undefined;
   let stateDir: string | undefined;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--run" && i + 1 < args.length) {
       runId = args[i + 1];
-    } else if (args[i] === "--channel" && i + 1 < args.length) {
-      channel = args[i + 1];
     } else if (args[i] === "--state-dir" && i + 1 < args.length) {
       stateDir = args[i + 1];
     }
   }
 
   if (!runId) {
-    console.error("[tiny-agent] Usage: tiny-agent tui --run <runId|latest> [--channel <channel>] [--state-dir <dir>]");
+    console.error("[tiny-agent] Usage: tiny-agent tui --run <runId|latest> [--state-dir <dir>]");
     process.exit(1);
   }
 
@@ -72,7 +80,8 @@ export function runTui(args: string[]): void {
   const controller = new TuiController(buildTuiControllerOptions({
     runDir,
     runsDir,
-    channel,
+    stateRoot: baseDir,
+    runId: resolvedRunId,
     env: process.env,
   }));
   controller.start();

@@ -26,8 +26,8 @@ Removed visible side channels
 1. `terminal_write` 和 `terminal_key` 永远只作用于 current session，schema 中没有 `session` 参数。
 2. `session_focus` 是改变 current session 的唯一常规入口。
 3. `session_observe` 可以观察 current session 或指定 session，但不会改变 current session。
-4. 所有 PTY observation 都返回最多一屏 terminal viewport，不返回任意长度 tail，不做日志分页 API。
-5. 完整 PTY 输出仍持久化在 session log；如果 agent 需要更多历史，使用 shell 原生命令读取日志，例如 `wc`、`head`、`tail`、`sed`、`rg`，避免 `less`/`more` 等交互式 pager。
+4. 所有 PTY observation 都返回一个 bounded terminal viewport，并带 0-based visual-line window cursor；`session_observe` 可以用 `startLine` / `lineCount` 翻阅 retained semantic scrollback。
+5. 完整 raw PTY 输出仍持久化在 session log；如果 agent 需要搜索或精确 raw bytes，使用 shell 原生命令读取日志，例如 `wc`、`head`、`tail`、`sed`、`rg`，避免 `less`/`more` 等交互式 pager。
 6. `io_wait` 仍是等待 environment event 的 run-state decision，不是 shell 命令。
 
 ## Shared Observation
@@ -70,14 +70,25 @@ type TerminalScreen = {
   text: string;
   rows: number;
   cols: number;
+  window: PtyVisualWindow;
   truncated: boolean;
   logRef?: {
     path: string;
   };
 };
+
+type PtyVisualWindow = {
+  startLine: number; // inclusive, visual line, 0-based
+  endLine: number;   // exclusive
+  totalLines: number;
+  cols: number;
+  rows: number;
+  hasOlder: boolean;
+  hasNewer: boolean;
+};
 ```
 
-`screen.text` 是当前 semantic terminal viewport，不是旧的任意长度 tail 字段。Managed shell 的 marker 和 continuation prompt chrome 会被剥离；主 prompt 保留，用来提供 cwd/user 的操作定位。raw PTY 历史仍保留在 `screen.logRef.path`。CLI runtime 中它是 run-scoped 文件，例如 `.tiny-agent/runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log`；未配置文件日志的测试/内存 runtime 才可能使用虚拟 fallback。`returnedToPrompt` 是普通命令编排的紧凑信号，表示这次观察看到了 shell 或 continuation prompt。`screen.truncated` 只表示屏幕之外可能还有历史；更多内容必须通过 shell 原生命令查看 `screen.logRef.path`。
+`screen.text` 是当前 semantic terminal viewport，不是旧的任意长度 tail 字段。`screen.window` 描述这次返回的 visual-line 范围，cursor 从 session retained semantic scrollback 顶部 0 开始，范围使用 `[startLine,endLine)`。Managed shell 的 marker 和 continuation prompt chrome 会被剥离；主 prompt 保留，用来提供 cwd/user 的操作定位。raw PTY 历史仍保留在 `screen.logRef.path`。CLI runtime 中它是 run-scoped 文件，例如 `.tiny-agent/runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log`；未配置文件日志的测试/内存 runtime 才可能使用虚拟 fallback。`returnedToPrompt` 是普通命令编排的紧凑信号，表示这次观察看到了 shell 或 continuation prompt。`screen.truncated` 表示当前 visual window 之外还有 retained semantic scrollback；搜索和 raw 精确定位仍应通过 shell 原生命令查看 `screen.logRef.path`。
 
 ## Tool Schemas
 
@@ -164,9 +175,10 @@ Description:
 ```text
 Observe a PTY session without changing current session.
 If session is omitted, observe current session.
-Returns terminal.inputSeq, prompt facts, alive status, and the current terminal viewport screen.
+Returns terminal.inputSeq, prompt facts, alive status, and a terminal viewport screen.
 Use this after long-running commands, timeouts, focus changes, restarts, or before writing to confirm the latest inputSeq.
-This is not a log pagination API; read the persisted log path with shell-native tools when more history is needed.
+Omit startLine for the latest window. Provide startLine and optional lineCount to page retained semantic visual-line scrollback.
+This is not a raw log pagination API; read the persisted log path with shell-native tools when exact raw history or search is needed.
 ```
 
 Schema:
@@ -178,6 +190,16 @@ Schema:
     "session": {
       "type": "string",
       "description": "Optional session id to observe. Omit to observe current session."
+    },
+    "startLine": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Optional 0-based visual line cursor. Omit to observe the latest window."
+    },
+    "lineCount": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Optional number of visual lines to return. Defaults to terminal rows."
     }
   },
   "additionalProperties": false
@@ -219,6 +241,8 @@ type SessionListObservation = {
       startOffset?: number;
       endOffset?: number;
     };
+    window?: PtyVisualWindow;
+    preview?: string;
   }>;
 };
 ```
@@ -404,6 +428,6 @@ BASE64
 
 - No command-shaped shell-wrapper tool.
 - No file-staging side channel.
-- No arbitrary log pagination in tool observation.
+- No arbitrary raw log pagination in tool observation; visual-line paging is bounded by `screen.window`.
 - No `session` parameter on write-like terminal tools.
 - No provider-native tool calling dependency.

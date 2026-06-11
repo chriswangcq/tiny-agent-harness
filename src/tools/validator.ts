@@ -175,15 +175,36 @@ export class ToolCallValidator {
   private parseSessionObserve(
     args: Record<string, unknown>,
   ): TerminalToolRequest | string {
-    const unexpected = rejectUnexpectedArgs(args, ["session"]);
+    const unexpected = rejectUnexpectedArgs(args, [
+      "session",
+      "startLine",
+      "lineCount",
+    ]);
     if (unexpected) return invalidArg("session_observe", unexpected);
 
     const session = parseOptionalSession("session_observe", args.session);
     if (typeof session === "string" && session.startsWith("error:")) {
       return session.slice("error:".length);
     }
+    const startLine = parseOptionalNonNegativeInteger(
+      "session_observe",
+      "startLine",
+      args.startLine,
+    );
+    if (typeof startLine === "string") return startLine;
+    const lineCount = parseOptionalPositiveInteger(
+      "session_observe",
+      "lineCount",
+      args.lineCount,
+    );
+    if (typeof lineCount === "string") return lineCount;
 
-    return { kind: "session_observe", ...(session ? { session } : {}) };
+    return {
+      kind: "session_observe",
+      ...(session ? { session } : {}),
+      ...(startLine === undefined ? {} : { startLine }),
+      ...(lineCount === undefined ? {} : { lineCount }),
+    };
   }
 
   private parseSessionList(
@@ -379,6 +400,18 @@ function parseOptionalNonNegativeInteger(
   return value;
 }
 
+function parseOptionalPositiveInteger(
+  toolName: ToolName,
+  argName: string,
+  value: unknown,
+): number | undefined | string {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    return `Invalid ${toolName} arguments: ${argName} must be a positive integer when provided.`;
+  }
+  return value;
+}
+
 function validateTerminalWriteText(text: string): string | undefined {
   if (usesDeprecatedMainJsCli(text)) {
     return (
@@ -396,7 +429,7 @@ function validateTerminalWriteText(text: string): string | undefined {
   if (usesImSendTextArgument(text)) {
     return (
       "Invalid terminal_write arguments: agent IM replies must use " +
-      "`tiny-agent im send --channel <channel> --kind status --text-stdin`. " +
+      "`tiny-agent im send --from \"$TAH_IM_SELF_ENDPOINT\" --to \"$TAH_IM_USER_ENDPOINT\" --kind status --text-stdin`. " +
       "Use stdin forms such as a quoted heredoc or input redirection instead of shell arguments. " +
       "Do not use `tiny-agent im send --text` from the agent."
     );

@@ -1,6 +1,11 @@
 export { McpJsonRpcClient } from "./client.js";
-export type { McpServerConfig } from "./client.js";
+export type { McpRemoteServerConfig, McpServerConfig, McpStdioServerConfig } from "./client.js";
+export { HttpMcpTransport } from "./http-transport.js";
+export { McpRuntimeManager, mcpServerProcessId, planMcpRuntime } from "./manager.js";
+export type { McpRuntimeManagerDeps, McpRuntimePlan } from "./manager.js";
 export { ProcessMcpTransport } from "./process-transport.js";
+export { redactSensitive } from "./redaction.js";
 export { McpRegistryStore } from "./registry.js";
 export type { McpRegistry } from "./registry.js";
+export { createMcpTransport } from "./transport-factory.js";
 export type { JsonRpcTransport } from "./transport.js";

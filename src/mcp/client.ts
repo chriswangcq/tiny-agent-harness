@@ -1,10 +1,27 @@
 import type { JsonRpcTransport } from "./transport.js";
 
-export type McpServerConfig = {
-  name: string;
+export const DEFAULT_MCP_PROTOCOL_VERSION = "2024-11-05";
+
+export type McpServerConfig =
+  | ({ name: string } & McpStdioServerConfig)
+  | ({ name: string } & McpRemoteServerConfig);
+
+export type McpStoredServerConfig =
+  | McpStdioServerConfig
+  | McpRemoteServerConfig;
+
+export type McpStdioServerConfig = {
+  type?: "stdio";
   command: string;
   args: string[];
   env?: Record<string, string>;
+};
+
+export type McpRemoteServerConfig = {
+  type: "http" | "sse";
+  url: string;
+  headers?: Record<string, string>;
+  protocolVersion?: string;
 };
 
 type JsonRpcId = string | number;
@@ -17,6 +34,10 @@ type JsonRpcMessage = {
   result?: unknown;
   error?: { code: number; message: string; data?: unknown };
 };
+
+export interface McpJsonRpcClientOptions {
+  protocolVersion?: string;
+}
 
 /** Pure JSON-RPC client — transport and timeout are injected. No fs/spawn/process. */
 export class McpJsonRpcClient {
@@ -32,6 +53,7 @@ export class McpJsonRpcClient {
   constructor(
     private transport: JsonRpcTransport,
     private defaultTimeoutMs = 30_000,
+    private options: McpJsonRpcClientOptions = {},
   ) {
     transport.onData((chunk) => {
       this.buffer += chunk.toString("utf-8");
@@ -47,11 +69,13 @@ export class McpJsonRpcClient {
   }
 
   async initialize(): Promise<unknown> {
-    return this.sendRequest("initialize", {
-      protocolVersion: "2024-11-05",
+    const result = await this.sendRequest("initialize", {
+      protocolVersion: this.options.protocolVersion ?? DEFAULT_MCP_PROTOCOL_VERSION,
       capabilities: {},
       clientInfo: { name: "tiny-agent-mcp", version: "0.1.0" },
     });
+    this.sendNotification("notifications/initialized");
+    return result;
   }
 
   async listTools(timeoutMs?: number): Promise<unknown> {
@@ -80,6 +104,13 @@ export class McpJsonRpcClient {
         JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n",
       );
     });
+  }
+
+  sendNotification(method: string, params?: Record<string, unknown>): void {
+    if (this.closed) return;
+    this.transport.write(
+      JSON.stringify({ jsonrpc: "2.0", method, params }) + "\n",
+    );
   }
 
   disconnect(): void {

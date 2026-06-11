@@ -99,6 +99,75 @@ describe("mcp CLI", () => {
     expect(srv.args).toEqual(["hello"]);
   });
 
+  it("adds remote URL servers and redacts sensitive list output", async () => {
+    const addRun = makeTestDeps();
+    const addRc = await runMcpCli(
+      [
+        "--json",
+        "add",
+        "remote-srv",
+        "--url",
+        "https://api.example.test/mcp",
+        "--header",
+        "Authorization: Bearer secret-token",
+        "--header",
+        "X-Api-Key: secret-key",
+        "--transport",
+        "sse",
+        "--protocol-version",
+        "2025-03-26",
+      ],
+      addRun.deps,
+    );
+    expect(addRc).toBe(0);
+    const addJson = JSON.parse(addRun.stdoutLines()[0]);
+    expect(addJson.ok).toBe(true);
+
+    const raw = fs.readFileSync(
+      path.join(stateDir, "mcp-servers.json"),
+      "utf-8",
+    );
+    const data = JSON.parse(raw);
+    expect(data.servers["remote-srv"]).toEqual({
+      type: "sse",
+      url: "https://api.example.test/mcp",
+      headers: {
+        Authorization: "Bearer secret-token",
+        "X-Api-Key": "secret-key",
+      },
+      protocolVersion: "2025-03-26",
+    });
+
+    const listRun = makeTestDeps();
+    const listRc = await runMcpCli(["--json", "list"], listRun.deps);
+    expect(listRc).toBe(0);
+    const listJson = JSON.parse(listRun.stdoutLines()[0]);
+    const srv = listJson.servers.find((s: any) => s.name === "remote-srv");
+    expect(srv).toMatchObject({
+      name: "remote-srv",
+      type: "sse",
+      url: "https://api.example.test/mcp",
+      headers: {
+        Authorization: "<redacted>",
+        "X-Api-Key": "<redacted>",
+      },
+    });
+    expect(JSON.stringify(listJson)).not.toContain("secret-token");
+    expect(JSON.stringify(listJson)).not.toContain("secret-key");
+  });
+
+  it("rejects malformed remote URL config before saving", async () => {
+    const h = makeTestDeps();
+    const rc = await runMcpCli(
+      ["add", "bad-remote", "--url", "file:///tmp/mcp"],
+      h.deps,
+    );
+    expect(rc).toBe(1);
+    const err = JSON.parse(h.stderrLines()[0]);
+    expect(err.error).toContain("http or https");
+    expect(fs.existsSync(path.join(stateDir, "mcp-servers.json"))).toBe(false);
+  });
+
   it("add without --json has --json NOT in server args", async () => {
     const h = makeTestDeps();
     const rc = await runMcpCli(
@@ -380,6 +449,34 @@ describe("mcp CLI", () => {
     } finally {
       fs.rmSync(flagState, { recursive: true, force: true });
       fs.rmSync(envState, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers TAH_PROJECT_STATE_DIR over run-scoped TAH_STATE_DIR", async () => {
+    const projectState = path.join(tmpBase, "project-state");
+    const runState = path.join(tmpBase, "runs", "run-1");
+    fs.mkdirSync(projectState, { recursive: true });
+    fs.mkdirSync(runState, { recursive: true });
+    try {
+      const h = makeDeps({
+        cwd: tmpBase,
+        env: {
+          TAH_PROJECT_STATE_DIR: projectState,
+          TAH_STATE_DIR: runState,
+        },
+      });
+      const rc = await runMcpCli(["add", "project-srv", "echo"], h.deps);
+      expect(rc).toBe(0);
+
+      const projectPath = path.join(projectState, "mcp-servers.json");
+      const runPath = path.join(runState, "mcp-servers.json");
+      expect(fs.existsSync(projectPath)).toBe(true);
+      expect(fs.existsSync(runPath)).toBe(false);
+      const data = JSON.parse(fs.readFileSync(projectPath, "utf-8"));
+      expect(data.servers["project-srv"]).toBeDefined();
+    } finally {
+      fs.rmSync(projectState, { recursive: true, force: true });
+      fs.rmSync(runState, { recursive: true, force: true });
     }
   });
 

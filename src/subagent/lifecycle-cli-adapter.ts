@@ -1,11 +1,10 @@
-// Run-scoped lifecycle CLI adapter.
+// Team-scoped lifecycle CLI adapter.
 //
 // This is the effect boundary for `tiny-agent team lifecycle ...`: it reads durable
-// run-scoped team/supervisor state, wires those facts into the pure runtime
+// team/supervisor state, wires those facts into the pure runtime
 // adapter, and performs real process shutdown through injected ports.
 
 import * as nodeFs from "node:fs/promises";
-import * as path from "node:path";
 import process from "node:process";
 import { failureEnvelope, successEnvelope, type CliEnvelope } from "../cli/envelope.js";
 import {
@@ -16,7 +15,7 @@ import {
 } from "./team-roster.js";
 import {
   createTeamDirectorySnapshot,
-  planRunScopedTeamPaths,
+  planTeamScopedDirectoryLayout,
   readTeamDirectory,
   writeTeamDirectory,
   type FsPort,
@@ -28,10 +27,9 @@ import {
   type LifecycleRuntimePorts,
   type TeamSnapshot,
 } from "./lifecycle-runtime-adapter.js";
-import { planRunScopedWorkerPaths } from "./local-worker-launcher.js";
 import {
   appendLifecycleEvent,
-  planRunScopedSupervisorPaths,
+  planTeamScopedSupervisorPaths,
   readAllLifecycleEvents,
   type SupervisorFsPort,
   type SupervisorLifecycleEvent,
@@ -51,7 +49,8 @@ Lifecycle subcommands:
   shutdown <workerId>               Request one worker shutdown
 
 Options:
-  --run <runId|latest>              Target run directory (default: latest)
+  --team <teamId>                   Target team id (required)
+  --run <runId>                     Optional execution run id fact
   --expiry-ms <ms>                  Lease duration for lease
   --threshold-ms <ms>               Stale heartbeat threshold
   --execute                         Execute reaper/shutdown process effects
@@ -65,11 +64,11 @@ export type LifecycleCliAdapterPorts = {
   fs: LifecycleAdapterFsPort;
   nowIso: () => string;
   newEventId: (prefix: string, seed: string) => string;
-  listRunIds?: (stateRoot: string) => Promise<string[]>;
   readWorkerPid?: (input: {
     stateRoot: string;
-    runId: string;
-    workerId: string;
+    teamId: string;
+    memberId: string;
+    runId?: string;
   }) => Promise<number | undefined>;
   shutdownProcess?: (
     pid: number,
@@ -78,8 +77,9 @@ export type LifecycleCliAdapterPorts = {
   ) => Promise<void>;
   checkProcessExists?: (input: {
     stateRoot: string;
-    runId: string;
-    workerId: string;
+    teamId: string;
+    memberId: string;
+    runId?: string;
     pid: number;
   }) => Promise<boolean>;
 };
@@ -92,12 +92,14 @@ export type ExecuteLifecycleAdapterOptions = {
 type ParsedCommand =
   | {
       kind: "lifecycle-status";
+      teamId?: string;
       runId?: string;
       workerId: string;
       staleThresholdMs: number;
     }
   | {
       kind: "lease";
+      teamId?: string;
       runId?: string;
       workerId: string;
       leaseDurationMs: number;
@@ -105,12 +107,14 @@ type ParsedCommand =
     }
   | {
       kind: "reaper";
+      teamId?: string;
       runId?: string;
       staleThresholdMs: number;
       execute: boolean;
     }
   | {
       kind: "shutdown";
+      teamId?: string;
       runId?: string;
       workerId: string;
       reason: string;
@@ -148,10 +152,24 @@ export async function executeLifecycleAdapterCommand(
   }
 
   try {
-    const runId = await resolveRunId(ports, options.stateRoot, parsed.command.runId);
-    const context = await loadLifecycleContext(ports, options.stateRoot, runId);
+    const teamId = parsed.command.teamId;
+    if (!teamId) {
+      return failureEnvelope({
+        tool: TOOL_NAME,
+        cwd: options.cwd,
+        errorCode: "TEAM_ID_REQUIRED",
+        error: "Missing --team <teamId>; lifecycle state is stored under teams/<teamId>/",
+      });
+    }
+    const runId = parsed.command.runId;
+    const context = await loadLifecycleContext(
+      ports,
+      options.stateRoot,
+      teamId,
+      runId,
+    );
     const adapter = createRuntimeAdapter(
-      createRuntimePorts(ports, options.stateRoot, runId, context),
+      createRuntimePorts(ports, options.stateRoot, teamId, runId, context),
     );
 
     switch (parsed.command.kind) {
@@ -167,6 +185,7 @@ export async function executeLifecycleAdapterCommand(
           cwd: options.cwd,
           extra: {
             command: "lifecycle-status",
+            teamId,
             runId,
             workerId: worker.memberId,
             worker,
@@ -200,6 +219,7 @@ export async function executeLifecycleAdapterCommand(
           cwd: options.cwd,
           extra: {
             command: "lease",
+            teamId,
             runId,
             workerId: worker.memberId,
             envelope,
@@ -227,6 +247,7 @@ export async function executeLifecycleAdapterCommand(
           cwd: options.cwd,
           extra: {
             command: "reaper",
+            teamId,
             runId,
             envelope,
           },
@@ -254,6 +275,7 @@ export async function executeLifecycleAdapterCommand(
           cwd: options.cwd,
           extra: {
             command: "shutdown",
+            teamId,
             runId,
             workerId: worker.memberId,
             envelope,
@@ -297,14 +319,6 @@ export function createNodeLifecycleCliAdapterPorts(): LifecycleCliAdapterPorts {
     newEventId: (prefix, seed) => {
       counter += 1;
       return `${prefix}-${Date.now()}-${seed}-${counter}`;
-    },
-    async listRunIds(stateRoot) {
-      const runsDir = path.join(stateRoot, "runs");
-      const entries = await nodeFs.readdir(runsDir, { withFileTypes: true });
-      return entries
-        .filter((entry) => entry.isDirectory() && entry.name.startsWith("run-"))
-        .map((entry) => entry.name)
-        .sort();
     },
     shutdownProcess: defaultShutdownProcess,
     checkProcessExists: async ({ pid }) => {
@@ -362,12 +376,13 @@ function parseLifecycleAdapterArgs(args: string[]): ParseResult {
   switch (subcommand) {
     case "lifecycle-status": {
       if (!common.positionals[0]) {
-        return usage("Usage: tiny-agent team lifecycle lifecycle-status <workerId> [--run <runId>]");
+        return usage("Usage: tiny-agent team lifecycle lifecycle-status <workerId> --team <teamId> [--run <runId>]");
       }
       return {
         ok: true,
         command: {
           kind: "lifecycle-status",
+          teamId: common.teamId,
           runId: common.runId,
           workerId: common.positionals[0],
           staleThresholdMs: common.staleThresholdMs ?? DEFAULT_STALE_THRESHOLD_MS,
@@ -376,12 +391,13 @@ function parseLifecycleAdapterArgs(args: string[]): ParseResult {
     }
     case "lease": {
       if (!common.positionals[0]) {
-        return usage("Usage: tiny-agent team lifecycle lease <workerId> [--run <runId>] [--expiry-ms <ms>]");
+        return usage("Usage: tiny-agent team lifecycle lease <workerId> --team <teamId> [--run <runId>] [--expiry-ms <ms>]");
       }
       return {
         ok: true,
         command: {
           kind: "lease",
+          teamId: common.teamId,
           runId: common.runId,
           workerId: common.positionals[0],
           leaseDurationMs: common.expiryMs ?? DEFAULT_LEASE_DURATION_MS,
@@ -394,6 +410,7 @@ function parseLifecycleAdapterArgs(args: string[]): ParseResult {
         ok: true,
         command: {
           kind: "reaper",
+          teamId: common.teamId,
           runId: common.runId,
           staleThresholdMs: common.staleThresholdMs ?? DEFAULT_STALE_THRESHOLD_MS,
           execute: common.execute,
@@ -401,12 +418,13 @@ function parseLifecycleAdapterArgs(args: string[]): ParseResult {
       };
     case "shutdown": {
       if (!common.positionals[0]) {
-        return usage("Usage: tiny-agent team lifecycle shutdown <workerId> [--run <runId>] [--execute] [--reason <text>]");
+        return usage("Usage: tiny-agent team lifecycle shutdown <workerId> --team <teamId> [--run <runId>] [--execute] [--reason <text>]");
       }
       return {
         ok: true,
         command: {
           kind: "shutdown",
+          teamId: common.teamId,
           runId: common.runId,
           workerId: common.positionals[0],
           reason: common.reason ?? "Lifecycle shutdown requested",
@@ -427,6 +445,7 @@ function parseCommonFlags(args: string[]):
   | {
       ok: true;
       positionals: string[];
+      teamId?: string;
       runId?: string;
       execute: boolean;
       expiryMs?: number;
@@ -436,6 +455,7 @@ function parseCommonFlags(args: string[]):
     }
   | { ok: false; errorCode: string; error: string } {
   const positionals: string[] = [];
+  let teamId: string | undefined;
   let runId: string | undefined;
   let execute = false;
   let expiryMs: number | undefined;
@@ -447,6 +467,11 @@ function parseCommonFlags(args: string[]):
     const arg = args[i];
     if (arg === "--execute") {
       execute = true;
+      continue;
+    }
+    if (arg === "--team") {
+      teamId = requiredValue(args, i, "--team");
+      i += 1;
       continue;
     }
     if (arg === "--run") {
@@ -485,6 +510,7 @@ function parseCommonFlags(args: string[]):
   return {
     ok: true,
     positionals,
+    teamId,
     runId,
     execute,
     expiryMs,
@@ -510,27 +536,11 @@ function parsePositiveInt(value: string, flag: string): number {
   return parsed;
 }
 
-async function resolveRunId(
-  ports: LifecycleCliAdapterPorts,
-  stateRoot: string,
-  runId: string | undefined,
-): Promise<string> {
-  if (runId && runId !== "latest") return runId;
-  if (!ports.listRunIds) {
-    throw new Error("Missing run id and no listRunIds port was provided");
-  }
-  const runIds = await ports.listRunIds(stateRoot);
-  const latest = [...runIds].sort().at(-1);
-  if (!latest) {
-    throw new Error(`No run directories found under ${path.join(stateRoot, "runs")}`);
-  }
-  return latest;
-}
-
 async function loadLifecycleContext(
   ports: LifecycleCliAdapterPorts,
   stateRoot: string,
-  runId: string,
+  teamId: string,
+  runId: string | undefined,
 ): Promise<{
   roster: TeamDirectorySnapshot["roster"];
   supervisorEvents: SupervisorLifecycleEvent[];
@@ -538,14 +548,8 @@ async function loadLifecycleContext(
   teamLayout: TeamDirectoryLayout;
   supervisorPorts: SupervisorPorts;
 }> {
-  const runTeamPaths = planRunScopedTeamPaths(stateRoot, runId);
-  const teamLayout: TeamDirectoryLayout = {
-    teamDir: runTeamPaths.runTeamDir,
-    stateFile: runTeamPaths.runStateFile,
-    eventsFile: runTeamPaths.runEventsFile,
-    runsDir: path.join(stateRoot, "runs"),
-  };
-  const supervisorPaths = planRunScopedSupervisorPaths(stateRoot, runId);
+  const teamLayout = planTeamScopedDirectoryLayout(stateRoot, teamId);
+  const supervisorPaths = planTeamScopedSupervisorPaths(stateRoot, teamId);
   const supervisorPorts: SupervisorPorts = {
     fs: ports.fs,
     clock: { now: ports.nowIso },
@@ -557,17 +561,18 @@ async function loadLifecycleContext(
     rosterState: teamSnapshot.roster,
     supervisorEvents: events.validEvents,
     createdAt: teamSnapshot.createdAt,
-    runId,
+    runId: runId ?? `team:${teamId}`,
   };
 
-  // Populate per-worker process existence from run-scoped worker state files.
+  // Populate per-worker process existence from team-scoped member state files.
   const processExistence: Record<string, boolean> = {};
-  for (const [workerId] of Object.entries(teamSnapshot.roster.members)) {
-    processExistence[workerId] = await resolveProcessExistence(
+  for (const [memberId, member] of Object.entries(teamSnapshot.roster.members)) {
+    processExistence[memberId] = await resolveProcessExistence(
       ports,
       stateRoot,
-      runId,
-      workerId,
+      teamId,
+      memberId,
+      member.runId ?? runId,
     );
   }
   if (Object.keys(processExistence).length > 0) {
@@ -586,34 +591,43 @@ async function loadLifecycleContext(
 function createRuntimePorts(
   ports: LifecycleCliAdapterPorts,
   stateRoot: string,
-  runId: string,
+  teamId: string,
+  runId: string | undefined,
   context: {
     teamLayout: TeamDirectoryLayout;
     supervisorPorts: SupervisorPorts;
+    roster: TeamDirectorySnapshot["roster"];
   },
 ): LifecycleRuntimePorts {
-  const supervisorPaths = planRunScopedSupervisorPaths(stateRoot, runId);
+  const supervisorPaths = planTeamScopedSupervisorPaths(stateRoot, teamId);
   return {
     nowIso: ports.nowIso,
     generateId: ports.newEventId,
     appendSupervisorEvent: (event) =>
       appendLifecycleEvent(context.supervisorPorts, supervisorPaths, event),
     shutdownWorker: async (workerId, reason) => {
+      const member = context.roster.members[workerId];
+      const workerRunId = member?.runId ?? runId;
       const pid = ports.readWorkerPid
-        ? await ports.readWorkerPid({ stateRoot, runId, workerId })
-        : await readWorkerPidFromState(ports.fs, stateRoot, runId, workerId);
+        ? await ports.readWorkerPid({
+            stateRoot,
+            teamId,
+            memberId: workerId,
+            runId: workerRunId,
+          })
+        : await readWorkerPidFromState(ports.fs, stateRoot, teamId, workerId);
       if (pid === undefined) {
         throw new Error(`Missing worker pid for ${workerId}`);
       }
       const shutdown = ports.shutdownProcess ?? defaultShutdownProcess;
       await shutdown(pid, workerId, reason);
-      // Write terminal state back to the run-scoped worker state file.
-      const workerPaths = planRunScopedWorkerPaths(stateRoot, runId, workerId);
+      // Write terminal state back to the team-scoped member state file.
+      const workerStateFile = teamMemberStateFile(stateRoot, teamId, workerId);
       try {
-        const raw = await ports.fs.readFile(workerPaths.runWorkerStateFile);
+        const raw = await ports.fs.readFile(workerStateFile);
         const current = JSON.parse(raw) as Record<string, unknown>;
         const next = { ...current, status: "terminated", endedAt: ports.nowIso(), exitSignal: "SIGTERM" };
-        await ports.fs.writeFile(workerPaths.runWorkerStateFile, JSON.stringify(next, null, 2));
+        await ports.fs.writeFile(workerStateFile, JSON.stringify(next, null, 2));
       } catch {
         // State file absent or unparseable -- keep shutdown success; do not hide it.
       }
@@ -628,7 +642,6 @@ function createRuntimePorts(
       }
       const nextSnapshot = createTeamDirectorySnapshot(
         result.state,
-        snapshot.taskState,
         ports.nowIso(),
         snapshot.createdAt,
       );
@@ -639,7 +652,7 @@ function createRuntimePorts(
 }
 
 /**
- * Resolve process existence for a worker by reading its run-scoped state file.
+ * Resolve process existence for a worker by reading its team-scoped member state file.
  *
  * Terminal state (exited/terminated) => false.
  * Missing/unparseable state or missing pid => true (backward compatible default).
@@ -648,13 +661,14 @@ function createRuntimePorts(
 async function resolveProcessExistence(
   ports: LifecycleCliAdapterPorts,
   stateRoot: string,
-  runId: string,
-  workerId: string,
+  teamId: string,
+  memberId: string,
+  runId: string | undefined,
 ): Promise<boolean> {
-  const workerPaths = planRunScopedWorkerPaths(stateRoot, runId, workerId);
+  const workerStateFile = teamMemberStateFile(stateRoot, teamId, memberId);
   let raw: string;
   try {
-    raw = await ports.fs.readFile(workerPaths.runWorkerStateFile);
+    raw = await ports.fs.readFile(workerStateFile);
   } catch {
     // Missing state file => default true
     return true;
@@ -681,7 +695,13 @@ async function resolveProcessExistence(
 
   if (ports.checkProcessExists) {
     try {
-      return await ports.checkProcessExists({ stateRoot, runId, workerId, pid });
+      return await ports.checkProcessExists({
+        stateRoot,
+        teamId,
+        memberId,
+        runId,
+        pid,
+      });
     } catch (err: unknown) {
       if (
         err &&
@@ -712,13 +732,13 @@ async function resolveProcessExistence(
 async function readWorkerPidFromState(
   fs: LifecycleAdapterFsPort,
   stateRoot: string,
-  runId: string,
-  workerId: string,
+  teamId: string,
+  memberId: string,
 ): Promise<number | undefined> {
-  const workerPaths = planRunScopedWorkerPaths(stateRoot, runId, workerId);
+  const workerStateFile = teamMemberStateFile(stateRoot, teamId, memberId);
   let raw: string;
   try {
-    raw = await fs.readFile(workerPaths.runWorkerStateFile);
+    raw = await fs.readFile(workerStateFile);
   } catch {
     return undefined;
   }
@@ -730,6 +750,15 @@ async function readWorkerPidFromState(
   return typeof pid === "number" && Number.isInteger(pid) && pid > 0
     ? pid
     : undefined;
+}
+
+function teamMemberStateFile(
+  stateRoot: string,
+  teamId: string,
+  memberId: string,
+): string {
+  const layout = planTeamScopedDirectoryLayout(stateRoot, teamId);
+  return `${layout.membersDir}/${memberId}/state.json`;
 }
 
 async function defaultShutdownProcess(

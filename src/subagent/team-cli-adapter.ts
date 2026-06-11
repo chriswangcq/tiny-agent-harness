@@ -1,47 +1,33 @@
 // Project-scoped team CLI adapter.
 //
 // Pure command handling lives in team-cli.ts. This adapter is the explicit
-// effect boundary: load/save durable team state and deliver task assignment
-// instructions through run-scoped IM.
+// effect boundary for loading and saving durable team roster state.
 
 import * as nodeFs from "node:fs/promises";
-import * as path from "node:path";
 import { failureEnvelope, type CliEnvelope } from "../cli/envelope.js";
-import { ImCliTransport } from "../im/transport.js";
-import type { UserMessage } from "../types/environment.js";
 import {
   appendTeamDirectoryEvents,
   createTeamDirectorySnapshot,
-  planTeamDirectoryLayout,
+  planTeamScopedDirectoryLayout,
   readTeamDirectory,
   writeTeamDirectory,
   type FsPort,
+  type TeamDirectoryLayout,
   type TeamDirectorySnapshot,
 } from "./directory-store.js";
 import {
   createTeamServiceState,
   executeTeamCommand,
   parseTeamArgs,
-  recordTaskDispatchFailed,
-  recordTaskDispatchSent,
   type TeamCliPorts,
+  type TeamParsedCommand,
   type TeamServiceState,
-  type TeamTaskDispatchPlan,
 } from "./team-cli.js";
 
 const TOOL_NAME = "team";
 
-export type TeamImDispatchPort = {
-  postUserMessage: (input: {
-    stateRoot: string;
-    runId: string;
-    message: UserMessage;
-  }) => Promise<void>;
-};
-
 export type TeamCliAdapterPorts = TeamCliPorts & {
   fs: FsPort;
-  im: TeamImDispatchPort;
 };
 
 export type ExecuteTeamAdapterOptions = {
@@ -54,7 +40,17 @@ export async function executeTeamAdapterCommand(
   args: string[],
   options: ExecuteTeamAdapterOptions,
 ): Promise<CliEnvelope> {
-  const parsed = parseTeamArgs(args);
+  const scopedArgs = extractTeamScope(args);
+  if (!scopedArgs.ok) {
+    return failureEnvelope({
+      tool: TOOL_NAME,
+      cwd: options.cwd,
+      errorCode: "PARSE_ERROR",
+      error: scopedArgs.error,
+    });
+  }
+
+  const parsed = parseTeamArgs(scopedArgs.args);
   if (!parsed.ok) {
     return failureEnvelope({
       tool: TOOL_NAME,
@@ -65,7 +61,16 @@ export async function executeTeamAdapterCommand(
     });
   }
 
-  const layout = planTeamDirectoryLayout(options.stateRoot);
+  const teamId = resolveExplicitTeamId(parsed.command, scopedArgs.teamId);
+  if (!teamId.ok) {
+    return failureEnvelope({
+      tool: TOOL_NAME,
+      cwd: options.cwd,
+      errorCode: "TEAM_ID_REQUIRED",
+      error: teamId.error,
+    });
+  }
+  const layout = planTeamScopedDirectoryLayout(options.stateRoot, teamId.teamId);
   let state: TeamServiceState;
   let createdAt: string | undefined;
 
@@ -85,65 +90,14 @@ export async function executeTeamAdapterCommand(
     }
     state = {
       roster: snapshot.roster,
-      taskState: snapshot.taskState,
       events: [],
     };
     createdAt = snapshot.createdAt;
   }
 
-  const result = executeTeamCommand(ports, state, args, options.cwd);
+  const result = executeTeamCommand(ports, state, scopedArgs.args, options.cwd);
   if (!result.ok) {
     return result;
-  }
-
-  const dispatch = readDispatchPlan(result);
-  if (dispatch) {
-    let flushedEventCount = 0;
-    const preDispatchEventFailure = await appendEventsOrFailure(
-      ports.fs,
-      layout,
-      state,
-      flushedEventCount,
-      options.cwd,
-    );
-    if (preDispatchEventFailure.envelope) {
-      return preDispatchEventFailure.envelope;
-    }
-    flushedEventCount = preDispatchEventFailure.nextOffset;
-
-    const dispatchResult = await deliverDispatch(ports, state, dispatch, options);
-    const postDispatchEventFailure = await appendEventsOrFailure(
-      ports.fs,
-      layout,
-      state,
-      flushedEventCount,
-      options.cwd,
-    );
-    if (postDispatchEventFailure.envelope) {
-      return postDispatchEventFailure.envelope;
-    }
-
-    const writeFailure = await writeCurrentStateOrFailure(
-      ports.fs,
-      layout,
-      state,
-      ports.nowIso(),
-      createdAt,
-      options.cwd,
-    );
-    if (writeFailure) {
-      return writeFailure;
-    }
-    if (!dispatchResult.ok) {
-      return dispatchResult;
-    }
-    return {
-      ...result,
-      dispatch: {
-        ...dispatch,
-        status: "sent",
-      },
-    };
   }
 
   if (state.events.length === 0) {
@@ -194,69 +148,18 @@ export function createNodeTeamCliAdapterPorts(): TeamCliAdapterPorts {
       counter += 1;
       return `${prefix}-${Date.now()}-${seed}-${counter}`;
     },
-    newMessageId: (prefix, seed) => {
-      counter += 1;
-      return `${prefix}-${Date.now()}-${seed}-${counter}`;
-    },
-    im: {
-      async postUserMessage(input) {
-        const baseDir = path.join(input.stateRoot, "runs", input.runId, "im");
-        await new ImCliTransport({ baseDir }).post(input.message);
-      },
-    },
   };
-}
-
-async function deliverDispatch(
-  ports: TeamCliAdapterPorts,
-  state: TeamServiceState,
-  dispatch: TeamTaskDispatchPlan,
-  options: ExecuteTeamAdapterOptions,
-): Promise<CliEnvelope> {
-  if (!dispatch.runId) {
-    const error = `Member "${dispatch.memberId}" has no runId; cannot choose a run-scoped IM inbox.`;
-    recordTaskDispatchFailed(ports, state, dispatch, error);
-    return failureEnvelope({
-      tool: TOOL_NAME,
-      cwd: options.cwd,
-      errorCode: "TEAM_DISPATCH_TARGET_MISSING",
-      error,
-      details: { dispatch },
-    });
-  }
-
-  try {
-    await ports.im.postUserMessage({
-      stateRoot: options.stateRoot,
-      runId: dispatch.runId,
-      message: dispatch.message,
-    });
-  } catch (error) {
-    const message = `Failed to dispatch task ${dispatch.taskId} to ${dispatch.memberId}: ${formatError(error)}`;
-    recordTaskDispatchFailed(ports, state, dispatch, message);
-    return failureEnvelope({
-      tool: TOOL_NAME,
-      cwd: options.cwd,
-      errorCode: "TEAM_DISPATCH_FAILED",
-      error: message,
-      details: { dispatch },
-    });
-  }
-
-  recordTaskDispatchSent(ports, state, dispatch);
-  return { ok: true, tool: TOOL_NAME, version: "0.1.0" };
 }
 
 async function writeCurrentState(
   fs: FsPort,
-  layout: ReturnType<typeof planTeamDirectoryLayout>,
+  layout: TeamDirectoryLayout,
   state: TeamServiceState,
   now: string,
   createdAt?: string,
 ): Promise<void> {
   const snapshot = createTeamDirectorySnapshot(
     state.roster,
-    state.taskState,
     now,
     createdAt,
   );
@@ -265,7 +168,7 @@ async function writeCurrentState(
 
 async function appendEventsOrFailure(
   fs: FsPort,
-  layout: ReturnType<typeof planTeamDirectoryLayout>,
+  layout: TeamDirectoryLayout,
   state: TeamServiceState,
   offset: number,
   cwd: string | undefined,
@@ -293,7 +196,7 @@ async function appendEventsOrFailure(
 
 async function writeCurrentStateOrFailure(
   fs: FsPort,
-  layout: ReturnType<typeof planTeamDirectoryLayout>,
+  layout: TeamDirectoryLayout,
   state: TeamServiceState,
   now: string,
   createdAt: string | undefined,
@@ -312,15 +215,52 @@ async function writeCurrentStateOrFailure(
   }
 }
 
-function readDispatchPlan(envelope: CliEnvelope): TeamTaskDispatchPlan | undefined {
-  if (!envelope.ok) {
-    return undefined;
+function extractTeamScope(args: string[]):
+  | { ok: true; args: string[]; teamId?: string }
+  | { ok: false; error: string } {
+  const nextArgs: string[] = [];
+  let teamId: string | undefined;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--team") {
+      const value = args[index + 1];
+      if (!value || value.startsWith("--")) {
+        return { ok: false, error: "Missing value for --team" };
+      }
+      teamId = value;
+      index += 1;
+      continue;
+    }
+    if (arg !== undefined) {
+      nextArgs.push(arg);
+    }
   }
-  const dispatch = envelope.dispatch;
-  if (!dispatch || typeof dispatch !== "object") {
-    return undefined;
+
+  return { ok: true, args: nextArgs, teamId };
+}
+
+function resolveExplicitTeamId(
+  command: TeamParsedCommand,
+  explicitTeamId: string | undefined,
+): { ok: true; teamId: string } | { ok: false; error: string } {
+  if (command.group === "create") {
+    if (explicitTeamId && explicitTeamId !== command.teamId) {
+      return {
+        ok: false,
+        error: `--team ${explicitTeamId} does not match created team ${command.teamId}`,
+      };
+    }
+    return { ok: true, teamId: command.teamId };
   }
-  return dispatch as TeamTaskDispatchPlan;
+
+  if (!explicitTeamId) {
+    return {
+      ok: false,
+      error: "Missing --team <teamId>; team state is stored under teams/<teamId>/",
+    };
+  }
+  return { ok: true, teamId: explicitTeamId };
 }
 
 function formatError(error: unknown): string {

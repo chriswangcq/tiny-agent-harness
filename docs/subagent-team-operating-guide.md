@@ -1,16 +1,16 @@
 # Subagent Team Operating Guide
 
-This guide documents the current lightweight team control plane. The team layer is a member roster and task/lifecycle coordination surface; it is not a mandatory workspace, branch, or ledger factory.
+This guide documents the current lightweight team control plane. The team layer is a member roster and lifecycle coordination surface; work instructions are sent through IM. It is not a mandatory workspace, branch, or ledger factory.
 
 ## Mental Model
 
-Create a team, add members, assign work, and observe lifecycle facts.
+Create a team, add members, send work through IM, and observe lifecycle facts.
 
 ```text
 tiny-agent team create <teamId>
   -> tiny-agent team member add/update/status/heartbeat/terminate
-  -> tiny-agent team task create/assign/start/succeed/fail/cancel
-  -> tiny-agent team lifecycle lease/reaper/shutdown for run-scoped worker processes
+  -> tiny-agent im post --from user:main --to member:<teamId>/<memberId> --text <instruction>
+  -> tiny-agent team lifecycle lease/reaper/shutdown for team member runs
 ```
 
 Workspace layout, git branch policy, child ledgers, and QA protocol are instructions sent to workers through IM or metadata/evidence submitted by workers. They are not required fields in the team roster schema.
@@ -20,11 +20,10 @@ Workspace layout, git branch policy, child ledgers, and QA protocol are instruct
 | Layer | Responsibility |
 | --- | --- |
 | `team-roster.ts` | Pure member roster FSM. Durable people/control-plane truth. |
-| `team.ts` | Pure task FSM for assignment, IM dispatch status, and task lifecycle. |
-| `team-cli-adapter.ts` | Project-scoped effect boundary: load/save team state and post assignment instructions to run-scoped IM. |
+| `team-cli-adapter.ts` | Project-scoped effect boundary: load/save team roster state. |
 | `directory-store.ts` | Explicit-port JSON snapshot store for `team/state.json`. |
 | `local-worker-launcher.ts` | Optional adapter that can spawn a local worker process when explicitly asked. |
-| `lifecycle-runtime-adapter.ts` | Lease, heartbeat, stale reaper, shutdown chain over run-scoped worker process facts. |
+| `lifecycle-runtime-adapter.ts` | Lease, heartbeat, stale reaper, shutdown chain over explicit team member process facts. |
 | TUI dashboard | Observer/control projection only. It does not orchestrate or bypass review. |
 
 Core domain code does not read time, files, env, network, or process state. Those inputs arrive through explicit ports or typed snapshots.
@@ -61,67 +60,49 @@ These metadata values are observable facts, not scheduler obligations. The maste
 ```bash
 tiny-agent team create team-p6
 
-tiny-agent team member add coder-1 coder default
-tiny-agent team member list
-tiny-agent team member show coder-1
-tiny-agent team member update coder-1 --json '{"runId":"run-123","currentTask":"Fix TUI roster"}'
-tiny-agent team member status coder-1 active
-tiny-agent team member heartbeat coder-1 --evidence "commit abc123"
-tiny-agent team member terminate coder-1 --reason "task complete"
+tiny-agent team --team team-p6 member add coder-1 coder default
+tiny-agent team --team team-p6 member list
+tiny-agent team --team team-p6 member show coder-1
+tiny-agent team --team team-p6 member update coder-1 --json '{"runId":"run-123","currentTask":"Fix TUI roster"}'
+tiny-agent team --team team-p6 member status coder-1 active
+tiny-agent team --team team-p6 member heartbeat coder-1 --evidence "commit abc123"
+tiny-agent team --team team-p6 member terminate coder-1 --reason "task complete"
 
-tiny-agent team task create T-001 "Fix roster projection"
-tiny-agent team task assign T-001 coder-1 --text "Fix roster projection and report commit/test evidence"
-tiny-agent team task assign T-001 coder-1 --text-stdin < task-instructions.md
-tiny-agent team task start T-001
-tiny-agent team task succeed T-001 --output '{"commit":"abc123"}'
+tiny-agent team --team team-p6 member update coder-1 --json '{"assignment":{"id":"A-001","title":"Fix roster projection","status":"assigned"}}'
+tiny-agent im pair --a user:main --b member:team-p6/coder-1 --kind a2a
+tiny-agent im bind --run-id run-123 --self member:team-p6/coder-1 --peer user:main --kind a2a
+tiny-agent im post --from user:main --to member:team-p6/coder-1 --text "Fix roster projection and report commit/test evidence"
+tiny-agent im post --from user:main --to member:team-p6/coder-1 --text-stdin < assignment-instructions.md
 ```
 
-`task assign` is the normal dispatch path. It writes a user message to the assigned member's run-scoped IM inbox and records the dispatch chain in the task state:
+`im post` is the normal dispatch path. Use the roster to discover or record the member's `runId` and endpoint metadata; public IM owns delivery. The team roster can store an optional `assignment` label for observability, but it does not mirror IM delivery state.
 
-```text
-task_assigned -> task_dispatch_requested -> task_dispatch_sent
-task_assigned -> task_dispatch_requested -> task_dispatch_failed
-```
-
-The assigned member must have `runId` set before dispatch. The channel alone is not enough for a product team because multiple worker runs may share a project state root.
-
-Lifecycle commands are for run-scoped worker processes:
+Lifecycle commands require explicit team ownership. `--run` is an optional execution fact; it never selects or owns the team:
 
 ```bash
-tiny-agent team lifecycle lease coder-1 --run run-123
-tiny-agent team lifecycle lifecycle-status coder-1 --run run-123
-tiny-agent team lifecycle reaper --run run-123 --threshold-ms 300000
-tiny-agent team lifecycle shutdown coder-1 --run run-123 --execute --reason "stale heartbeat"
+tiny-agent team lifecycle lease coder-1 --team team-main --run run-123
+tiny-agent team lifecycle lifecycle-status coder-1 --team team-main --run run-123
+tiny-agent team lifecycle reaper --team team-main --run run-123 --threshold-ms 300000
+tiny-agent team lifecycle shutdown coder-1 --team team-main --run run-123 --execute --reason "stale heartbeat"
 ```
 
 ## Durable State
 
-Project-scoped team state:
+Team-scoped state:
 
 ```text
-~/.tiny-agent/projects/<projectId>/team/state.json
-~/.tiny-agent/projects/<projectId>/team/events.jsonl
+~/.tiny-agent/projects/<projectId>/teams/<teamId>/state.json
+~/.tiny-agent/projects/<projectId>/teams/<teamId>/events.jsonl
+~/.tiny-agent/projects/<projectId>/teams/<teamId>/members/<memberId>/state.json
+~/.tiny-agent/projects/<projectId>/teams/<teamId>/runs/<runId>.json
+~/.tiny-agent/projects/<projectId>/teams/<teamId>/supervisor/lifecycle-events.jsonl
 ```
 
-`team/state.json` contains both `roster` and `taskState`.
-
-`team/events.jsonl` is the append-only team event stream. Each mutating command appends current facts before the snapshot is written:
+`state.json` contains the projected `roster`. `events.jsonl` is the append-only team event stream and canonical read source. Each mutating command appends current facts before the snapshot is written:
 
 ```text
 team_created
 roster_event
-task_event
-```
-
-The event stream is the canonical read source. The directory reader replays a valid `team/events.jsonl` first and only falls back to `team/state.json` when no event stream exists.
-
-Run-scoped team state and lifecycle facts:
-
-```text
-~/.tiny-agent/projects/<projectId>/runs/<runId>/team/state.json
-~/.tiny-agent/projects/<projectId>/runs/<runId>/team/events.jsonl
-~/.tiny-agent/projects/<projectId>/runs/<runId>/supervisor/lifecycle-events.jsonl
-~/.tiny-agent/projects/<projectId>/runs/<runId>/workers/<workerId>/state.json
 ```
 
 `lifecycle-events.jsonl` is the audit trail for `heartbeat_recorded`, `lease_*`, `reaper_*`, and `shutdown_*`. The TUI team dashboard projects these events for humans; it does not own the lifecycle state.
@@ -131,11 +112,13 @@ Run-scoped team state and lifecycle facts:
 1. Create or select a team.
 2. Add members with role and channel only.
 3. Bind active worker runs back to roster members with `tiny-agent team member update <memberId> --json '{"runId":"run-..."}'`.
-4. Send concrete instructions with `tiny-agent team task assign`; it dispatches through IM and records sent/failed.
-5. Include workspace/git/ledger requirements inside the assignment text when needed.
-6. Record optional facts as metadata or handoff evidence after they exist.
-7. Use lifecycle lease/heartbeat/reaper/shutdown for worker processes.
-8. Merge code through git and review gates outside the roster reducer.
+4. Optionally record a visible assignment label with `tiny-agent team --team <teamId> member update <memberId> --json '{"assignment":{...}}'`.
+5. Ensure the worker endpoint pair exists and is bound to the worker run.
+6. Send concrete instructions with `tiny-agent im post --from user:main --to member:<teamId>/<memberId> --text ...`.
+7. Include workspace/git/ledger requirements inside the assignment text when needed.
+8. Record optional facts as metadata or handoff evidence after they exist.
+9. Use lifecycle lease/heartbeat/reaper/shutdown for team member runs.
+10. Merge code through git and review gates outside the roster reducer.
 
 ## Design Rules
 

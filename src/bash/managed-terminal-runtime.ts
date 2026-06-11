@@ -79,7 +79,10 @@ export class ManagedTerminalRuntime {
           const start = parseCursor(cursor);
           const timedOut = await this.waitForPromptIfRequested(entry, options);
           const output = entry.pty.readOutputSince(start);
-          const screen = await entry.pty.readScreen();
+          const screen = await entry.pty.readScreenWindow({
+            startLine: options?.screenStartLine,
+            lineCount: options?.screenLineCount,
+          });
           const logRef = entry.pty.snapshot.outputLog?.ref ?? `managed-pty://${session}`;
           return {
             chunk: output.chunk,
@@ -93,6 +96,7 @@ export class ManagedTerminalRuntime {
               text: screen.text,
               rows: screen.rows,
               cols: screen.cols,
+              window: { ...screen.window },
               truncated: screen.hasScrollback,
               logRef: { path: logRef },
             },

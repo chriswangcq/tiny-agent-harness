@@ -1,26 +1,48 @@
-import { describe, it, expect, afterEach } from "vitest";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import * as os from "node:os";
+import { describe, it, expect } from "vitest";
 import { Environment } from "../src/environment/environment.js";
-import { ImCliTransport } from "../src/im/transport.js";
-import type { EnvironmentEvent, IoWaitRequest } from "../src/types/environment.js";
+import {
+  PublicImService,
+  createInMemoryImStore,
+  type PublicImMessage,
+  type PublicImServicePorts,
+} from "../src/im/index.js";
+import type { EnvironmentEvent } from "../src/types/environment.js";
 import type { UserMessage } from "../src/types/environment.js";
 
-let tmpDirs: string[] = [];
-
-function makeTmpDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "env-integration-test-"));
-  tmpDirs.push(dir);
-  return dir;
+function fakePorts(): PublicImServicePorts {
+  let idCounter = 0;
+  let nowCounter = 0;
+  return {
+    store: createInMemoryImStore(),
+    clock: {
+      nowIso: () => {
+        nowCounter += 1;
+        return `2026-06-11T00:00:${String(nowCounter).padStart(2, "0")}.000Z`;
+      },
+    },
+    ids: {
+      newMessageId: (seed) => {
+        idCounter += 1;
+        return `msg-${seed.replace(/[^a-zA-Z0-9]+/g, "-")}-${idCounter}`;
+      },
+    },
+  };
 }
 
-afterEach(() => {
-  for (const dir of tmpDirs) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-  tmpDirs = [];
-});
+function toEnvironmentUserMessage(message: PublicImMessage): UserMessage {
+  return {
+    id: message.id,
+    channel: message.channelId,
+    role: "user",
+    text: message.text,
+    createdAt: message.createdAt,
+    metadata: {
+      from: message.from,
+      to: message.to,
+      pairId: message.pairId,
+    },
+  };
+}
 
 describe("Environment reminder rendering", () => {
   it("renderReminder produces correct format for all event kinds", () => {
@@ -162,33 +184,34 @@ describe("Environment consumeSince + waitFor closed loop", () => {
 
 describe("IM → Environment bridge", () => {
   it("posted IM messages become environment events", async () => {
-    const baseDir = makeTmpDir();
-    const transport = new ImCliTransport({ baseDir });
+    const service = new PublicImService(fakePorts());
     const env = new Environment();
 
-    await transport.post({
-      id: "msg-001",
-      channel: "default",
-      role: "user",
+    await service.postMessage({
+      stateRoot: "/state",
+      from: "user:main",
+      to: "run:run-1",
       text: "fix the bug",
-      createdAt: "2026-01-01T00:00:00Z",
     });
-    await transport.post({
-      id: "msg-002",
-      channel: "default",
-      role: "user",
+    await service.postMessage({
+      stateRoot: "/state",
+      from: "user:main",
+      to: "run:run-1",
       text: "also add tests",
-      createdAt: "2026-01-01T00:00:01Z",
     });
 
-    const result = await transport.receive({ channel: "default" });
+    const result = await service.readChannelMessages({
+      stateRoot: "/state",
+      from: "user:main",
+      to: "run:run-1",
+    });
     for (const msg of result.messages) {
       env.appendEvent({
         id: `env-im-${msg.id}`,
         kind: "user_message_received",
         source: "im",
         timestamp: msg.createdAt,
-        message: msg,
+        message: toEnvironmentUserMessage(msg),
       });
     }
 
@@ -205,8 +228,7 @@ describe("IM → Environment bridge", () => {
   });
 
   it("IM bridge + waitFor resolves io_wait for new_user_message", async () => {
-    const baseDir = makeTmpDir();
-    const transport = new ImCliTransport({ baseDir });
+    const service = new PublicImService(fakePorts());
     const env = new Environment();
 
     const waitPromise = env.waitFor({
@@ -218,22 +240,25 @@ describe("IM → Environment bridge", () => {
     });
 
     setTimeout(async () => {
-      await transport.post({
-        id: "msg-003",
-        channel: "default",
-        role: "user",
+      await service.postMessage({
+        stateRoot: "/state",
+        from: "user:main",
+        to: "run:run-1",
         text: "go ahead",
-        createdAt: "2026-01-01T00:00:02Z",
       });
 
-      const result = await transport.receive({ channel: "default" });
+      const result = await service.readChannelMessages({
+        stateRoot: "/state",
+        from: "user:main",
+        to: "run:run-1",
+      });
       for (const msg of result.messages) {
         env.appendEvent({
           id: `env-im-${msg.id}`,
           kind: "user_message_received",
           source: "im",
           timestamp: msg.createdAt,
-          message: msg,
+          message: toEnvironmentUserMessage(msg),
         });
       }
     }, 50);

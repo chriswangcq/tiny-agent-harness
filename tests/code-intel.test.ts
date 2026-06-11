@@ -90,6 +90,18 @@ describe("code-intel argv parsing", () => {
       location: { path: "src/file.ts", line: 1, column: 2 },
       includeDeclaration: true,
     });
+    expect(parseCodeIntelArgv(["workspace-symbols", "Example", "--json"])).toEqual({
+      kind: "workspace-symbols",
+      query: "Example",
+    });
+    expect(parseCodeIntelArgv(["implementations", "src/file.ts:1:2", "--json"])).toEqual({
+      kind: "implementations",
+      location: { path: "src/file.ts", line: 1, column: 2 },
+    });
+    expect(parseCodeIntelArgv(["incoming-calls", "src/file.ts:1:2", "--json"])).toEqual({
+      kind: "incoming-calls",
+      location: { path: "src/file.ts", line: 1, column: 2 },
+    });
   });
 
   it("rejects apply flags because codeq is read-only", () => {
@@ -165,7 +177,38 @@ describe("code-intel CLI execution", () => {
     }
   });
 
-  it("queries definition, references, hover, and file diagnostics", async () => {
+  it("queries workspace symbols through the configured LSP server", async () => {
+    const project = makeProject();
+    const result = await executeCodeIntelArgv(
+      ["workspace-symbols", "Example", "--json"],
+      createCodeIntelRuntime(project),
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.result).toMatchObject({
+        query: "Example",
+        symbols: [
+          {
+            name: "Example",
+            kind: "class",
+            path: "src/example.ts",
+            range: { start: { line: 1, column: 14 } },
+            containerName: "src/example.ts",
+            preview: "export class Example {",
+          },
+          {
+            name: "Target",
+            kind: "constant",
+            path: "src/target.ts",
+            preview: "const Target = other;",
+          },
+        ],
+      });
+    }
+  });
+
+  it("queries definition, references, implementation, hover, and file diagnostics", async () => {
     const project = makeProject();
     const runtime = createCodeIntelRuntime(project);
 
@@ -200,6 +243,23 @@ describe("code-intel CLI execution", () => {
       });
     }
 
+    const implementations = await executeCodeIntelArgv(
+      ["implementations", "src/example.ts:1:15", "--json"],
+      createCodeIntelRuntime(project),
+    );
+    expect(implementations.ok).toBe(true);
+    if (implementations.ok) {
+      expect(implementations.result).toMatchObject({
+        implementations: [
+          {
+            path: "src/target.ts",
+            range: { start: { line: 1, column: 17 } },
+            preview: "export function other() {",
+          },
+        ],
+      });
+    }
+
     const hover = await executeCodeIntelArgv(
       ["hover", "src/example.ts:1:15", "--json"],
       createCodeIntelRuntime(project),
@@ -227,6 +287,60 @@ describe("code-intel CLI execution", () => {
             code: "1001",
             message: "Fake diagnostic",
             preview: "export class Example {",
+          },
+        ],
+      });
+    }
+  });
+
+  it("queries call hierarchy through the configured LSP server", async () => {
+    const project = makeProject();
+
+    const incoming = await executeCodeIntelArgv(
+      ["incoming-calls", "src/example.ts:2:3", "--json"],
+      createCodeIntelRuntime(project),
+    );
+    expect(incoming.ok).toBe(true);
+    if (incoming.ok) {
+      expect(incoming.result).toMatchObject({
+        items: [
+          {
+            name: "run",
+            kind: "method",
+            path: "src/example.ts",
+            preview: "  run() { return 1; }",
+          },
+        ],
+        incomingCalls: [
+          {
+            from: {
+              name: "other",
+              kind: "function",
+              path: "src/target.ts",
+              preview: "export function other() {",
+            },
+            fromRanges: [{ start: { line: 2, column: 10 } }],
+          },
+        ],
+      });
+    }
+
+    const outgoing = await executeCodeIntelArgv(
+      ["outgoing-calls", "src/example.ts:2:3", "--json"],
+      createCodeIntelRuntime(project),
+    );
+    expect(outgoing.ok).toBe(true);
+    if (outgoing.ok) {
+      expect(outgoing.result).toMatchObject({
+        outgoingCalls: [
+          {
+            to: {
+              name: "Target",
+              kind: "constant",
+              path: "src/target.ts",
+              preview: "const Target = other;",
+            },
+            fromRanges: [{ start: { line: 2, column: 18 } }],
           },
         ],
       });

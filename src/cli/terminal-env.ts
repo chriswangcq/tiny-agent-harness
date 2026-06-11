@@ -23,7 +23,10 @@ export type CliTerminalEnvOptions = {
   runDir?: string;
   stateDir?: string;
   projectStateDir?: string;
-  imDir?: string;
+  imStateDir?: string;
+  imRunId?: string;
+  imSelfEndpoint?: string;
+  imUserEndpoint?: string;
   skillRunsDir?: string;
   sessionsDir?: string;
   skillsDir?: string;
@@ -38,16 +41,21 @@ export type CliTerminalEnvOptions = {
  */
 export function buildCliTerminalEnv(
   env: NodeJS.ProcessEnv,
-  channel: string,
   options: CliTerminalEnvOptions = {},
 ): Record<string, string> {
   const cleaned = cleanEnv(env);
-  cleaned["TAH_RUN_CHANNEL"] = channel;
+  delete cleaned.TAH_IM_DIR;
+  delete cleaned.TAH_RUN_CHANNEL;
+  delete cleaned.TAH_IM_CHANNEL;
+
   assignIfDefined(cleaned, "TAH_RUN_ID", options.runId);
   assignIfDefined(cleaned, "TAH_RUN_DIR", options.runDir);
   assignIfDefined(cleaned, "TAH_STATE_DIR", options.stateDir ?? options.runDir);
   assignIfDefined(cleaned, "TAH_PROJECT_STATE_DIR", options.projectStateDir);
-  assignIfDefined(cleaned, "TAH_IM_DIR", options.imDir);
+  assignIfDefined(cleaned, "TAH_IM_STATE_DIR", options.imStateDir);
+  assignIfDefined(cleaned, "TAH_IM_RUN_ID", options.imRunId ?? options.runId);
+  assignIfDefined(cleaned, "TAH_IM_SELF_ENDPOINT", options.imSelfEndpoint);
+  assignIfDefined(cleaned, "TAH_IM_USER_ENDPOINT", options.imUserEndpoint);
   assignIfDefined(cleaned, "TAH_SKILL_RUNS_DIR", options.skillRunsDir);
   assignIfDefined(cleaned, "TAH_SESSIONS_DIR", options.sessionsDir);
   assignIfDefined(cleaned, "TAH_SKILLS_DIR", options.skillsDir);

@@ -36,7 +36,6 @@ describe("Environment priority-only io_wait compatibility", () => {
   });
 
   it("legacy channel drift does not block priority-based waits", async () => {
-    env.setBoundChannel("default");
     const waitReq = makeIoWait("cli");
     const origChannel = waitReq.condition.channel;
     const promise = env.waitFor({ runId: "run-1", wait: waitReq });
@@ -49,7 +48,6 @@ describe("Environment priority-only io_wait compatibility", () => {
   });
 
   it("normal default->default path still works as a priority wait", async () => {
-    env.setBoundChannel("default");
     const waitReq = makeIoWait("default");
     const promise = env.waitFor({ runId: "run-2", wait: waitReq });
     env.appendEvent(makeUserMsg("default", "hello"));
@@ -58,7 +56,7 @@ describe("Environment priority-only io_wait compatibility", () => {
     expect(result.message.text).toBe("hello");
   });
 
-  it("without boundChannel, legacy condition.channel still does not filter events", async () => {
+  it("legacy condition.channel still does not filter events", async () => {
     const waitReq = makeIoWait("cli");
     const promise = env.waitFor({ runId: "run-3", wait: waitReq });
     env.appendEvent(makeUserMsg("default", "msg"));
@@ -66,8 +64,7 @@ describe("Environment priority-only io_wait compatibility", () => {
     expect(result.message.channel).toBe("default");
   });
 
-  it("boundChannel=default + wait.channel=cli + no events yet -> waiter registered, wait not mutated", async () => {
-    env.setBoundChannel("default");
+  it("wait.channel=cli + no events yet -> waiter registered, wait not mutated", async () => {
     const waitReq = makeIoWait("cli");
     const orig = waitReq.condition.channel;
     expect(waitReq.condition.channel).toBe(orig);

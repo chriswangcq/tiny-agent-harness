@@ -39,6 +39,15 @@ export type AgentRunStatus =
 
 // ─── Agent Run State Data ───────────────────────────────────────────
 
+export type AgentRunTeamRole = "coordinator" | "worker" | "reviewer";
+
+export type AgentRunTeamLink = {
+  teamId: string;
+  memberId: string;
+  role: AgentRunTeamRole;
+  taskId?: string;
+};
+
 export interface AgentRunStateData {
   runId: string;
   status: AgentRunStatus;
@@ -52,6 +61,9 @@ export interface AgentRunStateData {
 
   transcriptPath: string;
   lastEventId?: string;
+
+  /** Optional backlink when this run is created by a team workflow. */
+  team?: AgentRunTeamLink;
 
   pendingModelOutput?: FimStepOutput;
   pendingModelTurn?: ModelTurn;

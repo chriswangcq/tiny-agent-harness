@@ -4,8 +4,9 @@
 
 - **Home-scoped project store**：默认状态根是 `~/.tiny-agent/projects/<projectId>/`，项目源码目录不再自动创建 `.tiny-agent/`。
 - **User-scoped runtime config**：provider credentials 和默认模型配置放在 `~/.tiny-agent/config.json`，不放进项目源码目录，也不混入 project state。
-- **Run 自包含**：一个 run 的所有状态（IM、session、environment、skill-runs、team/supervisor/worker state）都在 `runs/run-<ts>/` 下，可独立归档、恢复和清理。
+- **Run 是执行单元**：一个 run 的执行状态（session、environment、skill-runs、debug artifacts）在 `runs/run-<ts>/` 下，可独立归档、恢复和清理。public IM 是 project-scoped 服务，run 通过显式 run binding 关联 endpoint pair。Team/supervisor/worker member state 属于 project-scoped `teams/<teamId>/` 控制面，run 通过显式 team metadata 或 team run reference 被关联。
 - **Skills 项目公共**：技能定义是跨 run 共享的知识资产，放在项目级 `skills/` 下。
+- **MCP 项目公共**：MCP server registry 是项目能力配置，放在 project state root 下；每次调用仍通过 run 的 PTY/transcript/session log 审计。
 
 ## 目录结构
 
@@ -22,15 +23,27 @@
 │   └── <skill-name>/
 │       └── SKILL.md
 │
+├── mcp-servers.json                # 公共：MCP server registry（跨 run 共享）
+│
+├── im/                             # 公共：public IM endpoint pairs / channels / run bindings
+│   ├── endpoints/
+│   │   └── <endpointId>.json
+│   ├── pairs/
+│   │   └── <pairId>.json
+│   ├── channels/
+│   │   └── <channelId>/
+│   │       ├── meta.json
+│   │       ├── messages.jsonl
+│   │       └── cursors/
+│   │           └── <consumerId>.cursor
+│   └── run-bindings/
+│       └── <runId>.json
+│
 ├── runs/
 │   ├── latest.json                 # 指向最新 run
-│   └── run-<ts>/                   # 单个 run（完全自包含）
+│   └── run-<ts>/                   # 单个 run 执行单元
 │       ├── state.json              # AgentRunState 状态机快照
 │       ├── transcript.jsonl        # 完整执行转录（每行一个 RunEvent）
-│       │
-│       ├── im/                     # 本 run 的 IM 消息
-│       │   ├── <channel>.inbox.jsonl
-│       │   └── <channel>.outbox.jsonl
 │       │
 │       ├── sessions/               # 本 run 的终端 session raw PTY log
 │       │   └── <safe-session-id>-<sha256-10>.log
@@ -49,18 +62,21 @@
 │           │   └── step-XXXX-thinking.prompt.txt
 │           └── thinking/
 │               └── step-XXXX-thinking.trace.txt
-│       │
-│       └── mcp-servers.json        # 可选：本 run 的 MCP server registry
-│       │
-│       ├── supervisor/             # 本 run 的 supervisor 生命周期存储
-│       │   ├── lifecycle-events.jsonl
-│       │   └── snapshot.json
-│       │
-│       ├── workers/               # 本 run 的 worker 进程状态
-│       │   └── <workerId>/
-│       │       ├── state.json
+│
+├── teams/                          # project-scoped team control plane
+│   └── <teamId>/
+│       ├── state.json              # roster projection snapshot
+│       ├── events.jsonl            # append-only team fact stream
+│       ├── members/
+│       │   └── <memberId>/
+│       │       ├── state.json      # local member worker process state
 │       │       └── output.log
-││
+│       ├── runs/
+│       │   └── <runId>.json        # team-owned run reference
+│       └── supervisor/
+│           ├── lifecycle-events.jsonl
+│           └── snapshot.json
+│
 ├── launcher/                       # 启动器日志
 │   └── ui-<ts>.log
 │
@@ -107,6 +123,18 @@
 
 技能定义目录。每个技能一个子目录，包含 `SKILL.md` 等文件。agent 可以通过 `tiny-agent skill list` / `tiny-agent skill show` 发现和使用这些技能。技能定义跨 run 共享，可以在多个 run 中反复使用和迭代。
 
+### `im/` — Public IM
+
+public IM 是 project-scoped 服务，不属于任何单个 run。endpoint pair 代表通信关系，directional channel log 保存消息，run binding 记录某个 run 当前监听哪些 pair。
+
+| 子目录/文件 | 内容 | 格式 |
+|-------------|------|------|
+| `endpoints/` | endpoint metadata，例如 `user:main`、`run:<runId>`、`member:<team>/<member>` | JSON |
+| `pairs/` | endpoint pair metadata 和方向信息 | JSON |
+| `channels/<channelId>/messages.jsonl` | 单方向 append-only message log | JSONL |
+| `channels/<channelId>/cursors/<consumerId>.cursor` | per-consumer cursor | JSON |
+| `run-bindings/<runId>.json` | run 到 endpoint pair 的绑定索引 | JSON |
+
 ### `runs/run-<ts>/` — Run 自包含
 
 每个 run 完全自包含以下子目录：
@@ -115,12 +143,25 @@
 |--------|------|------|
 | `state.json` | AgentRunState 快照 | JSON |
 | `transcript.jsonl` | 完整执行事件流 | JSONL |
-| `im/` | 本 run 的 IM 收发记录 | JSONL |
 | `sessions/` | 终端 PTY raw log；文件名为 sanitize 后的 session id 加短 hash，避免路径穿越和重名 | 纯文本 |
 | `environment/` | 环境事件（one-shot events + persistent facts） | JSONL |
 | `skill-runs/` | 技能执行实例的状态和日志 | JSON |
 | `debug/` | 调试产物（prompt 快照、thinking trace 等） | 纯文本 |
-| `mcp-servers.json` | 可选 MCP server registry；agent 在 PTY 中默认使用 run-scoped `TAH_STATE_DIR` | JSON |
+| `mcp-servers.json` | 项目级 MCP server registry，支持 stdio、Streamable HTTP 和 legacy HTTP+SSE server；agent 在 PTY 中默认使用 `TAH_PROJECT_STATE_DIR` | JSON |
+
+### `teams/<teamId>/` — Team 控制面
+
+Team 是 workflow/supervisor owner，位于 project state root 下。AgentRun 是 team 创建或引用的执行单元，不反向拥有 team。
+
+| 子目录/文件 | 内容 | 格式 |
+|-------------|------|------|
+| `state.json` | roster projection snapshot | JSON |
+| `events.jsonl` | append-only team fact stream | JSONL |
+| `members/<memberId>/state.json` | 本地 member worker 进程状态 | JSON |
+| `members/<memberId>/output.log` | 本地 member worker 输出日志 | 文本 |
+| `runs/<runId>.json` | team-owned run reference | JSON |
+| `supervisor/lifecycle-events.jsonl` | team supervisor lifecycle event stream | JSONL |
+| `supervisor/snapshot.json` | team supervisor snapshot | JSON |
 
 ### PTY 启动环境变量
 
@@ -130,17 +171,19 @@ Managed PTY 启动时会把当前 run 信息注入 shell 环境，供 agent 在 
 |----------|------|
 | `TAH_RUN_ID` | 当前 run id |
 | `TAH_RUN_DIR` | 当前 `runs/run-<ts>/` 目录 |
-| `TAH_STATE_DIR` | CLI 默认状态目录；在 PTY 中等于当前 run 目录 |
-| `TAH_PROJECT_STATE_DIR` | 当前项目的 home-scoped state root；供 team lifecycle/reaper 等跨 run 控制面使用 |
-| `TAH_RUN_CHANNEL` | 当前 IM channel |
-| `TAH_IM_DIR` | 当前 run 的 IM inbox/outbox 目录 |
+| `TAH_STATE_DIR` | CLI 默认 run 状态目录；在 PTY 中等于当前 run 目录 |
+| `TAH_PROJECT_STATE_DIR` | 当前项目的 home-scoped state root；供 MCP registry、team lifecycle/reaper 等跨 run 控制面使用 |
+| `TAH_IM_STATE_DIR` | public IM state root；在 PTY 中等于当前 project state root |
+| `TAH_IM_RUN_ID` | 当前 run id，供 `tiny-agent im run-recv/run-ack` 默认定位 |
+| `TAH_IM_SELF_ENDPOINT` | 当前 run 的默认回复 endpoint，例如 `run:<runId>` |
+| `TAH_IM_USER_ENDPOINT` | 默认用户 endpoint，当前为 `user:main` |
 | `TAH_SKILL_RUNS_DIR` | 当前 run 的 skill-runs 目录 |
 | `TAH_SESSIONS_DIR` | 当前 run 的 sessions 目录 |
 | `TAH_SKILLS_DIR` | 项目级 skills 目录 |
 | `TAH_TRANSCRIPT_PATH` | 当前 run transcript JSONL |
 | `TAH_ENVIRONMENT_EVENTS_PATH` | 当前 run environment events JSONL |
 
-因此 agent 在 PTY 中执行 `tiny-agent im send ...`、`tiny-agent skill ...`、`tiny-agent codeq ...`、`tiny-agent mcp ...` 或 `tiny-agent team ...` 时，不需要额外传 `--state-dir`；显式传入 `--state-dir` 仍然用于人工调试或跨 run 操作。
+因此 agent 在 PTY 中执行 `tiny-agent im send --from "$TAH_IM_SELF_ENDPOINT" --to "$TAH_IM_USER_ENDPOINT" --text-stdin`、`tiny-agent skill ...`、`tiny-agent codeq ...`、`tiny-agent mcp ...` 或 `tiny-agent team ...` 时，不需要额外传 `--state-dir`；显式传入 `--state-dir` 仍然用于人工调试或跨 run 操作。
 
 ### PTY session 生命周期
 
@@ -164,18 +207,19 @@ TUI 启动器的 stdout/stderr 日志，用于排查 UI 启动问题。不属于
 
 ## 当前落地状态
 
-当前 CLI 主路径已经按 run-scoped 目录写入：
+当前 CLI 主路径按 run 执行状态和 project-scoped team 控制面分开写入：
 
 | 能力 | 当前路径 |
 |------|----------|
-| IM inbox/outbox | `~/.tiny-agent/projects/<projectId>/runs/<runId>/im/` |
+| Public IM endpoints/pairs/channels/run bindings | `~/.tiny-agent/projects/<projectId>/im/` |
 | PTY raw logs | `~/.tiny-agent/projects/<projectId>/runs/<runId>/sessions/` |
 | Environment events | `~/.tiny-agent/projects/<projectId>/runs/<runId>/environment/events.jsonl` |
 | Skill runs | `~/.tiny-agent/projects/<projectId>/runs/<runId>/skill-runs/` |
 | Model context snapshot | `~/.tiny-agent/projects/<projectId>/runs/<runId>/session.json` |
 | Debug prompt/trace artifacts | `~/.tiny-agent/projects/<projectId>/runs/<runId>/debug/` |
-| Supervisor lifecycle events | `~/.tiny-agent/projects/<projectId>/runs/<runId>/supervisor/lifecycle-events.jsonl` (append-only heartbeat, lease, shutdown_requested/completed/failed, reaper facts) |
-| Worker process state | `~/.tiny-agent/projects/<projectId>/runs/<runId>/workers/<workerId>/state.json` |
+| Supervisor lifecycle events | `~/.tiny-agent/projects/<projectId>/teams/<teamId>/supervisor/lifecycle-events.jsonl` (append-only heartbeat, lease, shutdown_requested/completed/failed, reaper facts) |
+| Worker process state | `~/.tiny-agent/projects/<projectId>/teams/<teamId>/members/<memberId>/state.json` |
+| Team run references | `~/.tiny-agent/projects/<projectId>/teams/<teamId>/runs/<runId>.json` |
 
 仍保持项目级：
 
@@ -184,4 +228,4 @@ TUI 启动器的 stdout/stderr 日志，用于排查 UI 启动问题。不属于
 - `launcher/` — TUI launcher 日志。
 - `tmp/` — 临时文件。
 
-因此 `runs/run-<ts>/` 是一个可独立打包、归档或删除的完整运行单元。
+因此 `runs/run-<ts>/` 是一个可独立打包、归档或删除的执行单元；team 控制面通过 `teams/<teamId>/runs/<runId>.json` 和 run state 的可选 team metadata 记录所有权。

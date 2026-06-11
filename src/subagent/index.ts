@@ -1,4 +1,3 @@
-export * from "./team.js";
 export * from "./team-cli-adapter.js";
 export * from "./merge-protocol.js";
 export * from "./team-roster.js";

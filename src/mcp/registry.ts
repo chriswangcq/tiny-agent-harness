@@ -1,10 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { McpServerConfig } from "./client.js";
+import type { McpServerConfig, McpStoredServerConfig } from "./client.js";
 import { DirectoryLock } from "../state/lock.js";
 
 export type McpRegistry = {
-  servers: Record<string, Omit<McpServerConfig, "name">>;
+  servers: Record<string, McpStoredServerConfig>;
 };
 
 export class McpRegistryStore {

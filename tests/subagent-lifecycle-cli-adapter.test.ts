@@ -11,9 +11,8 @@ import {
 } from "../src/subagent/team-roster.js";
 import {
   createTeamDirectorySnapshot,
-  planRunScopedTeamPaths,
+  planTeamScopedDirectoryLayout,
 } from "../src/subagent/directory-store.js";
-import { createSubAgentTeamState } from "../src/subagent/team.js";
 import {
   createLifecycleCliAdapterPorts,
   executeLifecycleAdapterCommand,
@@ -21,7 +20,7 @@ import {
   type LifecycleAdapterFsPort,
 } from "../src/subagent/lifecycle-cli-adapter.js";
 import {
-  planRunScopedSupervisorPaths,
+  planTeamScopedSupervisorPaths,
   type SupervisorLifecycleEvent,
 } from "../src/subagent/supervisor-store.js";
 
@@ -95,34 +94,33 @@ function rosterWithWorkers(workers: TeamMember[]): TeamRosterState {
   return state;
 }
 
-async function writeRunRoster(
+async function writeTeamRoster(
   stateRoot: string,
-  runId: string,
+  teamId: string,
   workers: TeamMember[],
 ): Promise<void> {
-  const paths = planRunScopedTeamPaths(stateRoot, runId);
-  await fsPort.mkdir(paths.runTeamDir);
+  const paths = planTeamScopedDirectoryLayout(stateRoot, teamId);
+  await fsPort.mkdir(paths.teamDir);
   const state = rosterWithWorkers(workers);
   const snapshot = createTeamDirectorySnapshot(
     state,
-    createSubAgentTeamState(state.teamId),
     NOW,
   );
-  await fsPort.writeFile(paths.runStateFile, JSON.stringify(snapshot, null, 2));
+  await fsPort.writeFile(paths.stateFile, JSON.stringify(snapshot, null, 2));
 }
 
 async function writeWorkerState(
   stateRoot: string,
-  runId: string,
-  workerId: string,
+  teamId: string,
+  memberId: string,
   state: Record<string, unknown>,
 ): Promise<void> {
   const workerDir = path.join(
     stateRoot,
-    "runs",
-    runId,
-    "workers",
-    workerId,
+    "teams",
+    teamId,
+    "members",
+    memberId,
   );
   await fsPort.mkdir(workerDir);
   await fsPort.writeFile(
@@ -132,15 +130,15 @@ async function writeWorkerState(
 }
 async function readWorkerState(
   stateRoot: string,
-  runId: string,
-  workerId: string,
+  teamId: string,
+  memberId: string,
 ): Promise<Record<string, unknown>> {
   const workerDir = path.join(
     stateRoot,
-    "runs",
-    runId,
-    "workers",
-    workerId,
+    "teams",
+    teamId,
+    "members",
+    memberId,
   );
   const raw = await readFile(path.join(workerDir, "state.json"), "utf-8");
   return JSON.parse(raw) as Record<string, unknown>;
@@ -148,9 +146,9 @@ async function readWorkerState(
 
 async function readLifecycleEvents(
   stateRoot: string,
-  runId: string,
+  teamId: string,
 ): Promise<SupervisorLifecycleEvent[]> {
-  const paths = planRunScopedSupervisorPaths(stateRoot, runId);
+  const paths = planTeamScopedSupervisorPaths(stateRoot, teamId);
   const raw = await readFile(paths.eventsFile, "utf-8");
   return raw
     .split("\n")
@@ -160,10 +158,10 @@ async function readLifecycleEvents(
 
 async function readRosterSnapshot(
   stateRoot: string,
-  runId: string,
+  teamId: string,
 ): Promise<{ roster: TeamRosterState }> {
-  const paths = planRunScopedTeamPaths(stateRoot, runId);
-  return JSON.parse(await readFile(paths.runStateFile, "utf-8"));
+  const paths = planTeamScopedDirectoryLayout(stateRoot, teamId);
+  return JSON.parse(await readFile(paths.stateFile, "utf-8"));
 }
 
 const fsPort: LifecycleAdapterFsPort = {
@@ -194,7 +192,6 @@ function makePorts(shutdownCalls: Array<{ pid: number; workerId: string }> = [])
     shutdownProcess: async (pid, workerId) => {
       shutdownCalls.push({ pid, workerId });
     },
-    listRunIds: async () => ["run-1"],
   });
 }
 
@@ -219,61 +216,61 @@ describe("lifecycle CLI adapter", () => {
     expect(LIFECYCLE_HELP).toContain("shutdown");
   });
 
-  it("records heartbeat and lease into run-scoped supervisor events", async () => {
+  it("records heartbeat and lease into team-scoped supervisor events", async () => {
     const stateRoot = await makeProject();
-    await writeRunRoster(stateRoot, "run-1", [makeWorker()]);
+    await writeTeamRoster(stateRoot, "team-test", [makeWorker()]);
 
     const result = await executeLifecycleAdapterCommand(
       makePorts(),
-      ["lease", "worker-1", "--run", "run-1", "--expiry-ms", "60000"],
+      ["lease", "worker-1", "--team", "team-test", "--run", "run-1", "--expiry-ms", "60000"],
       { stateRoot, cwd: stateRoot },
     );
 
     expect(result.ok).toBe(true);
     expect(result.command).toBe("lease");
-    expect(result.runId).toBe("run-1");
+    expect(result.teamId).toBe("team-test");
 
-    const events = await readLifecycleEvents(stateRoot, "run-1");
+    const events = await readLifecycleEvents(stateRoot, "team-test");
     expect(events.map((event) => event.type)).toEqual([
       "heartbeat_recorded",
       "lease_acquired",
     ]);
 
-    const roster = await readRosterSnapshot(stateRoot, "run-1");
+    const roster = await readRosterSnapshot(stateRoot, "team-test");
     expect(roster.roster.members["worker-1"]?.lastHeartbeat).toBe(NOW);
   });
 
-  it("derives the latest run when run id is omitted", async () => {
+  it("records lease when run id is omitted", async () => {
     const stateRoot = await makeProject();
-    await writeRunRoster(stateRoot, "run-1", [makeWorker()]);
+    await writeTeamRoster(stateRoot, "team-test", [makeWorker()]);
 
     const result = await executeLifecycleAdapterCommand(
       makePorts(),
-      ["lease", "worker-1"],
+      ["lease", "worker-1", "--team", "team-test"],
       { stateRoot, cwd: stateRoot },
     );
 
     expect(result.ok).toBe(true);
-    expect(result.runId).toBe("run-1");
+    expect(result.teamId).toBe("team-test");
 
-    const events = await readLifecycleEvents(stateRoot, "run-1");
+    const events = await readLifecycleEvents(stateRoot, "team-test");
     expect(events.map((event) => event.type)).toEqual([
       "heartbeat_recorded",
       "lease_acquired",
     ]);
   });
 
-  it("reaper dry-run enumerates stale run-scoped workers without shutdown", async () => {
+  it("reaper dry-run enumerates stale team-scoped workers without shutdown", async () => {
     const stateRoot = await makeProject();
     const shutdownCalls: Array<{ pid: number; workerId: string }> = [];
-    await writeRunRoster(stateRoot, "run-1", [
+    await writeTeamRoster(stateRoot, "team-test", [
       makeWorker({ workerId: "fresh", lastHeartbeat: LATER }),
       makeWorker({ workerId: "stale", lastHeartbeat: "2026-06-07T11:00:00.000Z" }),
     ]);
 
     const result = await executeLifecycleAdapterCommand(
       makePorts(shutdownCalls),
-      ["reaper", "--run", "run-1"],
+      ["reaper", "--team", "team-test", "--run", "run-1"],
       { stateRoot, cwd: stateRoot },
     );
 
@@ -290,21 +287,21 @@ describe("lifecycle CLI adapter", () => {
   it("reaper execute reads worker pid state and appends shutdown audit events", async () => {
     const stateRoot = await makeProject();
     const shutdownCalls: Array<{ pid: number; workerId: string }> = [];
-    await writeRunRoster(stateRoot, "run-1", [
+    await writeTeamRoster(stateRoot, "team-test", [
       makeWorker({ workerId: "stale", lastHeartbeat: "2026-06-07T11:00:00.000Z" }),
     ]);
-    await writeWorkerState(stateRoot, "run-1", "stale", { pid: 12345 });
+    await writeWorkerState(stateRoot, "team-test", "stale", { pid: 12345 });
 
     const result = await executeLifecycleAdapterCommand(
       makePorts(shutdownCalls),
-      ["reaper", "--run", "run-1", "--execute"],
+      ["reaper", "--team", "team-test", "--run", "run-1", "--execute"],
       { stateRoot, cwd: stateRoot },
     );
 
     expect(result.ok).toBe(true);
     expect(shutdownCalls).toEqual([{ pid: 12345, workerId: "stale" }]);
 
-    const eventTypes = (await readLifecycleEvents(stateRoot, "run-1")).map(
+    const eventTypes = (await readLifecycleEvents(stateRoot, "team-test")).map(
       (event) => event.type,
     );
     expect(eventTypes).toContain("reaper_planned");
@@ -313,7 +310,7 @@ describe("lifecycle CLI adapter", () => {
     expect(eventTypes).toContain("reaper_executed");
 
     // Verify terminal state was written after shutdown
-    const workerState = await readWorkerState(stateRoot, "run-1", "stale");
+    const workerState = await readWorkerState(stateRoot, "team-test", "stale");
     expect(workerState.status).toBe("terminated");
     expect(workerState.endedAt).toBe(NOW);
     expect(workerState.exitSignal).toBe("SIGTERM");
@@ -322,11 +319,11 @@ describe("lifecycle CLI adapter", () => {
 
   it("shutdown execute reports missing pid as structured failure", async () => {
     const stateRoot = await makeProject();
-    await writeRunRoster(stateRoot, "run-1", [makeWorker()]);
+    await writeTeamRoster(stateRoot, "team-test", [makeWorker()]);
 
     const result = await executeLifecycleAdapterCommand(
       makePorts(),
-      ["shutdown", "worker-1", "--run", "run-1", "--execute"],
+      ["shutdown", "worker-1", "--team", "team-test", "--run", "run-1", "--execute"],
       { stateRoot, cwd: stateRoot },
     );
 
@@ -334,7 +331,7 @@ describe("lifecycle CLI adapter", () => {
     expect(result.errorCode).toBe("SHUTDOWN_FAILED");
     expect(result.error).toContain("Missing worker pid");
 
-    const eventTypes = (await readLifecycleEvents(stateRoot, "run-1")).map(
+    const eventTypes = (await readLifecycleEvents(stateRoot, "team-test")).map(
       (event) => event.type,
     );
     expect(eventTypes).toContain("shutdown_requested");
@@ -344,9 +341,9 @@ describe("lifecycle CLI adapter", () => {
   it("shutdown execute skips terminal worker state and does not call shutdownProcess", async () => {
     const stateRoot = await makeProject();
     const shutdownCalls: Array<{ pid: number; workerId: string }> = [];
-    await writeRunRoster(stateRoot, "run-1", [makeWorker()]);
+    await writeTeamRoster(stateRoot, "team-test", [makeWorker()]);
     // Write worker state with a terminal status that should be skipped
-    await writeWorkerState(stateRoot, "run-1", "worker-1", {
+    await writeWorkerState(stateRoot, "team-test", "worker-1", {
       pid: 12345,
       status: "terminated",
       endedAt: "2026-06-07T11:00:00.000Z",
@@ -355,7 +352,7 @@ describe("lifecycle CLI adapter", () => {
 
     const result = await executeLifecycleAdapterCommand(
       makePorts(shutdownCalls),
-      ["shutdown", "worker-1", "--run", "run-1", "--execute"],
+      ["shutdown", "worker-1", "--team", "team-test", "--run", "run-1", "--execute"],
       { stateRoot, cwd: stateRoot },
     );
 
@@ -364,16 +361,16 @@ describe("lifecycle CLI adapter", () => {
     expect(result.error).toContain("Missing worker pid");
     expect(shutdownCalls).toEqual([]);
 
-    const eventTypes = (await readLifecycleEvents(stateRoot, "run-1")).map(
+    const eventTypes = (await readLifecycleEvents(stateRoot, "team-test")).map(
       (event) => event.type,
     );
     expect(eventTypes).toContain("shutdown_requested");
     expect(eventTypes).toContain("shutdown_failed");
   });
 
-  it("team-run lifecycle branch reads run-scoped roster instead of empty state", async () => {
+  it("team-run lifecycle branch reads explicit team-scoped roster", async () => {
     const stateRoot = await makeProject();
-    await writeRunRoster(stateRoot, "run-1", [makeWorker()]);
+    await writeTeamRoster(stateRoot, "team-test", [makeWorker()]);
     const originalCwd = process.cwd();
     const originalWrite = process.stdout.write;
     const originalProjectStateDir = process.env.TAH_PROJECT_STATE_DIR;
@@ -387,7 +384,7 @@ describe("lifecycle CLI adapter", () => {
     }) as typeof process.stdout.write;
 
     try {
-      await runTeam(["lifecycle", "lease", "worker-1", "--run", "run-1"]);
+      await runTeam(["lifecycle", "lease", "worker-1", "--team", "team-test", "--run", "run-1"]);
     } finally {
       process.stdout.write = originalWrite;
       if (originalProjectStateDir === undefined) {
@@ -443,11 +440,11 @@ describe("lifecycle CLI adapter", () => {
 
   it("lifecycle-status surfaces missing_process via processExistence false for terminal-state worker", async () => {
     const stateRoot = await makeProject();
-    await writeRunRoster(stateRoot, "run-1", [
+    await writeTeamRoster(stateRoot, "team-test", [
       makeWorker({ workerId: "term", lastHeartbeat: "2026-06-07T11:00:00.000Z" }),
     ]);
     // Write terminal worker state
-    await writeWorkerState(stateRoot, "run-1", "term", {
+    await writeWorkerState(stateRoot, "team-test", "term", {
       pid: 99999,
       status: "exited",
       endedAt: "2026-06-07T11:00:00.000Z",
@@ -455,7 +452,7 @@ describe("lifecycle CLI adapter", () => {
 
     const result = await executeLifecycleAdapterCommand(
       makePorts(),
-      ["lifecycle-status", "term", "--run", "run-1"],
+      ["lifecycle-status", "term", "--team", "team-test", "--run", "run-1"],
       { stateRoot, cwd: stateRoot },
     );
 
@@ -467,10 +464,10 @@ describe("lifecycle CLI adapter", () => {
 
   it("lifecycle-status surfaces missing_process via injected checkProcessExists returning false", async () => {
     const stateRoot = await makeProject();
-    await writeRunRoster(stateRoot, "run-1", [
+    await writeTeamRoster(stateRoot, "team-test", [
       makeWorker({ workerId: "gone", lastHeartbeat: "2026-06-07T11:00:00.000Z" }),
     ]);
-    await writeWorkerState(stateRoot, "run-1", "gone", {
+    await writeWorkerState(stateRoot, "team-test", "gone", {
       pid: 12345,
       status: "running",
     });
@@ -481,16 +478,15 @@ describe("lifecycle CLI adapter", () => {
       nowIso: () => NOW,
       newEventId: (prefix: string, seed: string) => `${prefix}-${seed}-gone`,
       shutdownProcess: async () => {},
-      listRunIds: async () => ["run-1"],
-      checkProcessExists: async (input: { pid: number; workerId: string }) => {
-        checkCalled.push({ pid: input.pid, workerId: input.workerId });
+      checkProcessExists: async (input: { pid: number; memberId: string }) => {
+        checkCalled.push({ pid: input.pid, workerId: input.memberId });
         return false;
       },
     });
 
     const result = await executeLifecycleAdapterCommand(
       ports,
-      ["lifecycle-status", "gone", "--run", "run-1"],
+      ["lifecycle-status", "gone", "--team", "team-test", "--run", "run-1"],
       { stateRoot, cwd: stateRoot },
     );
 
@@ -503,12 +499,12 @@ describe("lifecycle CLI adapter", () => {
   it("reaper dry-run lists missing_process workers from terminal-state worker", async () => {
     const stateRoot = await makeProject();
     const shutdownCalls: Array<{ pid: number; workerId: string }> = [];
-    await writeRunRoster(stateRoot, "run-1", [
+    await writeTeamRoster(stateRoot, "team-test", [
       makeWorker({ workerId: "fresh", lastHeartbeat: LATER }),
       makeWorker({ workerId: "gone", lastHeartbeat: "2026-06-07T11:00:00.000Z" }),
     ]);
     // Write terminal state for the stale worker
-    await writeWorkerState(stateRoot, "run-1", "gone", {
+    await writeWorkerState(stateRoot, "team-test", "gone", {
       pid: 12345,
       status: "exited",
       endedAt: "2026-06-07T11:30:00.000Z",
@@ -516,7 +512,7 @@ describe("lifecycle CLI adapter", () => {
 
     const result = await executeLifecycleAdapterCommand(
       makePorts(shutdownCalls),
-      ["reaper", "--run", "run-1"],
+      ["reaper", "--team", "team-test", "--run", "run-1"],
       { stateRoot, cwd: stateRoot },
     );
 
@@ -537,10 +533,10 @@ describe("lifecycle CLI adapter", () => {
   it("reaper dry-run lists missing_process workers from injected checkProcessExists returning false", async () => {
     const stateRoot = await makeProject();
     const shutdownCalls: Array<{ pid: number; workerId: string }> = [];
-    await writeRunRoster(stateRoot, "run-1", [
+    await writeTeamRoster(stateRoot, "team-test", [
       makeWorker({ workerId: "gone", lastHeartbeat: "2026-06-07T11:00:00.000Z" }),
     ]);
-    await writeWorkerState(stateRoot, "run-1", "gone", {
+    await writeWorkerState(stateRoot, "team-test", "gone", {
       pid: 12345,
       status: "running",
     });
@@ -553,16 +549,15 @@ describe("lifecycle CLI adapter", () => {
       shutdownProcess: async (pid: number, workerId: string) => {
         shutdownCalls.push({ pid, workerId });
       },
-      listRunIds: async () => ["run-1"],
-      checkProcessExists: async (input: { pid: number; workerId: string }) => {
-        checkCalled.push({ pid: input.pid, workerId: input.workerId });
+      checkProcessExists: async (input: { pid: number; memberId: string }) => {
+        checkCalled.push({ pid: input.pid, workerId: input.memberId });
         return false;
       },
     });
 
     const result = await executeLifecycleAdapterCommand(
       ports,
-      ["reaper", "--run", "run-1"],
+      ["reaper", "--team", "team-test", "--run", "run-1"],
       { stateRoot, cwd: stateRoot },
     );
 
@@ -580,17 +575,17 @@ describe("lifecycle CLI adapter", () => {
 
   it("lifecycle-status uses default true when worker has running pid but no checkProcessExists port", async () => {
     const stateRoot = await makeProject();
-    await writeRunRoster(stateRoot, "run-1", [
+    await writeTeamRoster(stateRoot, "team-test", [
       makeWorker({ workerId: "ok", lastHeartbeat: LATER }),
     ]);
-    await writeWorkerState(stateRoot, "run-1", "ok", {
+    await writeWorkerState(stateRoot, "team-test", "ok", {
       pid: 12345,
       status: "running",
     });
 
     const result = await executeLifecycleAdapterCommand(
       makePorts(),
-      ["lifecycle-status", "ok", "--run", "run-1"],
+      ["lifecycle-status", "ok", "--team", "team-test", "--run", "run-1"],
       { stateRoot, cwd: stateRoot },
     );
 
@@ -602,10 +597,10 @@ describe("lifecycle CLI adapter", () => {
 
   it("default checkProcessExists returns true for EPERM (process exists but cannot signal)", async () => {
     const stateRoot = await makeProject();
-    await writeRunRoster(stateRoot, "run-1", [
+    await writeTeamRoster(stateRoot, "team-test", [
       makeWorker({ workerId: "eperm", lastHeartbeat: "2026-06-07T11:00:00.000Z" }),
     ]);
-    await writeWorkerState(stateRoot, "run-1", "eperm", {
+    await writeWorkerState(stateRoot, "team-test", "eperm", {
       pid: 99999,
       status: "running",
     });
@@ -617,9 +612,8 @@ describe("lifecycle CLI adapter", () => {
       nowIso: () => NOW,
       newEventId: (prefix: string, seed: string) => `${prefix}-${seed}-eperm`,
       shutdownProcess: async () => {},
-      listRunIds: async () => ["run-1"],
-      checkProcessExists: async (input: { pid: number; workerId: string }) => {
-        checkCalled.push({ pid: input.pid, workerId: input.workerId });
+      checkProcessExists: async (input: { pid: number; memberId: string }) => {
+        checkCalled.push({ pid: input.pid, workerId: input.memberId });
         // Simulate EPERM: process exists but we cannot signal it
         const err = new Error("EPERM: operation not permitted") as Error & { code: string };
         err.code = "EPERM";
@@ -629,7 +623,7 @@ describe("lifecycle CLI adapter", () => {
 
     const result = await executeLifecycleAdapterCommand(
       ports,
-      ["lifecycle-status", "eperm", "--run", "run-1"],
+      ["lifecycle-status", "eperm", "--team", "team-test", "--run", "run-1"],
       { stateRoot, cwd: stateRoot },
     );
 

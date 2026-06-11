@@ -67,7 +67,7 @@ describe("ToolCallValidator terminal input tools", () => {
       makeCall("terminal_write", {
         expectedInputSeq: 1,
         text:
-          "tiny-agent im send --channel default --kind status --text-stdin <<'IM'\n" +
+          "tiny-agent im send --from \"$TAH_IM_SELF_ENDPOINT\" --to \"$TAH_IM_USER_ENDPOINT\" --kind status --text-stdin <<'IM'\n" +
           "Done.\n" +
           "IM\n",
       }),
@@ -80,7 +80,7 @@ describe("ToolCallValidator terminal input tools", () => {
     const result = new ToolCallValidator().validate(
       makeCall("terminal_write", {
         expectedInputSeq: 1,
-        text: "tiny-agent im send --channel default --kind status --text 'hello'\n",
+        text: "tiny-agent im send --from \"$TAH_IM_SELF_ENDPOINT\" --to \"$TAH_IM_USER_ENDPOINT\" --kind status --text 'hello'\n",
       }),
     );
 
@@ -96,7 +96,7 @@ describe("ToolCallValidator terminal input tools", () => {
     const result = new ToolCallValidator().validate(
       makeCall("terminal_write", {
         expectedInputSeq: 1,
-        text: "im send --channel default --kind status --text-stdin <<'IM'\nDone.\nIM\n",
+        text: "im send --from \"$TAH_IM_SELF_ENDPOINT\" --to \"$TAH_IM_USER_ENDPOINT\" --kind status --text-stdin <<'IM'\nDone.\nIM\n",
       }),
     );
 
@@ -111,7 +111,7 @@ describe("ToolCallValidator terminal input tools", () => {
     const result = new ToolCallValidator().validate(
       makeCall("terminal_write", {
         expectedInputSeq: 1,
-        text: "node dist/cli/main.js im send --channel default --kind status --text-stdin <<'IM'\nDone.\nIM\n",
+        text: "node dist/cli/main.js im send --from \"$TAH_IM_SELF_ENDPOINT\" --to \"$TAH_IM_USER_ENDPOINT\" --kind status --text-stdin <<'IM'\nDone.\nIM\n",
       }),
     );
 
@@ -205,13 +205,15 @@ describe("ToolCallValidator terminal input tools", () => {
 describe("ToolCallValidator session tools", () => {
   it("validates session_observe and session_list", () => {
     const observe = new ToolCallValidator().validate(
-      makeCall("session_observe", { session: "tests" }),
+      makeCall("session_observe", { session: "tests", startLine: 12, lineCount: 8 }),
     );
     expect(observe.status).toBe("valid");
     if (observe.status === "valid") {
       expect(observe.request.request).toEqual({
         kind: "session_observe",
         session: "tests",
+        startLine: 12,
+        lineCount: 8,
       });
     }
 
@@ -219,6 +221,24 @@ describe("ToolCallValidator session tools", () => {
     expect(list.status).toBe("valid");
     if (list.status === "valid") {
       expect(list.request.request).toEqual({ kind: "session_list" });
+    }
+  });
+
+  it("rejects invalid session_observe paging arguments", () => {
+    const negativeStart = new ToolCallValidator().validate(
+      makeCall("session_observe", { startLine: -1 } as any),
+    );
+    expect(negativeStart.status).toBe("invalid");
+    if (negativeStart.status === "invalid") {
+      expect(negativeStart.observation.message).toContain("startLine");
+    }
+
+    const zeroLineCount = new ToolCallValidator().validate(
+      makeCall("session_observe", { lineCount: 0 } as any),
+    );
+    expect(zeroLineCount.status).toBe("invalid");
+    if (zeroLineCount.status === "invalid") {
+      expect(zeroLineCount.observation.message).toContain("positive integer");
     }
   });
 

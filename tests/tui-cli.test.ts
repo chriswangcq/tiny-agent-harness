@@ -2,39 +2,38 @@ import { describe, expect, it } from "vitest";
 import { buildTuiControllerOptions } from "../src/cli/tui.js";
 
 describe("buildTuiControllerOptions", () => {
-  it("passes the explicit runsDir to TuiController options", () => {
+  it("passes public IM state and endpoints to TuiController options", () => {
     const options = buildTuiControllerOptions({
       runDir: "/repo/.tiny-agent/runs/run-1",
       runsDir: "/repo/.tiny-agent/runs",
-      channel: "ops",
+      stateRoot: "/repo/.tiny-agent",
+      runId: "run-1",
       env: {},
     });
 
     expect(options).toEqual({
       runDir: "/repo/.tiny-agent/runs/run-1",
       runsDir: "/repo/.tiny-agent/runs",
-      imBaseDir: "/repo/.tiny-agent/runs/run-1/im",
-      channel: "ops",
+      stateRoot: "/repo/.tiny-agent",
+      runId: "run-1",
+      selfEndpoint: "run:run-1",
+      userEndpoint: "user:main",
     });
   });
 
-  it("uses TAH_IM_CHANNEL when no channel flag is provided", () => {
+  it("uses explicit public IM endpoint env overrides", () => {
     const options = buildTuiControllerOptions({
       runDir: "/repo/.tiny-agent/runs/run-2",
       runsDir: "/repo/.tiny-agent/runs",
-      env: { TAH_IM_CHANNEL: "from-env" },
+      stateRoot: "/repo/.tiny-agent",
+      runId: "run-2",
+      env: {
+        TAH_IM_SELF_ENDPOINT: "member:team-p6/coder-1",
+        TAH_IM_USER_ENDPOINT: "user:operator",
+      },
     });
 
-    expect(options.channel).toBe("from-env");
-  });
-
-  it("defaults channel when neither flag nor env is provided", () => {
-    const options = buildTuiControllerOptions({
-      runDir: "/repo/.tiny-agent/runs/run-3",
-      runsDir: "/repo/.tiny-agent/runs",
-      env: {},
-    });
-
-    expect(options.channel).toBe("default");
+    expect(options.selfEndpoint).toBe("member:team-p6/coder-1");
+    expect(options.userEndpoint).toBe("user:operator");
   });
 });

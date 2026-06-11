@@ -41,6 +41,7 @@ export function createCodeIntelRuntime(cwd: string): CodeIntelRuntime {
         workspaceRoot,
         serverCommand: config.languages.typescript.serverCommand,
         initializationOptions: config.languages.typescript.initializationOptions,
+        workspaceFiles: config.languages.typescript.workspaceFiles,
         limits: config.limits,
       }),
     collectWorkspaceDiagnostics: () =>
@@ -164,6 +165,10 @@ export function parseCodeIntelArgv(argv: string[]): CodeIntelCommand {
       const target = requiredPositional(command, rest);
       return { kind: "symbols", path: target };
     }
+    case "workspace-symbols": {
+      const query = requiredPositional(command, rest);
+      return { kind: "workspace-symbols", query };
+    }
     case "definition": {
       const target = requiredPositional(command, rest);
       return { kind: "definition", location: parseSourceLocation(target) };
@@ -176,13 +181,26 @@ export function parseCodeIntelArgv(argv: string[]): CodeIntelCommand {
         includeDeclaration: rest.includes("--include-declaration"),
       };
     }
+    case "implementation":
+    case "implementations": {
+      const target = requiredPositional(command, rest);
+      return { kind: "implementations", location: parseSourceLocation(target) };
+    }
+    case "incoming-calls": {
+      const target = requiredPositional(command, rest);
+      return { kind: "incoming-calls", location: parseSourceLocation(target) };
+    }
+    case "outgoing-calls": {
+      const target = requiredPositional(command, rest);
+      return { kind: "outgoing-calls", location: parseSourceLocation(target) };
+    }
     case "hover": {
       const target = requiredPositional(command, rest);
       return { kind: "hover", location: parseSourceLocation(target) };
     }
     default:
       throw new Error(
-        "Usage: tiny-agent codeq <capabilities|diagnostics|symbols|definition|references|hover> ... --json",
+        "Usage: tiny-agent codeq <capabilities|diagnostics|symbols|workspace-symbols|definition|references|implementations|incoming-calls|outgoing-calls|hover> ... --json",
       );
   }
 }
@@ -204,10 +222,18 @@ async function runBackendCommand(
       return backend.diagnostics(command);
     case "symbols":
       return backend.symbols(command.path);
+    case "workspace-symbols":
+      return backend.workspaceSymbols(command.query);
     case "definition":
       return backend.definition(command.location);
     case "references":
       return backend.references(command);
+    case "implementations":
+      return backend.implementations(command.location);
+    case "incoming-calls":
+      return backend.incomingCalls(command.location);
+    case "outgoing-calls":
+      return backend.outgoingCalls(command.location);
     case "hover":
       return backend.hover(command.location);
   }
@@ -225,6 +251,8 @@ function commandToQuery(command: CodeIntelCommand): CodeIntelQuery {
       };
     case "symbols":
       return { command: "symbols", path: command.path };
+    case "workspace-symbols":
+      return { command: "workspace-symbols", query: command.query };
     case "definition":
       return { command: "definition", location: command.location };
     case "references":
@@ -233,6 +261,12 @@ function commandToQuery(command: CodeIntelCommand): CodeIntelQuery {
         location: command.location,
         includeDeclaration: command.includeDeclaration,
       };
+    case "implementations":
+      return { command: "implementations", location: command.location };
+    case "incoming-calls":
+      return { command: "incoming-calls", location: command.location };
+    case "outgoing-calls":
+      return { command: "outgoing-calls", location: command.location };
     case "hover":
       return { command: "hover", location: command.location };
   }

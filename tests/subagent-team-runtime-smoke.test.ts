@@ -1,7 +1,7 @@
 /**
  * P6-09 local team runtime smoke tests.
  *
- * Exercises the core runtime loop using only pure FSM functions
+ * Exercises the core runtime loop using pure domain functions
  * (same patterns as existing P6-01~P6-06 unit tests).
  * No real filesystem, network, time, or external dependencies.
  *
@@ -24,24 +24,13 @@ import {
 
 // P6-02: Directory store
 import {
-  planTeamDirectoryLayout,
+  planTeamScopedDirectoryLayout,
   createTeamDirectorySnapshot,
   validateTeamDirectorySnapshot,
 } from "../src/subagent/directory-store.js";
 
-// P6-03: Team FSM
-import {
-  applySubAgentTeamEvent,
-  createSubAgentTeamState,
-  listActiveSubAgentAssignments,
-  summarizeSubAgentTeam,
-  type SubAgentTeamEvent,
-  type SubAgentTeamState,
-} from "../src/subagent/team.js";
-
 // P6-04: Local worker launcher planning
 import {
-  planRunScopedWorkerPaths,
   planWorkerLaunch,
   buildSpawnCommand,
   type WorkerLaunchParams,
@@ -75,17 +64,6 @@ function applyRosterEvents(
   return events.reduce((s, e) => {
     const r = applyTeamRosterEvent(s, e);
     if (r.status !== "applied") throw new Error(`roster ${e.eventId}: ${r.status}`);
-    return r.state;
-  }, state);
-}
-
-function applyTeamEvents(
-  state: SubAgentTeamState,
-  events: SubAgentTeamEvent[],
-): SubAgentTeamState {
-  return events.reduce((s, e) => {
-    const r = applySubAgentTeamEvent(s, e);
-    if (r.status !== "applied") throw new Error(`team ${e.eventId}: ${r.status}`);
     return r.state;
   }, state);
 }
@@ -179,77 +157,18 @@ describe("P6-01 team roster smoke", () => {
 
 describe("P6-02 directory store smoke", () => {
   it("plans team directory layout", () => {
-    const layout = planTeamDirectoryLayout("/home/project");
-    expect(layout.teamDir).toBe("/home/project/team");
-    expect(layout.stateFile).toBe("/home/project/team/state.json");
-    expect(layout.eventsFile).toBe("/home/project/team/events.jsonl");
+    const layout = planTeamScopedDirectoryLayout("/home/project", "team-p6-09");
+    expect(layout.teamDir).toBe("/home/project/teams/team-p6-09");
+    expect(layout.stateFile).toBe("/home/project/teams/team-p6-09/state.json");
+    expect(layout.eventsFile).toBe("/home/project/teams/team-p6-09/events.jsonl");
   });
 
   it("creates valid snapshot from roster", () => {
     const roster = createTeamRosterState("team-p6-09");
-    // API: createTeamDirectorySnapshot(roster, taskState, now, createdAt?)
-    const snapshot = createTeamDirectorySnapshot(
-      roster,
-      createSubAgentTeamState("team-p6-09"),
-      "2026-06-06T12:00:00.000Z",
-    );
+    const snapshot = createTeamDirectorySnapshot(roster, "2026-06-06T12:00:00.000Z");
     const validation = validateTeamDirectorySnapshot(snapshot);
     expect(validation.valid).toBe(true);
     expect(snapshot.teamId).toBe("team-p6-09");
-  });
-});
-
-// ===========================================================================
-// P6-03: Team FSM smoke
-// ===========================================================================
-
-describe("P6-03 team FSM smoke", () => {
-  it("runs full lifecycle: register → submit → assign → start → succeed", () => {
-    const state = applyTeamEvents(createSubAgentTeamState("team-p6-09"), [
-      { kind: "member_added", eventId: "e1", workerId: "w1", label: "coder" },
-      { kind: "task_submitted", eventId: "e2", taskId: "t1", title: "Smoke test" },
-      { kind: "task_assigned", eventId: "e3", taskId: "t1", workerId: "w1" },
-      { kind: "task_started", eventId: "e4", taskId: "t1" },
-      { kind: "task_succeeded", eventId: "e5", taskId: "t1", output: { ok: true } },
-    ]);
-
-    expect(state.tasks["t1"]!.status).toBe("succeeded");
-    expect(state.tasks["t1"]!.workerId).toBe("w1");
-    expect(state.workers["w1"]!.status).toBe("idle");
-    expect(state.workers["w1"]!.currentTaskId).toBeUndefined();
-    expect(state.appliedEventIds).toEqual(["e1", "e2", "e3", "e4", "e5"]);
-
-    const summary = summarizeSubAgentTeam(state);
-    expect(summary.totalTasks).toBe(1);
-    expect(summary.tasksByStatus.succeeded).toBe(1);
-  });
-
-  it("handles task failure", () => {
-    const state = applyTeamEvents(createSubAgentTeamState("team-p6-09"), [
-      { kind: "member_added", eventId: "e1", workerId: "w1", label: "coder" },
-      { kind: "task_submitted", eventId: "e2", taskId: "t1", title: "Failing" },
-      { kind: "task_assigned", eventId: "e3", taskId: "t1", workerId: "w1" },
-      { kind: "task_started", eventId: "e4", taskId: "t1" },
-      { kind: "task_failed", eventId: "e5", taskId: "t1", error: "failure" },
-    ]);
-
-    expect(state.tasks["t1"]!.status).toBe("failed");
-    expect(state.tasks["t1"]!.error).toBe("failure");
-    expect(state.workers["w1"]!.status).toBe("idle");
-    expect(summarizeSubAgentTeam(state).tasksByStatus.failed).toBe(1);
-  });
-
-  it("lists active assignments", () => {
-    const state = applyTeamEvents(createSubAgentTeamState("team-p6-09"), [
-      { kind: "member_added", eventId: "e1", workerId: "w1", label: "coder" },
-      { kind: "task_submitted", eventId: "e2", taskId: "t1", title: "T1" },
-      { kind: "task_assigned", eventId: "e3", taskId: "t1", workerId: "w1" },
-      { kind: "task_started", eventId: "e4", taskId: "t1" },
-    ]);
-
-    const active = listActiveSubAgentAssignments(state);
-    expect(active).toHaveLength(1);
-    expect(active[0].taskId).toBe("t1");
   });
 });
 
@@ -258,22 +177,17 @@ describe("P6-03 team FSM smoke", () => {
 // ===========================================================================
 
 describe("P6-04 worker launcher planning smoke", () => {
-  it("plans run-scoped worker paths", () => {
-    const paths = planRunScopedWorkerPaths("/home/project", "run-001", "coder-1");
-    // API returns RunScopedWorkerPaths: { runWorkerDir, runWorkerStateFile, runWorkerLogFile }
-    expect(paths.runWorkerDir).toContain("run-001");
-    expect(paths.runWorkerDir).toContain("coder-1");
-    expect(paths.runWorkerStateFile).toBeDefined();
-  });
-
   it("plans worker launch", () => {
     // API: planWorkerLaunch(params: WorkerLaunchParams)
-    // WorkerLaunchParams requires: stateRoot, runId, workerId, workspace, branch, channel, taskPrompt, role, allowedActions, now
+    // WorkerLaunchParams requires explicit team/member owner inputs.
     const params: WorkerLaunchParams = {
       workerId: "coder-1",
+      teamId: "team-p6-09",
+      memberId: "coder-1",
       role: "coder",
       stateRoot: "/home/project",
       runId: "run-001",
+      assignmentId: "assignment-smoke",
       workspace: "/home/project",
       branch: "codex/p6/09",
       channel: "p6-09",
@@ -293,7 +207,10 @@ describe("P6-04 worker launcher planning smoke", () => {
     // buildSpawnCommand takes a WorkerLaunchPlan
     const plan = planWorkerLaunch({
       workerId: "coder-1",
+      teamId: "team-p6-09",
+      memberId: "coder-1",
       runId: "run-001",
+      assignmentId: "assignment-smoke",
       stateRoot: "/home/project",
       branch: "codex/p6/09",
       channel: "p6-09",
@@ -305,9 +222,7 @@ describe("P6-04 worker launcher planning smoke", () => {
     });
     const cmd = buildSpawnCommand(plan);
     expect(cmd.command).toBeDefined();
-    // The spawn command uses --channel <channel> not workerId directly
-    expect(cmd.args.join(" ")).toContain("--channel");
-    expect(cmd.args.join(" ")).toContain("p6-09");
+    expect(cmd.args.join(" ")).not.toContain("--channel");
     expect(cmd.args.join(" ")).toContain("--state-dir");
   });
 });
@@ -387,7 +302,7 @@ describe("P6-06 handoff evidence smoke", () => {
 // ===========================================================================
 
 describe("E2E runtime chain", () => {
-  it("chains: add member → create team → plan launch → project status → record evidence", () => {
+  it("chains: add member -> create team -> plan launch -> project status -> record evidence", () => {
     // 1. Team roster
     const roster = applyRosterEvents(createTeamRosterState("team-p6-09"), [
       {
@@ -399,29 +314,18 @@ describe("E2E runtime chain", () => {
     expect(lookupMember(roster, "coder-1")).toBeDefined();
 
     // 2. Directory store snapshot
-    const snapshot = createTeamDirectorySnapshot(
-      roster,
-      createSubAgentTeamState("team-p6-09"),
-      "2026-06-06T12:00:00.000Z",
-    );
+    const snapshot = createTeamDirectorySnapshot(roster, "2026-06-06T12:00:00.000Z");
     expect(validateTeamDirectorySnapshot(snapshot).valid).toBe(true);
 
-    // 3. Team FSM
-    const teamState = applyTeamEvents(createSubAgentTeamState("team-p6-09"), [
-      { kind: "member_added", eventId: "te1", workerId: "coder-1", label: "coder" },
-      { kind: "task_submitted", eventId: "te2", taskId: "t1", title: "E2E task" },
-      { kind: "task_assigned", eventId: "te3", taskId: "t1", workerId: "coder-1" },
-      { kind: "task_started", eventId: "te4", taskId: "t1" },
-      { kind: "task_succeeded", eventId: "te5", taskId: "t1", output: { ok: true } },
-    ]);
-    expect(teamState.tasks["t1"]!.status).toBe("succeeded");
-
-    // 4. Worker launcher plan
+    // 3. Worker launcher plan
     const plan = planWorkerLaunch({
       workerId: "coder-1",
+      teamId: "team-p6-09",
+      memberId: "coder-1",
       role: "coder",
       stateRoot: "/tmp/e2e-test",
       runId: "run-e2e-001",
+      assignmentId: "t1",
       workspace: "/tmp/e2e-test",
       branch: "codex/p6/09",
       channel: "p6-09",
@@ -431,7 +335,7 @@ describe("E2E runtime chain", () => {
     });
     expect(plan.runId).toBe("run-e2e-001");
 
-    // 5. Status projector
+    // 4. Status projector
     const proj = projectWorkerStatus({
       member: makeMember({
         memberId: "coder-1",
@@ -449,7 +353,7 @@ describe("E2E runtime chain", () => {
     });
     expect(proj.status).toBe("healthy");
 
-    // 6. Handoff evidence
+    // 5. Handoff evidence
     const evidence = makeEvidence();
     expect(validateHandoffEvidence(evidence).valid).toBe(true);
     const summary = summarizeHandoffEvidence(evidence);

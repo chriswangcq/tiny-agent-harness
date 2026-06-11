@@ -56,7 +56,7 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("terminal.inputSeq");
     expect(prompt.messages[0]!.content).toContain("screen.text");
     expect(prompt.messages[0]!.content).toContain("screen.logRef.path");
-    expect(prompt.messages[0]!.content).toContain("tiny-agent im send --channel");
+    expect(prompt.messages[0]!.content).toContain("tiny-agent im send --from \"$TAH_IM_SELF_ENDPOINT\" --to \"$TAH_IM_USER_ENDPOINT\"");
     expect(prompt.messages[0]!.content).toContain("--text-stdin");
     expect(prompt.messages[0]!.content).toContain("CLI capabilities are installed on PATH");
     expect(prompt.messages[0]!.content).toContain("`tiny-agent im`, `tiny-agent skill`, `tiny-agent codeq`, `tiny-agent mcp`, and `tiny-agent team`");

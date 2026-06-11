@@ -39,6 +39,27 @@ describe("McpJsonRpcClient", () => {
     expect(transport.write).toHaveBeenCalled();
   });
 
+  it("initialize uses configured protocol version and sends initialized notification", async () => {
+    client.disconnect();
+    transport = makeFakeTransport();
+    client = new McpJsonRpcClient(transport, 500, { protocolVersion: "2025-03-26" });
+
+    const p = client.initialize();
+    const initMessage = JSON.parse((transport.write as any).mock.calls[0][0]);
+    expect(initMessage.method).toBe("initialize");
+    expect(initMessage.params.protocolVersion).toBe("2025-03-26");
+
+    transport.simulate(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { ok: true } }) + "\n");
+    await expect(p).resolves.toEqual({ ok: true });
+
+    const notification = JSON.parse((transport.write as any).mock.calls[1][0]);
+    expect(notification).toMatchObject({
+      jsonrpc: "2.0",
+      method: "notifications/initialized",
+    });
+    expect(notification.id).toBeUndefined();
+  });
+
   it("chunked response", async () => {
     const p = client.sendRequest("test", {});
     transport.simulate('{ "jsonrpc": "2.0", "id": 1, "result');

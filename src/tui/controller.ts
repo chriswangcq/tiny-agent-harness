@@ -4,61 +4,92 @@
 //   TranscriptReader  → reads transcript.jsonl + state.json
 //   ViewModelBuilder  → converts events into TuiViewModel
 //   BlessedRenderer   → renders the view model to the terminal
-//   ImCliTransport    → reads IM inbox/outbox, sends user messages
+//   PublicImService   → projects public IM channel logs and posts user messages
 //
-// Polls the transcript file and IM at a configurable interval and
+// Polls the transcript file and public IM at a configurable interval and
 // re-renders on each tick.
 
-import { TranscriptReader } from "./transcript-reader.js";
-import { ViewModelBuilder } from "./view-model-builder.js";
-import { BlessedRenderer } from "./renderer.js";
-import { ImCliTransport } from "../im/transport.js";
-import { SessionLogTailReader } from "./session-log-tail.js";
+import * as crypto from "node:crypto";
 import * as path from "node:path";
+import {
+  DEFAULT_RUN_USER_ENDPOINT,
+  PublicImService,
+  createNodeImStore,
+  createRunImSelfEndpoint,
+  type PublicImMessage,
+} from "../im/index.js";
+import type { AgentMessage, UserMessage } from "../types/environment.js";
+import { BlessedRenderer } from "./renderer.js";
 import { scanRunIndex } from "./run-index-reader.js";
+import { SessionLogTailReader } from "./session-log-tail.js";
+import { TranscriptReader } from "./transcript-reader.js";
+import type { SessionTailUpdate, TuiKey, TuiViewModel } from "./types.js";
+import { ViewModelBuilder } from "./view-model-builder.js";
+
+export type TuiRendererPort = {
+  render(view: TuiViewModel): void;
+  onKey(handler: (key: TuiKey) => void): void;
+  onMessage(handler: (text: string) => void): void;
+  close(): void;
+};
+
+export type TuiSessionLogPort = {
+  read(): Promise<SessionTailUpdate[]>;
+  dispose(): void;
+};
 
 export type TuiControllerOptions = {
   runDir: string;
-  imBaseDir: string;
-  channel?: string;
+  stateRoot: string;
+  runId: string;
+  selfEndpoint?: string;
+  userEndpoint?: string;
   pollIntervalMs?: number;
   runsDir?: string;
+  imService?: PublicImService;
+  builder?: ViewModelBuilder;
+  renderer?: TuiRendererPort;
+  sessionLogs?: TuiSessionLogPort;
 };
 
 export class TuiController {
   private readonly reader: TranscriptReader;
   private readonly builder: ViewModelBuilder;
-  private readonly renderer: BlessedRenderer;
-  private readonly im: ImCliTransport;
-  private readonly sessionLogs: SessionLogTailReader;
-  private readonly channel: string;
+  private readonly renderer: TuiRendererPort;
+  private readonly im: PublicImService;
+  private readonly sessionLogs: TuiSessionLogPort;
+  private readonly stateRoot: string;
+  private readonly selfEndpoint: string;
+  private readonly userEndpoint: string;
   private readonly pollIntervalMs: number;
   private readonly runsDir?: string;
   private timer: ReturnType<typeof setInterval> | null = null;
   private polling = false;
-  private imInboxCursor: string | undefined;
-  private imOutboxCursor: string | undefined;
+  private imUserCursor: string | undefined;
+  private imAgentCursor: string | undefined;
 
   constructor(options: TuiControllerOptions) {
     this.reader = new TranscriptReader(options.runDir);
-    this.builder = new ViewModelBuilder();
-    this.renderer = new BlessedRenderer();
-    this.sessionLogs = new SessionLogTailReader({
-      sessionsDir: path.join(options.runDir, "sessions"),
-    });
-    this.im = new ImCliTransport({
-      baseDir: options.imBaseDir,
-    });
-    this.channel = options.channel ?? "default";
+    this.builder = options.builder ?? new ViewModelBuilder();
+    this.renderer = options.renderer ?? new BlessedRenderer();
+    this.sessionLogs =
+      options.sessionLogs ??
+      new SessionLogTailReader({
+        sessionsDir: path.join(options.runDir, "sessions"),
+      });
+    this.im = options.imService ?? createTuiPublicImService();
+    this.stateRoot = options.stateRoot;
+    this.selfEndpoint = options.selfEndpoint ?? createRunImSelfEndpoint(options.runId);
+    this.userEndpoint = options.userEndpoint ?? DEFAULT_RUN_USER_ENDPOINT;
     this.pollIntervalMs = options.pollIntervalMs ?? 100;
     this.runsDir = options.runsDir;
   }
 
   start(): void {
-    void this.poll();
+    void this.pollOnce();
 
     this.timer = setInterval(() => {
-      void this.poll();
+      void this.pollOnce();
     }, this.pollIntervalMs);
 
     this.renderer.onKey((key) => {
@@ -69,7 +100,7 @@ export class TuiController {
     });
 
     this.renderer.onMessage(async (text: string) => {
-      await this.sendUserMessage(text);
+      await this.submitUserMessage(text);
     });
   }
 
@@ -82,39 +113,31 @@ export class TuiController {
     this.renderer.close();
   }
 
-  private async poll(): Promise<void> {
+  async pollOnce(): Promise<void> {
     if (this.polling) {
       return;
     }
     this.polling = true;
     try {
-      // Read new transcript events
       const { events } = this.reader.readNewEvents();
       for (const event of events) {
         this.builder.applyEvent(event);
       }
 
-      // Read latest state
       const state = this.reader.readState();
       if (state) {
         this.builder.applyState(state);
       }
 
-      // Poll IM inbox for user messages
-      this.pollImInbox();
+      await this.pollPublicImUserMessages();
+      await this.pollPublicImAgentMessages();
 
-      // Poll IM outbox for agent messages
-      this.pollImOutbox();
-
-      // Read live session logs for display-only PTY pane updates. This does not
-      // mutate runtime state or model-visible context.
       try {
         this.builder.applySessionLogTails(await this.sessionLogs.read());
       } catch {
         // Best-effort display projection; transcript/state rendering continues.
       }
 
-      // Optional: scan runs directory for run browser data
       if (this.runsDir) {
         try {
           const runRows = scanRunIndex(this.runsDir);
@@ -124,7 +147,6 @@ export class TuiController {
         }
       }
 
-      // Render
       const viewModel = this.builder.getViewModel();
       this.renderer.render(viewModel);
     } finally {
@@ -132,48 +154,99 @@ export class TuiController {
     }
   }
 
-  private pollImInbox(): void {
+  private async pollPublicImUserMessages(): Promise<void> {
     try {
-      const result = this.im.receiveSync({
-        channel: this.channel,
-        cursor: this.imInboxCursor,
+      const result = await this.im.readChannelMessages({
+        stateRoot: this.stateRoot,
+        from: this.userEndpoint,
+        to: this.selfEndpoint,
+        cursor: this.imUserCursor,
       });
-      for (const msg of result.messages) {
-        this.builder.addImUserMessage(msg);
+      for (const message of result.messages) {
+        if (message.role === "user") {
+          this.builder.addImUserMessage(publicToUserMessage(message));
+        }
       }
       if (result.nextCursor) {
-        this.imInboxCursor = result.nextCursor;
+        this.imUserCursor = result.nextCursor;
       }
     } catch {
-      // Best-effort — IM may not exist yet
+      // Best-effort — public IM may not exist yet.
     }
   }
 
-  private pollImOutbox(): void {
+  private async pollPublicImAgentMessages(): Promise<void> {
     try {
-      const result = this.im.readOutboxSync({
-        channel: this.channel,
-        cursor: this.imOutboxCursor,
+      const result = await this.im.readChannelMessages({
+        stateRoot: this.stateRoot,
+        from: this.selfEndpoint,
+        to: this.userEndpoint,
+        cursor: this.imAgentCursor,
       });
-      for (const msg of result.messages) {
-        this.builder.addImAgentMessage(msg);
+      for (const message of result.messages) {
+        if (message.role === "agent") {
+          this.builder.addImAgentMessage(publicToAgentMessage(message));
+        }
       }
       if (result.nextCursor) {
-        this.imOutboxCursor = result.nextCursor;
+        this.imAgentCursor = result.nextCursor;
       }
     } catch {
-      // Best-effort
+      // Best-effort — public IM may not exist yet.
     }
   }
 
-  private async sendUserMessage(text: string): Promise<void> {
-    const id = `tui-msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    await this.im.post({
-      id,
-      channel: this.channel,
-      role: "user",
+  async submitUserMessage(text: string): Promise<void> {
+    await this.im.postMessage({
+      stateRoot: this.stateRoot,
+      from: this.userEndpoint,
+      to: this.selfEndpoint,
       text,
-      createdAt: new Date().toISOString(),
+      metadata: { source: "tui" },
     });
   }
+}
+
+function createTuiPublicImService(): PublicImService {
+  return new PublicImService({
+    store: createNodeImStore(),
+    clock: { nowIso: () => new Date().toISOString() },
+    ids: {
+      newMessageId: (seed) => {
+        const scope = seed.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "");
+        return `tui-im-${scope}-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
+      },
+    },
+  });
+}
+
+function publicToUserMessage(message: PublicImMessage): UserMessage {
+  return {
+    id: message.id,
+    channel: message.channelId,
+    role: "user",
+    text: message.text,
+    createdAt: message.createdAt,
+    metadata: publicMessageMetadata(message),
+  };
+}
+
+function publicToAgentMessage(message: PublicImMessage): AgentMessage {
+  return {
+    id: message.id,
+    channel: message.channelId,
+    role: "agent",
+    kind: message.kind === "error" ? "error" : "status",
+    text: message.text,
+    createdAt: message.createdAt,
+    metadata: publicMessageMetadata(message),
+  };
+}
+
+function publicMessageMetadata(message: PublicImMessage): Record<string, string> {
+  return {
+    from: message.from,
+    to: message.to,
+    pairId: message.pairId,
+  };
 }

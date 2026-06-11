@@ -33,6 +33,8 @@ export type PtyReadResult = {
 export type PtyReadOptions = {
   waitForPromptMs?: number;
   afterPromptSeq?: number;
+  screenStartLine?: number;
+  screenLineCount?: number;
 };
 
 export type StructuredLogEvent = {

@@ -9,7 +9,7 @@ describe("main CLI help", () => {
     expect(HELP_TEXT).toContain("tiny-agent skill <subcommand>");
     expect(HELP_TEXT).toContain("tiny-agent codeq <subcommand>");
     expect(HELP_TEXT).toContain("tiny-agent team <group>");
-    expect(HELP_TEXT).toContain("tiny-agent ui  --channel <ch> --resume <runId|latest>");
+    expect(HELP_TEXT).toContain("tiny-agent ui  --resume <runId|latest>");
     expect(HELP_TEXT).toContain("team lifecycle <subcommand>");
     expect(HELP_TEXT).toContain("terminal/session tools");
     expect(HELP_TEXT).not.toContain("tiny-agent file <subcommand>");

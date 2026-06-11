@@ -26,7 +26,7 @@ Provider credentials 和默认模型配置不属于 project state，放在用户
 
 `<projectId>` 由项目根目录 basename 和项目根绝对路径 sha256 短 hash 确定，例如 `tiny-agent-harness-4f2a1b7c9e01`。这样 runtime 状态不污染源码目录，同时同一项目的 `tiny-agent` 主入口及其 `im`、`skill`、`tui`、`mcp`、`team` 子命令仍看到同一套状态。
 
-当前实现进一步把 run 产生的可变状态全部收敛到 `runs/<runId>/`：IM inbox/outbox、environment events、PTY session log、skill-runs、model context 和 debug artifacts 都随 run 自包含。项目级目录只保留共享 skill definitions、run 容器、启动器日志、锁和临时文件。
+当前实现进一步把 run 产生的执行状态收敛到 `runs/<runId>/`：environment events、PTY session log、skill-runs、model context 和 debug artifacts 都随 run 自包含。public IM 是 project-scoped 服务，通过 endpoint pair、directional channel log 和 run binding 关联具体 run。项目级目录保留跨 run 共享的 skill definitions、MCP server registry、IM、team 控制面、run 容器、启动器日志、锁和临时文件。
 
 ## State Root Resolution
 
@@ -56,7 +56,7 @@ Resolver 不自动发现、读取或迁移项目内 `.tiny-agent/project.json`�
 规则：
 
 - CLI 输出给 agent 的路径可以使用绝对 state-root 路径，方便 TUI 或外部工具直接打开。
-- PTY 内 `TAH_STATE_DIR` 等于当前 run dir，用于 MCP 等 run-scoped CLI；`TAH_PROJECT_STATE_DIR` 等于 home project state root，用于 team lifecycle/reaper 等跨 run 控制面。
+- PTY 内 `TAH_STATE_DIR` 等于当前 run dir，用于 skill-runs、environment 等 run-scoped CLI；`TAH_PROJECT_STATE_DIR` 和 `TAH_IM_STATE_DIR` 等于 home project state root，用于 public IM、MCP registry、team lifecycle/reaper 等跨 run 控制面。
 - 不同项目不能共享同一个 state root，除非用户显式传 `--state-dir`。
 
 ## CLI Surface
@@ -104,14 +104,31 @@ sub-agent runtime       # 当前只有纯 domain/FSM，不独立调度子进程
   locks/
     project.lock/
     runs.latest.lock/
+    mcp-registry.lock/
     run-<runId>.lock/
     run-<runId>.transcript.lock/
     run-<runId>.environment.events.lock/
-    run-<runId>.im-channel-<channel>.lock/
+    im-channel-<channelId>.lock/
+    im-run-binding-<runId>.lock/
     run-<runId>.skill-run-<skillRunId>.lock/
-    run-<runId>.mcp-registry.lock/
     session-<sessionId>.lock/
     skills.registry.lock/
+
+  mcp-servers.json
+
+  im/
+    endpoints/
+      <endpointId>.json
+    pairs/
+      <pairId>.json
+    channels/
+      <channelId>/
+        meta.json
+        messages.jsonl
+        cursors/
+          <consumerId>.cursor
+    run-bindings/
+      <runId>.json
 
   runs/
     latest.json
@@ -119,12 +136,6 @@ sub-agent runtime       # 当前只有纯 domain/FSM，不独立调度子进程
       state.json
       transcript.jsonl
       session.json
-
-      im/
-        default.inbox.jsonl
-        default.outbox.jsonl
-        cursors/
-          default.cursor
 
       environment/
         events.jsonl
@@ -144,8 +155,6 @@ sub-agent runtime       # 当前只有纯 domain/FSM，不独立调度子进程
           step-0000-thinking.prompt.txt
         thinking/
           step-0000-thinking.trace.txt
-
-      mcp-servers.json
 
   skills/
     coding-review/
@@ -168,10 +177,10 @@ sub-agent runtime       # 当前只有纯 domain/FSM，不独立调度子进程
 - `runs/<runId>/debug/prompts/` 保存由 transcript/model-context 通过 `promptRef` 引用的大 prompt artifact。
 - `runs/<runId>/debug/thinking/` 保存 streamed thinking trace artifact；transcript 只保存 `traceRef`。
 - `runs/<runId>/environment/events.jsonl` 是本 run 的外部环境事件 ledger。
-- `runs/<runId>/im/` 是本 run 的 local mock IM inbox/outbox。
-- `runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log` 是完整 raw PTY 输出，observation 只返回一屏 semantic terminal viewport，并通过 `screen.logRef.path` 指向该日志。
+- `im/` 是 project-scoped public IM store；run 只通过 `im/run-bindings/<runId>.json` 关联 endpoint pair。
+- `runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log` 是完整 raw PTY 输出，observation 返回 bounded semantic visual window，并通过 `screen.window` 给出 visual-line cursor、通过 `screen.logRef.path` 指向 raw log。
 - `runs/<runId>/skill-runs/<id>/execution.txt` 和 `review-task.txt` 只给 agent 通过 bash 原生命令读取，不直接塞进 prompt。
-- `runs/<runId>/mcp-servers.json` 是可选 run-scoped MCP server registry。
+- `mcp-servers.json` 是 project-scoped MCP server registry；MCP tool invocation 仍通过 run-scoped PTY/transcript/session log 审计。
 
 ## File Types
 
@@ -186,8 +195,8 @@ project.json
 runs/<runId>/state.json
 runs/<runId>/session.json
 runs/<runId>/skill-runs/<skillRunId>/state.json
-runs/<runId>/im/cursors/<channel>.cursor
-runs/<runId>/mcp-servers.json
+im/channels/<channelId>/cursors/<consumerId>.cursor
+mcp-servers.json
 ```
 
 写入规则：
@@ -218,8 +227,7 @@ type SnapshotMeta = {
 ```text
 runs/<runId>/transcript.jsonl
 runs/<runId>/environment/events.jsonl
-runs/<runId>/im/<channel>.inbox.jsonl
-runs/<runId>/im/<channel>.outbox.jsonl
+im/channels/<channelId>/messages.jsonl
 ```
 
 写入规则：
@@ -353,7 +361,8 @@ runs.latest.lock
 
 ### Bash Session
 
-`tiny-agent` 内部的 ManagedTerminalRuntime 是 session raw log owner。
+默认 `tiny-agent run` 的 TerminalHost 子进程是 session raw log owner。
+ManagedTerminalRuntime 是 TerminalHost 进程内部的 PTY/session 实现细节。
 
 它负责写：
 
@@ -383,7 +392,7 @@ Environment 是 run-scoped 外部事件 ledger。它统一建模 IM、新用户�
 写入者：
 
 - `tiny-agent im` append `user_message_received`
-- ManagedTerminalRuntime append `session_output_changed`、`session_returned_to_prompt`、`session_exited` 等 session 事件
+- TerminalHost append `session_output_changed`、`session_returned_to_prompt`、`session_exited` 等 session 事件
 - `tiny-agent skill` append `skill_run_started`、`skill_run_closed`、`skill_review_pending`、`skill_review_completed`
 - `tiny-agent mcp` 可 append MCP registry/tool-call 相关事件
 
@@ -410,25 +419,29 @@ run-<runId>.environment.events.lock
 
 cursor 不能在 reminder 入 transcript 之前提前移动。`io_wait` 统一采用优先级等待口径：窄 wait 也能被更高 level 的用户消息打断，避免用户发来的新指令卡在下一轮之外。
 
-### IM
+### Public IM
 
-`tiny-agent im` 负责本地 mock channel。
+`tiny-agent im` 负责 project-scoped public IM。
 
 文件：
 
 ```text
-runs/<runId>/im/<channel>.inbox.jsonl
-runs/<runId>/im/<channel>.outbox.jsonl
-runs/<runId>/im/cursors/<channel>.cursor
+im/endpoints/<endpointId>.json
+im/pairs/<pairId>.json
+im/channels/<channelId>/meta.json
+im/channels/<channelId>/messages.jsonl
+im/channels/<channelId>/cursors/<consumerId>.cursor
+im/run-bindings/<runId>.json
 ```
 
 锁：
 
 ```text
-run-<runId>.im-channel-<channel>.lock
+im-channel-<channelId>.lock
+im-run-binding-<runId>.lock
 ```
 
-`tiny-agent im post --run latest` 会写入最新 run 的 IM inbox；如果 PTY 已注入 `TAH_IM_DIR`，agent 在 shell 里执行 `tiny-agent im send/recv` 会自动落到当前 run。`tiny-agent im listen` 不能长期持锁。它只能循环短暂读文件，然后 sleep / wait。
+`tiny-agent im post --from <endpoint> --to <endpoint>` append 到发送方向的 channel log。`tiny-agent im recv --as <endpoint> --with <endpoint> --cursor <id>` 读取 cursor 后的新消息；`tiny-agent im ack --as <endpoint> --with <endpoint> --message-id <id>` 推进 consumer cursor。Run poller 使用 `run-recv/run-ack` 按 `im/run-bindings/<runId>.json` 汇总多个 pair。`tiny-agent im listen` 不能长期持锁；它只能循环短暂读文件，然后 sleep / wait。
 
 ### Skill
 
@@ -470,22 +483,21 @@ run-<runId>.skill-run-<id>.lock -> skills.registry.lock -> run-<runId>.environme
 
 ### MCP Registry
 
-`tiny-agent mcp` 负责 run-scoped MCP server registry 和 MCP tool invocation。它不是 model-visible provider tool；agent 只能通过 PTY 中的 `tiny-agent mcp ...` 命令使用它。
+`tiny-agent mcp` 负责 project-scoped MCP server registry 和 MCP tool invocation。它不是 model-visible provider tool；agent 只能通过 PTY 中的 `tiny-agent mcp ...` 命令使用它。
 
 文件：
 
 ```text
-runs/<runId>/mcp-servers.json
+mcp-servers.json
 ```
 
 锁：
 
 ```text
-run-<runId>.mcp-registry.lock
-run-<runId>.environment.events.lock
+mcp-registry.lock
 ```
 
-`tiny-agent mcp add/remove/list/tools/call` 读取 `TAH_STATE_DIR`。在 agent PTY 内，`TAH_STATE_DIR` 等于当前 run dir，因此 registry 默认随 run 打包；人工调试可以显式传 `--state-dir`。
+`tiny-agent mcp add/remove/list/tools/call` 默认优先读取 `TAH_PROJECT_STATE_DIR`，因此 agent PTY 内 registry 跨 run 共享；人工调试可以显式传 `--state-dir`。如果没有 `TAH_PROJECT_STATE_DIR`，CLI 会回退到 `TAH_STATE_DIR` 或默认 project resolver。Registry 可保存 stdio server、Streamable HTTP remote server 和 legacy HTTP+SSE server 配置；`mcp list` 输出会脱敏敏感 headers。具体 MCP 调用仍通过当前 run 的 PTY、transcript 和 session log 留痕。
 
 ## Deadlock Avoidance
 
@@ -554,7 +566,7 @@ src/state/jsonl.ts      # locked append/read by offset
 
 然后按这个顺序接 CLI：
 
-1. `tiny-agent im`：最小 JSONL inbox/outbox，验证锁和 append。
+1. `tiny-agent im`：最小 public IM channel log，验证锁、append 和 cursor。
 2. `tiny-agent skill`：接 state root、skill-run lock、environment event。
 3. `tiny-agent`：接真实 file-backed Environment、run lease、latest pointer。
 4. `tiny-agent tui`：只读 state，不拿写锁。

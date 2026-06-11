@@ -71,6 +71,18 @@ const sessionObserveSchema: JsonSchema = {
       description:
         "Optional PTY session id to observe without changing the current session.",
     },
+    startLine: {
+      type: "integer",
+      minimum: 0,
+      description:
+        "Optional 0-based visual line cursor. When omitted, observe the latest window.",
+    },
+    lineCount: {
+      type: "integer",
+      minimum: 1,
+      description:
+        "Optional number of visual lines to return. Defaults to the terminal row count.",
+    },
   },
   additionalProperties: false,
 };
@@ -149,7 +161,7 @@ export const TERMINAL_KEY_TOOL_DEFINITION: ToolDefinition = {
 export const SESSION_OBSERVE_TOOL_DEFINITION: ToolDefinition = {
   name: "session_observe",
   description:
-    "Observe a PTY session without sending input. Omit session to observe the current session. The observation is one terminal screen plus terminal facts.",
+    "Observe a PTY session without sending input. Omit session to observe the current session. Supports visual-line paging with startLine and lineCount; omit startLine for the latest window.",
   inputSchema: sessionObserveSchema,
 };
 

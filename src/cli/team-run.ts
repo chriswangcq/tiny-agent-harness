@@ -48,10 +48,9 @@ export async function runTeam(args: string[]): Promise<void> {
     return;
   }
 
-  const normalizedArgs = await normalizeTextStdin(options.commandArgs);
   const result = await executeTeamAdapterCommand(
     createNodeTeamCliAdapterPorts(),
-    normalizedArgs,
+    options.commandArgs,
     { stateRoot: resolveTeamStateRoot(options.stateDir), cwd },
   );
   process.stdout.write(JSON.stringify(result));
@@ -110,23 +109,4 @@ function parseTeamRunOptions(args: string[]): {
   }
 
   return { commandArgs, stateDir };
-}
-
-async function normalizeTextStdin(args: string[]): Promise<string[]> {
-  if (!args.includes("--text-stdin")) {
-    return args;
-  }
-  if (args.includes("--text")) {
-    return args;
-  }
-  const text = await readStdinText(process.stdin as AsyncIterable<Buffer | string>);
-  return [...args.filter((arg) => arg !== "--text-stdin"), "--text", text];
-}
-
-async function readStdinText(stdin: AsyncIterable<Buffer | string>): Promise<string> {
-  let text = "";
-  for await (const chunk of stdin) {
-    text += typeof chunk === "string" ? chunk : chunk.toString("utf8");
-  }
-  return text;
 }

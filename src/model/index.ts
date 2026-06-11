@@ -1,5 +1,33 @@
-export { DeepSeekFimAdapter } from "./adapter.js";
-export type { DeepSeekFimConfig } from "./adapter.js";
+export {
+  createModelGatewayPort,
+  createModelGatewayProcessRecord,
+  modelGatewayProcessId,
+  parseModelGatewayRequest,
+  serializeModelGatewayRequest,
+  serializeModelGatewayResponse,
+} from "./gateway.js";
+export type {
+  ModelGatewayGenerateRequest,
+  ModelGatewayPortDeps,
+  ModelGatewayRequest,
+  ModelGatewayResponse,
+  ModelGatewayShutdownRequest,
+  ModelGatewayTransportPort,
+} from "./gateway.js";
+export {
+  handleModelGatewayRequest,
+  serveModelGateway,
+} from "./gateway-host.js";
+export {
+  ChildProcessModelGatewayTransport,
+} from "./gateway-transport.js";
+export {
+  launchModelGateway,
+} from "./gateway-launcher.js";
+export type {
+  LaunchedModelGateway,
+  LaunchModelGatewayInput,
+} from "./gateway-launcher.js";
 
 export {
   DEFAULT_PROMPT_ENCODE_MAX_BUFFER_BYTES,

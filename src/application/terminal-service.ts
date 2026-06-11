@@ -39,7 +39,7 @@ export class TerminalService {
       case "session_interrupt":
         return this.handleCurrentSessionInput(request);
       case "session_observe":
-        return this.handleObserve(request.session);
+        return this.handleObserve(request);
       case "session_list":
         return this.handleList();
       case "session_focus":
@@ -93,33 +93,68 @@ export class TerminalService {
     });
   }
 
-  private async handleObserve(sessionOverride?: string): Promise<TerminalObservation> {
+  private async handleObserve(
+    request: Extract<TerminalToolRequest, { kind: "session_observe" }>,
+  ): Promise<TerminalObservation> {
     const currentSession = await this.ports.sessions.getCurrent();
-    const session = sessionOverride ?? currentSession;
+    const session = request.session ?? currentSession;
     const snapshot = await this.loadSnapshotOrReject(session, {
       kind: "session_observe",
-      ...(sessionOverride ? { session: sessionOverride } : {}),
+      ...(request.session ? { session: request.session } : {}),
+      ...(request.startLine === undefined ? {} : { startLine: request.startLine }),
+      ...(request.lineCount === undefined ? {} : { lineCount: request.lineCount }),
     });
     if ("observation" in snapshot) return snapshot.observation;
 
     return this.readParseSaveObserve(
       session,
       snapshot,
-      { kind: "session_observe", ...(sessionOverride ? { session: sessionOverride } : {}) },
-      { inputAccepted: false },
+      request,
+      {
+        inputAccepted: false,
+        screenStartLine: request.startLine,
+        screenLineCount: request.lineCount,
+      },
       currentSession,
     );
   }
 
   private async handleList(): Promise<SessionListObservation> {
+    const snapshots = await this.ports.sessions.list();
     return {
       currentSession: await this.ports.sessions.getCurrent(),
-      sessions: (await this.ports.sessions.list()).map((snapshot) => ({
-        session: snapshot.session,
-        terminal: snapshot.terminal,
-        parserCursor: snapshot.parserState.totalBytes.toString(),
-        outputLog: snapshot.outputLog,
-      })),
+      sessions: await Promise.all(
+        snapshots.map(async (snapshot) => this.sessionListSnapshot(snapshot)),
+      ),
+    };
+  }
+
+  private async sessionListSnapshot(
+    snapshot: TerminalRuntimeSnapshot,
+  ): Promise<SessionListObservation["sessions"][number]> {
+    let nextSnapshot = snapshot;
+    let screen = emptyScreen(snapshot.session, snapshot.outputLog?.ref);
+
+    try {
+      const read = await this.ports.pty.read(
+        snapshot.session,
+        snapshot.parserState.totalBytes.toString(),
+      );
+      const applied = this.applyRead(snapshot, read, { inputAccepted: false });
+      nextSnapshot = applied.snapshot;
+      screen = read.screen;
+      await this.ports.sessions.save(nextSnapshot);
+    } catch {
+      // Keep session_list best-effort; stale terminal facts are still useful.
+    }
+
+    return {
+      session: nextSnapshot.session,
+      terminal: nextSnapshot.terminal,
+      parserCursor: nextSnapshot.parserState.totalBytes.toString(),
+      outputLog: nextSnapshot.outputLog,
+      window: screen.window,
+      preview: previewScreenText(screen.text),
     };
   }
 
@@ -267,7 +302,12 @@ export class TerminalService {
     session: string,
     snapshot: TerminalRuntimeSnapshot,
     request: TerminalToolRequest,
-    options: { inputAccepted: boolean; waitForPromptMs?: number },
+    options: {
+      inputAccepted: boolean;
+      waitForPromptMs?: number;
+      screenStartLine?: number;
+      screenLineCount?: number;
+    },
     currentSession = session,
   ): Promise<TerminalObservation> {
     const read = await this.ports.pty.read(
@@ -276,6 +316,8 @@ export class TerminalService {
       {
         waitForPromptMs: options.waitForPromptMs,
         afterPromptSeq: snapshot.terminal.lastShellPrompt?.promptSeq,
+        screenStartLine: options.screenStartLine,
+        screenLineCount: options.screenLineCount,
       },
     );
     const applied = this.applyRead(snapshot, read, options);
@@ -476,11 +518,26 @@ function buildTerminalObservation(input: {
 }
 
 function emptyScreen(session: string, logPath?: string): TerminalScreen {
+  const emptyWindow = {
+    startLine: 0,
+    endLine: 0,
+    totalLines: 0,
+    cols: 0,
+    rows: 0,
+    hasOlder: false,
+    hasNewer: false,
+  };
   return {
     text: "",
     rows: 0,
     cols: 0,
+    window: emptyWindow,
     truncated: false,
     logRef: { path: logPath ?? `managed-pty://${session}` },
   };
+}
+
+function previewScreenText(text: string, maxLines = 3): string {
+  const lines = text.replace(/\s+$/u, "").split("\n").filter(Boolean);
+  return lines.slice(Math.max(0, lines.length - maxLines)).join("\n");
 }

@@ -1,205 +1,34 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
-import * as path from "node:path";
 import * as os from "node:os";
+import * as path from "node:path";
 import { Readable } from "node:stream";
-import { ImCliTransport } from "../src/im/transport.js";
 import { runIm } from "../src/cli/im.js";
+import {
+  planImRunBindingLayout,
+  type PublicImRunReceiveMessage,
+} from "../src/im/index.js";
 
-describe("ImCliTransport", () => {
-  let tmpDir: string;
-
-  function createBaseDir(): string {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "im-test-"));
-    return tmpDir;
-  }
-
-  afterEach(() => {
-    if (tmpDir && fs.existsSync(tmpDir)) {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("post writes to inbox and receive reads it", async () => {
-    const baseDir = createBaseDir();
-    const transport = new ImCliTransport({ baseDir });
-
-    await transport.post({
-      id: "msg-001",
-      channel: "default",
-      role: "user",
-      text: "hello",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-
-    const result = await transport.receive({ channel: "default" });
-    expect(result.messages).toHaveLength(1);
-    expect(result.messages[0]!.id).toBe("msg-001");
-    expect(result.messages[0]!.text).toBe("hello");
-    expect(result.nextCursor).toBe("msg-001");
-  });
-
-  it("receive with cursor returns only newer messages", async () => {
-    const baseDir = createBaseDir();
-    const transport = new ImCliTransport({ baseDir });
-
-    await transport.post({
-      id: "msg-001",
-      channel: "default",
-      role: "user",
-      text: "first",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-    await transport.post({
-      id: "msg-002",
-      channel: "default",
-      role: "user",
-      text: "second",
-      createdAt: "2026-01-01T00:00:01.000Z",
-    });
-
-    const result = await transport.receive({
-      channel: "default",
-      cursor: "msg-001",
-    });
-    expect(result.messages).toHaveLength(1);
-    expect(result.messages[0]!.id).toBe("msg-002");
-  });
-
-  it("send writes to outbox", async () => {
-    const baseDir = createBaseDir();
-    const transport = new ImCliTransport({ baseDir });
-
-    await transport.send({
-      channel: "default",
-      role: "agent",
-      kind: "status",
-      text: "done",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-
-    const outboxPath = path.join(baseDir, "default.outbox.jsonl");
-    expect(fs.existsSync(outboxPath)).toBe(true);
-    const content = fs.readFileSync(outboxPath, "utf-8").trim();
-    const parsed = JSON.parse(content);
-    expect(parsed.kind).toBe("status");
-    expect(parsed.text).toBe("done");
-  });
-
-  it("ack writes cursor file", async () => {
-    const baseDir = createBaseDir();
-    const transport = new ImCliTransport({ baseDir });
-
-    await transport.ack({ channel: "default", messageId: "msg-001" });
-
-    const cursorPath = path.join(baseDir, "cursors", "default.cursor");
-    expect(fs.existsSync(cursorPath)).toBe(true);
-    expect(fs.readFileSync(cursorPath, "utf-8")).toBe("msg-001");
-  });
-
-  it("pollNewMessages returns filtered messages", async () => {
-    const baseDir = createBaseDir();
-    const transport = new ImCliTransport({ baseDir });
-
-    await transport.post({
-      id: "msg-001",
-      channel: "test",
-      role: "user",
-      text: "a",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-    await transport.post({
-      id: "msg-002",
-      channel: "test",
-      role: "user",
-      text: "b",
-      createdAt: "2026-01-01T00:00:01.000Z",
-    });
-
-    const msgs = await transport.pollNewMessages({
-      channel: "test",
-      cursor: "msg-001",
-    });
-    expect(msgs).toHaveLength(1);
-    expect(msgs[0]!.text).toBe("b");
-  });
-
-  it("receive on empty channel returns empty array", async () => {
-    const baseDir = createBaseDir();
-    const transport = new ImCliTransport({ baseDir });
-
-    const result = await transport.receive({ channel: "empty" });
-    expect(result.messages).toHaveLength(0);
-    expect(result.nextCursor).toBeUndefined();
-  });
-
-  it("multiple channels are isolated", async () => {
-    const baseDir = createBaseDir();
-    const transport = new ImCliTransport({ baseDir });
-
-    await transport.post({
-      id: "msg-a",
-      channel: "alpha",
-      role: "user",
-      text: "alpha-msg",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-    await transport.post({
-      id: "msg-b",
-      channel: "beta",
-      role: "user",
-      text: "beta-msg",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-
-    const alpha = await transport.receive({ channel: "alpha" });
-    const beta = await transport.receive({ channel: "beta" });
-    expect(alpha.messages).toHaveLength(1);
-    expect(alpha.messages[0]!.text).toBe("alpha-msg");
-    expect(beta.messages).toHaveLength(1);
-    expect(beta.messages[0]!.text).toBe("beta-msg");
-  });
-});
-
-describe("runIm CLI", () => {
-  let tmpDir: string;
-  let originalWrite: typeof process.stdout.write;
-  let captured: string[];
+describe("runIm public IM CLI", () => {
+  let tmpDir: string | undefined;
+  let originalWrite: typeof process.stdout.write | undefined;
+  let captured: string[] = [];
   let originalTahStateDir: string | undefined;
-  let originalTahImDir: string | undefined;
+  let originalTahImStateDir: string | undefined;
 
   function createStateDir(): string {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "im-cli-test-"));
-    fs.mkdirSync(path.join(tmpDir, "im"), { recursive: true });
     return tmpDir;
-  }
-
-  function createLatestRun(stateDir: string, runId = "run-test"): string {
-    const runDir = path.join(stateDir, "runs", runId);
-    fs.mkdirSync(path.join(runDir, "im"), { recursive: true });
-    fs.writeFileSync(
-      path.join(stateDir, "runs", "latest.json"),
-      JSON.stringify({ runId, runDir: path.join("runs", runId) }),
-      "utf-8",
-    );
-    return runDir;
-  }
-
-  function readInbox(baseDir: string, channel: string): Array<{ text: string }> {
-    const filePath = path.join(baseDir, `${channel}.inbox.jsonl`);
-    return fs
-      .readFileSync(filePath, "utf-8")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as { text: string });
   }
 
   function useTahStateDir(stateDir: string): void {
     originalTahStateDir = process.env.TAH_STATE_DIR;
-    originalTahImDir = process.env.TAH_IM_DIR;
     process.env.TAH_STATE_DIR = stateDir;
-    delete process.env.TAH_IM_DIR;
+  }
+
+  function useTahImStateDir(stateDir: string): void {
+    originalTahImStateDir = process.env.TAH_IM_STATE_DIR;
+    process.env.TAH_IM_STATE_DIR = stateDir;
   }
 
   function captureStdout(): void {
@@ -212,235 +41,383 @@ describe("runIm CLI", () => {
   }
 
   function restoreStdout(): void {
-    process.stdout.write = originalWrite;
+    if (originalWrite) {
+      process.stdout.write = originalWrite;
+      originalWrite = undefined;
+    }
+  }
+
+  async function runJson(args: string[], stdin?: Readable): Promise<Record<string, any>> {
+    captureStdout();
+    await runIm([...args, "--json"], stdin ? { stdin } : {});
+    restoreStdout();
+    return JSON.parse(captured.join("")) as Record<string, any>;
   }
 
   afterEach(() => {
-    if (originalWrite) restoreStdout();
+    restoreStdout();
     if (originalTahStateDir === undefined) {
       delete process.env.TAH_STATE_DIR;
     } else {
       process.env.TAH_STATE_DIR = originalTahStateDir;
     }
-    if (originalTahImDir === undefined) {
-      delete process.env.TAH_IM_DIR;
+    if (originalTahImStateDir === undefined) {
+      delete process.env.TAH_IM_STATE_DIR;
     } else {
-      process.env.TAH_IM_DIR = originalTahImDir;
+      process.env.TAH_IM_STATE_DIR = originalTahImStateDir;
     }
     originalTahStateDir = undefined;
-    originalTahImDir = undefined;
+    originalTahImStateDir = undefined;
     if (tmpDir && fs.existsSync(tmpDir)) {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+    tmpDir = undefined;
   });
 
-  it("post + recv roundtrip with --json", async () => {
+  it("creates public pair metadata", async () => {
     const stateDir = createStateDir();
 
-    captureStdout();
-    await runIm(["post", "--channel", "default", "--text", "hello world", "--state-dir", stateDir, "--json"]);
-    restoreStdout();
-
-    const postResult = JSON.parse(captured.join(""));
-    expect(postResult.ok).toBe(true);
-    expect(postResult.channel).toBe("default");
-
-    captureStdout();
-    await runIm(["recv", "--channel", "default", "--state-dir", stateDir, "--json"]);
-    restoreStdout();
-
-    const recvResult = JSON.parse(captured.join(""));
-    expect(recvResult.ok).toBe(true);
-    expect(recvResult.count).toBe(1);
-    expect(recvResult.messages[0].text).toBe("hello world");
-  });
-
-  it("post without explicit state dir targets the latest run inbox", async () => {
-    const stateDir = createStateDir();
-    const runDir = createLatestRun(stateDir, "run-latest");
-    useTahStateDir(stateDir);
-
-    captureStdout();
-    await runIm(["post", "--channel", "default", "--text", "hello latest", "--json"]);
-    restoreStdout();
-
-    const postResult = JSON.parse(captured.join(""));
-    expect(postResult.ok).toBe(true);
-    expect(postResult.target).toBe("run");
-    expect(postResult.runId).toBe("run-latest");
-    expect(readInbox(path.join(runDir, "im"), "default")[0].text).toBe(
-      "hello latest",
-    );
-    expect(fs.existsSync(path.join(stateDir, "im", "default.inbox.jsonl"))).toBe(
-      false,
-    );
-  });
-
-  it("--run latest post targets the latest run inbox", async () => {
-    const stateDir = createStateDir();
-    const runDir = createLatestRun(stateDir, "run-explicit-latest");
-    useTahStateDir(stateDir);
-
-    captureStdout();
-    await runIm([
-      "post",
-      "--channel",
-      "default",
-      "--text",
-      "hello run latest",
-      "--run",
-      "latest",
-      "--json",
-    ]);
-    restoreStdout();
-
-    const postResult = JSON.parse(captured.join(""));
-    expect(postResult.target).toBe("run");
-    expect(postResult.runId).toBe("run-explicit-latest");
-    expect(readInbox(path.join(runDir, "im"), "default")[0].text).toBe(
-      "hello run latest",
-    );
-  });
-
-  it("post without latest run falls back to global state inbox", async () => {
-    const stateDir = createStateDir();
-    useTahStateDir(stateDir);
-
-    captureStdout();
-    await runIm(["post", "--channel", "default", "--text", "hello global", "--json"]);
-    restoreStdout();
-
-    const postResult = JSON.parse(captured.join(""));
-    expect(postResult.target).toBe("global_state");
-    expect(postResult.runId).toBeUndefined();
-    expect(readInbox(path.join(stateDir, "im"), "default")[0].text).toBe(
-      "hello global",
-    );
-  });
-
-  it("explicit --state-dir keeps the global state inbox even when latest exists", async () => {
-    const stateDir = createStateDir();
-    const runDir = createLatestRun(stateDir, "run-ignored");
-
-    captureStdout();
-    await runIm([
-      "post",
-      "--channel",
-      "default",
-      "--text",
-      "hello explicit",
+    const result = await runJson([
+      "pair",
+      "--a",
+      "user:main",
+      "--b",
+      "member:team-p6/coder-1",
+      "--kind",
+      "a2user",
       "--state-dir",
       stateDir,
-      "--json",
+    ]);
+
+    expect(result).toMatchObject({
+      ok: true,
+      tool: "im",
+      pair: {
+        kind: "a2user",
+        endpoints: ["member:team-p6/coder-1", "user:main"],
+      },
+    });
+    expect(fs.existsSync(path.join(stateDir, "im", "pairs", `${result.pair.pairId}.json`)))
+      .toBe(true);
+  });
+
+  it("post + recv roundtrip with endpoint pair cursor semantics", async () => {
+    const stateDir = createStateDir();
+
+    const first = await runJson([
+      "post",
+      "--from",
+      "user:main",
+      "--to",
+      "member:team-p6/coder-1",
+      "--text",
+      "first",
+      "--state-dir",
+      stateDir,
+    ]);
+    await runJson([
+      "post",
+      "--from",
+      "user:main",
+      "--to",
+      "member:team-p6/coder-1",
+      "--text",
+      "second",
+      "--state-dir",
+      stateDir,
+    ]);
+
+    const initial = await runJson([
+      "recv",
+      "--as",
+      "member:team-p6/coder-1",
+      "--with",
+      "user:main",
+      "--state-dir",
+      stateDir,
+    ]);
+    expect(initial.count).toBe(2);
+    expect(initial.messages.map((message: { text: string }) => message.text)).toEqual([
+      "first",
+      "second",
+    ]);
+
+    await runJson([
+      "ack",
+      "--as",
+      "member:team-p6/coder-1",
+      "--with",
+      "user:main",
+      "--message-id",
+      first.id,
+      "--state-dir",
+      stateDir,
+    ]);
+
+    const afterAck = await runJson([
+      "recv",
+      "--as",
+      "member:team-p6/coder-1",
+      "--with",
+      "user:main",
+      "--state-dir",
+      stateDir,
+    ]);
+    expect(afterAck.count).toBe(1);
+    expect(afterAck.messages[0].text).toBe("second");
+  });
+
+  it("sends agent status from stdin over the public pair", async () => {
+    const stateDir = createStateDir();
+    const text = "## report\n\n- done\n";
+
+    const sent = await runJson(
+      [
+        "send",
+        "--from",
+        "member:team-p6/coder-1",
+        "--to",
+        "user:main",
+        "--kind",
+        "status",
+        "--text-stdin",
+        "--state-dir",
+        stateDir,
+      ],
+      Readable.from([text]),
+    );
+    expect(sent).toMatchObject({
+      ok: true,
+      kind: "status",
+      from: "member:team-p6/coder-1",
+      to: "user:main",
+    });
+
+    const received = await runJson([
+      "recv",
+      "--as",
+      "user:main",
+      "--with",
+      "member:team-p6/coder-1",
+      "--state-dir",
+      stateDir,
+    ]);
+    expect(received.count).toBe(1);
+    expect(received.messages[0]).toMatchObject({
+      id: sent.id,
+      role: "agent",
+      kind: "status",
+      text,
+    });
+  });
+
+  it("binds a run to a2user and a2a pairs and aggregates inbound messages", async () => {
+    const stateDir = createStateDir();
+
+    await runJson([
+      "bind",
+      "--run-id",
+      "run-123",
+      "--self",
+      "member:team-p6/coder-1",
+      "--peer",
+      "user:main",
+      "--kind",
+      "a2user",
+      "--state-dir",
+      stateDir,
+    ]);
+    await runJson([
+      "bind",
+      "--run-id",
+      "run-123",
+      "--self",
+      "member:team-p6/coder-1",
+      "--peer",
+      "member:team-p6/reviewer-1",
+      "--kind",
+      "a2a",
+      "--state-dir",
+      stateDir,
+    ]);
+    const userMessage = await runJson([
+      "post",
+      "--from",
+      "user:main",
+      "--to",
+      "member:team-p6/coder-1",
+      "--text",
+      "from user",
+      "--state-dir",
+      stateDir,
+    ]);
+    const reviewerMessage = await runJson([
+      "send",
+      "--from",
+      "member:team-p6/reviewer-1",
+      "--to",
+      "member:team-p6/coder-1",
+      "--kind",
+      "status",
+      "--text",
+      "from reviewer",
+      "--state-dir",
+      stateDir,
+    ]);
+
+    const received = await runJson([
+      "run-recv",
+      "--run-id",
+      "run-123",
+      "--state-dir",
+      stateDir,
+    ]);
+    expect(received.count).toBe(2);
+    expect(
+      received.messages.map((message: PublicImRunReceiveMessage) => message.text),
+    ).toEqual(["from user", "from reviewer"]);
+    expect(
+      received.messages.map((message: PublicImRunReceiveMessage) => message.binding.kind),
+    ).toEqual(["a2user", "a2a"]);
+
+    await runJson([
+      "run-ack",
+      "--run-id",
+      "run-123",
+      "--peer",
+      "user:main",
+      "--message-id",
+      userMessage.id,
+      "--state-dir",
+      stateDir,
+    ]);
+
+    const afterAck = await runJson([
+      "run-recv",
+      "--run-id",
+      "run-123",
+      "--state-dir",
+      stateDir,
+    ]);
+    expect(afterAck.messages.map((message: { id: string }) => message.id)).toEqual([
+      reviewerMessage.id,
+    ]);
+
+    const bindingLayout = planImRunBindingLayout(stateDir, "run-123");
+    expect(fs.existsSync(bindingLayout.bindingFile)).toBe(true);
+  });
+
+  it("uses TAH_STATE_DIR as the default public IM root", async () => {
+    const stateDir = createStateDir();
+    useTahStateDir(stateDir);
+
+    await runJson([
+      "post",
+      "--from",
+      "user:main",
+      "--to",
+      "member:team-p6/coder-1",
+      "--text",
+      "hello env root",
+    ]);
+
+    const received = await runJson([
+      "recv",
+      "--as",
+      "member:team-p6/coder-1",
+      "--with",
+      "user:main",
+    ]);
+    expect(received.messages[0].text).toBe("hello env root");
+  });
+
+  it("prefers TAH_IM_STATE_DIR over TAH_STATE_DIR for public IM storage", async () => {
+    const publicStateDir = createStateDir();
+    const runLocalStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "im-cli-run-local-"));
+    useTahStateDir(runLocalStateDir);
+    useTahImStateDir(publicStateDir);
+
+    try {
+      await runJson([
+        "post",
+        "--from",
+        "user:main",
+        "--to",
+        "member:team-p6/coder-1",
+        "--text",
+        "hello explicit im root",
+      ]);
+
+      const received = await runJson([
+        "recv",
+        "--as",
+        "member:team-p6/coder-1",
+        "--with",
+        "user:main",
+      ]);
+      expect(received.messages[0].text).toBe("hello explicit im root");
+      expect(fs.existsSync(path.join(publicStateDir, "im"))).toBe(true);
+      expect(fs.existsSync(path.join(runLocalStateDir, "im"))).toBe(false);
+    } finally {
+      fs.rmSync(runLocalStateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prints usable text output when --json is omitted", async () => {
+    const stateDir = createStateDir();
+
+    captureStdout();
+    await runIm([
+      "post",
+      "--from",
+      "user:main",
+      "--to",
+      "member:team-p6/coder-1",
+      "--text",
+      "hello text mode",
+      "--state-dir",
+      stateDir,
     ]);
     restoreStdout();
 
-    const postResult = JSON.parse(captured.join(""));
-    expect(postResult.target).toBe("explicit_state");
-    expect(postResult.runId).toBeUndefined();
-    expect(readInbox(path.join(stateDir, "im"), "default")[0].text).toBe(
-      "hello explicit",
-    );
-    expect(fs.existsSync(path.join(runDir, "im", "default.inbox.jsonl"))).toBe(
-      false,
-    );
+    const lines = captured.join("").trim().split("\n");
+    expect(lines).toContain("message.text=hello text mode");
+    expect(lines).toContain("from=user:main");
+    expect(lines).toContain("to=member:team-p6/coder-1");
   });
 
-  it("send writes agent message with --json", async () => {
+  it("returns a failure envelope for missing endpoint arguments", async () => {
     const stateDir = createStateDir();
-    const origChannel = process.env.TAH_RUN_CHANNEL;
-    delete process.env.TAH_RUN_CHANNEL;
+    const originalExit = process.exit;
+    const originalStderrWrite = process.stderr.write;
+    const capturedStderr: string[] = [];
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      capturedStderr.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
+      return true;
+    }) as typeof process.stderr.write;
+    process.exit = ((code?: string | number | null) => {
+      throw new Error(`process.exit ${code ?? 0}`);
+    }) as typeof process.exit;
 
     try {
-      captureStdout();
-      await runIm(["send", "--channel", "default", "--kind", "status", "--text", "all done", "--state-dir", stateDir, "--json"]);
-      restoreStdout();
-
-      const sendResult = JSON.parse(captured.join(""));
-      expect(sendResult.ok).toBe(true);
-      expect(sendResult.id).toMatch(/^agent-/);
-      expect(sendResult.kind).toBe("status");
-
-      const outboxPath = path.join(stateDir, "im", "default.outbox.jsonl");
-      expect(fs.existsSync(outboxPath)).toBe(true);
+      await expect(
+        runIm(["post", "--to", "member:team-p6/coder-1", "--text", "hello", "--state-dir", stateDir]),
+      ).rejects.toThrow("process.exit 1");
     } finally {
-      if (origChannel === undefined) {
-        delete process.env.TAH_RUN_CHANNEL;
-      } else {
-        process.env.TAH_RUN_CHANNEL = origChannel;
-      }
+      process.exit = originalExit;
+      process.stderr.write = originalStderrWrite;
     }
+
+    const error = JSON.parse(capturedStderr.join(""));
+    expect(error).toMatchObject({
+      ok: false,
+      tool: "im",
+      errorCode: "IM_ERROR",
+      error: "tiny-agent im post requires --from",
+    });
   });
 
-  it("send auto-corrects channel via TAH_RUN_CHANNEL (cli->default)", async () => {
-    const origEnv = process.env.TAH_RUN_CHANNEL;
-    process.env.TAH_RUN_CHANNEL = "default";
-    try {
-      const stateDir = createStateDir();
-
-      captureStdout();
-      await runIm(["send", "--channel", "cli", "--kind", "status", "--text-stdin", "--state-dir", stateDir, "--json"], {
-        stdin: Readable.from(["hello from agent"]),
-      });
-      restoreStdout();
-
-      const sendResult = JSON.parse(captured.join(""));
-      expect(sendResult.ok).toBe(true);
-      // Channel must be auto-corrected to default
-      expect(sendResult.channel).toBe("default");
-
-      // Verify default.outbox.jsonl exists with correct content
-      const defaultOutbox = path.join(stateDir, "im", "default.outbox.jsonl");
-      expect(fs.existsSync(defaultOutbox)).toBe(true);
-      const lines = fs.readFileSync(defaultOutbox, "utf-8").trim().split("\n");
-      expect(lines.length).toBeGreaterThanOrEqual(1);
-      const msg = JSON.parse(lines[lines.length - 1]!);
-      expect(msg.channel).toBe("default");
-      expect(msg.text).toBe("hello from agent");
-
-      // cli.outbox.jsonl MUST NOT exist
-      const cliOutbox = path.join(stateDir, "im", "cli.outbox.jsonl");
-      expect(fs.existsSync(cliOutbox)).toBe(false);
-    } finally {
-      if (origEnv === undefined) {
-        delete process.env.TAH_RUN_CHANNEL;
-      } else {
-        process.env.TAH_RUN_CHANNEL = origEnv;
-      }
-    }
-  });
-
-  it("send reads multiline agent message with --text-stdin", async () => {
-    const stateDir = createStateDir();
-    const origChannel = process.env.TAH_RUN_CHANNEL;
-    delete process.env.TAH_RUN_CHANNEL;
-    const text = "## report\n\n- `cli/` stays literal\n- done\n";
-
-    try {
-      captureStdout();
-      await runIm(
-        ["send", "--channel", "default", "--kind", "status", "--text-stdin", "--state-dir", stateDir, "--json"],
-        { stdin: Readable.from([text]) },
-      );
-      restoreStdout();
-
-      const sendResult = JSON.parse(captured.join(""));
-      expect(sendResult.ok).toBe(true);
-
-      const outboxPath = path.join(stateDir, "im", "default.outbox.jsonl");
-      const messages = fs.readFileSync(outboxPath, "utf-8").trim().split("\n").map((line) => JSON.parse(line));
-      expect(messages).toHaveLength(1);
-      expect(messages[0].text).toBe(text);
-    } finally {
-      if (origChannel === undefined) {
-        delete process.env.TAH_RUN_CHANNEL;
-      } else {
-        process.env.TAH_RUN_CHANNEL = origChannel;
-      }
-    }
-  });
-
-  it("post rejects reserved agent sender labels", async () => {
+  it("returns a failure envelope for malformed endpoints", async () => {
     const stateDir = createStateDir();
     const originalExit = process.exit;
     const originalStderrWrite = process.stderr.write;
@@ -457,12 +434,12 @@ describe("runIm CLI", () => {
       await expect(
         runIm([
           "post",
-          "--channel",
-          "default",
+          "--from",
+          "not-an-endpoint",
+          "--to",
+          "member:team-p6/coder-1",
           "--text",
           "hello",
-          "--from",
-          "assistant",
           "--state-dir",
           stateDir,
           "--json",
@@ -474,64 +451,11 @@ describe("runIm CLI", () => {
     }
 
     const error = JSON.parse(capturedStderr.join(""));
-    expect(error.errorCode).toBe("IM_POST_RESERVED_SENDER");
-  });
-
-  it("ack writes cursor with --json", async () => {
-    const stateDir = createStateDir();
-
-    captureStdout();
-    await runIm(["ack", "--channel", "default", "--message-id", "msg-001", "--state-dir", stateDir, "--json"]);
-    restoreStdout();
-
-    const ackResult = JSON.parse(captured.join(""));
-    expect(ackResult.ok).toBe(true);
-    expect(ackResult.messageId).toBe("msg-001");
-  });
-
-  it("recv uses the acknowledged cursor when --cursor is omitted", async () => {
-    const stateDir = createStateDir();
-
-    captureStdout();
-    await runIm(["post", "--channel", "ch", "--text", "first", "--state-dir", stateDir, "--json"]);
-    restoreStdout();
-    const postResult1 = JSON.parse(captured.join(""));
-
-    captureStdout();
-    await runIm(["post", "--channel", "ch", "--text", "second", "--state-dir", stateDir, "--json"]);
-    restoreStdout();
-
-    captureStdout();
-    await runIm(["ack", "--channel", "ch", "--message-id", postResult1.id, "--state-dir", stateDir, "--json"]);
-    restoreStdout();
-
-    captureStdout();
-    await runIm(["recv", "--channel", "ch", "--state-dir", stateDir, "--json"]);
-    restoreStdout();
-
-    const recvResult = JSON.parse(captured.join(""));
-    expect(recvResult.count).toBe(1);
-    expect(recvResult.messages[0].text).toBe("second");
-  });
-
-  it("recv with cursor filters old messages", async () => {
-    const stateDir = createStateDir();
-
-    captureStdout();
-    await runIm(["post", "--channel", "ch", "--text", "first", "--state-dir", stateDir, "--json"]);
-    restoreStdout();
-    const postResult1 = JSON.parse(captured.join(""));
-
-    captureStdout();
-    await runIm(["post", "--channel", "ch", "--text", "second", "--state-dir", stateDir, "--json"]);
-    restoreStdout();
-
-    captureStdout();
-    await runIm(["recv", "--channel", "ch", "--cursor", postResult1.id, "--state-dir", stateDir, "--json"]);
-    restoreStdout();
-
-    const recvResult = JSON.parse(captured.join(""));
-    expect(recvResult.count).toBe(1);
-    expect(recvResult.messages[0].text).toBe("second");
+    expect(error).toMatchObject({
+      ok: false,
+      tool: "im",
+      errorCode: "IM_ERROR",
+    });
+    expect(error.error).toMatch(/Invalid IM endpoint/);
   });
 });

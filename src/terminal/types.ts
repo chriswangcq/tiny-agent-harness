@@ -111,6 +111,8 @@ export type TerminalSessionSnapshot = {
   terminal: TerminalState;
   parserCursor?: string;
   outputLog?: LogRef;
+  window?: PtyVisualWindow;
+  preview?: string;
 };
 
 export type TerminalWriteRequest = {
@@ -130,6 +132,8 @@ export type TerminalKeyRequest = {
 export type SessionObserveRequest = {
   kind: "session_observe";
   session?: string;
+  startLine?: number;
+  lineCount?: number;
 };
 
 export type SessionListRequest = {
@@ -176,10 +180,21 @@ export type TerminalScreen = {
   text: string;
   rows: number;
   cols: number;
+  window: PtyVisualWindow;
   truncated: boolean;
   logRef: {
     path: string;
   };
+};
+
+export type PtyVisualWindow = {
+  startLine: number;
+  endLine: number;
+  totalLines: number;
+  cols: number;
+  rows: number;
+  hasOlder: boolean;
+  hasNewer: boolean;
 };
 
 export type TerminalObservation = {

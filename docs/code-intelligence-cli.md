@@ -98,8 +98,12 @@ tiny-agent codeq capabilities --json
 tiny-agent codeq diagnostics [path] --json
 tiny-agent codeq diagnostics --workspace --json
 tiny-agent codeq symbols <path> --json
+tiny-agent codeq workspace-symbols <query> --json
 tiny-agent codeq definition <location> --json
 tiny-agent codeq references <location> --json
+tiny-agent codeq implementations <location> --json
+tiny-agent codeq incoming-calls <location> --json
+tiny-agent codeq outgoing-calls <location> --json
 tiny-agent codeq hover <location> --json
 ```
 
@@ -335,6 +339,16 @@ tiny-agent codeq definition src/run/orchestrator.ts:37:18 --json
 
 If there are multiple definitions, return all up to `--max-results`.
 
+### workspace-symbols
+
+```bash
+tiny-agent codeq workspace-symbols RunOrchestrator --json
+```
+
+Use this when the agent knows a symbol name but not the owning file. Some
+language servers can return only a URI without a range; in that case `range`
+and `preview` are omitted instead of inventing a location.
+
 ### references
 
 ```bash
@@ -364,6 +378,26 @@ tiny-agent codeq references src/run/orchestrator.ts:37:18 --include-declaration 
   }
 }
 ```
+
+### implementations
+
+```bash
+tiny-agent codeq implementations src/run/orchestrator.ts:37:18 --json
+```
+
+`implementation` is accepted as an alias for `implementations`.
+
+### incoming-calls / outgoing-calls
+
+```bash
+tiny-agent codeq incoming-calls src/run/orchestrator.ts:37:18 --json
+tiny-agent codeq outgoing-calls src/run/orchestrator.ts:37:18 --json
+```
+
+Call hierarchy is a two-step LSP flow internally: prepare the symbol at the
+location, then ask for incoming or outgoing calls for the prepared item. The
+CLI keeps the raw server item out of the JSON output and returns normalized
+paths, ranges, and short previews.
 
 ### hover
 
@@ -718,6 +752,8 @@ Recommended prompt guidance for future agent instructions:
 Use `tiny-agent codeq` when semantic code navigation is cheaper or safer than reading by grep:
 - definition/reference questions
 - symbol maps for large files
+- workspace symbol lookup when the file is unknown
+- implementation and call hierarchy questions
 - hover/type questions
 - language-server diagnostics
 

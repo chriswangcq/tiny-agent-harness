@@ -1,7 +1,8 @@
 #!/usr/bin/env node
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 
 import { RunOrchestrator } from "../run/orchestrator.js";
 import type { RunPorts } from "../run/orchestrator.js";
@@ -11,7 +12,6 @@ import {
   reconstructModelContextItemsFromTranscript,
 } from "../run/session-store.js";
 import { TranscriptStore } from "../transcript/store.js";
-import { DeepSeekFimAdapter } from "../model/adapter.js";
 import { PromptBuilder } from "../model/prompt-builder.js";
 import {
   ModelContextSession,
@@ -21,15 +21,30 @@ import {
   type ModelContextSessionSnapshot,
 } from "../model/context-session.js";
 import { DeepSeekV4PromptTokenCounter } from "../model/prompt-token-counter.js";
-import { ManagedTerminalRuntime } from "../bash/managed-terminal-runtime.js";
+import {
+  JsonlRuntimeEventSink,
+  JsonProcessRegistryStore,
+  RunSupervisor,
+  type ProcessSpawnerPort,
+  type SpawnedProcessPort,
+} from "../runtime/index.js";
+import { launchTerminalHost, type LaunchedTerminalHost } from "../terminal-host/index.js";
+import { launchModelGateway, type LaunchedModelGateway } from "../model/index.js";
 import { ToolCallValidator } from "../tools/validator.js";
 import { AlwaysApproveReviewer } from "../tools/reviewer.js";
 import { STATIC_TOOL_CATALOG } from "../tools/catalog.js";
 import { ENVIRONMENT_EVENT_LEVELS } from "../types/environment.js";
+import type { UserMessage } from "../types/environment.js";
 import { Environment } from "../environment/environment.js";
-import { ImCliTransport } from "../im/transport.js";
+import { PublicImService, createNodeImStore, type PublicImRunReceiveMessage } from "../im/index.js";
 import { SkillRunStore } from "../skill/store.js";
 import { buildCliTerminalEnv } from "./terminal-env.js";
+import {
+  ackPublicRunUserMessage,
+  createRunImSelfEndpoint,
+  ensureDefaultRunImBinding,
+  receivePublicRunUserMessages,
+} from "./run-im.js";
 import type { AgentRunStateData, RunEvent } from "../types/run.js";
 import {
   DEFAULT_CONTEXT_WINDOW_MAX_TOKENS,
@@ -53,20 +68,16 @@ function die(message: string): never {
 }
 
 function parseCliOptions(args: string[]): {
-  channel?: string;
   task?: string;
   stateDir?: string;
   resumeRunId?: string;
 } {
-  let channel: string | undefined;
   let task: string | undefined;
   let stateDir: string | undefined;
   let resumeRunId: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--channel" && i + 1 < args.length) {
-      channel = args[++i];
-    } else if (args[i] === "--task" && i + 1 < args.length) {
+    if (args[i] === "--task" && i + 1 < args.length) {
       task = args[++i];
     } else if (args[i] === "--state-dir" && i + 1 < args.length) {
       stateDir = args[++i];
@@ -75,11 +86,10 @@ function parseCliOptions(args: string[]): {
     }
   }
 
-  return { channel, task, stateDir, resumeRunId };
+  return { task, stateDir, resumeRunId };
 }
 
 type RunScopedPaths = {
-  imDir: string;
   skillRunsDir: string;
   sessionsDir: string;
   environmentDir: string;
@@ -88,14 +98,12 @@ type RunScopedPaths = {
 
 function ensureRunScopedPaths(runDir: string): RunScopedPaths {
   const paths: RunScopedPaths = {
-    imDir: path.join(runDir, "im"),
     skillRunsDir: path.join(runDir, "skill-runs"),
     sessionsDir: path.join(runDir, "sessions"),
     environmentDir: path.join(runDir, "environment"),
     environmentEventsPath: path.join(runDir, "environment", "events.jsonl"),
   };
   for (const dir of [
-    paths.imDir,
     paths.skillRunsDir,
     paths.sessionsDir,
     paths.environmentDir,
@@ -105,37 +113,109 @@ function ensureRunScopedPaths(runDir: string): RunScopedPaths {
   return paths;
 }
 
-function createCliTerminalPort(options: {
-  channel: string;
+function createCliTerminalHost(options: {
   runId: string;
   runDir: string;
   stateDir: string;
   paths: RunScopedPaths;
   skillsDir: string;
   transcriptPath: string;
-}) {
-  const runtime = new ManagedTerminalRuntime({
-    defaultSessionId: "default",
-    cwd: process.cwd(),
-    promptNonce: `cli-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    env: buildCliTerminalEnv(process.env, options.channel, {
+  supervisor: RunSupervisor;
+}): LaunchedTerminalHost {
+  const promptNonce = `cli-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const terminalEnv = buildCliTerminalEnv(process.env, {
       runId: options.runId,
       runDir: options.runDir,
       stateDir: options.runDir,
       projectStateDir: options.stateDir,
-      imDir: options.paths.imDir,
+      imStateDir: options.stateDir,
+      imRunId: options.runId,
+      imSelfEndpoint: createRunImSelfEndpoint(options.runId),
+      imUserEndpoint: "user:main",
       skillRunsDir: options.paths.skillRunsDir,
       sessionsDir: options.paths.sessionsDir,
       skillsDir: options.skillsDir,
       transcriptPath: options.transcriptPath,
       environmentEventsPath: options.paths.environmentEventsPath,
-    }),
-    sessionsDir: options.paths.sessionsDir,
-    screenRows: 24,
-    screenCols: 80,
-    postWriteReadDelayMs: 100,
   });
-  return runtime.createRunPort();
+  const hostArgs = [
+    ...process.execArgv,
+    process.argv[1]!,
+    "terminal-host",
+    "--default-session",
+    "default",
+    "--cwd",
+    process.cwd(),
+    "--prompt-nonce",
+    promptNonce,
+    "--sessions-dir",
+    options.paths.sessionsDir,
+    "--rows",
+    "24",
+    "--cols",
+    "80",
+  ];
+
+  return launchTerminalHost({
+    supervisor: options.supervisor,
+    processId: `terminal-host:${options.runId}:default`,
+    owner: { scope: "run", runId: options.runId },
+    executable: process.execPath,
+    args: hostArgs,
+    cwd: process.cwd(),
+    env: terminalEnv,
+    statePath: path.join(options.runDir, "terminal-host.json"),
+    logPath: path.join(options.paths.sessionsDir, "terminal-host.stderr.log"),
+    requestTimeoutMs: 30_000,
+    newRequestId: (() => {
+      let sequence = 0;
+      return () => `terminal-host-${options.runId}-${++sequence}`;
+    })(),
+  });
+}
+
+function createCliRunImService(): PublicImService {
+  return new PublicImService({
+    store: createNodeImStore(),
+    clock: { nowIso: () => new Date().toISOString() },
+    ids: {
+      newMessageId: (seed) => {
+        const scope = seed.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "");
+        return `run-im-${scope}-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
+      },
+    },
+  });
+}
+
+function createCliModelGateway(options: {
+  runId: string;
+  runDir: string;
+  model: string;
+  supervisor: RunSupervisor;
+}): LaunchedModelGateway {
+  const gatewayArgs = [
+    ...process.execArgv,
+    process.argv[1]!,
+    "model-gateway",
+    "--model",
+    options.model,
+  ];
+  return launchModelGateway({
+    supervisor: options.supervisor,
+    processId: `model-gateway:${options.runId}:${options.model}`,
+    owner: { scope: "run", runId: options.runId },
+    executable: process.execPath,
+    args: gatewayArgs,
+    cwd: process.cwd(),
+    env: process.env,
+    statePath: path.join(options.runDir, "model-gateway.json"),
+    logPath: path.join(options.runDir, "model-gateway.stderr.log"),
+    requestTimeoutMs: 180_000,
+    newRequestId: (() => {
+      let sequence = 0;
+      return () => `model-gateway-${options.runId}-${++sequence}`;
+    })(),
+  });
 }
 
 function createCliRunSessionPort(store: RunSessionStore) {
@@ -276,7 +356,7 @@ function appendResumeReminder(items: ModelContextItem[]): ModelContextItem[] {
 async function waitForNewLatestRun(options: {
   runsDir: string;
   previousRunId?: string;
-  child: ChildProcess;
+  child: SpawnedProcessPort;
   timeoutMs: number;
 }): Promise<string> {
   let childExit:
@@ -309,9 +389,43 @@ async function waitForNewLatestRun(options: {
   throw new Error("timed out waiting for agent run to create latest run");
 }
 
+function readProjectIdFromStateRoot(baseDir: string): string {
+  try {
+    const parsed = JSON.parse(
+      fs.readFileSync(path.join(baseDir, "project.json"), "utf-8"),
+    ) as { projectId?: string };
+    if (parsed.projectId) {
+      return parsed.projectId;
+    }
+  } catch {
+    // Fall through to a stable local fallback.
+  }
+  return path.basename(baseDir) || "project";
+}
+
+function createRuntimeEventIdFactory(prefix: string): () => string {
+  let sequence = 0;
+  return () => `${prefix}-${Date.now()}-${++sequence}`;
+}
+
+function createRuntimeEventSink(baseDir: string): JsonlRuntimeEventSink {
+  return new JsonlRuntimeEventSink({
+    filePath: path.join(baseDir, "runtime", "events.jsonl"),
+  });
+}
+
+const nodeProcessSpawner: ProcessSpawnerPort = {
+  spawn(executable, args, options) {
+    return spawn(executable, [...args], {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: [...options.stdio] as ["ignore" | "pipe", "pipe", "pipe"],
+    });
+  },
+};
+
 async function runUnifiedUi(args: string[]): Promise<void> {
-  const { channel: parsedChannel, task, stateDir, resumeRunId } = parseCliOptions(args);
-  const channel = parsedChannel ?? process.env.TAH_IM_CHANNEL ?? "default";
+  const { task, stateDir, resumeRunId } = parseCliOptions(args);
   const deepseek = loadDeepSeekRuntimeConfig();
 
   if (!deepseek.apiKey) {
@@ -350,8 +464,6 @@ async function runUnifiedUi(args: string[]): Promise<void> {
           process.argv[1]!,
           "resume",
           resumeTargetRunId,
-          "--channel",
-          channel,
           "--state-dir",
           baseDir,
         ]
@@ -359,8 +471,6 @@ async function runUnifiedUi(args: string[]): Promise<void> {
           ...process.execArgv,
           process.argv[1]!,
           "run",
-          "--channel",
-          channel,
           "--state-dir",
           baseDir,
         ];
@@ -368,10 +478,31 @@ async function runUnifiedUi(args: string[]): Promise<void> {
     runArgs.push("--task", task);
   }
 
-  const child = spawn(process.execPath, runArgs, {
+  const supervisor = new RunSupervisor({
+    store: new JsonProcessRegistryStore({
+      filePath: path.join(baseDir, "processes.json"),
+      nowIso: () => new Date().toISOString(),
+    }),
+    spawner: nodeProcessSpawner,
+    nowIso: () => new Date().toISOString(),
+    nowEpochMs: () => Date.now(),
+    events: createRuntimeEventSink(baseDir),
+    newEventId: createRuntimeEventIdFactory("runtime-ui"),
+    eventProducer: "tiny-agent-ui",
+  });
+  const runProcessId = `run-launch-${Date.now()}`;
+  const { child } = supervisor.startRunProcess({
+    processId: runProcessId,
+    owner: { scope: "project", projectId: readProjectIdFromStateRoot(baseDir) },
+    executable: process.execPath,
+    args: runArgs,
     cwd: process.cwd(),
     env: process.env,
-    stdio: ["ignore", "pipe", "pipe"],
+    logPath,
+    statePath: baseDir,
+    metadata: {
+      resume: resumeTargetRunId ?? null,
+    },
   });
 
   child.stdout?.pipe(logStream, { end: false });
@@ -403,6 +534,11 @@ async function runUnifiedUi(args: string[]): Promise<void> {
       child,
       timeoutMs: 5_000,
     }));
+  supervisor.attachRunId({
+    processId: runProcessId,
+    runId,
+    runDir: path.join(runsDir, runId),
+  });
 
   console.log(`[tiny-agent] ${resumeTargetRunId ? "Resumed" : "Started"} background run: ${runId}`);
   console.log(`[tiny-agent] Agent log: ${logPath}`);
@@ -413,36 +549,61 @@ async function runUnifiedUi(args: string[]): Promise<void> {
   );
 
   const { runTui } = await import("./tui.js");
-  runTui(["--run", runId, "--channel", channel, "--state-dir", baseDir]);
+  runTui(["--run", runId, "--state-dir", baseDir]);
 }
 
 async function waitForFirstMessage(
-  transport: ImCliTransport,
+  options: {
+    service: PublicImService;
+    stateRoot: string;
+    runId: string;
+  },
   environment: Environment,
-  channel: string,
-): Promise<{ task: string; cursor?: string }> {
-  // Skip messages already in inbox from previous runs
-  const existing = await transport.receive({ channel });
-  let cursor = existing.nextCursor;
-
+): Promise<{ task: string }> {
   while (true) {
-    const result = await transport.receive({ channel, cursor });
-    if (result.messages.length > 0) {
-      const msg = result.messages[0]!;
-      for (const message of result.messages) {
-        environment.appendEvent({
-          level: ENVIRONMENT_EVENT_LEVELS.USER_MESSAGE,
-          id: `env-im-${message.id}`,
-          kind: "user_message_received",
-          source: "im",
-          timestamp: message.createdAt,
-          message,
-        });
+    const messages = await receivePublicRunUserMessages(options);
+    if (messages.length > 0) {
+      for (const message of messages) {
+        appendPublicImUserMessage(environment, message);
+        await ackPublicRunUserMessage({ ...options, messageId: message.id });
       }
-      return { task: msg.text, cursor: result.nextCursor };
+      return { task: messages[0]!.text };
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
+}
+
+function appendPublicImUserMessage(
+  environment: Environment,
+  message: PublicImRunReceiveMessage,
+): void {
+  environment.appendEvent({
+    level: ENVIRONMENT_EVENT_LEVELS.USER_MESSAGE,
+    id: `env-im-${message.id}`,
+    kind: "user_message_received",
+    source: "im",
+    timestamp: message.createdAt,
+    message: publicImMessageToEnvironmentUserMessage(message),
+  });
+}
+
+function publicImMessageToEnvironmentUserMessage(
+  message: PublicImRunReceiveMessage,
+): UserMessage {
+  return {
+    id: message.id,
+    channel: message.channelId,
+    role: "user",
+    text: message.text,
+    createdAt: message.createdAt,
+    metadata: {
+      from: message.from,
+      to: message.to,
+      pairId: message.pairId,
+      bindingPeer: message.binding.peer,
+      bindingKind: String(message.binding.kind),
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -488,6 +649,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (firstArg === "terminal-host") {
+    const { runTerminalHostCli } = await import("../terminal-host/cli.js");
+    process.exitCode = await runTerminalHostCli(process.argv.slice(3));
+    return;
+  }
+
   if (firstArg === "codeq") {
     const { runCodeIntelCli } = await import("../code-intel/cli.js");
     process.exitCode = await runCodeIntelCli(process.argv.slice(3));
@@ -497,6 +664,12 @@ async function main(): Promise<void> {
   if (firstArg === "mcp") {
     const { runMcpCli } = await import("../mcp/cli.js");
     process.exitCode = await runMcpCli(process.argv.slice(3));
+    return;
+  }
+
+  if (firstArg === "model-gateway") {
+    const { runModelGatewayCli } = await import("./model-gateway.js");
+    process.exitCode = await runModelGatewayCli(process.argv.slice(3));
     return;
   }
 
@@ -519,10 +692,9 @@ async function main(): Promise<void> {
   // --- Parse run arguments ---
   // Supported forms:
   //   tiny-agent "fix the tests"                     (legacy positional)
-  //   tiny-agent run --channel default                (wait for IM message)
-  //   tiny-agent run --channel default --task "fix"   (task + channel)
+  //   tiny-agent run                                  (wait for public IM message)
+  //   tiny-agent run --task "fix"                     (start with task)
   const args = process.argv.slice(2);
-  let channel: string | undefined;
   let taskArg: string | undefined;
   let stateDirArg: string | undefined;
   let resumeRunId: string | undefined;
@@ -530,36 +702,30 @@ async function main(): Promise<void> {
   if (args[0] === "resume") {
     resumeRunId = args[1];
     const parsed = parseCliOptions(args.slice(2));
-    channel = parsed.channel;
     stateDirArg = parsed.stateDir;
     if (!resumeRunId) {
-      die("Usage: tiny-agent resume <runId|latest> [--channel <channel>] [--state-dir <dir>]");
+      die("Usage: tiny-agent resume <runId|latest> [--state-dir <dir>]");
     }
   } else if (args[0] === "run") {
     const parsed = parseCliOptions(args.slice(1));
-    channel = parsed.channel;
     taskArg = parsed.task;
     stateDirArg = parsed.stateDir;
     resumeRunId = parsed.resumeRunId;
-    if (!channel && !resumeRunId) {
-      die("Usage: tiny-agent run --channel <channel> [--task <task>] [--state-dir <dir>] OR tiny-agent run --resume <runId|latest>");
-    }
   } else if (args[0]) {
     const reserved = ["io_wait", "io-wait"];
     if (reserved.includes(args[0])) {
       die(`"${args[0]}" is a tool call, not a CLI command.`);
     }
     const parsed = parseCliOptions(args.slice(1));
-    channel = parsed.channel;
     stateDirArg = parsed.stateDir;
     taskArg = args[0];
   } else {
     die(
         "Usage:\n" +
         "  tiny-agent <task> [--state-dir <dir>]\n" +
-        "  tiny-agent run --channel <channel> [--task <task>] [--state-dir <dir>]\n" +
+        "  tiny-agent run [--task <task>] [--state-dir <dir>]\n" +
         "  tiny-agent resume <runId|latest> [--state-dir <dir>]\n" +
-        "  tiny-agent ui --channel <channel> [--task <task>|--resume <runId|latest>] [--state-dir <dir>]",
+        "  tiny-agent ui [--task <task>|--resume <runId|latest>] [--state-dir <dir>]",
     );
   }
 
@@ -569,10 +735,6 @@ async function main(): Promise<void> {
     die(missingDeepSeekApiKeyMessage(deepseek.configPath));
   }
 
-  if (!channel) {
-    channel = process.env.TAH_IM_CHANNEL ?? "default";
-  }
-
   // --- Create directory structure ---
   const baseDir = resolveCliStateRoot(stateDirArg);
   const runsDir = path.join(baseDir, "runs");
@@ -580,24 +742,27 @@ async function main(): Promise<void> {
   for (const dir of [runsDir, skillsDir]) {
     fs.mkdirSync(dir, { recursive: true });
   }
-
-  // --- Wire up modules ---
-  const model = new DeepSeekFimAdapter({
-    apiKey: deepseek.apiKey,
-    baseUrl: deepseek.baseUrl,
-    model: deepseek.model,
-    thinkingMaxTokens: 4096,
-    decisionMaxTokens: 2048,
+  const runProcessSupervisor = new RunSupervisor({
+    store: new JsonProcessRegistryStore({
+      filePath: path.join(baseDir, "processes.json"),
+      nowIso: () => new Date().toISOString(),
+    }),
+    spawner: nodeProcessSpawner,
+    nowIso: () => new Date().toISOString(),
+    nowEpochMs: () => Date.now(),
+    events: createRuntimeEventSink(baseDir),
+    newEventId: createRuntimeEventIdFactory(`runtime-${resumeRunId ? "resume" : "run"}`),
+    eventProducer: "tiny-agent-run",
   });
 
+  // --- Wire up modules ---
   const promptBuilder = new PromptBuilder();
   const validator = new ToolCallValidator();
   const reviewer = new AlwaysApproveReviewer();
 
   const environment = new Environment();
-  environment.setBoundChannel(channel);
 
-  let imTransport: ImCliTransport;
+  const imService = createCliRunImService();
   let skillRunStore: SkillRunStore;
 
   // --- Create or load run/session state ---
@@ -608,13 +773,11 @@ async function main(): Promise<void> {
   let initialState: AgentRunState;
   let initialHistory: ModelContextItem[] = [];
   let task: string;
-  let imCursor: string | undefined;
   let runPaths: RunScopedPaths;
 
   if (resumeRunId) {
     runDir = resolveRunDir(runsDir, resumeRunId);
     runPaths = ensureRunScopedPaths(runDir);
-    imTransport = new ImCliTransport({ baseDir: runPaths.imDir });
     skillRunStore = new SkillRunStore({
       skillRunsDir: runPaths.skillRunsDir,
       skillsDir,
@@ -632,24 +795,31 @@ async function main(): Promise<void> {
     initialState = new AgentRunState(loadedState);
     initialHistory = appendResumeReminder(loadHistoryForRun(runDir));
 
-    const initial = await imTransport.receive({ channel });
-    imCursor = initial.nextCursor;
+    await ensureDefaultRunImBinding({
+      service: imService,
+      stateRoot: baseDir,
+      runId,
+    });
     publishLatestRun(runsDir, runId, runDir);
   } else {
     runId = `run-${Date.now()}`;
     runDir = path.join(runsDir, runId);
     runPaths = ensureRunScopedPaths(runDir);
-    imTransport = new ImCliTransport({ baseDir: runPaths.imDir });
     skillRunStore = new SkillRunStore({
       skillRunsDir: runPaths.skillRunsDir,
       skillsDir,
     });
     environment.setEventsPath(runPaths.environmentEventsPath);
+    await ensureDefaultRunImBinding({
+      service: imService,
+      stateRoot: baseDir,
+      runId,
+    });
 
     transcriptPath = path.join(runDir, "transcript.jsonl");
     transcript = new TranscriptStore(runDir);
     const initialDisplayTask =
-      taskArg ?? `Waiting for first user message on channel "${channel}"`;
+      taskArg ?? `Waiting for first user message on public IM endpoint ${createRunImSelfEndpoint(runId)}`;
 
     // Make the run visible to TUI immediately, even before the first IM message.
     // The real run_started event is still recorded by RunOrchestrator once a
@@ -669,14 +839,20 @@ async function main(): Promise<void> {
     publishLatestRun(runsDir, runId, runDir);
 
     if (taskArg) {
-      const initial = await imTransport.receive({ channel });
-      imCursor = initial.nextCursor;
       task = taskArg;
     } else {
-      console.log(`[tiny-agent] Waiting for user message on channel: ${channel}`);
-      const firstMessage = await waitForFirstMessage(imTransport, environment, channel);
+      console.log(
+        `[tiny-agent] Waiting for user message on public IM endpoint: ${createRunImSelfEndpoint(runId)}`,
+      );
+      const firstMessage = await waitForFirstMessage(
+        {
+          service: imService,
+          stateRoot: baseDir,
+          runId,
+        },
+        environment,
+      );
       task = firstMessage.task;
-      imCursor = firstMessage.cursor;
       console.log(`[tiny-agent] Received task: ${task}`);
     }
 
@@ -698,32 +874,36 @@ async function main(): Promise<void> {
       timestamp: createdAt,
       message: {
         id: `task-${runId}`,
-        channel,
+        channel: createRunImSelfEndpoint(runId),
         role: "user",
         text: taskArg,
         createdAt,
+        metadata: {
+          from: "user:main",
+          to: createRunImSelfEndpoint(runId),
+        },
       },
     });
   }
 
-  // --- IM → Environment bridge: poll inbox for new user messages ---
+  // --- IM → Environment bridge: poll public run bindings for new user messages ---
   let imPollingActive = true;
   const imPollInterval = setInterval(async () => {
     if (!imPollingActive) return;
     try {
-      const result = await imTransport.receive({ channel, cursor: imCursor });
-      for (const msg of result.messages) {
-        environment.appendEvent({
-          id: `env-im-${msg.id}`,
-          level: ENVIRONMENT_EVENT_LEVELS.USER_MESSAGE,
-          kind: "user_message_received",
-          source: "im",
-          timestamp: msg.createdAt,
-          message: msg,
+      const messages = await receivePublicRunUserMessages({
+        service: imService,
+        stateRoot: baseDir,
+        runId,
+      });
+      for (const message of messages) {
+        appendPublicImUserMessage(environment, message);
+        await ackPublicRunUserMessage({
+          service: imService,
+          stateRoot: baseDir,
+          runId,
+          messageId: message.id,
         });
-      }
-      if (result.nextCursor) {
-        imCursor = result.nextCursor;
       }
     } catch {
       // Best-effort polling
@@ -737,19 +917,26 @@ async function main(): Promise<void> {
     contextWindow: createCliContextWindowPort(promptBuilder),
     initialItems: initialHistory,
   });
+  const terminalHost = createCliTerminalHost({
+    runId,
+    runDir,
+    stateDir: baseDir,
+    paths: runPaths,
+    skillsDir,
+    transcriptPath,
+    supervisor: runProcessSupervisor,
+  });
+  const modelGateway = createCliModelGateway({
+    runId,
+    runDir,
+    model: deepseek.model,
+    supervisor: runProcessSupervisor,
+  });
   const ports: RunPorts = {
-    model,
+    model: modelGateway.model,
     validator,
     reviewer,
-    terminal: createCliTerminalPort({
-      channel,
-      runId,
-      runDir,
-      stateDir: baseDir,
-      paths: runPaths,
-      skillsDir,
-      transcriptPath,
-    }),
+    terminal: terminalHost.terminal,
     modelContext,
     session: createCliRunSessionPort(new RunSessionStore(runDir)),
     tools: [...STATIC_TOOL_CATALOG],
@@ -782,6 +969,10 @@ async function main(): Promise<void> {
   } finally {
     imPollingActive = false;
     clearInterval(imPollInterval);
+    await Promise.all([
+      terminalHost.dispose(),
+      modelGateway.dispose(),
+    ]);
   }
 }
 

@@ -41,13 +41,6 @@ export class Environment implements EnvironmentPort {
 
   private waiters: Waiter[] = [];
 
-  // Bound IM channel for this run; io_wait channel is auto-corrected to this value.
-  boundChannel: string | undefined = undefined;
-
-  setBoundChannel(ch: string): void {
-    this.boundChannel = ch;
-  }
-
   // Set the file path for persisting environment events.
   // When set, every appendEvent also writes a JSONL line, and waiters poll the
   // file for events emitted by sibling CLI processes.

@@ -18,9 +18,9 @@ export { BlessedRenderer } from "./renderer.js";
 export { TuiController } from "./controller.js";
 export { SessionLogTailReader } from "./session-log-tail.js";
 export {
-  RunLifecycleAuditReader,
+  TeamLifecycleAuditReader,
   projectLifecycleAuditEvents,
-  readRunLifecycleAuditProjection,
+  readTeamLifecycleAuditProjection,
 } from "./lifecycle-audit-projection.js";
 export { DEFAULT_TUI_LIMITS } from "./types.js";
 export type {
@@ -47,8 +47,8 @@ export type {
 export type {
   LifecycleAuditProjectionResult,
   LifecycleAuditProjectionState,
-  ReadRunLifecycleAuditProjectionInput,
-  RunLifecycleAuditReaderOptions,
+  ReadTeamLifecycleAuditProjectionInput,
+  TeamLifecycleAuditReaderOptions,
 } from "./lifecycle-audit-projection.js";
 export type {
   TuiViewModel,

@@ -193,6 +193,13 @@ export class ManagedPtySession {
     return this.screenBuffer.snapshot();
   }
 
+  async readScreenWindow(options: {
+    startLine?: number;
+    lineCount?: number;
+  }): Promise<TerminalScreenBufferSnapshot> {
+    return this.screenBuffer.snapshot(options);
+  }
+
   private applyChunk(chunk: string): void {
     const bytes = Buffer.from(chunk, "utf-8");
     if (this.outputLogPath === undefined) {

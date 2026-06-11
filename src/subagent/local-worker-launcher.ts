@@ -10,41 +10,76 @@ import type {
   TeamRosterEvent,
   TeamRosterResult,
 } from "./team-roster.js";
+import {
+  planTeamRunReferencePath,
+  planTeamScopedDirectoryLayout,
+} from "./directory-store.js";
+import {
+  createRuntimeProcess,
+  markProcessRunning,
+  type RuntimeProcessRecord,
+} from "../runtime/process-registry.js";
 
 // ---------------------------------------------------------------------------
 // Path planner — pure functions
 // ---------------------------------------------------------------------------
 
-/** Workers directory relative to the product state root. */
-export const DEFAULT_WORKERS_DIR = "runs";
+/** Canonical worker launch paths used by the active launcher. */
+export type WorkerLaunchPaths = {
+  /** Directory for team member worker state. */
+  workerDir: string;
+  /** Worker state JSON file path. */
+  workerStateFile: string;
+  /** Worker output log file path. */
+  workerLogFile: string;
+  /** Team-owned run reference file path, when available. */
+  runRefFile?: string;
+};
 
-/** Run-scoped worker directory paths. */
-export type RunScopedWorkerPaths = {
-  /** Directory for worker state under runs/<runId>/workers/<workerId>/ */
-  runWorkerDir: string;
-  /** Worker state JSON file path */
-  runWorkerStateFile: string;
-  /** Worker output log file path */
-  runWorkerLogFile: string;
+/** Active team-scoped worker paths under teams/<teamId>/. */
+export type TeamScopedWorkerPaths = WorkerLaunchPaths & {
+  teamId: string;
+  memberId: string;
+  runId: string;
+  /** Directory for team member state under teams/<teamId>/members/<memberId>/ */
+  teamMemberDir: string;
+  /** Team member worker state JSON file path. */
+  teamMemberStateFile: string;
+  /** Team member output log file path. */
+  teamMemberLogFile: string;
+  /** Team-owned reference to the agent run created for this member. */
+  teamRunRefFile: string;
 };
 
 /**
- * Compute run-scoped worker directory paths.
- * Worker state lives under runs/<runId>/workers/<workerId>/,
- * keeping runtime state self-contained per the state-layout contract.
+ * Compute active team-scoped worker paths.
+ * Worker/member state lives under teams/<teamId>/members/<memberId>/,
+ * while the run reference lives under teams/<teamId>/runs/<runId>.json.
  * Pure — no IO, no side effects.
  */
-export function planRunScopedWorkerPaths(
+export function planTeamScopedWorkerPaths(
   stateRoot: string,
+  teamId: string,
+  memberId: string,
   runId: string,
-  workerId: string,
-): RunScopedWorkerPaths {
-  const root = stateRoot.replace(/\/+$/, ""); // strip trailing slashes
-  const runWorkerDir = `${root}/${DEFAULT_WORKERS_DIR}/${runId}/workers/${workerId}`;
+): TeamScopedWorkerPaths {
+  const layout = planTeamScopedDirectoryLayout(stateRoot, teamId);
+  const runRef = planTeamRunReferencePath(stateRoot, teamId, runId);
+  const teamMemberDir = `${layout.membersDir}/${memberId}`;
+  const teamMemberStateFile = `${teamMemberDir}/state.json`;
+  const teamMemberLogFile = `${teamMemberDir}/output.log`;
   return {
-    runWorkerDir,
-    runWorkerStateFile: `${runWorkerDir}/state.json`,
-    runWorkerLogFile: `${runWorkerDir}/output.log`,
+    teamId,
+    memberId,
+    runId,
+    workerDir: teamMemberDir,
+    workerStateFile: teamMemberStateFile,
+    workerLogFile: teamMemberLogFile,
+    runRefFile: runRef.runRefFile,
+    teamMemberDir,
+    teamMemberStateFile,
+    teamMemberLogFile,
+    teamRunRefFile: runRef.runRefFile,
   };
 }
 
@@ -102,7 +137,10 @@ export type RosterStorePort = {
 /** Durable process state written for reaper/shutdown lookup. */
 export type WorkerProcessState = {
   workerId: string;
+  teamId?: string;
+  memberId?: string;
   runId: string;
+  assignmentId?: string;
   pid: number;
   spawnedPid: number;
   status: "running" | "exited" | "terminated";
@@ -123,6 +161,11 @@ export type WorkerStatePort = {
   write: (filePath: string, state: WorkerProcessState) => Promise<void>;
 };
 
+/** Process registry port — explicit durable process record write. */
+export type WorkerProcessRegistryPort = {
+  upsert: (record: RuntimeProcessRecord) => Promise<void> | void;
+};
+
 /** All effect ports needed to execute a worker launch. */
 export type WorkerLaunchEffects = {
   spawn: SpawnPort;
@@ -131,6 +174,7 @@ export type WorkerLaunchEffects = {
   ids: IdGenerator;
   roster: RosterStorePort;
   workerState: WorkerStatePort;
+  processRegistry?: WorkerProcessRegistryPort;
 };
 
 /** A spawn command ready for execution by a SpawnPort. */
@@ -145,10 +189,16 @@ export type WorkerSpawnCommand = {
 
 /** Input parameters for planning a worker launch. */
 export type WorkerLaunchParams = {
-  /** Product state root directory (for run-scoped path computation) */
+  /** Product state root directory (for team-scoped path computation) */
   stateRoot: string;
+  /** Team workflow id that owns this member run */
+  teamId: string;
+  /** Team member id that owns this run */
+  memberId: string;
   /** Agent run id */
   runId: string;
+  /** Optional team assignment id that caused the run */
+  assignmentId?: string;
   /** Unique worker identifier */
   workerId: string;
   /** Workspace directory for the worker */
@@ -170,7 +220,10 @@ export type WorkerLaunchParams = {
 /** A complete worker launch plan with all computed fields. */
 export type WorkerLaunchPlan = {
   workerId: string;
+  teamId: string;
+  memberId: string;
   runId: string;
+  assignmentId?: string;
   stateRoot: string;
   workspace: string;
   branch: string;
@@ -179,8 +232,8 @@ export type WorkerLaunchPlan = {
   allowedActions: string[];
   taskPrompt: string;
   createdAt: string;
-  /** Run-scoped worker paths */
-  paths: RunScopedWorkerPaths;
+  /** Active team-scoped worker paths */
+  paths: TeamScopedWorkerPaths;
   /** Command to spawn the worker process */
   spawnCommand: WorkerSpawnCommand;
 };
@@ -191,21 +244,25 @@ export type WorkerLaunchPlan = {
 
 /**
  * Plan a worker launch from explicit input parameters.
- * Computes run-scoped paths and builds the spawn command.
+ * Computes team-scoped paths and builds the spawn command.
  * Pure — no IO, no side effects, no hidden dependencies.
  */
 export function planWorkerLaunch(
   params: WorkerLaunchParams,
 ): WorkerLaunchPlan {
-  const paths = planRunScopedWorkerPaths(
+  const paths = planTeamScopedWorkerPaths(
     params.stateRoot,
+    params.teamId,
+    params.memberId,
     params.runId,
-    params.workerId,
   );
 
   const plan: WorkerLaunchPlan = {
     workerId: params.workerId,
+    teamId: params.teamId,
+    memberId: params.memberId,
     runId: params.runId,
+    assignmentId: params.assignmentId,
     stateRoot: params.stateRoot,
     workspace: params.workspace,
     branch: params.branch,
@@ -230,7 +287,7 @@ export function planWorkerLaunch(
 /**
  * Build a spawn command for a worker launch plan.
  * The command runs the installed `tiny-agent run` CLI with the worker's
- * channel and task prompt.
+ * task prompt. Public IM binding is owned by run startup, not by a channel arg.
  * Pure — no IO, no side effects.
  */
 export function buildSpawnCommand(
@@ -238,8 +295,6 @@ export function buildSpawnCommand(
 ): WorkerSpawnCommand {
   const args: string[] = [
     "run",
-    "--channel",
-    plan.channel,
     "--state-dir",
     plan.stateRoot,
   ];
@@ -263,6 +318,7 @@ export type LaunchFailureStage =
   | "checkout"
   | "spawn"
   | "worker_state"
+  | "process_registry"
   | "member_add"
   | "member_update"
   | "member_status";
@@ -303,6 +359,57 @@ export type WorkerLaunchFailure = {
 export type WorkerLaunchResult = WorkerLaunchSuccess | WorkerLaunchFailure;
 
 // ---------------------------------------------------------------------------
+// Process registry adapter helpers
+// ---------------------------------------------------------------------------
+
+export function teamMemberRunProcessId(
+  teamId: string,
+  memberId: string,
+  runId: string,
+): string {
+  return `team-member-run:${teamId}:${memberId}:${runId}`;
+}
+
+export function createTeamMemberRunProcessRecord(
+  plan: WorkerLaunchPlan,
+): RuntimeProcessRecord {
+  return createRuntimeProcess({
+    id: teamMemberRunProcessId(plan.teamId, plan.memberId, plan.runId),
+    kind: "run",
+    owner: {
+      scope: "team-member",
+      teamId: plan.teamId,
+      memberId: plan.memberId,
+      runId: plan.runId,
+    },
+    command: {
+      executable: plan.spawnCommand.command,
+      args: plan.spawnCommand.args,
+      cwd: plan.workspace,
+    },
+    now: plan.createdAt,
+    statePath: plan.paths.workerStateFile,
+    logPath: plan.paths.workerLogFile,
+    metadata: {
+      channel: plan.channel,
+      branch: plan.branch,
+      role: plan.role,
+      assignmentId: plan.assignmentId ?? null,
+    },
+  });
+}
+
+export function markTeamMemberRunProcessRunning(
+  plan: WorkerLaunchPlan,
+  input: { pid: number; now: string },
+): RuntimeProcessRecord {
+  return markProcessRunning(createTeamMemberRunProcessRecord(plan), {
+    pid: input.pid,
+    now: input.now,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Launch executor — function behind explicit ports
 // ---------------------------------------------------------------------------
 
@@ -330,13 +437,15 @@ export async function launchLocalWorker(
   const registerEvent: TeamRosterEvent = {
     kind: "member_added",
     eventId: registerEventId,
-    memberId: plan.workerId,
+    memberId: plan.memberId,
     role: plan.role,
     channel: plan.channel,
     metadata: {
       workspace: plan.workspace,
       branch: plan.branch,
       allowedActions: plan.allowedActions.join(","),
+      runId: plan.runId,
+      assignmentId: plan.assignmentId ?? "",
     },
   };
 
@@ -437,9 +546,12 @@ export async function launchLocalWorker(
 
   // Step 4: Persist process state for reaper/shutdown lookup.
   try {
-    await effects.workerState.write(plan.paths.runWorkerStateFile, {
+    await effects.workerState.write(plan.paths.workerStateFile, {
       workerId: plan.workerId,
+      teamId: plan.teamId,
+      memberId: plan.memberId,
       runId: plan.runId,
+      assignmentId: plan.assignmentId,
       pid: spawnResult.pid,
       spawnedPid: spawnResult.pid,
       status: "running",
@@ -464,12 +576,37 @@ export async function launchLocalWorker(
     };
   }
 
+  if (effects.processRegistry) {
+    try {
+      await effects.processRegistry.upsert(
+        markTeamMemberRunProcessRunning(plan, {
+          pid: spawnResult.pid,
+          now: effects.clock.nowISO(),
+        }),
+      );
+    } catch (err) {
+      return {
+        kind: "launch_failure",
+        workerId: plan.workerId,
+        stage: "process_registry",
+        error: `Worker process registry write failed: ${formatError(err)}`,
+        evidence: {
+          branch: plan.branch,
+          registeredEventId: registerEventId,
+          runId: plan.runId,
+          spawnResult,
+          failedAt: effects.clock.nowISO(),
+        },
+      };
+    }
+  }
+
   // Step 5: Update worker with runId
   const updateEventId = effects.ids.newId();
   const updateEvent: TeamRosterEvent = {
     kind: "member_updated",
     eventId: updateEventId,
-    memberId: plan.workerId,
+    memberId: plan.memberId,
     patch: {
       runId: plan.runId,
       currentTask: plan.taskPrompt,
@@ -514,7 +651,7 @@ export async function launchLocalWorker(
   const statusEvent: TeamRosterEvent = {
     kind: "member_status_changed",
     eventId: statusEventId,
-    memberId: plan.workerId,
+    memberId: plan.memberId,
     status: "active",
     reason: "launch completed",
   };
@@ -554,7 +691,7 @@ export async function launchLocalWorker(
 
   // Get member for success response.
   const state = await effects.roster.load();
-  const member = state.members[plan.workerId];
+  const member = state.members[plan.memberId];
 
   return {
     kind: "launch_success",
@@ -565,7 +702,7 @@ export async function launchLocalWorker(
     workspace: plan.workspace,
     spawnedPid: spawnResult.pid,
     member: member ?? {
-      memberId: plan.workerId,
+      memberId: plan.memberId,
       role: plan.role,
       runId: plan.runId,
       channel: plan.channel,
@@ -573,6 +710,8 @@ export async function launchLocalWorker(
         workspace: plan.workspace,
         branch: plan.branch,
         allowedActions: plan.allowedActions.join(","),
+        runId: plan.runId,
+        assignmentId: plan.assignmentId ?? "",
       },
       currentTask: plan.taskPrompt,
       status: "active",

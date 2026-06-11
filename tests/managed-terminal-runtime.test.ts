@@ -94,6 +94,13 @@ describe("ManagedTerminalRuntime", () => {
       screen: {
         rows: 24,
         cols: 80,
+        window: {
+          startLine: 0,
+          endLine: 24,
+          totalLines: 24,
+          hasOlder: false,
+          hasNewer: false,
+        },
         logRef: { path: "managed-pty://default" },
       },
     });
@@ -201,9 +208,52 @@ describe("ManagedTerminalRuntime", () => {
         "build",
         "default",
       ]);
+      expect(list.sessions.every((session) => session.window !== undefined)).toBe(true);
+      expect(list.sessions.every((session) => typeof session.preview === "string")).toBe(true);
     }
     expect(write).toMatchObject({ currentSession: "build", result: "ok" });
     expect(ptyMock.spawned[1]?.writes.at(-1)).toBe("pwd\n");
+  });
+
+  it("observes historical visual-line windows by cursor", async () => {
+    const port = makeRuntime().createRunPort();
+    await port.execute({ request: { kind: "session_observe" } });
+    ptyMock.spawned[0]?.emit(
+      Array.from({ length: 30 }, (_, index) => `line-${index}`).join("\r\n"),
+    );
+
+    const latest = await port.execute({ request: { kind: "session_observe" } });
+    expect(latest.screen.window).toMatchObject({
+      startLine: 6,
+      endLine: 30,
+      totalLines: 30,
+      hasOlder: true,
+      hasNewer: false,
+    });
+    expect(latest.screen.text).toContain("line-29");
+    expect(latest.screen.text).not.toContain("line-0");
+
+    const firstPage = await port.execute({
+      request: {
+        kind: "session_observe",
+        startLine: 0,
+        lineCount: 5,
+      },
+    });
+    expect(firstPage.screen.window).toMatchObject({
+      startLine: 0,
+      endLine: 5,
+      totalLines: 30,
+      hasOlder: false,
+      hasNewer: true,
+    });
+    expect(firstPage.screen.text.split("\n")).toEqual([
+      "line-0",
+      "line-1",
+      "line-2",
+      "line-3",
+      "line-4",
+    ]);
   });
 
   it("observes a named session without changing focus", async () => {
@@ -270,7 +320,7 @@ describe("ManagedTerminalRuntime", () => {
         kind: "terminal_write",
         expectedInputSeq: 0,
         text:
-          "tiny-agent im send --channel default --kind status --text-stdin <<'IM'\n" +
+          "tiny-agent im send --from run:run-1 --to user:main --kind status --text-stdin <<'IM'\n" +
           "body\n" +
           "IM\n",
       },
@@ -278,7 +328,7 @@ describe("ManagedTerminalRuntime", () => {
     setTimeout(() => {
       ptyMock.spawned[0]?.emit(
         [
-          "$ tiny-agent im send --channel default --kind status --text-stdin <<'IM'",
+          "$ tiny-agent im send --from run:run-1 --to user:main --kind status --text-stdin <<'IM'",
           ...Array.from({ length: 60 }, (_, index) => `> line-${index}`),
           "ok=true",
           "id=agent-1",
@@ -318,7 +368,7 @@ describe("ManagedTerminalRuntime", () => {
       request: {
         kind: "terminal_write",
         expectedInputSeq: 0,
-        text: "tiny-agent im send --channel default --text-stdin\n",
+        text: "tiny-agent im send --from \"$TAH_IM_SELF_ENDPOINT\" --to \"$TAH_IM_USER_ENDPOINT\" --text-stdin\n",
       },
     });
     setTimeout(() => {

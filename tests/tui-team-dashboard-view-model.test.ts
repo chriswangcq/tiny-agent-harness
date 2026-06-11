@@ -12,19 +12,19 @@ import type {
   DashboardRowStatus,
   AuditEvent,
   LifecycleAuditEventItem,
+  TeamDashboardAssignmentSummary,
 } from "../src/tui/team-dashboard-view-model.js";
-import type { SubAgentTeamSummary } from "../src/subagent/team.js";
 import type { TeamRosterSummary } from "../src/subagent/team-roster.js";
 import type { MasterReviewChecklist } from "../src/subagent/merge-protocol.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────
 
-function emptyTeamSummary(): SubAgentTeamSummary {
+function emptyTeamSummary(): TeamDashboardAssignmentSummary {
   return {
     teamId: "test-team",
-    totalTasks: 0,
+    totalAssignments: 0,
     totalWorkers: 0,
-    tasksByStatus: {},
+    assignmentsByStatus: {},
     workersByStatus: {},
     activeAssignments: [],
   };
@@ -74,7 +74,7 @@ describe("buildTeamDashboardViewModel", () => {
     const kinds = vm.sections.map((s) => s.kind);
     expect(kinds).toContain("team-overview");
     expect(kinds).toContain("team-roster");
-    expect(kinds).toContain("active-tasks");
+    expect(kinds).toContain("active-assignments");
     expect(kinds).toContain("run-status");
   });
 
@@ -82,9 +82,9 @@ describe("buildTeamDashboardViewModel", () => {
     const input = emptyInput();
     input.teamSummary = {
       teamId: "team-alpha",
-      totalTasks: 5,
+      totalAssignments: 5,
       totalWorkers: 3,
-      tasksByStatus: { succeeded: 3, running: 1, queued: 1 },
+      assignmentsByStatus: { succeeded: 3, running: 1, queued: 1 },
       workersByStatus: { active: 2, idle: 1 },
       activeAssignments: [],
     };
@@ -94,7 +94,7 @@ describe("buildTeamDashboardViewModel", () => {
     expect(overview).toBeDefined();
     const texts = overview.rows.map((r) => r.text);
     expect(texts.some((t) => t.includes("team-alpha"))).toBe(true);
-    expect(texts.some((t) => t.includes("Total Tasks: 5"))).toBe(true);
+    expect(texts.some((t) => t.includes("Total Assignments: 5"))).toBe(true);
     expect(texts.some((t) => t.includes("Total Workers: 3"))).toBe(true);
   });
 
@@ -220,27 +220,27 @@ describe("buildTeamDashboardViewModel", () => {
     }
   });
 
-  it("active tasks section handles empty assignments", () => {
+  it("active assignments section handles empty assignments", () => {
     const vm = buildTeamDashboardViewModel(emptyInput());
-    const taskSection = vm.sections.find((s) => s.kind === "active-tasks")!;
-    expect(taskSection.rows.some((r) => r.text.includes("No active assignments"))).toBe(true);
+    const assignmentSection = vm.sections.find((s) => s.kind === "active-assignments")!;
+    expect(assignmentSection.rows.some((r) => r.text.includes("No active assignments"))).toBe(true);
   });
 
-  it("active tasks section shows assignments", () => {
+  it("active assignments section shows assignments", () => {
     const input = emptyInput();
     input.teamSummary = {
       ...emptyTeamSummary(),
       activeAssignments: [
-        { taskId: "t1", workerId: "w1" },
-        { taskId: "t2", workerId: "w2" },
+        { assignmentId: "a1", workerId: "w1" },
+        { assignmentId: "a2", workerId: "w2" },
       ],
-    } as SubAgentTeamSummary;
+    };
 
     const vm = buildTeamDashboardViewModel(input);
-    const taskSection = vm.sections.find((s) => s.kind === "active-tasks")!;
-    const texts = taskSection.rows.map((r) => r.text);
+    const assignmentSection = vm.sections.find((s) => s.kind === "active-assignments")!;
+    const texts = assignmentSection.rows.map((r) => r.text);
     expect(texts.some((t) => t.includes("Active Assignments: 2"))).toBe(true);
-    expect(texts.some((t) => t.includes("t1") && t.includes("w1"))).toBe(true);
+    expect(texts.some((t) => t.includes("a1") && t.includes("w1"))).toBe(true);
   });
 });
 
@@ -304,9 +304,9 @@ describe("purity contract", () => {
     const populated: TeamDashboardInput = {
       teamSummary: {
         teamId: "test",
-        totalTasks: 5,
+        totalAssignments: 5,
         totalWorkers: 3,
-        tasksByStatus: { succeeded: 5 },
+        assignmentsByStatus: { succeeded: 5 },
         workersByStatus: { active: 3 },
         activeAssignments: [],
       },

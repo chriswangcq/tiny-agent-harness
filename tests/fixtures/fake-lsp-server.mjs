@@ -42,6 +42,9 @@ function handleMessage(message) {
         definitionProvider: true,
         referencesProvider: true,
         documentSymbolProvider: true,
+        workspaceSymbolProvider: true,
+        implementationProvider: true,
+        callHierarchyProvider: true,
         hoverProvider: true,
         textDocumentSync: 1,
       },
@@ -112,6 +115,36 @@ function handleMessage(message) {
     return;
   }
 
+  if (message.method === "workspace/symbol") {
+    respond(message.id, [
+      {
+        name: "Example",
+        kind: 5,
+        containerName: "src/example.ts",
+        location: {
+          uri: targetUri("src/example.ts"),
+          range: {
+            start: { line: 0, character: 13 },
+            end: { line: 0, character: 20 },
+          },
+        },
+      },
+      {
+        name: "Target",
+        kind: 14,
+        containerName: "src/target.ts",
+        location: {
+          uri: targetUri("src/target.ts"),
+          range: {
+            start: { line: 3, character: 6 },
+            end: { line: 3, character: 12 },
+          },
+        },
+      },
+    ]);
+    return;
+  }
+
   if (message.method === "textDocument/definition") {
     respond(message.id, {
       uri: targetUri("src/target.ts"),
@@ -120,6 +153,19 @@ function handleMessage(message) {
         end: { line: 3, character: 13 },
       },
     });
+    return;
+  }
+
+  if (message.method === "textDocument/implementation") {
+    respond(message.id, [
+      {
+        uri: targetUri("src/target.ts"),
+        range: {
+          start: { line: 0, character: 16 },
+          end: { line: 0, character: 21 },
+        },
+      },
+    ]);
     return;
   }
 
@@ -138,6 +184,79 @@ function handleMessage(message) {
           start: { line: 3, character: 7 },
           end: { line: 3, character: 13 },
         },
+      },
+    ]);
+    return;
+  }
+
+  if (message.method === "textDocument/prepareCallHierarchy") {
+    respond(message.id, [
+      {
+        name: "run",
+        kind: 6,
+        uri: targetUri("src/example.ts"),
+        range: {
+          start: { line: 1, character: 2 },
+          end: { line: 1, character: 20 },
+        },
+        selectionRange: {
+          start: { line: 1, character: 2 },
+          end: { line: 1, character: 5 },
+        },
+      },
+    ]);
+    return;
+  }
+
+  if (message.method === "callHierarchy/incomingCalls") {
+    respond(message.id, [
+      {
+        from: {
+          name: "other",
+          kind: 12,
+          uri: targetUri("src/target.ts"),
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: 2, character: 1 },
+          },
+          selectionRange: {
+            start: { line: 0, character: 16 },
+            end: { line: 0, character: 21 },
+          },
+        },
+        fromRanges: [
+          {
+            start: { line: 1, character: 9 },
+            end: { line: 1, character: 12 },
+          },
+        ],
+      },
+    ]);
+    return;
+  }
+
+  if (message.method === "callHierarchy/outgoingCalls") {
+    respond(message.id, [
+      {
+        to: {
+          name: "Target",
+          kind: 14,
+          uri: targetUri("src/target.ts"),
+          range: {
+            start: { line: 3, character: 6 },
+            end: { line: 3, character: 12 },
+          },
+          selectionRange: {
+            start: { line: 3, character: 6 },
+            end: { line: 3, character: 12 },
+          },
+        },
+        fromRanges: [
+          {
+            start: { line: 1, character: 17 },
+            end: { line: 1, character: 18 },
+          },
+        ],
       },
     ]);
     return;

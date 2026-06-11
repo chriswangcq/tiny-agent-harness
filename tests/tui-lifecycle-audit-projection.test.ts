@@ -4,9 +4,9 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SupervisorLifecycleEvent } from "../src/subagent/supervisor-store.js";
 import {
-  RunLifecycleAuditReader,
+  TeamLifecycleAuditReader,
   projectLifecycleAuditEvents,
-  readRunLifecycleAuditProjection,
+  readTeamLifecycleAuditProjection,
 } from "../src/tui/lifecycle-audit-projection.js";
 
 const tmpDirs: string[] = [];
@@ -17,19 +17,19 @@ afterEach(() => {
   }
 });
 
-function makeTempRunDir(): string {
+function makeTempTeamDir(): string {
   const root = mkdtempSync(path.join(os.tmpdir(), "tah-lifecycle-audit-"));
   tmpDirs.push(root);
-  const runDir = path.join(root, ".tiny-agent", "runs", "run-1");
-  mkdirSync(path.join(runDir, "supervisor"), { recursive: true });
-  return runDir;
+  const teamDir = path.join(root, ".tiny-agent", "teams", "team-1");
+  mkdirSync(path.join(teamDir, "supervisor"), { recursive: true });
+  return teamDir;
 }
 
 function appendEvents(
-  runDir: string,
+  teamDir: string,
   lines: Array<SupervisorLifecycleEvent | string>,
 ): void {
-  const filePath = path.join(runDir, "supervisor", "lifecycle-events.jsonl");
+  const filePath = path.join(teamDir, "supervisor", "lifecycle-events.jsonl");
   for (const line of lines) {
     appendFileSync(
       filePath,
@@ -125,10 +125,10 @@ describe("projectLifecycleAuditEvents", () => {
   });
 });
 
-describe("readRunLifecycleAuditProjection", () => {
-  it("reads run-scoped lifecycle-events.jsonl into accumulated auditEvents", () => {
-    const runDir = makeTempRunDir();
-    appendEvents(runDir, [
+describe("readTeamLifecycleAuditProjection", () => {
+  it("reads team-scoped lifecycle-events.jsonl into accumulated auditEvents", () => {
+    const teamDir = makeTempTeamDir();
+    appendEvents(teamDir, [
       event("hb-1", "heartbeat_recorded", { workerId: "coder-1" }),
       event("lease-1", "lease_acquired", {
         workerId: "coder-1",
@@ -138,7 +138,7 @@ describe("readRunLifecycleAuditProjection", () => {
       }),
     ]);
 
-    const result = readRunLifecycleAuditProjection({ runDir });
+    const result = readTeamLifecycleAuditProjection({ teamDir });
 
     expect(result.state.byteOffset).toBeGreaterThan(0);
     expect(result.state.auditEvents.map((item) => item.eventId)).toEqual([
@@ -149,20 +149,20 @@ describe("readRunLifecycleAuditProjection", () => {
   });
 
   it("uses byte offset state to read only appended lifecycle events", () => {
-    const runDir = makeTempRunDir();
-    appendEvents(runDir, [
+    const teamDir = makeTempTeamDir();
+    appendEvents(teamDir, [
       event("hb-1", "heartbeat_recorded", { workerId: "coder-1" }),
     ]);
-    const first = readRunLifecycleAuditProjection({ runDir });
+    const first = readTeamLifecycleAuditProjection({ teamDir });
 
-    appendEvents(runDir, [
+    appendEvents(teamDir, [
       event("shutdown-1", "shutdown_completed", {
         workerId: "coder-1",
         totalWorkersTerminated: 1,
       }),
     ]);
-    const second = readRunLifecycleAuditProjection({
-      runDir,
+    const second = readTeamLifecycleAuditProjection({
+      teamDir,
       previousState: first.state,
     });
 
@@ -176,8 +176,8 @@ describe("readRunLifecycleAuditProjection", () => {
   });
 
   it("reports malformed and invalid JSONL lines without blocking valid events", () => {
-    const runDir = makeTempRunDir();
-    appendEvents(runDir, [
+    const teamDir = makeTempTeamDir();
+    appendEvents(teamDir, [
       "not json",
       { eventId: "bad", type: "not_real" as SupervisorLifecycleEvent["type"], timestamp: "2026-06-07T00:00:00.000Z", payload: {} },
       event("ok", "reaper_skipped", {
@@ -186,7 +186,7 @@ describe("readRunLifecycleAuditProjection", () => {
       }),
     ]);
 
-    const result = readRunLifecycleAuditProjection({ runDir });
+    const result = readTeamLifecycleAuditProjection({ teamDir });
 
     expect(result.parseErrors.length).toBe(2);
     expect(result.state.auditEvents).toEqual([
@@ -199,14 +199,14 @@ describe("readRunLifecycleAuditProjection", () => {
   });
 
   it("caps accumulated auditEvents to maxEvents newest by timestamp", () => {
-    const runDir = makeTempRunDir();
-    appendEvents(runDir, [
+    const teamDir = makeTempTeamDir();
+    appendEvents(teamDir, [
       event("old", "heartbeat_recorded", { workerId: "coder-1" }, "2026-06-07T00:00:00.000Z"),
       event("middle", "heartbeat_recorded", { workerId: "coder-1" }, "2026-06-07T00:01:00.000Z"),
       event("new", "shutdown_completed", { workerId: "coder-1" }, "2026-06-07T00:02:00.000Z"),
     ]);
 
-    const result = readRunLifecycleAuditProjection({ runDir, maxEvents: 2 });
+    const result = readTeamLifecycleAuditProjection({ teamDir, maxEvents: 2 });
 
     expect(result.state.auditEvents.map((item) => item.eventId)).toEqual([
       "middle",
@@ -215,11 +215,11 @@ describe("readRunLifecycleAuditProjection", () => {
   });
 });
 
-describe("RunLifecycleAuditReader", () => {
+describe("TeamLifecycleAuditReader", () => {
   it("keeps offset state between reads", () => {
-    const runDir = makeTempRunDir();
-    const reader = new RunLifecycleAuditReader({ runDir });
-    appendEvents(runDir, [
+    const teamDir = makeTempTeamDir();
+    const reader = new TeamLifecycleAuditReader({ teamDir });
+    appendEvents(teamDir, [
       event("hb-1", "heartbeat_recorded", { workerId: "coder-1" }),
     ]);
 

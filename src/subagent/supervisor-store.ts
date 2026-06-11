@@ -9,14 +9,19 @@
 // Path planner — pure functions
 // ---------------------------------------------------------------------------
 
-/** Run-scoped supervisor directory pattern. */
-export const RUN_SCOPED_SUPERVISOR_DIR = "runs";
+/** Team-scoped supervisor directory pattern for active team ownership. */
+export const TEAM_SCOPED_SUPERVISOR_DIR = "teams";
 
 /** Paths for supervisor state under a product state root. */
 export type SupervisorPaths = {
   supervisorDir: string;
   eventsFile: string;
   snapshotFile: string;
+};
+
+/** Active supervisor paths under teams/<teamId>/supervisor/. */
+export type TeamScopedSupervisorPaths = SupervisorPaths & {
+  teamId: string;
 };
 
 /**
@@ -43,41 +48,42 @@ function validateStateRoot(stateRoot: string): void {
 }
 
 /**
- * Validate that a run ID does not contain path-traversal or separator segments.
+ * Validate that a team ID does not contain path-traversal or separator segments.
  */
-function validateRunId(runId: string): void {
-  if (!runId || typeof runId !== "string") {
-    throw new Error(`Invalid runId: must be a non-empty string`);
+function validateTeamId(teamId: string): void {
+  if (!teamId || typeof teamId !== "string") {
+    throw new Error(`Invalid teamId: must be a non-empty string`);
   }
-  if (runId.includes("..") || runId.includes("/")) {
+  if (teamId.includes("..") || teamId.includes("/")) {
     throw new Error(
-      `Path traversal detected in runId: "${runId}". ` +
-      `The runId must not contain ".." or "/" segments.`
+      `Path traversal detected in teamId: "${teamId}". ` +
+      `The teamId must not contain ".." or "/" segments.`
     );
   }
-  if (runId.includes("%2e%2e") || runId.includes("%2F")) {
+  if (teamId.includes("%2e%2e") || teamId.includes("%2F")) {
     throw new Error(
-      `Path traversal detected in runId: "${runId}". ` +
+      `Path traversal detected in teamId: "${teamId}". ` +
       `URL-encoded path traversal patterns are not allowed.`
     );
   }
 }
 
 /**
- * Compute run-scoped supervisor store paths (ACTIVE).
- * Active path is under runs/<runId>/supervisor.
+ * Compute active team-scoped supervisor store paths.
+ * Active path is under teams/<teamId>/supervisor.
  * Pure — no IO, no side effects.
- * Throws on path traversal attempts in either stateRoot or runId.
+ * Throws on path traversal attempts in either stateRoot or teamId.
  */
-export function planRunScopedSupervisorPaths(
+export function planTeamScopedSupervisorPaths(
   stateRoot: string,
-  runId: string,
-): SupervisorPaths {
+  teamId: string,
+): TeamScopedSupervisorPaths {
   validateStateRoot(stateRoot);
-  validateRunId(runId);
+  validateTeamId(teamId);
   const root = stateRoot.replace(/\/+$/, "");
-  const supervisorDir = `${root}/${RUN_SCOPED_SUPERVISOR_DIR}/${runId}/supervisor`;
+  const supervisorDir = `${root}/${TEAM_SCOPED_SUPERVISOR_DIR}/${teamId}/supervisor`;
   return {
+    teamId,
     supervisorDir,
     eventsFile: `${supervisorDir}/lifecycle-events.jsonl`,
     snapshotFile: `${supervisorDir}/snapshot.json`,
