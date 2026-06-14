@@ -111,34 +111,46 @@ export class PublicImService {
   }): Promise<PublicImPairRecord> {
     const pair = createImPairAddress(input.a, input.b);
     const pairLayout = planImPairLayout(input.stateRoot, pair.endpointA, pair.endpointB);
-    const existing = await readJsonFile<PublicImPairRecord>(
-      this.ports.store,
-      pairLayout.pairFile,
-    );
-    if (existing) {
-      return existing;
-    }
-
-    const createdAt = this.ports.clock.nowIso();
     const first = createImDirectionalChannelAddress(pair.endpointA, pair.endpointB);
     const second = createImDirectionalChannelAddress(pair.endpointB, pair.endpointA);
-    const record: PublicImPairRecord = {
-      schemaVersion: PUBLIC_IM_SCHEMA_VERSION,
-      pairId: pair.pairId,
-      pairKey: pair.pairKey,
-      kind: input.kind ?? "direct",
-      endpoints: [pair.endpointA.canonical, pair.endpointB.canonical],
-      channels: {
-        [first.channelKey]: first.channelId,
-        [second.channelKey]: second.channelId,
-      },
-      createdAt,
-    };
 
-    await writeJsonFile(this.ports.store, pairLayout.pairFile, record);
-    await this.ensureChannelMeta(input.stateRoot, pair.endpointA, pair.endpointB, record, createdAt);
-    await this.ensureChannelMeta(input.stateRoot, pair.endpointB, pair.endpointA, record, createdAt);
-    return record;
+    return this.ports.store.withWriteLock(
+      {
+        stateRoot: input.stateRoot,
+        lockName: pairLockName(pair.pairId),
+        purpose: "im-pair",
+      },
+      async () => {
+        const existing = await readJsonFile<PublicImPairRecord>(
+          this.ports.store,
+          pairLayout.pairFile,
+        );
+        if (existing) {
+          await this.ensureChannelMeta(input.stateRoot, pair.endpointA, pair.endpointB, existing, existing.createdAt);
+          await this.ensureChannelMeta(input.stateRoot, pair.endpointB, pair.endpointA, existing, existing.createdAt);
+          return existing;
+        }
+
+        const createdAt = this.ports.clock.nowIso();
+        const record: PublicImPairRecord = {
+          schemaVersion: PUBLIC_IM_SCHEMA_VERSION,
+          pairId: pair.pairId,
+          pairKey: pair.pairKey,
+          kind: input.kind ?? "direct",
+          endpoints: [pair.endpointA.canonical, pair.endpointB.canonical],
+          channels: {
+            [first.channelKey]: first.channelId,
+            [second.channelKey]: second.channelId,
+          },
+          createdAt,
+        };
+
+        await writeJsonFile(this.ports.store, pairLayout.pairFile, record);
+        await this.ensureChannelMeta(input.stateRoot, pair.endpointA, pair.endpointB, record, createdAt);
+        await this.ensureChannelMeta(input.stateRoot, pair.endpointB, pair.endpointA, record, createdAt);
+        return record;
+      },
+    );
   }
 
   async bindRun(input: {
@@ -166,20 +178,29 @@ export class PublicImService {
       outboundChannelId: outbound.channelId,
     };
 
-    const layout = planImRunBindingLayout(input.stateRoot, input.runId);
-    const existing = await readJsonFile<PublicImRunBindingRecord>(
-      this.ports.store,
-      layout.bindingFile,
+    return this.ports.store.withWriteLock(
+      {
+        stateRoot: input.stateRoot,
+        lockName: runBindingLockName(input.runId),
+        purpose: "im-run-binding",
+      },
+      async () => {
+        const layout = planImRunBindingLayout(input.stateRoot, input.runId);
+        const existing = await readJsonFile<PublicImRunBindingRecord>(
+          this.ports.store,
+          layout.bindingFile,
+        );
+        const next: PublicImRunBindingRecord = {
+          schemaVersion: PUBLIC_IM_SCHEMA_VERSION,
+          runId: input.runId,
+          self: self.canonical,
+          bindings: upsertBinding(existing?.bindings ?? [], binding),
+          updatedAt: this.ports.clock.nowIso(),
+        };
+        await writeJsonFile(this.ports.store, layout.bindingFile, next);
+        return next;
+      },
     );
-    const next: PublicImRunBindingRecord = {
-      schemaVersion: PUBLIC_IM_SCHEMA_VERSION,
-      runId: input.runId,
-      self: self.canonical,
-      bindings: upsertBinding(existing?.bindings ?? [], binding),
-      updatedAt: this.ports.clock.nowIso(),
-    };
-    await writeJsonFile(this.ports.store, layout.bindingFile, next);
-    return next;
   }
 
   async postMessage(input: {
@@ -288,7 +309,14 @@ export class PublicImService {
     const self = normalizeImEndpoint(input.as);
     const peer = normalizeImEndpoint(input.with);
     const cursorLayout = planImCursorLayout(input.stateRoot, peer, self, self);
-    await this.ports.store.writeText(cursorLayout.cursorFile, input.messageId);
+    await this.ports.store.withWriteLock(
+      {
+        stateRoot: input.stateRoot,
+        lockName: cursorLockName(cursorLayout.channel.channelId, cursorLayout.consumer.consumerId),
+        purpose: "im-cursor",
+      },
+      () => this.ports.store.writeText(cursorLayout.cursorFile, input.messageId),
+    );
   }
 
   async ackRunChannel(input: {
@@ -302,7 +330,14 @@ export class PublicImService {
     const peer = normalizeImEndpoint(input.peer);
     const runConsumer = createImConsumerAddress(`run:${input.runId}`);
     const cursorLayout = planImCursorLayout(input.stateRoot, peer, self, runConsumer.consumer);
-    await this.ports.store.writeText(cursorLayout.cursorFile, input.messageId);
+    await this.ports.store.withWriteLock(
+      {
+        stateRoot: input.stateRoot,
+        lockName: cursorLockName(cursorLayout.channel.channelId, cursorLayout.consumer.consumerId),
+        purpose: "im-cursor",
+      },
+      () => this.ports.store.writeText(cursorLayout.cursorFile, input.messageId),
+    );
   }
 
   async readRunBinding(
@@ -352,12 +387,39 @@ export class PublicImService {
       createdAt: this.ports.clock.nowIso(),
       ...(input.metadata ? { metadata: input.metadata } : {}),
     };
-    await this.ensureChannelMeta(input.stateRoot, from, to, pair, message.createdAt);
-    await appendJsonlFile(this.ports.store, channelLayout.messagesFile, message);
+    await this.ports.store.withWriteLock(
+      {
+        stateRoot: input.stateRoot,
+        lockName: channelLockName(channel.channelId),
+        purpose: "im-channel-append",
+      },
+      async () => {
+        await this.ensureChannelMetaUnlocked(input.stateRoot, from, to, pair, message.createdAt);
+        await appendJsonlFile(this.ports.store, channelLayout.messagesFile, message);
+      },
+    );
     return message;
   }
 
   private async ensureChannelMeta(
+    stateRoot: string,
+    from: ImEndpoint,
+    to: ImEndpoint,
+    pair: PublicImPairRecord,
+    createdAt: string,
+  ): Promise<void> {
+    const channel = createImDirectionalChannelAddress(from, to);
+    await this.ports.store.withWriteLock(
+      {
+        stateRoot,
+        lockName: channelLockName(channel.channelId),
+        purpose: "im-channel-meta",
+      },
+      () => this.ensureChannelMetaUnlocked(stateRoot, from, to, pair, createdAt),
+    );
+  }
+
+  private async ensureChannelMetaUnlocked(
     stateRoot: string,
     from: ImEndpoint,
     to: ImEndpoint,
@@ -383,6 +445,22 @@ export class PublicImService {
       createdAt,
     } satisfies PublicImChannelMetaRecord);
   }
+}
+
+function pairLockName(pairId: string): string {
+  return `im-pair-${pairId}`;
+}
+
+function channelLockName(channelId: string): string {
+  return `im-channel-${channelId}`;
+}
+
+function runBindingLockName(runId: string): string {
+  return `im-run-binding-${runId}`;
+}
+
+function cursorLockName(channelId: string, consumerId: string): string {
+  return `im-cursor-${channelId}-${consumerId}`;
 }
 
 function upsertBinding(

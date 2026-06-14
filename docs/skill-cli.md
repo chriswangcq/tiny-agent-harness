@@ -23,12 +23,21 @@ tiny-agent skill run coding-review --json '{"path":"src"}'
 
 Agent 如果想使用 skill，本质上是在 PTY 里确认 shell prompt 后执行 `tiny-agent skill ...`。因此 skill 执行前仍然经过 tool review，执行结果也通过 PTY observation 返回。
 
+当前实现是 run-scoped all-host：`tiny-agent run` 为每个 run 启动
+`tiny-agent skill host --socket <runDir>/skill-host.sock`，TerminalHost 注入
+`TAH_SKILL_HOST_SOCKET`。普通 `tiny-agent skill ...` 只是 socket client；缺少
+host socket 时明确失败，不直接构造 store/discovery，也不回退到本地执行路径。
+
 ## Responsibilities
 
 ```text
-Skill CLI
+Skill host
   owns: skill discovery, skill metadata, skill command invocation
   does not own: agent loop, model prompting, tool review, PTY session runtime
+
+Skill public CLI
+  owns: argv parsing, host socket request/response envelope
+  does not own: skill store, skill run execution, environment event writes
 
 ManagedTerminalRuntime
   owns: running `tiny-agent skill ...` as a shell command
@@ -49,6 +58,7 @@ RunOrchestrator
 - 在 harness 里加载 skill 代码
 - 让 skill 绕过 PTY session manager
 - 让 skill 绕过 tool review
+- 让普通 `tiny-agent skill ...` 在缺少 host 时回退到 direct store/runner
 - 自动安装远程 skill
 - 让模型直接调用 skill SDK
 
@@ -141,6 +151,10 @@ type SkillManifest = {
 当前实现包含 discovery、execution、close/review、validate、install。全生命周期命令均已实现。
 子命令；安装仍是把本地 skill package 放入配置的 skills root。远程安装和依赖管理
 属于后续产品面。
+
+这些命令在 run PTY 中通过 `TAH_SKILL_HOST_SOCKET` 进入当前 run 的 Skill host。
+人工调试时可以显式传 `--host-socket <path>` 连接某个 host；公开 CLI 不因为
+缺少 host 而直接访问 `skills/` 或 `skill-runs/`。
 
 ```text
 tiny-agent skill list --json
@@ -385,7 +399,8 @@ tiny-agent skill validate coding-review --json
 
 ## IO Contract
 
-Skill CLI 必须遵守普通 Unix CLI 习惯。
+Skill public CLI 必须遵守普通 Unix CLI 习惯；实际 discovery/run/review 由
+run-owned Skill host 内部 command core 执行。
 
 输入：
 
@@ -415,7 +430,9 @@ Skill CLI 必须遵守普通 Unix CLI 习惯。
 
 ## Environment Integration
 
-Skill CLI 不直接写 AgentRunState 的主生命周期，但它维护自己的 durable SkillRun state。RunOrchestrator 在每轮 model step 前把 active skill run 状态渲染为 persistent system reminder。
+Skill host 不直接写 AgentRunState 的主生命周期，但它维护自己的 durable
+SkillRun state。RunOrchestrator 在每轮 model step 前把 active skill run 状态渲染为
+persistent system reminder。
 
 当 agent 运行：
 
@@ -427,10 +444,11 @@ tiny-agent skill run coding-review --json '{"path":"src"}'
 
 ```text
 terminal_write action starts
-tiny-agent skill process runs inside the current PTY session
+tiny-agent skill socket client runs inside the current PTY session
+run-owned skill-host executes the command core
 terminal screen observation returns or requires session_observe
 ManagedTerminalRuntime returns TerminalObservation through the tool-result path
-Skill CLI state keeps skillRun status as running until close
+SkillRun durable state stays running until close
 next agent loop renders active skill run as persistent reminder
 ```
 
@@ -545,7 +563,8 @@ to discover reusable local skills.
 Run a skill with `tiny-agent skill run <name> --json '<args>'`.
 ```
 
-Agent 需要具体 skill 时，再通过 bash 自己查。
+这些命令假设 agent 位于 run PTY 内，环境已经注入 `TAH_SKILL_HOST_SOCKET`。Agent
+需要具体 skill 时，再通过 bash 自己查。
 
 这保持 FIM prompt 小，同时让 skill 能通过文件系统持续增长。
 
@@ -555,6 +574,7 @@ Agent 需要具体 skill 时，再通过 bash 自己查。
 
 - `~/.tiny-agent/projects/<projectId>/skills` 作为默认 skill root
 - `~/.tiny-agent/projects/<projectId>/runs/<runId>/skill-runs` 作为当前 run 的 skill run root（agent PTY 中通过 `TAH_SKILL_RUNS_DIR` 注入）
+- `tiny-agent run` 启动 run-owned `skill-host`；公开 `tiny-agent skill ...` 只通过 `TAH_SKILL_HOST_SOCKET` 或 `--host-socket` 连接它
 - `tiny-agent skill install <source-path> [<name>] --json` 将本地 skill 目录复制到 skills root。安装前校验 SKILL.md 存在且目标名称不冲突。
 - `tiny-agent skill list --json`
 - `tiny-agent skill show <name> --json`
@@ -562,7 +582,6 @@ Agent 需要具体 skill 时，再通过 bash 自己查。
 - `tiny-agent skill status --active --json`
 - `tiny-agent skill close <skillRunId> --review none|required --json '<summary>'`
 - `tiny-agent skill review-complete <skillRunId> --json '<review>'`
-- `tiny-agent skill install <source-path> [<name>] --json`
 - `tiny-agent skill validate <name> --json`
 - `SKILL.md` 必须存在
 - `skill.json` 可选

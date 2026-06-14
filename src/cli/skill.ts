@@ -1,191 +1,176 @@
-import * as path from "node:path";
-import * as fs from "node:fs";
-import { failureEnvelope, successEnvelope } from "./envelope.js";
-import { SkillCli } from "../skill/cli.js";
-import { SkillRunStore } from "../skill/store.js";
-import { SkillDiscovery } from "../skill/discovery.js";
-import type { EnvironmentPort, EnvironmentEvent } from "../types/environment.js";
-import { StateRootResolver } from "../state/root.js";
+import { randomUUID } from "node:crypto";
+import { failureEnvelope } from "./envelope.js";
+import { skillUsage } from "../skill/command.js";
+import {
+  requestSkillHostSocket,
+  runSkillHostCli,
+  type SkillHostExecuteRequest,
+  type SkillHostResponse,
+} from "../skill/host.js";
 
-function die(message: string): never {
-  const env = failureEnvelope({ tool: "skill", errorCode: "SKILL_ERROR", error: message });
-  process.stderr.write(JSON.stringify(env) + "\n");
-  process.exit(1);
+const DEFAULT_SKILL_HOST_TIMEOUT_MS = 30_000;
+
+export type SkillClientRequest = {
+  socketPath: string;
+  request: SkillHostExecuteRequest;
+  timeoutMs: number;
+};
+
+export type SkillCliDeps = {
+  stdout: { write(text: string): unknown };
+  stderr: { write(text: string): unknown };
+  env: Record<string, string | undefined>;
+  cwd: string;
+  timeoutMs: number;
+  newRequestId: () => string;
+  requestHost: (request: SkillClientRequest) => Promise<SkillHostResponse>;
+};
+
+export function defaultSkillCliDeps(): SkillCliDeps {
+  return {
+    stdout: process.stdout,
+    stderr: process.stderr,
+    env: process.env,
+    cwd: process.cwd(),
+    timeoutMs: DEFAULT_SKILL_HOST_TIMEOUT_MS,
+    newRequestId: () => `skill-cli-${randomUUID()}`,
+    requestHost: requestSkillHostSocket,
+  };
 }
 
-function parseArgs(argv: string[]): { flags: Record<string, string>; positional: string[] } {
-  const flags: Record<string, string> = {};
-  const positional: string[] = [];
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!;
-    if (arg === "--json") {
+export async function runSkill(
+  argv: string[],
+  deps: SkillCliDeps = defaultSkillCliDeps(),
+): Promise<number> {
+  if (argv[0] === "host") {
+    return await runSkillHostCli(argv.slice(1));
+  }
+
+  if (!argv[0] || argv[0] === "--help" || argv[0] === "-h") {
+    deps.stdout.write(skillUsage());
+    return 0;
+  }
+
+  return await executeSkillClientArgv(argv, deps);
+}
+
+export async function executeSkillClientArgv(
+  argv: string[],
+  deps: SkillCliDeps,
+): Promise<number> {
+  let options: ReturnType<typeof parseSkillClientOptions>;
+  try {
+    options = parseSkillClientOptions(argv, deps.env);
+  } catch (error) {
+    writeSkillClientFailure(
+      deps,
+      "SKILL_HOST_ERROR",
+      error instanceof Error ? error.message : String(error),
+    );
+    return 1;
+  }
+
+  if (!options.socketPath) {
+    writeSkillClientFailure(
+      deps,
+      "SKILL_HOST_NOT_FOUND",
+      "tiny-agent skill requires a run-scoped Skill host socket. Set TAH_SKILL_HOST_SOCKET or pass --host-socket <path>.",
+    );
+    return 1;
+  }
+
+  try {
+    const response = await deps.requestHost({
+      socketPath: options.socketPath,
+      timeoutMs: options.timeoutMs ?? deps.timeoutMs,
+      request: {
+        schemaVersion: 1,
+        id: deps.newRequestId(),
+        type: "skill.execute",
+        argv: options.commandArgv,
+      },
+    });
+
+    if (response.type === "skill.execute.result") {
+      if (response.stdout) deps.stdout.write(response.stdout);
+      if (response.stderr) deps.stderr.write(response.stderr);
+      return response.exitCode;
+    }
+
+    const message =
+      response.type === "skill.error"
+        ? response.error.message
+        : `Unexpected skill host response: ${response.type}`;
+    writeSkillClientFailure(deps, "SKILL_HOST_ERROR", message);
+    return 1;
+  } catch (error) {
+    writeSkillClientFailure(
+      deps,
+      "SKILL_HOST_ERROR",
+      error instanceof Error ? error.message : String(error),
+    );
+    return 1;
+  }
+}
+
+function parseSkillClientOptions(
+  argv: string[],
+  env: Record<string, string | undefined>,
+): {
+  commandArgv: string[];
+  socketPath?: string;
+  timeoutMs?: number;
+} {
+  const commandArgv: string[] = [];
+  let socketPath = env.TAH_SKILL_HOST_SOCKET;
+  let timeoutMs: number | undefined;
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]!;
+    if (arg === "--host-socket") {
+      const value = argv[index + 1];
+      if (!value) {
+        throw new Error("Usage: tiny-agent skill <command> --host-socket <path>");
+      }
+      socketPath = value;
+      index += 1;
       continue;
     }
-    if (arg.startsWith("--") && i + 1 < argv.length) {
-      flags[arg.slice(2)] = argv[++i]!;
-    } else {
-      positional.push(arg);
-    }
-  }
-  return { flags, positional };
-}
-
-function hasFlag(argv: string[], name: string): boolean {
-  return argv.includes(`--${name}`);
-}
-
-function resolveStateDir(argv: string[]): string {
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--state-dir" && i + 1 < argv.length) {
-      return path.resolve(argv[i + 1]!);
-    }
-  }
-  if (process.env.TAH_STATE_DIR) {
-    return path.resolve(process.env.TAH_STATE_DIR);
-  }
-  return new StateRootResolver().resolve().stateDir;
-}
-
-function buildSkillCli(stateDir: string): SkillCli {
-  const skillsDir = process.env.TAH_SKILLS_DIR ?? path.join(stateDir, "skills");
-  const skillRunsDir =
-    process.env.TAH_SKILL_RUNS_DIR ?? path.join(stateDir, "skill-runs");
-  fs.mkdirSync(skillsDir, { recursive: true });
-  fs.mkdirSync(skillRunsDir, { recursive: true });
-
-  const store = new SkillRunStore({ skillRunsDir, skillsDir });
-  const discovery = new SkillDiscovery({ skillsDir });
-
-  const envEventsPath =
-    process.env.TAH_ENVIRONMENT_EVENTS_PATH ??
-    path.join(stateDir, "environment", "events.jsonl");
-  const environment: EnvironmentPort = {
-    appendEvent(event: EnvironmentEvent): void {
-      const dir = path.dirname(envEventsPath);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.appendFileSync(envEventsPath, JSON.stringify(event) + "\n", "utf-8");
-    },
-    consumeSince() { return []; },
-    waitFor() { return new Promise(() => {}); },
-  };
-
-  return new SkillCli(store, discovery, environment, skillsDir);
-}
-
-function output(data: unknown, json: boolean): void {
-  if (json) {
-    const raw = data as Record<string, unknown>;
-    const isError = raw.ok === false;
-    const envelope = isError
-      ? failureEnvelope({ tool: "skill", errorCode: "SKILL_ERROR", error: String(raw.error ?? "unknown error") })
-      : successEnvelope({ tool: "skill", extra: { ...raw } });
-    process.stdout.write(JSON.stringify(envelope) + "\n");
-  } else {
-    process.stdout.write(formatHuman(data) + "\n");
-  }
-}
-
-function formatHuman(data: unknown, indent = ""): string {
-  if (data === null || data === undefined) return "";
-  if (Array.isArray(data)) {
-    return data.map((item, i) => `${indent}[${i}] ${formatHuman(item, indent + "  ")}`).join("\n");
-  }
-  if (typeof data === "object") {
-    return Object.entries(data as Record<string, unknown>)
-      .map(([k, v]) => {
-        if (typeof v === "object" && v !== null) return `${indent}${k}:\n${formatHuman(v, indent + "  ")}`;
-        return `${indent}${k}=${String(v)}`;
-      })
-      .join("\n");
-  }
-  return `${indent}${String(data)}`;
-}
-
-export async function runSkill(argv: string[]): Promise<void> {
-  const subcommand = argv[0];
-  const rest = argv.slice(1);
-  const jsonMode = hasFlag(rest, "json");
-  const stateDir = resolveStateDir(rest);
-  const { flags, positional } = parseArgs(rest);
-
-  const cli = buildSkillCli(stateDir);
-  switch (subcommand) {
-
-    case "list": {
-      output(cli.handleList(), jsonMode);
-      break;
-    }
-    case "show": {
-      const name = positional[0];
-      if (!name) die("tiny-agent skill show requires <name>");
-      output(cli.handleShow(name), jsonMode);
-      break;
-    }
-    case "run": {
-      const name = positional[0];
-      if (!name) die("tiny-agent skill run requires <name>");
-      const argsJson = positional[1];
-      const args = argsJson ? JSON.parse(argsJson) : undefined;
-      output(cli.handleRun(name, args), jsonMode);
-      break;
-    }
-    case "status": {
-      output(cli.handleStatus(), jsonMode);
-      break;
-    }
-    case "close": {
-      const skillRunId = positional[0];
-      if (!skillRunId) die("tiny-agent skill close requires <skillRunId>");
-      const review = (flags["review"] ?? "none") as "none" | "required";
-      if (review !== "none" && review !== "required") {
-        die("--review must be 'none' or 'required'");
+    if (arg === "--host-timeout-ms") {
+      const value = argv[index + 1];
+      if (!value) {
+        throw new Error("Usage: tiny-agent skill <command> --host-timeout-ms <ms>");
       }
-      const summaryJson = positional[1];
-      let summary = "";
-      if (summaryJson) {
-        try {
-          const parsed = JSON.parse(summaryJson) as { summary?: string };
-          summary = parsed.summary ?? summaryJson;
-        } catch {
-          summary = summaryJson;
-        }
-      }
-      output(cli.handleClose(skillRunId, review, summary), jsonMode);
-      break;
+      timeoutMs = parsePositiveInteger(value, "--host-timeout-ms");
+      index += 1;
+      continue;
     }
-    case "review-complete": {
-      const skillRunId = positional[0];
-      if (!skillRunId) die("tiny-agent skill review-complete requires <skillRunId>");
-      const reviewJson = positional[1];
-      if (!reviewJson) die("tiny-agent skill review-complete requires JSON review data");
-      const reviewData = JSON.parse(reviewJson) as { summary: string; lessons: string[] };
-      output(cli.handleReviewComplete(skillRunId, reviewData), jsonMode);
-      break;
-    }
-    case "install": {
-      const sourcePath = positional[0];
-      if (!sourcePath) die("tiny-agent skill install requires <source-path>");
-      const name = positional[1];
-      output(cli.handleInstall(sourcePath, name || undefined), jsonMode);
-      break;
-    }
-    case "validate": {
-      const name = positional[0];
-      if (!name) die("tiny-agent skill validate requires <name>");
-      output(cli.handleValidate(name), jsonMode);
-      break;
-    }
-    default:
-      die(
-        "Usage: tiny-agent skill <list|show|run|status|close|review-complete|validate|install> [options]\n" +
-          "  tiny-agent skill list [--json]\n" +
-          "  tiny-agent skill show <name> [--json]\n" +
-          "  tiny-agent skill run <name> [--json '<args>']\n" +
-          "  tiny-agent skill status [--active] [--json]\n" +
-          "  tiny-agent skill close <skillRunId> --review none|required [--json '<summary>']\n" +
-          "  tiny-agent skill review-complete <skillRunId> --json '<review>'\n" +
-          "  tiny-agent skill validate <name> [--json]\n" +
-          "  tiny-agent skill install <source-path> [<name>] [--json]",
-      );
+    commandArgv.push(arg);
   }
+
+  return { commandArgv, socketPath, timeoutMs };
+}
+
+function parsePositiveInteger(value: string, flag: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${flag} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function writeSkillClientFailure(
+  deps: Pick<SkillCliDeps, "stdout">,
+  errorCode: string,
+  error: string,
+): void {
+  deps.stdout.write(
+    JSON.stringify(
+      failureEnvelope({
+        tool: "skill",
+        errorCode,
+        error,
+      }),
+    ) + "\n",
+  );
 }

@@ -1,6 +1,7 @@
 export * from "./commands.js";
 export * from "./config.js";
 export * from "./host.js";
+export * from "./launcher.js";
 export * from "./location.js";
 export * from "./output.js";
 export * from "./preview.js";

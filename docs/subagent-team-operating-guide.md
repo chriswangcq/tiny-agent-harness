@@ -10,7 +10,7 @@ Create a team, add members, send work through IM, and observe lifecycle facts.
 tiny-agent team create <teamId>
   -> tiny-agent team member add/update/status/heartbeat/terminate
   -> tiny-agent im post --from user:main --to member:<teamId>/<memberId> --text <instruction>
-  -> tiny-agent team lifecycle lease/reaper/shutdown for team member runs
+  -> tiny-agent team lifecycle lease/reaper/shutdown for team-member-owned runs
 ```
 
 Workspace layout, git branch policy, child ledgers, and QA protocol are instructions sent to workers through IM or metadata/evidence submitted by workers. They are not required fields in the team roster schema.
@@ -111,13 +111,13 @@ roster_event
 
 1. Create or select a team.
 2. Add members with role and channel only.
-3. Bind active worker runs back to roster members with `tiny-agent team member update <memberId> --json '{"runId":"run-..."}'`.
+3. Bind active team-member-owned runs back to roster members with `tiny-agent team member update <memberId> --json '{"runId":"run-..."}'`.
 4. Optionally record a visible assignment label with `tiny-agent team --team <teamId> member update <memberId> --json '{"assignment":{...}}'`.
-5. Ensure the worker endpoint pair exists and is bound to the worker run.
+5. Ensure the member endpoint pair exists and is bound to the team-member-owned run.
 6. Send concrete instructions with `tiny-agent im post --from user:main --to member:<teamId>/<memberId> --text ...`.
 7. Include workspace/git/ledger requirements inside the assignment text when needed.
 8. Record optional facts as metadata or handoff evidence after they exist.
-9. Use lifecycle lease/heartbeat/reaper/shutdown for team member runs.
+9. Use lifecycle lease/heartbeat/reaper/shutdown for team-member-owned runs.
 10. Merge code through git and review gates outside the roster reducer.
 
 ## Design Rules

@@ -25,11 +25,15 @@ import {
   JsonlRuntimeEventSink,
   JsonProcessRegistryStore,
   RunSupervisor,
+  residentHostPaths,
   type ProcessSpawnerPort,
   type SpawnedProcessPort,
 } from "../runtime/index.js";
 import { launchTerminalHost, type LaunchedTerminalHost } from "../terminal-host/index.js";
 import { launchModelGateway, type LaunchedModelGateway } from "../model/index.js";
+import { launchCodeIntelHost, type LaunchedCodeIntelHost } from "../code-intel/index.js";
+import { launchSkillHost, type LaunchedSkillHost } from "../skill/index.js";
+import { launchMcpHost, type LaunchedMcpHost } from "../mcp/index.js";
 import { ToolCallValidator } from "../tools/validator.js";
 import { AlwaysApproveReviewer } from "../tools/reviewer.js";
 import { STATIC_TOOL_CATALOG } from "../tools/catalog.js";
@@ -71,22 +75,36 @@ function parseCliOptions(args: string[]): {
   task?: string;
   stateDir?: string;
   resumeRunId?: string;
+  unexpectedArgs: string[];
 } {
   let task: string | undefined;
   let stateDir: string | undefined;
   let resumeRunId: string | undefined;
+  const unexpectedArgs: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--task" && i + 1 < args.length) {
+    if (args[i] === "--task" && i + 1 < args.length && !args[i + 1]!.startsWith("--")) {
       task = args[++i];
-    } else if (args[i] === "--state-dir" && i + 1 < args.length) {
+    } else if (args[i] === "--state-dir" && i + 1 < args.length && !args[i + 1]!.startsWith("--")) {
       stateDir = args[++i];
-    } else if (args[i] === "--resume" && i + 1 < args.length) {
+    } else if (args[i] === "--resume" && i + 1 < args.length && !args[i + 1]!.startsWith("--")) {
       resumeRunId = args[++i];
+    } else {
+      unexpectedArgs.push(args[i]!);
     }
   }
 
-  return { task, stateDir, resumeRunId };
+  return { task, stateDir, resumeRunId, unexpectedArgs };
+}
+
+function formatUnexpectedArgs(args: readonly string[]): string {
+  return args.map((arg) => JSON.stringify(arg)).join(", ");
+}
+
+function dieOnUnexpectedArgs(command: string, args: readonly string[]): void {
+  if (args.length > 0) {
+    die(`${command} received unexpected argument(s): ${formatUnexpectedArgs(args)}`);
+  }
 }
 
 type RunScopedPaths = {
@@ -120,23 +138,32 @@ function createCliTerminalHost(options: {
   paths: RunScopedPaths;
   skillsDir: string;
   transcriptPath: string;
+  codeqHostSocket: string;
+  skillHostSocket: string;
+  mcpHostSocket: string;
   supervisor: RunSupervisor;
 }): LaunchedTerminalHost {
   const promptNonce = `cli-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const terminalEnv = buildCliTerminalEnv(process.env, {
-      runId: options.runId,
-      runDir: options.runDir,
-      stateDir: options.runDir,
-      projectStateDir: options.stateDir,
-      imStateDir: options.stateDir,
-      imRunId: options.runId,
-      imSelfEndpoint: createRunImSelfEndpoint(options.runId),
-      imUserEndpoint: "user:main",
-      skillRunsDir: options.paths.skillRunsDir,
-      sessionsDir: options.paths.sessionsDir,
-      skillsDir: options.skillsDir,
-      transcriptPath: options.transcriptPath,
-      environmentEventsPath: options.paths.environmentEventsPath,
+    runId: options.runId,
+    runDir: options.runDir,
+    stateDir: options.runDir,
+    projectStateDir: options.stateDir,
+    imStateDir: options.stateDir,
+    imRunId: options.runId,
+    imSelfEndpoint: createRunImSelfEndpoint(options.runId),
+    imUserEndpoint: "user:main",
+    skillRunsDir: options.paths.skillRunsDir,
+    sessionsDir: options.paths.sessionsDir,
+    skillsDir: options.skillsDir,
+    transcriptPath: options.transcriptPath,
+    environmentEventsPath: options.paths.environmentEventsPath,
+    codeqHostSocket: options.codeqHostSocket,
+    codeqHostRunId: options.runId,
+    skillHostSocket: options.skillHostSocket,
+    skillHostRunId: options.runId,
+    mcpHostSocket: options.mcpHostSocket,
+    mcpHostRunId: options.runId,
   });
   const hostArgs = [
     ...process.execArgv,
@@ -171,6 +198,130 @@ function createCliTerminalHost(options: {
       let sequence = 0;
       return () => `terminal-host-${options.runId}-${++sequence}`;
     })(),
+  });
+}
+
+async function createCliCodeIntelHost(options: {
+  runId: string;
+  runDir: string;
+  supervisor: RunSupervisor;
+}): Promise<LaunchedCodeIntelHost> {
+  const paths = residentHostPaths({
+    kind: "codeq-host",
+    runId: options.runId,
+    runDir: options.runDir,
+  });
+  const hostArgs = [
+    ...process.execArgv,
+    process.argv[1]!,
+    "codeq",
+    "host",
+    "--cwd",
+    process.cwd(),
+    "--socket",
+    paths.socketPath,
+  ];
+  return await launchCodeIntelHost({
+    supervisor: options.supervisor,
+    processId: paths.processId,
+    owner: { scope: "run", runId: options.runId },
+    executable: process.execPath,
+    args: hostArgs,
+    cwd: process.cwd(),
+    env: process.env,
+    workspaceRoot: process.cwd(),
+    socketPath: paths.socketPath,
+    statePath: paths.statePath,
+    logPath: paths.logPath,
+    startupTimeoutMs: 10_000,
+  });
+}
+
+async function createCliSkillHost(options: {
+  runId: string;
+  runDir: string;
+  stateDir: string;
+  paths: RunScopedPaths;
+  skillsDir: string;
+  supervisor: RunSupervisor;
+}): Promise<LaunchedSkillHost> {
+  const hostPaths = residentHostPaths({
+    kind: "skill-host",
+    runId: options.runId,
+    runDir: options.runDir,
+  });
+  const hostEnv = buildCliTerminalEnv(process.env, {
+    runId: options.runId,
+    runDir: options.runDir,
+    stateDir: options.runDir,
+    projectStateDir: options.stateDir,
+    skillRunsDir: options.paths.skillRunsDir,
+    skillsDir: options.skillsDir,
+    environmentEventsPath: options.paths.environmentEventsPath,
+  });
+  const hostArgs = [
+    ...process.execArgv,
+    process.argv[1]!,
+    "skill",
+    "host",
+    "--socket",
+    hostPaths.socketPath,
+  ];
+  return await launchSkillHost({
+    supervisor: options.supervisor,
+    processId: hostPaths.processId,
+    owner: { scope: "run", runId: options.runId },
+    executable: process.execPath,
+    args: hostArgs,
+    cwd: process.cwd(),
+    env: hostEnv,
+    socketPath: hostPaths.socketPath,
+    skillsDir: options.skillsDir,
+    skillRunsDir: options.paths.skillRunsDir,
+    statePath: hostPaths.statePath,
+    logPath: hostPaths.logPath,
+    startupTimeoutMs: 10_000,
+  });
+}
+
+async function createCliMcpHost(options: {
+  runId: string;
+  runDir: string;
+  stateDir: string;
+  supervisor: RunSupervisor;
+}): Promise<LaunchedMcpHost> {
+  const hostPaths = residentHostPaths({
+    kind: "mcp-host",
+    runId: options.runId,
+    runDir: options.runDir,
+  });
+  const hostEnv = buildCliTerminalEnv(process.env, {
+    runId: options.runId,
+    runDir: options.runDir,
+    stateDir: options.runDir,
+    projectStateDir: options.stateDir,
+  });
+  const hostArgs = [
+    ...process.execArgv,
+    process.argv[1]!,
+    "mcp",
+    "host",
+    "--socket",
+    hostPaths.socketPath,
+  ];
+  return await launchMcpHost({
+    supervisor: options.supervisor,
+    processId: hostPaths.processId,
+    owner: { scope: "run", runId: options.runId },
+    executable: process.execPath,
+    args: hostArgs,
+    cwd: process.cwd(),
+    env: hostEnv,
+    socketPath: hostPaths.socketPath,
+    projectStateDir: options.stateDir,
+    statePath: hostPaths.statePath,
+    logPath: hostPaths.logPath,
+    startupTimeoutMs: 10_000,
   });
 }
 
@@ -425,7 +576,8 @@ const nodeProcessSpawner: ProcessSpawnerPort = {
 };
 
 async function runUnifiedUi(args: string[]): Promise<void> {
-  const { task, stateDir, resumeRunId } = parseCliOptions(args);
+  const { task, stateDir, resumeRunId, unexpectedArgs } = parseCliOptions(args);
+  dieOnUnexpectedArgs("tiny-agent ui", unexpectedArgs);
   const deepseek = loadDeepSeekRuntimeConfig();
 
   if (!deepseek.apiKey) {
@@ -639,7 +791,7 @@ async function main(): Promise<void> {
 
   if (firstArg === "skill") {
     const { runSkill } = await import("./skill.js");
-    await runSkill(process.argv.slice(3));
+    process.exitCode = await runSkill(process.argv.slice(3));
     return;
   }
 
@@ -691,9 +843,9 @@ async function main(): Promise<void> {
 
   // --- Parse run arguments ---
   // Supported forms:
-  //   tiny-agent "fix the tests"                     (legacy positional)
   //   tiny-agent run                                  (wait for public IM message)
-  //   tiny-agent run --task "fix"                     (start with task)
+  //   tiny-agent run --task "fix"                     (canonical start-with-task form)
+  //   tiny-agent "fix the tests"                      (alias for run --task)
   const args = process.argv.slice(2);
   let taskArg: string | undefined;
   let stateDirArg: string | undefined;
@@ -702,28 +854,44 @@ async function main(): Promise<void> {
   if (args[0] === "resume") {
     resumeRunId = args[1];
     const parsed = parseCliOptions(args.slice(2));
+    dieOnUnexpectedArgs("tiny-agent resume", parsed.unexpectedArgs);
     stateDirArg = parsed.stateDir;
     if (!resumeRunId) {
       die("Usage: tiny-agent resume <runId|latest> [--state-dir <dir>]");
     }
+    if (parsed.task || parsed.resumeRunId) {
+      die("tiny-agent resume accepts the run id as its only run selector.");
+    }
   } else if (args[0] === "run") {
     const parsed = parseCliOptions(args.slice(1));
+    dieOnUnexpectedArgs("tiny-agent run", parsed.unexpectedArgs);
     taskArg = parsed.task;
     stateDirArg = parsed.stateDir;
     resumeRunId = parsed.resumeRunId;
+    if (taskArg && resumeRunId) {
+      die("tiny-agent run accepts either --task or --resume, not both.");
+    }
   } else if (args[0]) {
     const reserved = ["io_wait", "io-wait"];
     if (reserved.includes(args[0])) {
       die(`"${args[0]}" is a tool call, not a CLI command.`);
     }
     const parsed = parseCliOptions(args.slice(1));
+    if (parsed.unexpectedArgs.length > 0) {
+      die(
+        `tiny-agent <task> accepts exactly one task argument. Quote multi-word tasks or use: tiny-agent run --task "<task>". Unexpected: ${formatUnexpectedArgs(parsed.unexpectedArgs)}`,
+      );
+    }
+    if (parsed.task || parsed.resumeRunId) {
+      die('tiny-agent <task> is already an alias for tiny-agent run --task "<task>". Do not combine it with --task or --resume.');
+    }
     stateDirArg = parsed.stateDir;
     taskArg = args[0];
   } else {
     die(
         "Usage:\n" +
-        "  tiny-agent <task> [--state-dir <dir>]\n" +
         "  tiny-agent run [--task <task>] [--state-dir <dir>]\n" +
+        "  tiny-agent <task> [--state-dir <dir>]  # alias for tiny-agent run --task <task>\n" +
         "  tiny-agent resume <runId|latest> [--state-dir <dir>]\n" +
         "  tiny-agent ui [--task <task>|--resume <runId|latest>] [--state-dir <dir>]",
     );
@@ -911,49 +1079,76 @@ async function main(): Promise<void> {
   }, 500);
 
   // --- Build RunPorts ---
-  const modelContext = ModelContextSession.create({
-    task,
-    renderer: new PromptBuilderContextRenderer(promptBuilder),
-    contextWindow: createCliContextWindowPort(promptBuilder),
-    initialItems: initialHistory,
-  });
-  const terminalHost = createCliTerminalHost({
-    runId,
-    runDir,
-    stateDir: baseDir,
-    paths: runPaths,
-    skillsDir,
-    transcriptPath,
-    supervisor: runProcessSupervisor,
-  });
-  const modelGateway = createCliModelGateway({
-    runId,
-    runDir,
-    model: deepseek.model,
-    supervisor: runProcessSupervisor,
-  });
-  const ports: RunPorts = {
-    model: modelGateway.model,
-    validator,
-    reviewer,
-    terminal: terminalHost.terminal,
-    modelContext,
-    session: createCliRunSessionPort(new RunSessionStore(runDir)),
-    tools: [...STATIC_TOOL_CATALOG],
-    environment,
-    listActiveSkillRuns: () => skillRunStore.listActive(),
-  };
-
-  // --- Create transcript store and orchestrator ---
-  const orchestrator = new RunOrchestrator(initialState, transcript, ports);
-
-  // --- Run ---
-  console.log(`[tiny-agent] Run ${runId} ${resumeRunId ? "resumed" : "started"}`);
-  console.log(`[tiny-agent] Task: ${task}`);
-  console.log(`[tiny-agent] Model: ${deepseek.model} @ ${deepseek.baseUrl}`);
-  console.log();
-
+  let codeIntelHost: LaunchedCodeIntelHost | undefined;
+  let skillHost: LaunchedSkillHost | undefined;
+  let mcpHost: LaunchedMcpHost | undefined;
+  let terminalHost: LaunchedTerminalHost | undefined;
+  let modelGateway: LaunchedModelGateway | undefined;
   try {
+    const modelContext = ModelContextSession.create({
+      task,
+      renderer: new PromptBuilderContextRenderer(promptBuilder),
+      contextWindow: createCliContextWindowPort(promptBuilder),
+      initialItems: initialHistory,
+    });
+    codeIntelHost = await createCliCodeIntelHost({
+      runId,
+      runDir,
+      supervisor: runProcessSupervisor,
+    });
+    skillHost = await createCliSkillHost({
+      runId,
+      runDir,
+      stateDir: baseDir,
+      paths: runPaths,
+      skillsDir,
+      supervisor: runProcessSupervisor,
+    });
+    mcpHost = await createCliMcpHost({
+      runId,
+      runDir,
+      stateDir: baseDir,
+      supervisor: runProcessSupervisor,
+    });
+    terminalHost = createCliTerminalHost({
+      runId,
+      runDir,
+      stateDir: baseDir,
+      paths: runPaths,
+      skillsDir,
+      transcriptPath,
+      codeqHostSocket: codeIntelHost.socketPath,
+      skillHostSocket: skillHost.socketPath,
+      mcpHostSocket: mcpHost.socketPath,
+      supervisor: runProcessSupervisor,
+    });
+    modelGateway = createCliModelGateway({
+      runId,
+      runDir,
+      model: deepseek.model,
+      supervisor: runProcessSupervisor,
+    });
+    const ports: RunPorts = {
+      model: modelGateway.model,
+      validator,
+      reviewer,
+      terminal: terminalHost.terminal,
+      modelContext,
+      session: createCliRunSessionPort(new RunSessionStore(runDir)),
+      tools: [...STATIC_TOOL_CATALOG],
+      environment,
+      listActiveSkillRuns: () => skillRunStore.listActive(),
+    };
+
+    // --- Create transcript store and orchestrator ---
+    const orchestrator = new RunOrchestrator(initialState, transcript, ports);
+
+    // --- Run ---
+    console.log(`[tiny-agent] Run ${runId} ${resumeRunId ? "resumed" : "started"}`);
+    console.log(`[tiny-agent] Task: ${task}`);
+    console.log(`[tiny-agent] Model: ${deepseek.model} @ ${deepseek.baseUrl}`);
+    console.log();
+
     const finalState = await orchestrator.run();
 
     console.log();
@@ -970,8 +1165,11 @@ async function main(): Promise<void> {
     imPollingActive = false;
     clearInterval(imPollInterval);
     await Promise.all([
-      terminalHost.dispose(),
-      modelGateway.dispose(),
+      terminalHost?.dispose(),
+      modelGateway?.dispose(),
+      mcpHost?.dispose(),
+      skillHost?.dispose(),
+      codeIntelHost?.dispose(),
     ]);
   }
 }

@@ -24,6 +24,12 @@ tiny-agent codeq references src/run/orchestrator.ts:37:18 --json
 
 这样 LSP 能力会经过现有 PTY session、tool review、observation、transcript 和 log path，不会绕过审计边界。
 
+当前实现是 **run-scoped all-host**：`tiny-agent run` 启动同生共死的
+`tiny-agent codeq host --socket <runs/<runId>/codeq-host.sock>` sidecar，
+TerminalHost env 注入 `TAH_CODEQ_HOST_SOCKET`。普通
+`tiny-agent codeq ...` 只是 host client；没有 socket 时返回结构化失败，
+不会创建 direct LSP backend，也不会跨 run 共享 host。
+
 ## Why
 
 `rg`、`sed`、`tsc` 和测试已经足够支撑第一版 coding agent，但它们不擅长回答这些问题：
@@ -40,17 +46,22 @@ tiny-agent codeq references src/run/orchestrator.ts:37:18 --json
 
 ```text
 Codeq CLI
-  owns: argv parsing, workspace resolution, JSON output contract, limits, error shape
+  owns: argv parsing, host-socket request, JSON output contract, error shape
+  does not own: LSP process, workspace index, fallback direct execution
+
+Codeq Host
+  owns: run-scoped socket, reusable CodeIntel runtime/backend, LSP process/session
+  owns: open-document cache and request serialization for its run
   does not own: agent loop, tool review, PTY runtime, transcript
 
-LanguageBackend
-  owns: selecting and speaking to one language server
-  owns: LSP initialize/request/shutdown lifecycle
+CodeIntelBackend
+  owns: selecting and speaking to one language server inside the host
+  owns: LSP initialize/request/shutdown lifecycle for that host process
   owns: translating LSP locations and edits into CLI result objects
 
-ServerProcess
-  owns: stdio process, timeout, stderr log, crash reporting
-  does not own: business interpretation of results
+Codeq Host Process
+  owns: run-owned subprocess, socket path, stderr log, crash reporting
+  does not own: agent loop, tool review, PTY runtime, transcript
 
 ManagedTerminalRuntime
   owns: running `tiny-agent codeq ...` as one shell command
@@ -73,7 +84,7 @@ The agent decides what to do with those facts.
 第一版明确不做：
 
 - 把 LSP 注册成 provider-native tool
-- 在 harness 内部维护 language server 长连接
+- 跨 run 共享 CodeQ host 或 language server state
 - 让 LSP 绕过 terminal/session tool review
 - 让 CLI 默认修改文件
 - 自动安装任意 language server
@@ -109,13 +120,16 @@ tiny-agent codeq hover <location> --json
 
 当前版本只读。`rename` 和 `code-actions` 仍然只保留设计契约，不默认实现写入。
 
-`diagnostics --workspace` 当前使用 TypeScript compiler fallback：
+`diagnostics --workspace` 当前在 CodeQ host 内使用 TypeScript compiler
+workspace diagnostics implementation：
 
 ```text
 tsc --noEmit --pretty false
 ```
 
-它和 LSP diagnostics 使用同一个 JSON result shape，并在 `backend.source` 标记为 `typescript-compiler`。
+它和 LSP diagnostics 使用同一个 JSON result shape，并在 `backend.source`
+标记为 `typescript-compiler`。这不是 public direct/fallback mode；普通
+CLI 仍然必须通过 run-scoped CodeQ host。
 
 ## Location Format
 
@@ -484,61 +498,29 @@ Dry-run rename output:
 
 ## State Model
 
-### V1: stateless commands
+### Current: run-scoped host-only commands
 
-V1 should start the server, initialize, run one command, shutdown, and exit.
-
-Benefits:
-
-- no hidden process-local index state
-- easy to test
-- easy to reproduce from transcript
-- no daemon cleanup problem
-- good fit for current small TypeScript project
-
-Cost:
-
-- slower than a daemon
-- workspace diagnostics may be expensive
-
-This is acceptable for the first implementation because correctness and clear state matter more than speed.
-
-### Later: explicit daemon
-
-If startup cost becomes painful, add an explicit daemon mode rather than silently keeping background processes alive.
+`tiny-agent run` starts one `codeq-host` for the run:
 
 ```text
-tiny-agent codeq server start --workspace . --json
-tiny-agent codeq server status --json
-tiny-agent codeq server restart --json
-tiny-agent codeq server stop --json
+runs/<runId>/codeq-host.sock
+runs/<runId>/codeq-host.json
+runs/<runId>/codeq-host.stderr.log
 ```
 
-Daemon state should live under:
+TerminalHost receives:
 
 ```text
-~/.tiny-agent/projects/<projectId>/code-intel/
-  servers/
-    <workspace-id>/
-      state.json
-      stderr.log
-      requests.jsonl
+TAH_CODEQ_HOST_SOCKET=<runs/<runId>/codeq-host.sock>
+TAH_CODEQ_HOST_RUN_ID=<runId>
 ```
 
-Every daemon-backed result must include:
+Ordinary `tiny-agent codeq ...` is a one-shot CLI client to that socket. It
+does not start an LSP backend itself. Missing socket is an error because the
+current architecture has no direct fallback path.
 
-```json
-{
-  "serverState": {
-    "mode": "daemon",
-    "serverId": "codeq-ts-...",
-    "workspaceGeneration": 12,
-    "startedAt": "2026-05-25T00:00:00.000Z"
-  }
-}
-```
-
-Do not introduce daemon mode until there is a measurable performance reason.
+The host is not a project daemon. It is run-owned, supervised by the run
+process, recreated on resume, and disposed with the run sidecars.
 
 ## Configuration
 
@@ -631,7 +613,7 @@ Keep `CodeIntelBackend` independent from argv and stdout. That makes command par
 
 ## LSP Lifecycle
 
-For each stateless command:
+For each run-scoped CodeQ host:
 
 ```text
 resolve workspace root
@@ -639,12 +621,12 @@ select backend from file extension or config
 spawn server command
 send initialize
 send initialized notification
+serve JSONL socket requests from tiny-agent codeq clients
 open target file when the request needs a textDocument
 send the request
 collect bounded result
-send shutdown
-send exit
-return JSON envelope
+return JSON envelope to the client
+on host shutdown: send shutdown, send exit, dispose backend
 ```
 
 Timeouts should apply to:
@@ -713,14 +695,15 @@ Do not make tests depend on a user's editor, global VS Code install, or existing
 ### Phase 1: read-only TypeScript CLI
 
 - Done: add `tiny-agent codeq` subcommand.
-- Done: add stateless LSP client.
+- Done: add run-scoped host-only LSP client path.
 - Done: support `capabilities`, `symbols`, `definition`, `references`, `hover`.
 - Done: support `diagnostics <path>` via LSP publish diagnostics.
 - Done: add tests with a fake LSP server and tiny TypeScript fixture.
 
 ### Phase 2: reliable diagnostics
 
-- Done: add `diagnostics --workspace` with a TypeScript compiler fallback.
+- Done: add host-owned `diagnostics --workspace` with TypeScript compiler
+  workspace diagnostics implementation.
 - Done: keep the output shape identical to file diagnostics.
 - Later: revisit LSP pull diagnostics if TypeScript language-server support becomes reliable enough.
 
@@ -731,12 +714,11 @@ Do not make tests depend on a user's editor, global VS Code install, or existing
 - Add `code-actions`.
 - Keep the first edit-planning pass read-only; reject `--apply`.
 
-### Phase 4: explicit daemon
+### Phase 4: run host hardening
 
-- Add `tiny-agent codeq server start/status/restart/stop`.
-- Persist daemon state and logs under `~/.tiny-agent/projects/<projectId>/code-intel/`.
-- Include daemon state in every result.
-- Keep stateless mode as the default unless the user asks for daemon mode.
+- Add file-version synchronization for long-lived opened documents.
+- Add host health/status projection from the run process registry.
+- Keep run ownership; do not add project-level shared daemon commands.
 
 ### Phase 5: multi-language
 
@@ -768,7 +750,7 @@ Treat `tiny-agent codeq` output as evidence, not authority. If applying edits, i
 
 ## Open Questions
 
-- Should TypeScript v1 use `typescript-language-server` only, or allow a direct `tsserver` backend when LSP diagnostics are weak?
-- Should `tiny-agent codeq diagnostics --workspace` eventually use LSP pull diagnostics instead of the current `tsc --noEmit --pretty false` fallback?
+- Should TypeScript v1 use `typescript-language-server` only inside the host, or allow a host-owned `tsserver` backend when LSP diagnostics are weak?
+- Should `tiny-agent codeq diagnostics --workspace` eventually use host-owned LSP pull diagnostics instead of the current host-owned `tsc --noEmit --pretty false` implementation?
 - Should previews include absolute file paths, workspace-relative paths, or both?
-- Should daemon mode ever become default for TUI sessions, or stay opt-in forever?
+- What host health/status projection should TUI show from run process records?

@@ -1,8 +1,8 @@
 export const HELP_TEXT = `tiny-agent — AI agent harness with terminal/session tools
 
 Usage:
-  tiny-agent <task>                                   Run with inline task
   tiny-agent run [--task <task>]                      Run, optionally wait for IM
+  tiny-agent <task>                                   Alias for tiny-agent run --task <task>
   tiny-agent run --resume <runId|latest>              Resume an existing run
   tiny-agent resume <runId|latest>                    Resume an existing run
   tiny-agent ui  [--task <task>]                      Run + TUI in one command
@@ -10,9 +10,9 @@ Usage:
                                                         Resume + TUI in one command
   tiny-agent tui --run <runId|latest>                 Attach TUI to existing run
   tiny-agent im  <subcommand> [options]               IM message operations
-  tiny-agent skill <subcommand> [options]             Skill management
-  tiny-agent codeq <subcommand> [options]             Read-only code intelligence queries
-  tiny-agent mcp  <subcommand> [options]              MCP server interaction
+  tiny-agent skill <subcommand> [options]             Skill host client
+  tiny-agent codeq <subcommand> [options]             CodeQ host client
+  tiny-agent mcp  <subcommand> [options]              MCP host client
   tiny-agent team <group> [options]                   Team member/lifecycle control
   tiny-agent --help                                   Show this help
 
@@ -31,7 +31,7 @@ IM subcommands:
                                                  Acknowledge an endpoint-pair cursor
   tiny-agent im run-recv --run-id <id>            Receive messages from all run bindings
   tiny-agent im run-ack  --run-id <id> --peer <endpoint> --message-id <id>
-                                                 Acknowledge one run-bound peer channel
+                                                 Acknowledge one run binding peer channel
 
 Skill subcommands:
   tiny-agent skill list                          List available skills
@@ -57,9 +57,12 @@ Environment variables:
   DEEPSEEK_BASE_URL  One-off override for providers.deepseek.baseUrl
   MODEL_NAME         One-off override for providers.deepseek.model
   TAH_STATE_DIR      Override product state root
+  TAH_CODEQ_HOST_SOCKET  Current run CodeQ host socket
+  TAH_SKILL_HOST_SOCKET  Current run Skill host socket
+  TAH_MCP_HOST_SOCKET    Current run MCP host socket
 
 User config:
   ~/.tiny-agent/config.json
 
-Most CLI subcommands accept --json for machine-readable output. Use --state-dir to override the product state root.
+Most CLI subcommands accept --json for machine-readable output. Use --state-dir to override the product state root. Skill, CodeQ, and MCP operational commands require a run host socket from the PTY environment or --host-socket.
 `;

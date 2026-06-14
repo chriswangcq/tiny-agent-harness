@@ -5,12 +5,15 @@ import * as path from "node:path";
 import {
   JsonProcessRegistryStore,
   classifyProcessFreshness,
+  createRunProcessRecord,
   createRuntimeProcess,
   markProcessCrashed,
   markProcessExited,
   markProcessRunning,
   markProcessStarting,
+  markRunProcessRunning,
   recordProcessHeartbeat,
+  runProcessId,
 } from "../src/runtime/index.js";
 
 const NOW = "2026-06-11T00:00:00.000Z";
@@ -114,6 +117,80 @@ describe("process registry transitions", () => {
         staleAfterMs: 5000,
       }),
     ).toEqual({ status: "stale", ageMs: 6000 });
+  });
+});
+
+describe("run process helpers", () => {
+  it("creates direct run process records through the shared run helper", () => {
+    const record = createRunProcessRecord({
+      runId: "run-1",
+      owner: { scope: "run", runId: "run-1" },
+      command: {
+        executable: "tiny-agent",
+        args: ["run", "--resume", "run-1"],
+        cwd: "/repo",
+      },
+      now: NOW,
+      statePath: "/state/runs/run-1/state.json",
+      metadata: { source: "cli" },
+    });
+
+    expect(record).toMatchObject({
+      id: "run:run-1",
+      kind: "run",
+      owner: { scope: "run", runId: "run-1" },
+      status: "planned",
+      command: {
+        executable: "tiny-agent",
+        args: ["run", "--resume", "run-1"],
+        cwd: "/repo",
+      },
+      statePath: "/state/runs/run-1/state.json",
+      metadata: { source: "cli" },
+    });
+  });
+
+  it("creates team-member-owned run process records without a worker-specific kind", () => {
+    const owner = {
+      scope: "team-member" as const,
+      teamId: "team-main",
+      memberId: "coder-1",
+      runId: "run-worker",
+    };
+    const record = markRunProcessRunning({
+      runId: "run-worker",
+      owner,
+      command: {
+        executable: "tiny-agent",
+        args: ["run", "--task", "fix tests"],
+        cwd: "/repo-worker",
+      },
+      now: NOW,
+      pid: 4242,
+      startedAt: LATER,
+      metadata: { assignmentId: "A-001" },
+    });
+
+    expect(runProcessId({ runId: "run-worker", owner })).toBe(
+      "team-member-run:team-main:coder-1:run-worker",
+    );
+    expect(record).toMatchObject({
+      id: "team-member-run:team-main:coder-1:run-worker",
+      kind: "run",
+      owner,
+      status: "running",
+      pid: 4242,
+      metadata: { assignmentId: "A-001" },
+    });
+  });
+
+  it("rejects mismatched run owner ids", () => {
+    expect(() =>
+      runProcessId({
+        runId: "run-actual",
+        owner: { scope: "run", runId: "run-other" },
+      }),
+    ).toThrow(/does not match/);
   });
 });
 

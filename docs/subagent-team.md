@@ -129,7 +129,7 @@ There is no compatibility path for removed roster command names. For non-lifecyc
 
 ## Local Worker Launcher
 
-`src/subagent/local-worker-launcher.ts` is an optional adapter for local worker processes. It can receive explicit `workspace`, `branch`, and `allowedActions` inputs because launching a local process may need them. When it writes to the roster, those facts are stored as `member.metadata`; they do not become required roster fields.
+`src/subagent/local-worker-launcher.ts` is an optional adapter for local worker processes. It launches `tiny-agent run`; the resulting process record is still `kind: "run"` and is owned by `{scope: "team-member", teamId, memberId, runId}`. It can receive explicit `workspace`, `branch`, and `allowedActions` inputs because launching a local process may need them. When it writes to the roster, those facts are stored as `member.metadata`; they do not become required roster fields.
 
 Launch effects are injected:
 
@@ -172,7 +172,7 @@ It provides:
 - `runReaper`
 - `requestShutdown`
 
-The worker lifecycle layer keeps `workerId` in supervisor events for historical event compatibility. Active process state lives under `teams/<teamId>/members/<memberId>/`, and the agent execution is a run referenced from `teams/<teamId>/runs/<runId>.json`.
+The worker lifecycle layer keeps `workerId` in supervisor events for historical event compatibility. Active team-member process facts live under `teams/<teamId>/members/<memberId>/`, and the agent execution is a normal run referenced from `teams/<teamId>/runs/<runId>.json`.
 
 ## Status Projector
 

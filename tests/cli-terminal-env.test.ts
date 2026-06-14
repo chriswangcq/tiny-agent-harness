@@ -41,6 +41,9 @@ describe("buildCliTerminalEnv", () => {
       skillsDir: "/repo/.tiny-agent/skills",
       transcriptPath: "/repo/.tiny-agent/runs/run-123/transcript.jsonl",
       environmentEventsPath: "/repo/.tiny-agent/runs/run-123/environment/events.jsonl",
+      codeqHostSocket: "/repo/.tiny-agent/runs/run-123/codeq-host.sock",
+      skillHostSocket: "/repo/.tiny-agent/runs/run-123/skill-host.sock",
+      mcpHostSocket: "/repo/.tiny-agent/runs/run-123/mcp-host.sock",
     });
 
     expect(result).toMatchObject({
@@ -56,6 +59,15 @@ describe("buildCliTerminalEnv", () => {
       TAH_SESSIONS_DIR: "/repo/.tiny-agent/runs/run-123/sessions",
       TAH_SKILLS_DIR: "/repo/.tiny-agent/skills",
       TAH_TRANSCRIPT_PATH: "/repo/.tiny-agent/runs/run-123/transcript.jsonl",
+      TAH_CODEQ_HOST_SOCKET:
+        "/repo/.tiny-agent/runs/run-123/codeq-host.sock",
+      TAH_CODEQ_HOST_RUN_ID: "run-123",
+      TAH_SKILL_HOST_SOCKET:
+        "/repo/.tiny-agent/runs/run-123/skill-host.sock",
+      TAH_SKILL_HOST_RUN_ID: "run-123",
+      TAH_MCP_HOST_SOCKET:
+        "/repo/.tiny-agent/runs/run-123/mcp-host.sock",
+      TAH_MCP_HOST_RUN_ID: "run-123",
       TAH_ENVIRONMENT_EVENTS_PATH:
         "/repo/.tiny-agent/runs/run-123/environment/events.jsonl",
     });

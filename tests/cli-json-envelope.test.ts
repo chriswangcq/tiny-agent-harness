@@ -12,19 +12,37 @@ import {
 // ---------------------------------------------------------------------------
 // Helper: run tiny-agent CLI through compiled dist js
 // ---------------------------------------------------------------------------
-function runCli(args: string[]): { stdout: unknown; stderr: unknown } {
+function parseCliOutput(text: string): unknown {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) return JSON.parse(trimmed);
+
+  for (const line of trimmed.split(/\r?\n/).reverse()) {
+    const candidate = line.trim();
+    if (!candidate.startsWith("{") && !candidate.startsWith("[")) continue;
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // Keep scanning; non-JSON diagnostics can contain bracketed prefixes.
+    }
+  }
+  return trimmed;
+}
+
+function runCli(args: string[], options?: { env?: NodeJS.ProcessEnv }): { stdout: unknown; stderr: unknown } {
   const result = spawnSync(
     process.execPath,
     ["dist/cli/main.js", ...args],
     {
       encoding: "utf8",
+      env: options?.env,
       timeout: 15_000,
       stdio: ["ignore", "pipe", "pipe"],
     }
   );
   return {
-    stdout: result.stdout && result.stdout.trim() ? JSON.parse(result.stdout.trim()) : null,
-    stderr: result.stderr && result.stderr.trim() ? JSON.parse(result.stderr.trim()) : null,
+    stdout: parseCliOutput(result.stdout),
+    stderr: parseCliOutput(result.stderr),
   };
 }
 
@@ -342,41 +360,47 @@ describe("Team CLI real output envelope", () => {
 // Real CLI boundary tests — Skill
 // ---------------------------------------------------------------------------
 describe("Skill CLI real output envelope", () => {
-  it("success: skill list produces envelope with tool, ok, skills", () => {
+  it("failure: skill list requires a run-scoped host socket", () => {
     const tmp = mkdtempSync(join(tmpdir(), "skill-env-test-"));
     try {
-      const result = runCli(["skill", "list", "--json", "--state-dir", tmp]);
-      const env = result.stdout as Record<string, unknown> | null;
-      expect(env).not.toBeNull();
-      expect(env!.ok).toBe(true);
-      expect(env!.tool).toBe("skill");
-      expect(env!.version).toBeDefined();
-      expect(Array.isArray(env!.skills)).toBe(true);
+      const env = { ...process.env };
+      delete env.TAH_SKILL_HOST_SOCKET;
+      const result = runCli(["skill", "list", "--json", "--state-dir", tmp], { env });
+      const output = result.stdout as Record<string, unknown> | null;
+      expect(output).not.toBeNull();
+      expect(output!.ok).toBe(false);
+      expect(output!.tool).toBe("skill");
+      expect(output!.version).toBeDefined();
+      expect(output!.errorCode).toBe("SKILL_HOST_NOT_FOUND");
     } finally {
       if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
     }
   });
 
-  it("error: skill show nonexistent produces failure envelope on stdout", () => {
-    const result = runCli(["skill", "show", "nonexistent-skill", "--json"]);
-    const env = result.stdout as Record<string, unknown> | null;
-    expect(env).not.toBeNull();
-    expect(env!.ok).toBe(false);
-    expect(env!.tool).toBe("skill");
-    expect(env!.version).toBeDefined();
-    expect(env!.error).toBeDefined();
+  it("failure: skill show does not fall back to direct store access", () => {
+    const env = { ...process.env };
+    delete env.TAH_SKILL_HOST_SOCKET;
+    const result = runCli(["skill", "show", "nonexistent-skill", "--json"], { env });
+    const output = result.stdout as Record<string, unknown> | null;
+    expect(output).not.toBeNull();
+    expect(output!.ok).toBe(false);
+    expect(output!.tool).toBe("skill");
+    expect(output!.version).toBeDefined();
+    expect(output!.errorCode).toBe("SKILL_HOST_NOT_FOUND");
   });
 
-  it("success: skill status produces envelope with tool, activeRuns", () => {
+  it("failure: skill status requires a run-scoped host socket", () => {
     const tmp = mkdtempSync(join(tmpdir(), "skill-env-test-"));
     try {
-      const result = runCli(["skill", "status", "--json", "--state-dir", tmp]);
-      const env = result.stdout as Record<string, unknown> | null;
-      expect(env).not.toBeNull();
-      expect(env!.ok).toBe(true);
-      expect(env!.tool).toBe("skill");
-      expect(env!.version).toBeDefined();
-      expect(Array.isArray(env!.activeRuns)).toBe(true);
+      const env = { ...process.env };
+      delete env.TAH_SKILL_HOST_SOCKET;
+      const result = runCli(["skill", "status", "--json", "--state-dir", tmp], { env });
+      const output = result.stdout as Record<string, unknown> | null;
+      expect(output).not.toBeNull();
+      expect(output!.ok).toBe(false);
+      expect(output!.tool).toBe("skill");
+      expect(output!.version).toBeDefined();
+      expect(output!.errorCode).toBe("SKILL_HOST_NOT_FOUND");
     } finally {
       if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
     }
@@ -387,32 +411,36 @@ describe("Skill CLI real output envelope", () => {
 // Real CLI boundary tests — MCP
 // ---------------------------------------------------------------------------
 describe("MCP CLI real output envelope", () => {
-  it("success: mcp list produces envelope with tool, ok, servers", () => {
+  it("failure: mcp list requires a run-scoped host socket", () => {
     const tmp = mkdtempSync(join(tmpdir(), "mcp-env-test-"));
     try {
+      const env = { ...process.env };
+      delete env.TAH_MCP_HOST_SOCKET;
       // --state-dir must come before subcommand per main.ts routing
-      const result = runCli(["--state-dir", tmp, "mcp", "list", "--json"]);
-      const env = result.stdout as Record<string, unknown> | null;
-      expect(env).not.toBeNull();
-      expect(env!.ok).toBe(true);
-      expect(env!.tool).toBe("mcp");
-      expect(env!.version).toBeDefined();
-      expect(Array.isArray(env!.servers)).toBe(true);
+      const result = runCli(["--state-dir", tmp, "mcp", "list", "--json"], { env });
+      const output = result.stdout as Record<string, unknown> | null;
+      expect(output).not.toBeNull();
+      expect(output!.ok).toBe(false);
+      expect(output!.tool).toBe("mcp");
+      expect(output!.version).toBeDefined();
+      expect(output!.errorCode).toBe("MCP_HOST_NOT_FOUND");
     } finally {
       if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
     }
   });
 
-  it("error: mcp unknown command produces failure envelope on stderr", () => {
+  it("failure: mcp unknown command does not fall back to local parsing", () => {
     const tmp = mkdtempSync(join(tmpdir(), "mcp-env-test-"));
     try {
-      const result = runCli(["--state-dir", tmp, "mcp", "nonexistent-cmd", "--json"]);
-      const stderr = result.stderr as Record<string, unknown> | null;
-      expect(stderr).not.toBeNull();
-      expect(stderr!.ok).toBe(false);
-      expect(stderr!.tool).toBe("mcp");
-      expect(stderr!.version).toBeDefined();
-      expect(stderr!.error).toBeDefined();
+      const env = { ...process.env };
+      delete env.TAH_MCP_HOST_SOCKET;
+      const result = runCli(["--state-dir", tmp, "mcp", "nonexistent-cmd", "--json"], { env });
+      const output = result.stdout as Record<string, unknown> | null;
+      expect(output).not.toBeNull();
+      expect(output!.ok).toBe(false);
+      expect(output!.tool).toBe("mcp");
+      expect(output!.version).toBeDefined();
+      expect(output!.errorCode).toBe("MCP_HOST_NOT_FOUND");
     } finally {
       if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
     }
@@ -423,27 +451,31 @@ describe("MCP CLI real output envelope", () => {
 // Real CLI boundary tests — Code Intelligence
 // ---------------------------------------------------------------------------
 describe("Code intelligence CLI real output envelope", () => {
-  it("success: codeq capabilities is routed through tiny-agent", () => {
+  it("failure: codeq capabilities requires a run-scoped host socket", () => {
     const tmp = mkdtempSync(join(tmpdir(), "codeq-env-test-"));
     try {
+      const env = { ...process.env };
+      delete env.TAH_CODEQ_HOST_SOCKET;
       const result = spawnSync(
         process.execPath,
         [join(process.cwd(), "dist/cli/main.js"), "codeq", "capabilities", "--json"],
         {
           cwd: tmp,
+          env,
           encoding: "utf8",
           timeout: 15_000,
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
-      const env = result.stdout && result.stdout.trim()
+      const output = result.stdout && result.stdout.trim()
         ? JSON.parse(result.stdout.trim()) as Record<string, unknown>
         : null;
-      expect(env).not.toBeNull();
-      expect(env!.ok).toBe(true);
-      expect(env!.tool).toBe("codeq");
-      expect(env!.version).toBeDefined();
-      expect(env!.query).toMatchObject({ command: "capabilities" });
+      expect(result.status).not.toBe(0);
+      expect(output).not.toBeNull();
+      expect(output!.ok).toBe(false);
+      expect(output!.tool).toBe("codeq");
+      expect(output!.version).toBeDefined();
+      expect(output!.error).toMatchObject({ code: "server_not_found" });
     } finally {
       if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
     }

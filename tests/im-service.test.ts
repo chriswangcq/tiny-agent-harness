@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  createImConsumerAddress,
+  createImDirectionalChannelAddress,
+  createImPairAddress,
   PublicImService,
   createInMemoryImStore,
   planImRunBindingLayout,
@@ -210,5 +213,49 @@ describe("PublicImService", () => {
       first.id,
       second.id,
     ]);
+  });
+
+  it("requests explicit write locks for pair, channel, run binding, and cursor writes", async () => {
+    const ports = fakePorts();
+    const service = new PublicImService(ports);
+    const stateRoot = "/state";
+    const runId = "run-123";
+    const self = "run:run-123";
+    const peer = "user:main";
+
+    await service.bindRun({
+      stateRoot,
+      runId,
+      self,
+      peer,
+      kind: "a2user",
+    });
+    const message = await service.postMessage({
+      stateRoot,
+      from: peer,
+      to: self,
+      text: "hello",
+    });
+    await service.ackRunChannel({
+      stateRoot,
+      runId,
+      peer,
+      messageId: message.id,
+    });
+
+    const pair = createImPairAddress(self, peer);
+    const inbound = createImDirectionalChannelAddress(peer, self);
+    const runConsumer = createImConsumerAddress(`run:${runId}`);
+    const acquired = ports.store.lockEvents
+      .filter((event) => event.phase === "acquire")
+      .map((event) => `${event.lockName}:${event.purpose}`);
+
+    expect(acquired).toContain(`im-pair-${pair.pairId}:im-pair`);
+    expect(acquired).toContain(`im-channel-${inbound.channelId}:im-channel-meta`);
+    expect(acquired).toContain(`im-channel-${inbound.channelId}:im-channel-append`);
+    expect(acquired).toContain(`im-run-binding-${runId}:im-run-binding`);
+    expect(acquired).toContain(
+      `im-cursor-${inbound.channelId}-${runConsumer.consumerId}:im-cursor`,
+    );
   });
 });

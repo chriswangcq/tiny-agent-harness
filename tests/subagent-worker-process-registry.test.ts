@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
-  createTeamMemberRunProcessRecord,
   launchLocalWorker,
-  markTeamMemberRunProcessRunning,
   planWorkerLaunch,
   type TeamRosterState,
   type TeamRosterEvent,
   type TeamRosterResult,
 } from "../src/subagent/index.js";
-import type { RuntimeProcessRecord } from "../src/runtime/index.js";
+import {
+  createRunProcessRecord,
+  markRunProcessRunning,
+  type AgentRunProcessOwner,
+  type RuntimeProcessRecord,
+} from "../src/runtime/index.js";
 
 const NOW = "2026-06-11T00:00:00.000Z";
 
@@ -67,9 +70,36 @@ function makeRoster() {
   };
 }
 
-describe("worker process registry helpers", () => {
-  it("converts a worker launch plan into a team-member-owned run process record", () => {
-    const record = createTeamMemberRunProcessRecord(makePlan());
+function teamMemberOwner(): AgentRunProcessOwner {
+  return {
+    scope: "team-member",
+    teamId: "team-main",
+    memberId: "worker-1",
+    runId: "run-main",
+  };
+}
+
+describe("shared run process helpers for worker launches", () => {
+  it("converts explicit worker launch facts into a team-member-owned run process record", () => {
+    const plan = makePlan();
+    const record = createRunProcessRecord({
+      runId: plan.runId,
+      owner: teamMemberOwner(),
+      command: {
+        executable: plan.spawnCommand.command,
+        args: plan.spawnCommand.args,
+        cwd: plan.workspace,
+      },
+      now: plan.createdAt,
+      statePath: plan.paths.workerStateFile,
+      logPath: plan.paths.workerLogFile,
+      metadata: {
+        channel: plan.channel,
+        branch: plan.branch,
+        role: plan.role,
+        assignmentId: plan.assignmentId ?? null,
+      },
+    });
 
     expect(record).toMatchObject({
       id: "team-member-run:team-main:worker-1:run-main",
@@ -95,9 +125,18 @@ describe("worker process registry helpers", () => {
   });
 
   it("marks successful worker launches as running process records", () => {
-    const record = markTeamMemberRunProcessRunning(makePlan(), {
+    const plan = makePlan();
+    const record = markRunProcessRunning({
+      runId: plan.runId,
+      owner: teamMemberOwner(),
+      command: {
+        executable: plan.spawnCommand.command,
+        args: plan.spawnCommand.args,
+        cwd: plan.workspace,
+      },
+      now: plan.createdAt,
       pid: 4242,
-      now: "2026-06-11T00:00:01.000Z",
+      startedAt: "2026-06-11T00:00:01.000Z",
     });
 
     expect(record).toMatchObject({

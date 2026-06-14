@@ -15,8 +15,10 @@ import {
   planTeamScopedDirectoryLayout,
 } from "./directory-store.js";
 import {
-  createRuntimeProcess,
-  markProcessRunning,
+  markRunProcessRunning,
+  type AgentRunProcessOwner,
+} from "../runtime/run-process.js";
+import {
   type RuntimeProcessRecord,
 } from "../runtime/process-registry.js";
 
@@ -359,57 +361,6 @@ export type WorkerLaunchFailure = {
 export type WorkerLaunchResult = WorkerLaunchSuccess | WorkerLaunchFailure;
 
 // ---------------------------------------------------------------------------
-// Process registry adapter helpers
-// ---------------------------------------------------------------------------
-
-export function teamMemberRunProcessId(
-  teamId: string,
-  memberId: string,
-  runId: string,
-): string {
-  return `team-member-run:${teamId}:${memberId}:${runId}`;
-}
-
-export function createTeamMemberRunProcessRecord(
-  plan: WorkerLaunchPlan,
-): RuntimeProcessRecord {
-  return createRuntimeProcess({
-    id: teamMemberRunProcessId(plan.teamId, plan.memberId, plan.runId),
-    kind: "run",
-    owner: {
-      scope: "team-member",
-      teamId: plan.teamId,
-      memberId: plan.memberId,
-      runId: plan.runId,
-    },
-    command: {
-      executable: plan.spawnCommand.command,
-      args: plan.spawnCommand.args,
-      cwd: plan.workspace,
-    },
-    now: plan.createdAt,
-    statePath: plan.paths.workerStateFile,
-    logPath: plan.paths.workerLogFile,
-    metadata: {
-      channel: plan.channel,
-      branch: plan.branch,
-      role: plan.role,
-      assignmentId: plan.assignmentId ?? null,
-    },
-  });
-}
-
-export function markTeamMemberRunProcessRunning(
-  plan: WorkerLaunchPlan,
-  input: { pid: number; now: string },
-): RuntimeProcessRecord {
-  return markProcessRunning(createTeamMemberRunProcessRecord(plan), {
-    pid: input.pid,
-    now: input.now,
-  });
-}
-
-// ---------------------------------------------------------------------------
 // Launch executor — function behind explicit ports
 // ---------------------------------------------------------------------------
 
@@ -579,9 +530,25 @@ export async function launchLocalWorker(
   if (effects.processRegistry) {
     try {
       await effects.processRegistry.upsert(
-        markTeamMemberRunProcessRunning(plan, {
+        markRunProcessRunning({
+          runId: plan.runId,
+          owner: teamMemberRunOwner(plan),
+          command: {
+            executable: plan.spawnCommand.command,
+            args: plan.spawnCommand.args,
+            cwd: plan.workspace,
+          },
+          now: plan.createdAt,
+          statePath: plan.paths.workerStateFile,
+          logPath: plan.paths.workerLogFile,
+          metadata: {
+            channel: plan.channel,
+            branch: plan.branch,
+            role: plan.role,
+            assignmentId: plan.assignmentId ?? null,
+          },
           pid: spawnResult.pid,
-          now: effects.clock.nowISO(),
+          startedAt: effects.clock.nowISO(),
         }),
       );
     } catch (err) {
@@ -726,4 +693,13 @@ export async function launchLocalWorker(
 function formatError(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+function teamMemberRunOwner(plan: WorkerLaunchPlan): AgentRunProcessOwner {
+  return {
+    scope: "team-member",
+    teamId: plan.teamId,
+    memberId: plan.memberId,
+    runId: plan.runId,
+  };
 }

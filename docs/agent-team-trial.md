@@ -18,7 +18,7 @@ P6-01 到 P6-06 已合入 team roster、directory store、team CLI 和 local wor
 
 ```text
 workspace: /Users/wangchaoqun/Documents/DeepSeek-agent-team/<ticket-slug>
-run:       run-team-<ticket-slug>-<timestamp> 或 worker runtime 生成的 run-*
+run:       run-team-<ticket-slug>-<timestamp> 或 local worker launcher 启动的 team-member-owned run-*
 branch:    codex/team/<ticket-slug>
 ```
 
@@ -34,7 +34,7 @@ git worktree add \
   main
 ```
 
-worker run 启动后，master 记录：
+team-member-owned run 启动后，master 记录：
 
 ```json
 {
@@ -84,7 +84,7 @@ worker run 启动后，master 记录：
 
 Master agent 每轮执行：
 
-1. 查看所有 worker run 状态、latest transcript、branch diff。
+1. 查看所有 team-member-owned run 状态、latest transcript、branch diff。
 2. 对 blocked / drifting worker 通过 IM 给出短指令。
 3. 对 review_pending worker 执行代码审查、运行验证、检查 docs。
 4. 对通过验证的 worker branch 按 merge order 合并。
@@ -169,7 +169,7 @@ Master coaches workers through each review cycle:
 
 | Check | Description |
 |-------|-------------|
-| `cycleReview` | Master reviews all worker run states each cycle |
+| `cycleReview` | Master reviews all team-member-owned run states each cycle |
 | `coachBlocked` | Master sends short IM instructions to blocked/drifting workers |
 | `codeReview` | Master performs code review on `review_pending` branches |
 | `reportMergeResult` | Master reports merge result back to worker via IM |

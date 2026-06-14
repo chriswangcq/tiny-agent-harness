@@ -4,9 +4,9 @@
 
 - **Home-scoped project store**：默认状态根是 `~/.tiny-agent/projects/<projectId>/`，项目源码目录不再自动创建 `.tiny-agent/`。
 - **User-scoped runtime config**：provider credentials 和默认模型配置放在 `~/.tiny-agent/config.json`，不放进项目源码目录，也不混入 project state。
-- **Run 是执行单元**：一个 run 的执行状态（session、environment、skill-runs、debug artifacts）在 `runs/run-<ts>/` 下，可独立归档、恢复和清理。public IM 是 project-scoped 服务，run 通过显式 run binding 关联 endpoint pair。Team/supervisor/worker member state 属于 project-scoped `teams/<teamId>/` 控制面，run 通过显式 team metadata 或 team run reference 被关联。
+- **Run 是执行单元**：一个 run 的执行状态（session、environment、skill-runs、host socket/state、debug artifacts）在 `runs/run-<ts>/` 下，可独立归档、恢复和清理。public IM 是 project-scoped 服务，run 通过显式 run binding 关联 endpoint pair。Team/supervisor/worker member state 属于 project-scoped `teams/<teamId>/` 控制面，run 通过显式 team metadata 或 team run reference 被关联。
 - **Skills 项目公共**：技能定义是跨 run 共享的知识资产，放在项目级 `skills/` 下。
-- **MCP 项目公共**：MCP server registry 是项目能力配置，放在 project state root 下；每次调用仍通过 run 的 PTY/transcript/session log 审计。
+- **MCP 项目公共**：MCP server registry 是项目能力配置，放在 project state root 下；公开 CLI 调用进入 run-owned `mcp-host`，再通过 run 的 PTY/transcript/session log 审计。
 
 ## 目录结构
 
@@ -43,6 +43,12 @@
 │   ├── latest.json                 # 指向最新 run
 │   └── run-<ts>/                   # 单个 run 执行单元
 │       ├── state.json              # AgentRunState 状态机快照
+│       ├── codeq-host.sock         # run-owned resident host socket
+│       ├── codeq-host.json         # run-owned resident host state
+│       ├── skill-host.sock         # run-owned resident host socket
+│       ├── skill-host.json         # run-owned resident host state
+│       ├── mcp-host.sock           # run-owned resident host socket
+│       ├── mcp-host.json           # run-owned resident host state
 │       ├── transcript.jsonl        # 完整执行转录（每行一个 RunEvent）
 │       │
 │       ├── sessions/               # 本 run 的终端 session raw PTY log
@@ -142,12 +148,13 @@ public IM 是 project-scoped 服务，不属于任何单个 run。endpoint pair 
 | 子目录 | 内容 | 格式 |
 |--------|------|------|
 | `state.json` | AgentRunState 快照 | JSON |
+| `codeq-host.sock` / `skill-host.sock` / `mcp-host.sock` | 当前 run 的 resident host socket | Unix socket |
+| `codeq-host.json` / `skill-host.json` / `mcp-host.json` | 当前 run 的 resident host 状态记录 | JSON |
 | `transcript.jsonl` | 完整执行事件流 | JSONL |
 | `sessions/` | 终端 PTY raw log；文件名为 sanitize 后的 session id 加短 hash，避免路径穿越和重名 | 纯文本 |
 | `environment/` | 环境事件（one-shot events + persistent facts） | JSONL |
 | `skill-runs/` | 技能执行实例的状态和日志 | JSON |
 | `debug/` | 调试产物（prompt 快照、thinking trace 等） | 纯文本 |
-| `mcp-servers.json` | 项目级 MCP server registry，支持 stdio、Streamable HTTP 和 legacy HTTP+SSE server；agent 在 PTY 中默认使用 `TAH_PROJECT_STATE_DIR` | JSON |
 
 ### `teams/<teamId>/` — Team 控制面
 
@@ -165,7 +172,7 @@ Team 是 workflow/supervisor owner，位于 project state root 下。AgentRun �
 
 ### PTY 启动环境变量
 
-Managed PTY 启动时会把当前 run 信息注入 shell 环境，供 agent 在 bash 内调用 `tiny-agent im`、`tiny-agent skill` 等子命令时自动落到当前 run：
+Managed PTY 启动时会把当前 run 信息和 run-owned host socket 注入 shell 环境，供 agent 在 bash 内调用 `tiny-agent im`、`tiny-agent skill` 等子命令时自动落到当前 run：
 
 | 环境变量 | 含义 |
 |----------|------|
@@ -177,13 +184,19 @@ Managed PTY 启动时会把当前 run 信息注入 shell 环境，供 agent 在 
 | `TAH_IM_RUN_ID` | 当前 run id，供 `tiny-agent im run-recv/run-ack` 默认定位 |
 | `TAH_IM_SELF_ENDPOINT` | 当前 run 的默认回复 endpoint，例如 `run:<runId>` |
 | `TAH_IM_USER_ENDPOINT` | 默认用户 endpoint，当前为 `user:main` |
+| `TAH_CODEQ_HOST_SOCKET` | 当前 run 的 CodeQ host socket；`tiny-agent codeq ...` 必须通过它调用 |
+| `TAH_CODEQ_HOST_RUN_ID` | CodeQ host 所属 run id |
+| `TAH_SKILL_HOST_SOCKET` | 当前 run 的 Skill host socket；`tiny-agent skill ...` 必须通过它调用 |
+| `TAH_SKILL_HOST_RUN_ID` | Skill host 所属 run id |
+| `TAH_MCP_HOST_SOCKET` | 当前 run 的 MCP host socket；`tiny-agent mcp ...` 必须通过它调用 |
+| `TAH_MCP_HOST_RUN_ID` | MCP host 所属 run id |
 | `TAH_SKILL_RUNS_DIR` | 当前 run 的 skill-runs 目录 |
 | `TAH_SESSIONS_DIR` | 当前 run 的 sessions 目录 |
 | `TAH_SKILLS_DIR` | 项目级 skills 目录 |
 | `TAH_TRANSCRIPT_PATH` | 当前 run transcript JSONL |
 | `TAH_ENVIRONMENT_EVENTS_PATH` | 当前 run environment events JSONL |
 
-因此 agent 在 PTY 中执行 `tiny-agent im send --from "$TAH_IM_SELF_ENDPOINT" --to "$TAH_IM_USER_ENDPOINT" --text-stdin`、`tiny-agent skill ...`、`tiny-agent codeq ...`、`tiny-agent mcp ...` 或 `tiny-agent team ...` 时，不需要额外传 `--state-dir`；显式传入 `--state-dir` 仍然用于人工调试或跨 run 操作。
+因此 agent 在 PTY 中执行 `tiny-agent im send --from "$TAH_IM_SELF_ENDPOINT" --to "$TAH_IM_USER_ENDPOINT" --text-stdin`、`tiny-agent skill ...`、`tiny-agent codeq ...`、`tiny-agent mcp ...` 或 `tiny-agent team ...` 时，不需要额外传 `--state-dir`。Skill、CodeQ 和 MCP 的公开 CLI 依赖 host socket；人工调试这些能力时应显式传 `--host-socket <path>` 连接某个 run host。
 
 ### PTY session 生命周期
 
@@ -213,6 +226,7 @@ TUI 启动器的 stdout/stderr 日志，用于排查 UI 启动问题。不属于
 |------|----------|
 | Public IM endpoints/pairs/channels/run bindings | `~/.tiny-agent/projects/<projectId>/im/` |
 | PTY raw logs | `~/.tiny-agent/projects/<projectId>/runs/<runId>/sessions/` |
+| Resident host socket/state | `~/.tiny-agent/projects/<projectId>/runs/<runId>/{codeq,skill,mcp}-host.*` |
 | Environment events | `~/.tiny-agent/projects/<projectId>/runs/<runId>/environment/events.jsonl` |
 | Skill runs | `~/.tiny-agent/projects/<projectId>/runs/<runId>/skill-runs/` |
 | Model context snapshot | `~/.tiny-agent/projects/<projectId>/runs/<runId>/session.json` |
@@ -224,6 +238,7 @@ TUI 启动器的 stdout/stderr 日志，用于排查 UI 启动问题。不属于
 仍保持项目级：
 
 - `skills/` — 跨 run 共享 skill definitions。
+- `mcp-servers.json` — 跨 run 共享 MCP server registry；公开 CLI 通过当前 run 的 `mcp-host` 访问。
 - `runs/` — run 容器和 latest pointer。
 - `launcher/` — TUI launcher 日志。
 - `tmp/` — 临时文件。

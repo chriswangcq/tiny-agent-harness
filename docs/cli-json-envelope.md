@@ -2,7 +2,7 @@
 
 ## Purpose
 
-All capability subcommands (`tiny-agent im`, `tiny-agent skill`, `tiny-agent mcp`, `tiny-agent codeq`) produce machine-readable JSON output through standardized success and failure envelopes. Agents parse capability results through terminal/session boundaries without special-casing every command.
+All capability subcommands (`tiny-agent im`, `tiny-agent skill`, `tiny-agent mcp`, `tiny-agent codeq`) produce machine-readable JSON output through standardized success and failure envelopes. Agents parse capability results through terminal/session boundaries without special-casing every command. Host-backed commands keep the same envelope at the public CLI surface; the live resource authority is the run-owned resident host behind the socket.
 
 ## Convention
 

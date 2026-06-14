@@ -28,6 +28,11 @@ export type CodeIntelRuntime = {
   };
 };
 
+export type CodeIntelExecutionOptions = {
+  backend?: CodeIntelBackend;
+  disposeBackend?: boolean;
+};
+
 export function createCodeIntelRuntime(cwd: string): CodeIntelRuntime {
   const workspaceRoot = findWorkspaceRoot(cwd);
   const { config, configPath } = loadCodeIntelConfig(workspaceRoot);
@@ -76,6 +81,7 @@ export async function executeCodeIntelArgv(
 export async function executeCodeIntelCommand(
   command: CodeIntelCommand,
   runtime: CodeIntelRuntime,
+  options: CodeIntelExecutionOptions = {},
 ): Promise<CodeIntelEnvelope> {
   const query = commandToQuery(command);
   const limits = { ...runtime.config.limits };
@@ -126,7 +132,8 @@ export async function executeCodeIntelCommand(
     }
   }
 
-  const backend = runtime.createBackend();
+  const backend = options.backend ?? runtime.createBackend();
+  const disposeBackend = options.disposeBackend ?? options.backend === undefined;
   try {
     const result = await runBackendCommand(command, backend);
     return successEnvelope({
@@ -141,7 +148,9 @@ export async function executeCodeIntelCommand(
   } catch (error) {
     return commandFailure(error, runtime, classifyRuntimeError(error));
   } finally {
-    await backend.dispose();
+    if (disposeBackend) {
+      await backend.dispose();
+    }
   }
 }
 

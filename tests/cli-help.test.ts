@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { HELP_TEXT } from "../src/cli/help-text.js";
@@ -9,9 +9,12 @@ describe("main CLI help", () => {
     expect(HELP_TEXT).toContain("tiny-agent skill <subcommand>");
     expect(HELP_TEXT).toContain("tiny-agent codeq <subcommand>");
     expect(HELP_TEXT).toContain("tiny-agent team <group>");
+    expect(HELP_TEXT).toContain("tiny-agent <task>");
+    expect(HELP_TEXT).toContain("Alias for tiny-agent run --task <task>");
     expect(HELP_TEXT).toContain("tiny-agent ui  --resume <runId|latest>");
     expect(HELP_TEXT).toContain("team lifecycle <subcommand>");
     expect(HELP_TEXT).toContain("terminal/session tools");
+    expect(HELP_TEXT).not.toContain("Run with inline task");
     expect(HELP_TEXT).not.toContain("tiny-agent file <subcommand>");
     expect(HELP_TEXT).not.toContain("cat <stashId>");
     expect(HELP_TEXT).not.toContain(["rece", "iver"].join(""));
@@ -29,6 +32,21 @@ describe("main CLI help", () => {
     );
     // The output should match the canonical HELP_TEXT
     expect(help).toBe(HELP_TEXT);
+  });
+
+  it("rejects unquoted multi-word positional task aliases", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--loader", "ts-node/esm", "src/cli/main.ts", "fix", "tests"],
+      {
+        encoding: "utf8",
+        timeout: 30_000,
+      },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("tiny-agent <task> accepts exactly one task argument");
+    expect(result.stderr).toContain('tiny-agent run --task "<task>"');
   });
 
   it("main bin entry has a node shebang for npm link", () => {

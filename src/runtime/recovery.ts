@@ -28,8 +28,9 @@ const PROCESS_KINDS: RuntimeProcessKind[] = [
   "run",
   "terminal-host",
   "pty-session",
-  "mcp-server",
   "codeq-host",
+  "skill-host",
+  "mcp-host",
   "model-gateway",
 ];
 

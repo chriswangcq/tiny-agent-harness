@@ -22,7 +22,7 @@
 | 能力 | 说明 |
 | --- | --- |
 | Agent ReAct loop | `AgentRunState` 决定下一步 effect，`RunOrchestrator` 执行模型调用、工具校验、审核、bash 执行和 transcript 写入。 |
-| 统一外部动作面 | 交互动作通过 terminal/session tools；文件和生成内容通过 shell-native heredoc、stdin redirection 或 CLI 落盘。MCP、memory、skills、sub-agent、code intelligence、测试、git 等能力都通过 CLI 进入 terminal session。 |
+| 统一外部动作面 | 交互动作通过 terminal/session tools；文件和生成内容通过 shell-native heredoc、stdin redirection 或 CLI 落盘。MCP、memory、skills、sub-agent、code intelligence、测试、git 等能力都通过 CLI 进入 terminal session；其中 codeq/skill/MCP 的公开 CLI 只连接 run-owned resident host socket。 |
 | 可观察与可恢复执行 | run state、transcript JSONL、session history、debug prompt artifacts、session log、environment events、skill run state、TUI view model 共同构成可审计执行轨迹。 |
 
 ## 2. 系统整体架构
@@ -61,7 +61,7 @@ TUI
 | 模型上下文层 | `src/model/context-session.ts`、`src/model/context-window.ts`、`src/model/prompt-builder.ts` | 本地有状态 FIM context wrapper：接收 incremental context item，负责 prompt message 渲染、context compaction、snapshot/restore。 |
 | 工具执行层 | `src/tools`、`src/terminal-host`、`src/bash` | 静态 terminal/session tool catalog、tool validation、review boundary、TerminalHost 进程、PTY-backed terminal session 和 observation。 |
 | 外部事件层 | `src/environment`、`src/im` | IM 消息、terminal/skill/environment events、`io_wait`、事件消费游标和 factual reminder。 |
-| 能力 CLI 层 | `src/skill`、`src/code-intel`、`src/cli` | `tiny-agent skill` discovery/run/review，`tiny-agent codeq` LSP 查询，`tiny-agent im` mock transport，用户命令入口。 |
+| 能力 CLI 层 | `src/skill`、`src/code-intel`、`src/mcp`、`src/cli` | host-backed `tiny-agent skill` / `tiny-agent codeq` / `tiny-agent mcp`，public IM CLI，用户命令入口。 |
 | 可观察层 | `src/transcript`、`src/tui`、`src/state` | transcript/state 持久化、文件锁、JSONL ledger、TUI transcript player、debugger domain 和 view model。 |
 | 评估与治理层 | `src/run/recovery.ts`、`src/run/replay.ts`、`src/tools/policy.ts`、`src/subagent` | resume/replay/eval case、模型协议诊断、tool policy reviewer 和 sub-agent team FSM 基础域。 |
 
@@ -96,7 +96,7 @@ task / environment reminder
 
 2. **所有交互能力共享 terminal/session 边界**
 
-   `tiny-agent skill run ...`、`tiny-agent codeq diagnostics ...`、`npm test`、`git`、MCP CLI 调用，本质上都是 terminal session 中的一条命令。生成文件、IM 回复和报告通过 heredoc、stdin redirection 或项目内 CLI 完成。它们共享 tool review、session log、one-screen observation 和 transcript。
+   `tiny-agent skill run ...`、`tiny-agent codeq diagnostics ...`、`npm test`、`git`、MCP CLI 调用，本质上都是 terminal session 中的一条命令。Skill、CodeQ 和 MCP 命令通过当前 run 注入的 host socket 进入 resident host；生成文件、IM 回复和报告通过 heredoc、stdin redirection 或项目内 CLI 完成。它们共享 tool review、session log、one-screen observation 和 transcript。
 
 3. **`io_wait` 是状态机决策**
 
@@ -172,7 +172,7 @@ level-0 session output noise 造成 wake storm；用户消息固定归一到 lev
 
 ### 4.5 Skill CLI
 
-`src/skill` 将 skills 设计为普通 CLI 能力，而不是 harness 内置工具。agent 使用 skill 的方式仍然是：
+`src/skill` 将 skills 设计为普通 CLI 能力，而不是 harness 内置工具。当前实现是 run-scoped all-host：`tiny-agent run` 启动 `skill-host`，TerminalHost 注入 `TAH_SKILL_HOST_SOCKET`，普通 `tiny-agent skill ...` 只作为 socket client。agent 使用 skill 的方式仍然是：
 
 ```bash
 tiny-agent skill list --json
@@ -186,9 +186,9 @@ tiny-agent skill validate coding-review --json
 
 `tiny-agent skill show` 只返回元数据（`name`, `manifest?`, `readmePath`, `contentLineCount`），不返回 SKILL.md 正文。读取正文需由 agent 在终端对 `readmePath` 执行 `sed -n` 等 shell 命令分段获取。
 
-当前 runtime 没有内置 `tiny-agent skill install` 子命令；skill package 的放置、同步或远程安装
-属于外层分发问题。agent runtime 只审计通过 terminal/session 执行的 discovery、
-run、close、review-complete 和 validate。
+当前 runtime 已支持本地 `tiny-agent skill install`，但安装、discovery、run、
+close、review-complete 和 validate 都通过 run-owned skill host 服务公开 CLI；缺少
+host socket 时不会回退到 direct store/runner。
 
 一个关键设计点是：skill 执行完成后是否复盘由 agent 判断。harness 提供 `running`、`review_pending`、`closed` 状态和 lessons 写入位置，但不把复盘作为固定后置流程强加给所有 skill run。
 
@@ -210,7 +210,12 @@ tiny-agent codeq outgoing-calls src/run/orchestrator.ts:37:18 --json
 tiny-agent codeq hover src/run/orchestrator.ts:37:18 --json
 ```
 
-`tiny-agent codeq` 补齐 `rg` 和直接读文件不擅长的语义查询能力，例如真实定义、引用点、实现点、call hierarchy、document/workspace symbols、hover 类型信息和 language server diagnostics。当前实现保持 stateless，每次命令启动 language server 或 compiler fallback，执行查询后关闭。
+`tiny-agent codeq` 补齐 `rg` 和直接读文件不擅长的语义查询能力，例如真实定义、引用点、实现点、call hierarchy、document/workspace symbols、hover 类型信息和 language server diagnostics。当前实现是 run-scoped all-host：`tiny-agent run` 启动同生共死的 `codeq-host` sidecar，TerminalHost 注入 `TAH_CODEQ_HOST_SOCKET`，普通 `tiny-agent codeq ...` 只作为 socket client 调用该 host；没有 direct CLI fallback，也不跨 run 共享 host。
+
+同一套 Resident Host Contract 也用于 `skill-host` 和 `mcp-host`：run 负责启动、
+监督、注入 socket 和回收；公开 CLI 只做 socket request/response，不创建隐藏
+fallback。Skill 的 durable owner 仍是 `skills/` 与 `skill-runs/`，MCP registry 的
+durable owner 仍是 project-scoped `mcp-servers.json`。
 
 当前 `tiny-agent codeq` 是只读查询子命令，`--apply` 会被解析层拒绝。未来如果增加 rename 或
 code action，也应先以 dry-run `WorkspaceEdit` 摘要形式进入 terminal/session
@@ -272,7 +277,7 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 ### 4.12 Sub-agent Team Domain
 
-`src/subagent` 当前是 sub-agent team 的轻量控制面：核心是 project-scoped roster/lifecycle 模型。team adapter 负责 team roster snapshot 落盘，不再拥有 task FSM 或 IM dispatch。派工由上层显式调用 public IM，例如 `tiny-agent im post --from user:main --to member:<teamId>/<memberId> --text ...` 完成；worker run 通过 `tiny-agent im bind --run-id <runId> --self member:<teamId>/<memberId> --peer user:main` 关联 endpoint pair。它提供：
+`src/subagent` 当前是 sub-agent team 的轻量控制面：核心是 project-scoped roster/lifecycle 模型。team adapter 负责 team roster snapshot 落盘，不再拥有 task FSM 或 IM dispatch。派工由上层显式调用 public IM，例如 `tiny-agent im post --from user:main --to member:<teamId>/<memberId> --text ...` 完成；team-member-owned run 通过 `tiny-agent im bind --run-id <runId> --self member:<teamId>/<memberId> --peer user:main` 关联 endpoint pair。它提供：
 
 - `TeamRosterState`：member / status / run binding / assignment label / applied event ids。
 - `applyTeamRosterEvent(...)`：纯 FSM reducer，处理 add/update/status/heartbeat/terminate。
@@ -445,7 +450,7 @@ CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-
 | --- | --- | --- |
 | 持续验证要跟上 | 最新审计中 `npm run typecheck`、`npm run build` 和全量 `npm test` 已通过；后续改动仍要保持这条线常绿。 | 把 typecheck/build/test/diff check 固定为提交前检查。 |
 | 文档与实现快速变化 | README、docs、system prompt 已覆盖 terminal/session、MCP、IM、skill、TUI、state layout、sub-agent domain 和 recovery/replay；这些边界仍会继续演进。 | 每次功能落地后同步更新对应设计文档和 project report。 |
-| 状态持久化仍需持续校准 | 主路径已经把 IM、environment、skill-runs、debug artifacts 和 session logs 收敛到 run-scoped 目录；但所有 CLI fallback、人工调试路径和锁粒度仍要持续验证。 | 用集成测试覆盖 run-scoped env 注入、多 CLI 共用 state root、并发写、resume/replay。 |
+| 状态持久化仍需持续校准 | 主路径已经把 IM、environment、skill-runs、resident host socket/state、debug artifacts 和 session logs 收敛到明确目录；但人工调试路径、host socket 注入和锁粒度仍要持续验证。 | 用集成测试覆盖 run-scoped env 注入、多 CLI 共用 state root、并发写、resume/replay。 |
 | terminal/session 约束对模型要求高 | 模型必须学会通过 shell 调 skill/codeq/im 等 CLI，并在 heredoc、前台 stdin consumer、`--text-stdin` 和 session 管理之间做正确选择，而不是直接获得 typed business tool affordance。 | 在 system prompt 和 examples 中强化 heredoc / `--text-stdin` / session observe 的边界，并避免示例污染大生成文件路径。 |
 | 低级 session noise 仍需观察 | 当前 `io_wait` 采用 priority-based wait；默认 wait 已提升为 meaningful event 阈值，level-0 `session_output_available` 不再唤醒普通 wait，用户消息仍以 level `100` 打断窄 wait。剩余风险在于长期运行 session 的事件体量和 reminder 可读性。 | 持续治理 event taxonomy：对低价值 session noise 做去重、聚合或 persistent fact 化，并用 TUI/debugger 展示 wake reason。 |
 | review 目前默认 approve | 默认 runtime 仍是 demo approve，但已有纯 policy evaluator / ToolPolicyReviewer 可作为产品模式基础。 | 增加显式配置开关、workspace policy、网络/文件权限和人工确认模式。 |
@@ -478,11 +483,12 @@ CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-
 
 ### 10.3 把 CLI 能力生态收敛成统一契约
 
-`tiny-agent skill`、`tiny-agent codeq`、`tiny-agent im` 已经展示了模式：
+`tiny-agent skill`、`tiny-agent codeq`、`tiny-agent mcp`、`tiny-agent im` 已经展示了模式：
 
 ```text
 capability as CLI
   -> run through terminal session
+  -> if the capability owns live resources, route through the run-owned host socket
   -> reviewed as a terminal/session request
   -> output as JSON
   -> logged in session

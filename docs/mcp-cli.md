@@ -10,11 +10,14 @@ MCP 不是模型可见的新 tool registry，也不绕过 terminal/session 边�
 Agent model
   -> terminal_write("tiny-agent mcp ...")
   -> shell process
-  -> tiny-agent mcp subcommand
+  -> tiny-agent mcp socket client
+  -> run-owned tiny-agent mcp host
   -> MCP JSON-RPC server process or remote MCP endpoint
 ```
 
 这意味着 MCP 能力增长不会改变 harness 内核。对 orchestrator 来说，`tiny-agent mcp tools`、`tiny-agent mcp call`、`tiny-agent skill run`、`tiny-agent codeq diagnostics`、`git`、`npm test` 都是同一类 terminal/session request：先 validation/review，再在 PTY 中执行，再通过一屏 observation 和 session log 回到模型。
+
+`tiny-agent run` 会为每个 run 启动一个同生共死的 `tiny-agent mcp host --socket <runDir>/mcp-host.sock`。TerminalHost 把 `TAH_MCP_HOST_SOCKET` 注入 PTY。普通 `tiny-agent mcp ...` 只作为 socket client 转发 argv；缺少 socket 时明确失败，不创建临时直连 client，也不回退到 public CLI 内部实现。
 
 ## CLI Surface
 
@@ -64,21 +67,23 @@ MCP registry 存在 project state root 下：
   mcp-servers.json
 ```
 
-当 agent 在 run PTY 里执行 `tiny-agent mcp ...` 时，shell 环境同时包含当前
-run 的 `TAH_STATE_DIR` 和项目级 `TAH_PROJECT_STATE_DIR`。MCP 默认读取
-`TAH_PROJECT_STATE_DIR`，因此 registry 是 project-scoped，而不是 run-scoped：
+当 agent 在 run PTY 里执行 `tiny-agent mcp ...` 时，shell 环境包含当前 run 的
+`TAH_MCP_HOST_SOCKET`。公开 CLI 通过这个 socket 请求 run-owned MCP host；host
+内部使用项目级 `TAH_PROJECT_STATE_DIR` 读取 registry，因此 registry 是
+project-scoped，而不是 run-scoped：
 
 ```text
 ~/.tiny-agent/projects/<projectId>/mcp-servers.json
 ```
 
-人工调试时可以显式传 `--state-dir` 给 `tiny-agent mcp ...` 的外层入口。显式
-`--state-dir` 仍然优先于所有环境变量；如果没有 `TAH_PROJECT_STATE_DIR`，
-CLI 会回退到 `TAH_STATE_DIR` 或默认 project resolver。
+人工调试普通子命令时必须连接一个 host：使用 PTY 注入的
+`TAH_MCP_HOST_SOCKET`，或显式传 `--host-socket <path>`。`--state-dir` 属于
+host 内部命令上下文；公开 CLI 不因为缺少 host 而直接读取 registry。
 
-MCP server 注册是项目能力配置，应该跨 run 复用。具体 `tools` / `call`
-命令仍然通过当前 run 的 PTY、transcript 和 session log 审计，所以调用痕迹和失败
-仍留在 run audit boundary 内。
+MCP server 配置是项目能力配置，应该跨 run 复用；这不是说本地 MCP host 或
+stdio MCP server 进程跨 run 常驻。具体 `tools` / `call` 命令仍然通过当前 run
+的 PTY、transcript 和 session log 审计，所以调用痕迹和失败仍留在 run audit
+boundary 内。
 
 ## Registry Schema
 
@@ -129,7 +134,12 @@ tools/call
 disconnect
 ```
 
-`tiny-agent mcp tools` 和 `tiny-agent mcp call` 每次都会 initialize、执行请求、disconnect。对 stdio server 来说这意味着每次启动一个 server process；对 remote server 来说这意味着每次建立一个短生命周期 MCP client session。它不是 daemon，也不在 harness 内部保存长期 MCP process。
+`tiny-agent mcp tools` 和 `tiny-agent mcp call` 的 MCP client lifecycle 由
+run-owned `mcp-host` 执行。当前 host 对每个请求 initialize、执行请求、disconnect。
+对 stdio server 来说这意味着 host 为请求启动一个 server process；对 remote
+server 来说这意味着 host 建立一个短生命周期 MCP client session。公开 CLI 本身
+不是 daemon，也不保存 MCP transport state；长期状态属于 MCP server 或 registry
+文件。
 
 ## Output Contract
 
@@ -166,6 +176,7 @@ tiny-agent mcp call local-docs search --args-json '{"query":"run recovery"}' --j
 ## Non Goals
 
 - 不把 MCP tools 直接注入模型可见 tool catalog。
-- 不把 MCP server 作为长期后台 daemon 管理。
+- 不让普通 `tiny-agent mcp ...` 在缺少 host 时回退到直接 registry/client 实现。
+- 不把 MCP host 做成跨 run 共享后台 daemon。
 - 不让 MCP call 绕过 terminal/session tool review。
 - 不在 harness 内核理解每个 MCP tool 的业务语义。

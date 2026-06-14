@@ -1,24 +1,55 @@
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 import { failureEnvelope, successEnvelope } from "../cli/envelope.js";
 import { McpJsonRpcClient, type McpRemoteServerConfig, type McpServerConfig } from "./client.js";
 import { redactSensitive } from "./redaction.js";
 import { McpRegistryStore } from "./registry.js";
 import { StateRootResolver } from "../state/root.js";
 import { createMcpTransport } from "./transport-factory.js";
+import type {
+  McpHostExecuteRequest,
+  McpHostResponse,
+} from "./host.js";
 
-export interface McpCliDeps {
+const DEFAULT_MCP_HOST_TIMEOUT_MS = 30_000;
+
+export interface McpCommandDeps {
   stdout: { write(text: string): unknown };
   stderr: { write(text: string): unknown };
   env: NodeJS.ProcessEnv;
   cwd: string;
 }
 
-export function defaultMcpCliDeps(): McpCliDeps {
+export type McpClientRequest = {
+  socketPath: string;
+  request: McpHostExecuteRequest;
+  timeoutMs: number;
+};
+
+export interface McpCliDeps extends McpCommandDeps {
+  timeoutMs: number;
+  newRequestId: () => string;
+  requestHost: (request: McpClientRequest) => Promise<McpHostResponse>;
+}
+
+export function defaultMcpCommandDeps(): McpCommandDeps {
   return {
     stdout: process.stdout,
     stderr: process.stderr,
     env: process.env,
     cwd: process.cwd(),
+  };
+}
+
+export function defaultMcpCliDeps(): McpCliDeps {
+  return {
+    ...defaultMcpCommandDeps(),
+    timeoutMs: DEFAULT_MCP_HOST_TIMEOUT_MS,
+    newRequestId: () => `mcp-cli-${randomUUID()}`,
+    requestHost: async (request) => {
+      const { requestMcpHostSocket } = await import("./host.js");
+      return await requestMcpHostSocket(request);
+    },
   };
 }
 
@@ -98,7 +129,7 @@ function extractCallJsonArgs(remaining: string[]): Record<string, unknown> {
   return {};
 }
 
-function writeStdout(deps: McpCliDeps, data: unknown, jsonMode: boolean): void {
+function writeStdout(deps: McpCommandDeps, data: unknown, jsonMode: boolean): void {
   if (jsonMode) {
     const raw = data as Record<string, unknown>;
     const isError = raw.ok === false;
@@ -116,7 +147,7 @@ function writeStdout(deps: McpCliDeps, data: unknown, jsonMode: boolean): void {
   }
 }
 
-function writeStderrError(deps: McpCliDeps, message: string, errorCode = "MCP_ERROR"): void {
+function writeStderrError(deps: McpCommandDeps, message: string, errorCode = "MCP_ERROR"): void {
   const env = failureEnvelope({ tool: "mcp", errorCode, error: message });
   deps.stderr.write(JSON.stringify(env) + "\n");
 }
@@ -237,7 +268,7 @@ function protocolVersionForConfig(config: McpServerConfig): string | undefined {
   return undefined;
 }
 
-function resolveStateDir(deps: McpCliDeps, override?: string): string {
+function resolveStateDir(deps: McpCommandDeps, override?: string): string {
   if (override) return path.resolve(deps.cwd, override);
   if (deps.env.TAH_PROJECT_STATE_DIR) return path.resolve(deps.cwd, deps.env.TAH_PROJECT_STATE_DIR);
   if (deps.env.TAH_STATE_DIR) return path.resolve(deps.cwd, deps.env.TAH_STATE_DIR);
@@ -249,9 +280,9 @@ function resolveStateDir(deps: McpCliDeps, override?: string): string {
   }).resolve().stateDir;
 }
 
-export async function runMcpCli(
+export async function executeMcpHostCommand(
   argv: string[],
-  deps: McpCliDeps = defaultMcpCliDeps(),
+  deps: McpCommandDeps = defaultMcpCommandDeps(),
 ): Promise<number> {
   const { cleanArgv, jsonMode: finalJsonMode } = parseOutputMode(argv);
   const { stateDirOverride, cleanArgv: finalArgv, error: stateDirError } = parseStateDir(cleanArgv);
@@ -455,4 +486,145 @@ Commands:
   }
 
   return 0;
+}
+
+export async function runMcpCli(
+  argv: string[],
+  deps: McpCliDeps = defaultMcpCliDeps(),
+): Promise<number> {
+  if (argv[0] === "host") {
+    const { runMcpHostCli } = await import("./host.js");
+    return await runMcpHostCli(argv.slice(1));
+  }
+
+  if (!argv[0] || argv[0] === "--help" || argv[0] === "-h") {
+    return await executeMcpHostCommand(argv, deps);
+  }
+
+  return await executeMcpClientArgv(argv, deps);
+}
+
+export async function executeMcpClientArgv(
+  argv: string[],
+  deps: McpCliDeps,
+): Promise<number> {
+  let options: {
+    commandArgv: string[];
+    socketPath?: string;
+    timeoutMs?: number;
+  };
+  try {
+    options = parseMcpClientOptions(argv, deps.env);
+  } catch (error) {
+    writeMcpClientFailure(
+      deps,
+      "MCP_HOST_ERROR",
+      error instanceof Error ? error.message : String(error),
+    );
+    return 1;
+  }
+
+  if (!options.socketPath) {
+    writeMcpClientFailure(
+      deps,
+      "MCP_HOST_NOT_FOUND",
+      "tiny-agent mcp requires a run-scoped MCP host socket. Set TAH_MCP_HOST_SOCKET or pass --host-socket <path>.",
+    );
+    return 1;
+  }
+
+  try {
+    const response = await deps.requestHost({
+      socketPath: options.socketPath,
+      timeoutMs: options.timeoutMs ?? deps.timeoutMs,
+      request: {
+        schemaVersion: 1,
+        id: deps.newRequestId(),
+        type: "mcp.execute",
+        argv: options.commandArgv,
+      },
+    });
+
+    if (response.type === "mcp.execute.result") {
+      if (response.stdout) deps.stdout.write(response.stdout);
+      if (response.stderr) deps.stderr.write(response.stderr);
+      return response.exitCode;
+    }
+
+    const message =
+      response.type === "mcp.error"
+        ? response.error.message
+        : `Unexpected MCP host response: ${response.type}`;
+    writeMcpClientFailure(deps, "MCP_HOST_ERROR", message);
+    return 1;
+  } catch (error) {
+    writeMcpClientFailure(
+      deps,
+      "MCP_HOST_ERROR",
+      error instanceof Error ? error.message : String(error),
+    );
+    return 1;
+  }
+}
+
+function parseMcpClientOptions(
+  argv: string[],
+  env: Record<string, string | undefined>,
+): {
+  commandArgv: string[];
+  socketPath?: string;
+  timeoutMs?: number;
+} {
+  const commandArgv: string[] = [];
+  let socketPath = env.TAH_MCP_HOST_SOCKET;
+  let timeoutMs: number | undefined;
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]!;
+    if (arg === "--host-socket") {
+      const value = argv[index + 1];
+      if (!value) {
+        throw new Error("Usage: tiny-agent mcp <command> --host-socket <path>");
+      }
+      socketPath = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--host-timeout-ms") {
+      const value = argv[index + 1];
+      if (!value) {
+        throw new Error("Usage: tiny-agent mcp <command> --host-timeout-ms <ms>");
+      }
+      timeoutMs = parsePositiveInteger(value, "--host-timeout-ms");
+      index += 1;
+      continue;
+    }
+    commandArgv.push(arg);
+  }
+
+  return { commandArgv, socketPath, timeoutMs };
+}
+
+function parsePositiveInteger(value: string, flag: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${flag} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function writeMcpClientFailure(
+  deps: Pick<McpCliDeps, "stdout">,
+  errorCode: string,
+  error: string,
+): void {
+  deps.stdout.write(
+    JSON.stringify(
+      failureEnvelope({
+        tool: "mcp",
+        errorCode,
+        error,
+      }),
+    ) + "\n",
+  );
 }

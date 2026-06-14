@@ -32,6 +32,12 @@ export type CliTerminalEnvOptions = {
   skillsDir?: string;
   transcriptPath?: string;
   environmentEventsPath?: string;
+  codeqHostSocket?: string;
+  codeqHostRunId?: string;
+  skillHostSocket?: string;
+  skillHostRunId?: string;
+  mcpHostSocket?: string;
+  mcpHostRunId?: string;
 };
 
 /**
@@ -60,6 +66,24 @@ export function buildCliTerminalEnv(
   assignIfDefined(cleaned, "TAH_SESSIONS_DIR", options.sessionsDir);
   assignIfDefined(cleaned, "TAH_SKILLS_DIR", options.skillsDir);
   assignIfDefined(cleaned, "TAH_TRANSCRIPT_PATH", options.transcriptPath);
+  assignIfDefined(cleaned, "TAH_CODEQ_HOST_SOCKET", options.codeqHostSocket);
+  assignIfDefined(
+    cleaned,
+    "TAH_CODEQ_HOST_RUN_ID",
+    options.codeqHostRunId ?? options.runId,
+  );
+  assignIfDefined(cleaned, "TAH_SKILL_HOST_SOCKET", options.skillHostSocket);
+  assignIfDefined(
+    cleaned,
+    "TAH_SKILL_HOST_RUN_ID",
+    options.skillHostRunId ?? options.runId,
+  );
+  assignIfDefined(cleaned, "TAH_MCP_HOST_SOCKET", options.mcpHostSocket);
+  assignIfDefined(
+    cleaned,
+    "TAH_MCP_HOST_RUN_ID",
+    options.mcpHostRunId ?? options.runId,
+  );
   assignIfDefined(
     cleaned,
     "TAH_ENVIRONMENT_EVENTS_PATH",

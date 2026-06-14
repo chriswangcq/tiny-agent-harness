@@ -26,7 +26,7 @@ Provider credentials 和默认模型配置不属于 project state，放在用户
 
 `<projectId>` 由项目根目录 basename 和项目根绝对路径 sha256 短 hash 确定，例如 `tiny-agent-harness-4f2a1b7c9e01`。这样 runtime 状态不污染源码目录，同时同一项目的 `tiny-agent` 主入口及其 `im`、`skill`、`tui`、`mcp`、`team` 子命令仍看到同一套状态。
 
-当前实现进一步把 run 产生的执行状态收敛到 `runs/<runId>/`：environment events、PTY session log、skill-runs、model context 和 debug artifacts 都随 run 自包含。public IM 是 project-scoped 服务，通过 endpoint pair、directional channel log 和 run binding 关联具体 run。项目级目录保留跨 run 共享的 skill definitions、MCP server registry、IM、team 控制面、run 容器、启动器日志、锁和临时文件。
+当前实现进一步把 run 产生的执行状态收敛到 `runs/<runId>/`：environment events、PTY session log、skill-runs、resident host socket/state、model context 和 debug artifacts 都随 run 自包含。public IM 是 project-scoped 服务，通过 endpoint pair、directional channel log 和 run binding 关联具体 run。项目级目录保留跨 run 共享的 skill definitions、MCP server registry、IM、team 控制面、run 容器、启动器日志、锁和临时文件。
 
 ## State Root Resolution
 
@@ -56,7 +56,7 @@ Resolver 不自动发现、读取或迁移项目内 `.tiny-agent/project.json`�
 规则：
 
 - CLI 输出给 agent 的路径可以使用绝对 state-root 路径，方便 TUI 或外部工具直接打开。
-- PTY 内 `TAH_STATE_DIR` 等于当前 run dir，用于 skill-runs、environment 等 run-scoped CLI；`TAH_PROJECT_STATE_DIR` 和 `TAH_IM_STATE_DIR` 等于 home project state root，用于 public IM、MCP registry、team lifecycle/reaper 等跨 run 控制面。
+- PTY 内 `TAH_STATE_DIR` 等于当前 run dir，用于 skill-runs、environment 等 run-scoped host 内部命令；`TAH_PROJECT_STATE_DIR` 和 `TAH_IM_STATE_DIR` 等于 home project state root，用于 public IM、MCP registry、team lifecycle/reaper 等跨 run 控制面。`TAH_CODEQ_HOST_SOCKET`、`TAH_SKILL_HOST_SOCKET`、`TAH_MCP_HOST_SOCKET` 指向当前 run 的 resident hosts；对应公开 CLI 缺少 socket 时必须失败。
 - 不同项目不能共享同一个 state root，除非用户显式传 `--state-dir`。
 
 ## CLI Surface
@@ -68,9 +68,9 @@ tiny-agent       # run orchestrator, agent run state, terminal/session tool exec
 tiny-agent ui    # one-command launcher: start/resume run and attach TUI
 tiny-agent tui   # transcript / state player
 tiny-agent im               # local mock user-message transport
-tiny-agent skill            # local skill discovery, run, close, review-complete
-tiny-agent mcp              # local MCP registry/call CLI, invoked through terminal/session tools
-tiny-agent codeq            # local code intelligence query CLI, invoked through terminal/session tools
+tiny-agent skill            # Skill host client; discovery, run, close, review-complete
+tiny-agent mcp              # MCP host client; registry/tools/call through terminal/session tools
+tiny-agent codeq            # CodeQ host client; code intelligence through terminal/session tools
 ```
 
 不需要 build 成独立 CLI 的部分：
@@ -109,6 +109,7 @@ sub-agent runtime       # 当前只有纯 domain/FSM，不独立调度子进程
     run-<runId>.transcript.lock/
     run-<runId>.environment.events.lock/
     im-channel-<channelId>.lock/
+    im-cursor-<channelId>-<consumerId>.lock/
     im-run-binding-<runId>.lock/
     run-<runId>.skill-run-<skillRunId>.lock/
     session-<sessionId>.lock/
@@ -180,7 +181,7 @@ sub-agent runtime       # 当前只有纯 domain/FSM，不独立调度子进程
 - `im/` 是 project-scoped public IM store；run 只通过 `im/run-bindings/<runId>.json` 关联 endpoint pair。
 - `runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log` 是完整 raw PTY 输出，observation 返回 bounded semantic visual window，并通过 `screen.window` 给出 visual-line cursor、通过 `screen.logRef.path` 指向 raw log。
 - `runs/<runId>/skill-runs/<id>/execution.txt` 和 `review-task.txt` 只给 agent 通过 bash 原生命令读取，不直接塞进 prompt。
-- `mcp-servers.json` 是 project-scoped MCP server registry；MCP tool invocation 仍通过 run-scoped PTY/transcript/session log 审计。
+- `mcp-servers.json` 是 project-scoped MCP server registry；公开 MCP CLI 通过 run-owned `mcp-host` 执行 registry/tool 调用，仍通过 run-scoped PTY/transcript/session log 审计。
 
 ## File Types
 
@@ -236,6 +237,12 @@ im/channels/<channelId>/messages.jsonl
 2. append 一整行 JSON。
 3. flush。
 4. 释放锁。
+
+读规则：
+
+1. Reader 不长期持有 writer 锁。
+2. 完整 JSONL 行必须严格解析。
+3. 文件末尾未换行的半行视为 in-flight append，下次读取时再处理。
 
 每行必须有稳定 id：
 
@@ -393,8 +400,8 @@ Environment 是 run-scoped 外部事件 ledger。它统一建模 IM、新用户�
 
 - `tiny-agent im` append `user_message_received`
 - TerminalHost append `session_output_changed`、`session_returned_to_prompt`、`session_exited` 等 session 事件
-- `tiny-agent skill` append `skill_run_started`、`skill_run_closed`、`skill_review_pending`、`skill_review_completed`
-- `tiny-agent mcp` 可 append MCP registry/tool-call 相关事件
+- `skill-host` append `skill_run_started`、`skill_run_closed`、`skill_review_pending`、`skill_review_completed`
+- `mcp-host` 可 append MCP registry/tool-call 相关事件
 
 文件：
 
@@ -439,13 +446,15 @@ im/run-bindings/<runId>.json
 ```text
 im-channel-<channelId>.lock
 im-run-binding-<runId>.lock
+im-cursor-<channelId>-<consumerId>.lock
 ```
 
 `tiny-agent im post --from <endpoint> --to <endpoint>` append 到发送方向的 channel log。`tiny-agent im recv --as <endpoint> --with <endpoint> --cursor <id>` 读取 cursor 后的新消息；`tiny-agent im ack --as <endpoint> --with <endpoint> --message-id <id>` 推进 consumer cursor。Run poller 使用 `run-recv/run-ack` 按 `im/run-bindings/<runId>.json` 汇总多个 pair。`tiny-agent im listen` 不能长期持锁；它只能循环短暂读文件，然后 sleep / wait。
 
 ### Skill
 
-`tiny-agent skill` 负责 skill discovery 和 skill run lifecycle。
+`tiny-agent skill host` 负责 skill discovery 和 skill run lifecycle。公开
+`tiny-agent skill ...` 只是当前 run 的 Skill host socket client。
 
 文件：
 
@@ -463,7 +472,7 @@ run-<runId>.skill-run-<skillRunId>.lock
 skills.registry.lock
 ```
 
-`tiny-agent skill run` 不长期持 `skill-run` 写锁：
+`skill-host` 执行 `skill run` 时不长期持 `skill-run` 写锁：
 
 1. 获取锁创建 state=`running`。
 2. 释放锁。
@@ -483,7 +492,7 @@ run-<runId>.skill-run-<id>.lock -> skills.registry.lock -> run-<runId>.environme
 
 ### MCP Registry
 
-`tiny-agent mcp` 负责 project-scoped MCP server registry 和 MCP tool invocation。它不是 model-visible provider tool；agent 只能通过 PTY 中的 `tiny-agent mcp ...` 命令使用它。
+`tiny-agent mcp host` 负责 project-scoped MCP server registry 访问和 MCP tool invocation。它不是 model-visible provider tool；agent 只能通过 PTY 中的 `tiny-agent mcp ...` 命令使用它，而普通命令只是当前 run 的 MCP host socket client。
 
 文件：
 
@@ -497,7 +506,14 @@ mcp-servers.json
 mcp-registry.lock
 ```
 
-`tiny-agent mcp add/remove/list/tools/call` 默认优先读取 `TAH_PROJECT_STATE_DIR`，因此 agent PTY 内 registry 跨 run 共享；人工调试可以显式传 `--state-dir`。如果没有 `TAH_PROJECT_STATE_DIR`，CLI 会回退到 `TAH_STATE_DIR` 或默认 project resolver。Registry 可保存 stdio server、Streamable HTTP remote server 和 legacy HTTP+SSE server 配置；`mcp list` 输出会脱敏敏感 headers。具体 MCP 调用仍通过当前 run 的 PTY、transcript 和 session log 留痕。
+公开 `tiny-agent mcp add/remove/list/tools/call` 必须通过 `TAH_MCP_HOST_SOCKET`
+或 `--host-socket <path>` 进入某个 run-owned MCP host；缺少 host socket 时明确
+失败，不回退到直接 registry/client 实现。host 内部默认优先读取
+`TAH_PROJECT_STATE_DIR`，因此 agent PTY 内 registry 跨 run 共享。Registry 可保存
+stdio server、Streamable HTTP remote server 和 legacy HTTP+SSE server 配置；
+`mcp list` 输出会脱敏敏感 headers。`tools/call` 的 MCP client connection 由
+host 建立并完成 initialize/request/disconnect；具体 MCP 调用仍通过当前 run 的
+PTY、transcript 和 session log 留痕。
 
 ## Deadlock Avoidance
 
@@ -567,11 +583,11 @@ src/state/jsonl.ts      # locked append/read by offset
 然后按这个顺序接 CLI：
 
 1. `tiny-agent im`：最小 public IM channel log，验证锁、append 和 cursor。
-2. `tiny-agent skill`：接 state root、skill-run lock、environment event。
+2. `tiny-agent skill host`：接 state root、skill-run lock、environment event；公开 `tiny-agent skill ...` 只验证 socket client envelope。
 3. `tiny-agent`：接真实 file-backed Environment、run lease、latest pointer。
 4. `tiny-agent tui`：只读 state，不拿写锁。
 
-这个顺序能最快验证文件锁，因为 `tiny-agent im post`、`tiny-agent skill run`、`tiny-agent` 会同时写 environment ledger。
+这个顺序能最快验证文件锁，因为 `tiny-agent im post`、host 内部的 `skill run`、`tiny-agent` 会同时写 environment ledger。
 
 ## Non Goals
 

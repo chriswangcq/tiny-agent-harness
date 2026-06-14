@@ -2,9 +2,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { executeCodeIntelClientArgv, type CodeIntelClientRequest } from "../src/code-intel/cli.js";
+import { defaultConfig } from "../src/code-intel/config.js";
 import { createCodeIntelRuntime, executeCodeIntelArgv, parseCodeIntelArgv } from "../src/code-intel/commands.js";
 import { parseSourceLocation } from "../src/code-intel/location.js";
 import { parseTscDiagnosticLine } from "../src/code-intel/tsc-diagnostics.js";
+import type { CodeIntelEnvelope } from "../src/code-intel/types.js";
 
 const tmpDirs: string[] = [];
 const originalProjectStateDir = process.env.TAH_PROJECT_STATE_DIR;
@@ -134,7 +137,76 @@ describe("code-intel TypeScript diagnostics parser", () => {
   });
 });
 
-describe("code-intel CLI execution", () => {
+describe("code-intel public CLI client", () => {
+  it("requires an explicit run-scoped host socket", async () => {
+    const result = await executeCodeIntelClientArgv(
+      ["capabilities", "--json"],
+      {
+        cwd: "/repo",
+        env: {},
+        timeoutMs: 1_000,
+        newRequestId: () => "req-no-host",
+        requestHost: async () => {
+          throw new Error("requestHost should not be called without a socket");
+        },
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("server_not_found");
+      expect(result.error.message).toContain("TAH_CODEQ_HOST_SOCKET");
+    }
+  });
+
+  it("sends parsed commands to the configured host socket", async () => {
+    let captured: CodeIntelClientRequest | undefined;
+    const envelope: CodeIntelEnvelope = {
+      ok: true,
+      tool: "codeq",
+      version: "0.1.0",
+      cwd: "/repo",
+      workspaceRoot: "/repo",
+      query: { command: "capabilities" },
+      result: { languages: [] },
+      limits: defaultConfig().limits,
+    };
+
+    const result = await executeCodeIntelClientArgv(
+      ["capabilities", "--json", "--host-socket", "/tmp/codeq.sock"],
+      {
+        cwd: "/repo",
+        env: {},
+        timeoutMs: 1_000,
+        newRequestId: () => "req-host",
+        requestHost: async (request) => {
+          captured = request;
+          return {
+            schemaVersion: 1,
+            id: request.request.id,
+            ok: true,
+            type: "codeq.execute.result",
+            envelope,
+          };
+        },
+      },
+    );
+
+    expect(result).toBe(envelope);
+    expect(captured).toMatchObject({
+      socketPath: "/tmp/codeq.sock",
+      timeoutMs: 1_000,
+      request: {
+        schemaVersion: 1,
+        id: "req-host",
+        type: "codeq.execute",
+        command: { kind: "capabilities" },
+      },
+    });
+  });
+});
+
+describe("code-intel command execution core", () => {
   it("reports configured capabilities", async () => {
     const project = makeProject();
     const result = await executeCodeIntelArgv(

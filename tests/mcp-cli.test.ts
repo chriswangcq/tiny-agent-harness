@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { runMcpCli, type McpCliDeps } from "../src/mcp/cli.js";
+import { executeMcpHostCommand, type McpCommandDeps } from "../src/mcp/cli.js";
 import { buildProjectId } from "../src/state/root.js";
 
 const tmpBase = path.join(os.tmpdir(), "mcp-cli-test-" + process.pid);
@@ -12,7 +12,7 @@ function makeDeps(options?: {
   env?: Record<string, string | undefined>;
   cwd?: string;
 }): {
-  deps: McpCliDeps;
+  deps: McpCommandDeps;
   stdoutLines: () => string[];
   stderrLines: () => string[];
 } {
@@ -62,14 +62,14 @@ afterEach(() => {
 describe("mcp CLI", () => {
   it("help returns rc=0 and prints usage", async () => {
     const h = makeTestDeps();
-    const rc = await runMcpCli(["--help"], h.deps);
+    const rc = await executeMcpHostCommand(["--help"], h.deps);
     expect(rc).toBe(0);
     expect(h.stdoutLines().some((l) => l.includes("Usage"))).toBe(true);
   });
 
   it("help with no command returns rc=0 and prints usage", async () => {
     const h = makeTestDeps();
-    const rc = await runMcpCli([], h.deps);
+    const rc = await executeMcpHostCommand([], h.deps);
     expect(rc).toBe(0);
     expect(h.stdoutLines().some((l) => l.includes("Usage"))).toBe(true);
   });
@@ -77,7 +77,7 @@ describe("mcp CLI", () => {
   it("add and list --json output has boolean ok", async () => {
     // add with --json
     const addRun = makeTestDeps();
-    const addRc = await runMcpCli(
+    const addRc = await executeMcpHostCommand(
       ["--json", "add", "test-srv", "echo", "hello"],
       addRun.deps,
     );
@@ -88,7 +88,7 @@ describe("mcp CLI", () => {
 
     // list with --json
     const listRun = makeTestDeps();
-    const listRc = await runMcpCli(["list", "--json"], listRun.deps);
+    const listRc = await executeMcpHostCommand(["list", "--json"], listRun.deps);
     expect(listRc).toBe(0);
     const listJson = JSON.parse(listRun.stdoutLines()[0]);
     expect(listJson.ok).toBe(true);
@@ -101,7 +101,7 @@ describe("mcp CLI", () => {
 
   it("adds remote URL servers and redacts sensitive list output", async () => {
     const addRun = makeTestDeps();
-    const addRc = await runMcpCli(
+    const addRc = await executeMcpHostCommand(
       [
         "--json",
         "add",
@@ -139,7 +139,7 @@ describe("mcp CLI", () => {
     });
 
     const listRun = makeTestDeps();
-    const listRc = await runMcpCli(["--json", "list"], listRun.deps);
+    const listRc = await executeMcpHostCommand(["--json", "list"], listRun.deps);
     expect(listRc).toBe(0);
     const listJson = JSON.parse(listRun.stdoutLines()[0]);
     const srv = listJson.servers.find((s: any) => s.name === "remote-srv");
@@ -158,7 +158,7 @@ describe("mcp CLI", () => {
 
   it("rejects malformed remote URL config before saving", async () => {
     const h = makeTestDeps();
-    const rc = await runMcpCli(
+    const rc = await executeMcpHostCommand(
       ["add", "bad-remote", "--url", "file:///tmp/mcp"],
       h.deps,
     );
@@ -170,7 +170,7 @@ describe("mcp CLI", () => {
 
   it("add without --json has --json NOT in server args", async () => {
     const h = makeTestDeps();
-    const rc = await runMcpCli(
+    const rc = await executeMcpHostCommand(
       ["add", "test2", "node", "-e", "1", "--json"],
       h.deps,
     );
@@ -189,7 +189,7 @@ describe("mcp CLI", () => {
 
   it("add with -- separator stores literal --json as server arg", async () => {
     const h = makeTestDeps();
-    const rc = await runMcpCli(
+    const rc = await executeMcpHostCommand(
       ["add", "test3", "echo", "--", "--json", "--foo"],
       h.deps,
     );
@@ -208,7 +208,7 @@ describe("mcp CLI", () => {
 
   it("keeps trailing --json literal after -- separator", async () => {
     const h = makeTestDeps();
-    const rc = await runMcpCli(
+    const rc = await executeMcpHostCommand(
       ["add", "test-json-tail", "echo", "--", "--foo", "--json"],
       h.deps,
     );
@@ -227,11 +227,11 @@ describe("mcp CLI", () => {
   it("remove --json output ok is boolean", async () => {
     // add first
     const addRun = makeTestDeps();
-    await runMcpCli(["add", "to-remove", "cmd"], addRun.deps);
+    await executeMcpHostCommand(["add", "to-remove", "cmd"], addRun.deps);
 
     // remove with --json
     const removeRun = makeTestDeps();
-    const rc = await runMcpCli(
+    const rc = await executeMcpHostCommand(
       ["--json", "remove", "to-remove"],
       removeRun.deps,
     );
@@ -243,7 +243,7 @@ describe("mcp CLI", () => {
 
   it("remove non-existent returns ok:false", async () => {
     const h = makeTestDeps();
-    const rc = await runMcpCli(["--json", "remove", "nope"], h.deps);
+    const rc = await executeMcpHostCommand(["--json", "remove", "nope"], h.deps);
     expect(rc).toBe(0);
     const json = JSON.parse(h.stdoutLines()[0]);
     expect(json.ok).toBe(false);
@@ -251,7 +251,7 @@ describe("mcp CLI", () => {
 
   it("unknown command returns rc=1 with JSON error on stderr", async () => {
     const h = makeTestDeps();
-    const rc = await runMcpCli(["nope"], h.deps);
+    const rc = await executeMcpHostCommand(["nope"], h.deps);
     expect(rc).toBe(1);
     const errLines = h.stderrLines();
     expect(errLines.length).toBeGreaterThanOrEqual(1);
@@ -262,7 +262,7 @@ describe("mcp CLI", () => {
 
   it("add missing args returns rc=1 with JSON error", async () => {
     const h = makeTestDeps();
-    const rc = await runMcpCli(["add", "only-name"], h.deps);
+    const rc = await executeMcpHostCommand(["add", "only-name"], h.deps);
     expect(rc).toBe(1);
     const err = JSON.parse(h.stderrLines()[0]);
     expect(err.ok).toBe(false);
@@ -271,7 +271,7 @@ describe("mcp CLI", () => {
 
   it("remove missing name returns rc=1 with JSON error", async () => {
     const h = makeTestDeps();
-    const rc = await runMcpCli(["remove"], h.deps);
+    const rc = await executeMcpHostCommand(["remove"], h.deps);
     expect(rc).toBe(1);
     const err = JSON.parse(h.stderrLines()[0]);
     expect(err.ok).toBe(false);
@@ -280,7 +280,7 @@ describe("mcp CLI", () => {
 
   it("tools missing server name returns rc=1", async () => {
     const h = makeTestDeps();
-    const rc = await runMcpCli(["tools"], h.deps);
+    const rc = await executeMcpHostCommand(["tools"], h.deps);
     expect(rc).toBe(1);
     const err = JSON.parse(h.stderrLines()[0]);
     expect(err.ok).toBe(false);
@@ -289,7 +289,7 @@ describe("mcp CLI", () => {
 
   it("tools non-existent server returns rc=1", async () => {
     const h = makeTestDeps();
-    const rc = await runMcpCli(["tools", "nope"], h.deps);
+    const rc = await executeMcpHostCommand(["tools", "nope"], h.deps);
     expect(rc).toBe(1);
     const err = JSON.parse(h.stderrLines()[0]);
     expect(err.ok).toBe(false);
@@ -298,7 +298,7 @@ describe("mcp CLI", () => {
 
   it("call missing args returns rc=1", async () => {
     const h = makeTestDeps();
-    const rc = await runMcpCli(["call", "srv"], h.deps);
+    const rc = await executeMcpHostCommand(["call", "srv"], h.deps);
     expect(rc).toBe(1);
     const err = JSON.parse(h.stderrLines()[0]);
     expect(err.ok).toBe(false);
@@ -307,7 +307,7 @@ describe("mcp CLI", () => {
 
   it("call non-existent server returns rc=1", async () => {
     const h = makeTestDeps();
-    const rc = await runMcpCli(["call", "nope", "tool"], h.deps);
+    const rc = await executeMcpHostCommand(["call", "nope", "tool"], h.deps);
     expect(rc).toBe(1);
     const err = JSON.parse(h.stderrLines()[0]);
     expect(err.ok).toBe(false);
@@ -317,8 +317,8 @@ describe("mcp CLI", () => {
   it("call --args-json invalid JSON returns rc=1", async () => {
     const h = makeTestDeps();
     // Add a server first
-    await runMcpCli(["add", "s1", "echo"], h.deps);
-    const rc = await runMcpCli(
+    await executeMcpHostCommand(["add", "s1", "echo"], h.deps);
+    const rc = await executeMcpHostCommand(
       ["call", "s1", "t", "--args-json", "not-json"],
       h.deps,
     );
@@ -341,7 +341,7 @@ describe("mcp CLI", () => {
     fs.mkdirSync(altTmp, { recursive: true });
     try {
       const h = makeDeps({ cwd: altTmp, env: { HOME: altHome } });
-      const rc = await runMcpCli(
+      const rc = await executeMcpHostCommand(
         ["--json", "add", "cwd-srv", "echo"],
         h.deps,
       );
@@ -365,7 +365,7 @@ describe("mcp CLI", () => {
     fs.mkdirSync(customState, { recursive: true });
     try {
       const h = makeDeps({ cwd: tmpBase, env: {} });
-      const rc = await runMcpCli(
+      const rc = await executeMcpHostCommand(
         ["add", "s1", "echo", "--state-dir", customState],
         h.deps,
       );
@@ -387,7 +387,7 @@ describe("mcp CLI", () => {
 
   it("--state-dir after -- is preserved as server arg", async () => {
     const h = makeTestDeps();
-    const rc = await runMcpCli(
+    const rc = await executeMcpHostCommand(
       ["add", "s1", "echo", "--", "--state-dir", "/server-state"],
       h.deps,
     );
@@ -407,7 +407,7 @@ describe("mcp CLI", () => {
     fs.mkdirSync(customState, { recursive: true });
     try {
       const h = makeDeps({ cwd: tmpBase, env: {} });
-      const rc = await runMcpCli(
+      const rc = await executeMcpHostCommand(
         ["--json", "add", "s1", "echo", "--state-dir", customState],
         h.deps,
       );
@@ -435,7 +435,7 @@ describe("mcp CLI", () => {
         cwd: tmpBase,
         env: { TAH_STATE_DIR: envState },
       });
-      const rc = await runMcpCli(
+      const rc = await executeMcpHostCommand(
         ["add", "s1", "echo", "--state-dir", flagState],
         h.deps,
       );
@@ -465,7 +465,7 @@ describe("mcp CLI", () => {
           TAH_STATE_DIR: runState,
         },
       });
-      const rc = await runMcpCli(["add", "project-srv", "echo"], h.deps);
+      const rc = await executeMcpHostCommand(["add", "project-srv", "echo"], h.deps);
       expect(rc).toBe(0);
 
       const projectPath = path.join(projectState, "mcp-servers.json");
@@ -487,7 +487,7 @@ describe("mcp CLI", () => {
       const h = makeDeps({ cwd: tmpBase, env: {} });
 
       // Add a server using custom state dir
-      let rc = await runMcpCli(
+      let rc = await executeMcpHostCommand(
         ["add", "s1", "echo", "--state-dir", customState],
         h.deps,
       );
@@ -495,7 +495,7 @@ describe("mcp CLI", () => {
 
       // List using same custom state dir
       const h2 = makeDeps({ cwd: tmpBase, env: {} });
-      rc = await runMcpCli(
+      rc = await executeMcpHostCommand(
         ["--json", "list", "--state-dir", customState],
         h2.deps,
       );
@@ -506,7 +506,7 @@ describe("mcp CLI", () => {
 
       // Remove using same custom state dir
       const h3 = makeDeps({ cwd: tmpBase, env: {} });
-      rc = await runMcpCli(
+      rc = await executeMcpHostCommand(
         ["remove", "s1", "--state-dir", customState],
         h3.deps,
       );
@@ -522,7 +522,7 @@ describe("mcp CLI", () => {
     try {
       const h = makeDeps({ cwd: tmpBase, env: {} });
       // --state-dir before --, --json trailing, server has -- separator with args
-      const rc = await runMcpCli(
+      const rc = await executeMcpHostCommand(
         ["add", "s1", "echo", "--state-dir", customState, "--", "--json", "--verbose", "--json"],
         h.deps,
       );
@@ -540,7 +540,7 @@ describe("mcp CLI", () => {
 
   it("--state-dir with no value returns rc=1", async () => {
     const h = makeTestDeps();
-    const rc = await runMcpCli(
+    const rc = await executeMcpHostCommand(
       ["add", "s1", "echo", "--state-dir"],
       h.deps,
     );
@@ -552,7 +552,7 @@ describe("mcp CLI", () => {
 
   it("--state-dir with next token being another flag returns rc=1", async () => {
     const h = makeTestDeps();
-    const rc = await runMcpCli(
+    const rc = await executeMcpHostCommand(
       ["add", "s1", "echo", "--state-dir", "--json"],
       h.deps,
     );
@@ -564,7 +564,7 @@ describe("mcp CLI", () => {
 
   it("--state-dir before -- with no value returns rc=1", async () => {
     const h = makeTestDeps();
-    const rc = await runMcpCli(
+    const rc = await executeMcpHostCommand(
       ["add", "s1", "echo", "--state-dir", "--", "server.js"],
       h.deps,
     );

@@ -12,7 +12,7 @@ endpoint pair
   -> optional run binding
 ```
 
-Run 是 IM 的使用者，不是 IM 的 owner。TUI、team member、外部用户、worker run 都可以注册 endpoint pair；一个 run 可以绑定多个 pair，例如 `a2user` 和 `a2a`。
+Run 是 IM 的使用者，不是 IM 的 owner。TUI、team member endpoint、外部用户和 agent endpoint 都可以注册 endpoint pair；一个 run 可以绑定多个 pair，例如 `a2user` 和 `a2a`。
 
 ## Endpoint Shape
 
@@ -112,6 +112,8 @@ tiny-agent im run-ack --run-id run-123 --peer user:main --message-id <messageId>
 ```
 
 Channel id 由 endpoint direction 的稳定 key 派生。两个 endpoint pair 会有两个 directional channel：`a => b` 和 `b => a`。消息只 append 到发送方向的 `messages.jsonl`；每个 consumer 独立维护 cursor。
+
+Writes are serialized with directory locks under `locks/`: pair metadata uses `im-pair-<pairId>`, channel metadata and message append use `im-channel-<channelId>`, run bindings use `im-run-binding-<runId>`, and cursor acks use `im-cursor-<channelId>-<consumerId>`. Snapshot-style IM files and cursors are written with temp-file rename; readers can stay lock-free because they only observe either the old file or the new file. Message-log readers also stay lock-free: they parse complete JSONL lines and ignore a trailing incomplete line from an in-flight append.
 
 ## Runtime Flow
 

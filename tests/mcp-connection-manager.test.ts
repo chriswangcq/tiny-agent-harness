@@ -1,17 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
-  McpRuntimeManager,
-  planMcpRuntime,
+  McpConnectionManager,
+  planMcpConnection,
   type McpServerConfig,
 } from "../src/mcp/index.js";
 
-const NOW = "2026-06-11T00:00:00.000Z";
-
-describe("planMcpRuntime", () => {
-  it("creates project-owned process records for stdio MCP servers", () => {
-    const plan = planMcpRuntime({
-      projectId: "project-1",
-      now: NOW,
+describe("planMcpConnection", () => {
+  it("creates non-resident connection plans for stdio MCP servers", () => {
+    const plan = planMcpConnection({
       config: {
         name: "local",
         command: "node",
@@ -22,32 +18,21 @@ describe("planMcpRuntime", () => {
       },
     });
 
-    expect(plan.kind).toBe("local-process");
-    if (plan.kind !== "local-process") throw new Error("expected process");
-    expect(plan.process).toMatchObject({
-      id: "mcp-server:project-1:local",
-      kind: "mcp-server",
-      owner: {
-        scope: "project",
-        projectId: "project-1",
-      },
-      status: "planned",
-      command: {
-        executable: "node",
-        args: ["server.js"],
-        envKeys: ["SECRET_TOKEN"],
-      },
-      metadata: {
-        serverName: "local",
-        transport: "stdio",
-      },
+    expect(plan.kind).toBe("local-stdio-connection");
+    if (plan.kind !== "local-stdio-connection") {
+      throw new Error("expected local stdio connection");
+    }
+    expect(plan.command).toEqual({
+      executable: "node",
+      args: ["server.js"],
+      envKeys: ["SECRET_TOKEN"],
     });
+    expect(JSON.stringify(plan)).not.toContain("secret");
+    expect(JSON.stringify(plan)).not.toContain("mcp-server");
   });
 
   it("represents remote MCP servers without a local process", () => {
-    const plan = planMcpRuntime({
-      projectId: "project-1",
-      now: NOW,
+    const plan = planMcpConnection({
       config: {
         name: "remote",
         type: "http",
@@ -70,26 +55,26 @@ describe("planMcpRuntime", () => {
   });
 });
 
-describe("McpRuntimeManager", () => {
+describe("McpConnectionManager", () => {
   it("reads project-scoped registry entries through injected ports", () => {
     const servers: McpServerConfig[] = [
       { name: "local", command: "node", args: ["server.js"] },
       { name: "remote", type: "sse", url: "https://api.example.test/sse" },
     ];
-    const manager = new McpRuntimeManager({
-      projectId: "project-1",
-      nowIso: () => NOW,
+    const manager = new McpConnectionManager({
       registry: {
         list: () => servers,
         get: (name) => servers.find((server) => server.name === name),
       },
     });
 
-    expect(manager.listRuntimePlans().map((plan) => plan.kind)).toEqual([
-      "local-process",
+    expect(manager.listConnectionPlans().map((plan) => plan.kind)).toEqual([
+      "local-stdio-connection",
       "remote-endpoint",
     ]);
-    expect(manager.getRuntimePlan("local")?.kind).toBe("local-process");
-    expect(manager.getRuntimePlan("missing")).toBeUndefined();
+    expect(manager.getConnectionPlan("local")?.kind).toBe(
+      "local-stdio-connection",
+    );
+    expect(manager.getConnectionPlan("missing")).toBeUndefined();
   });
 });

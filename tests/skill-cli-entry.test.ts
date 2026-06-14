@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { runSkill } from "../src/cli/skill.js";
+import { executeSkillHostCommand } from "../src/skill/command.js";
 
 describe("runSkill CLI", () => {
   let tmpDir: string;
@@ -86,7 +86,7 @@ describe("runSkill CLI", () => {
     createSkill(stateDir, "beta");
 
     captureStdout();
-    await runSkill(["list", "--state-dir", stateDir, "--json"]);
+    await executeSkillHostCommand(["list", "--state-dir", stateDir, "--json"]);
     restoreStdout();
 
     const result = getCapturedJson() as { skills: Array<{ name: string }> };
@@ -100,7 +100,7 @@ describe("runSkill CLI", () => {
     createSkill(stateDir, "demo");
 
     captureStdout();
-    await runSkill(["show", "demo", "--state-dir", stateDir, "--json"]);
+    await executeSkillHostCommand(["show", "demo", "--state-dir", stateDir, "--json"]);
     restoreStdout();
 
     const result = getCapturedJson() as { name: string; contentLineCount: number };
@@ -112,7 +112,7 @@ describe("runSkill CLI", () => {
     const stateDir = createStateDir();
 
     captureStdout();
-    await runSkill(["show", "nonexistent", "--state-dir", stateDir, "--json"]);
+    await executeSkillHostCommand(["show", "nonexistent", "--state-dir", stateDir, "--json"]);
     restoreStdout();
 
     const result = getCapturedJson() as { ok: false; error: string };
@@ -125,7 +125,7 @@ describe("runSkill CLI", () => {
     createSkill(stateDir, "runner", { entry: true });
 
     captureStdout();
-    await runSkill(["run", "runner", "--state-dir", stateDir, "--json"]);
+    await executeSkillHostCommand(["run", "runner", "--state-dir", stateDir, "--json"]);
     restoreStdout();
 
     const result = getCapturedJson() as { ok: boolean; skillRunId: string; skill: string; status: string };
@@ -140,11 +140,11 @@ describe("runSkill CLI", () => {
     createSkill(stateDir, "runner", { entry: true });
 
     captureStdout();
-    await runSkill(["run", "runner", "--state-dir", stateDir, "--json"]);
+    await executeSkillHostCommand(["run", "runner", "--state-dir", stateDir, "--json"]);
     restoreStdout();
 
     captureStdout();
-    await runSkill(["status", "--state-dir", stateDir, "--json"]);
+    await executeSkillHostCommand(["status", "--state-dir", stateDir, "--json"]);
     restoreStdout();
 
     const result = getCapturedJson() as { activeRuns: Array<{ skillRunId: string }> };
@@ -156,12 +156,12 @@ describe("runSkill CLI", () => {
     createSkill(stateDir, "closer", { entry: true });
 
     captureStdout();
-    await runSkill(["run", "closer", "--state-dir", stateDir, "--json"]);
+    await executeSkillHostCommand(["run", "closer", "--state-dir", stateDir, "--json"]);
     restoreStdout();
     const runResult = getCapturedJson() as { skillRunId: string };
 
     captureStdout();
-    await runSkill(["close", runResult.skillRunId, "--review", "none", "--state-dir", stateDir, "--json"]);
+    await executeSkillHostCommand(["close", runResult.skillRunId, "--review", "none", "--state-dir", stateDir, "--json"]);
     restoreStdout();
 
     const closeResult = getCapturedJson() as { ok: boolean; status: string };
@@ -169,7 +169,7 @@ describe("runSkill CLI", () => {
     expect(closeResult.status).toBe("closed");
 
     captureStdout();
-    await runSkill(["status", "--state-dir", stateDir, "--json"]);
+    await executeSkillHostCommand(["status", "--state-dir", stateDir, "--json"]);
     restoreStdout();
     const statusResult = getCapturedJson() as { activeRuns: unknown[] };
     expect(statusResult.activeRuns).toHaveLength(0);
@@ -180,12 +180,12 @@ describe("runSkill CLI", () => {
     createSkill(stateDir, "reviewer", { entry: true });
 
     captureStdout();
-    await runSkill(["run", "reviewer", "--state-dir", stateDir, "--json"]);
+    await executeSkillHostCommand(["run", "reviewer", "--state-dir", stateDir, "--json"]);
     restoreStdout();
     const runResult = getCapturedJson() as { skillRunId: string };
 
     captureStdout();
-    await runSkill([
+    await executeSkillHostCommand([
       "close", runResult.skillRunId,
       "--review", "required",
       '{"summary":"needs review"}',
@@ -198,7 +198,7 @@ describe("runSkill CLI", () => {
     expect(["review_pending", "closed"]).toContain(closeResult.status);
 
     captureStdout();
-    await runSkill(["status", "--state-dir", stateDir, "--json"]);
+    await executeSkillHostCommand(["status", "--state-dir", stateDir, "--json"]);
     restoreStdout();
     const statusResult = getCapturedJson() as { activeRuns: unknown[] };
     if (closeResult.status === "closed") {
@@ -214,13 +214,13 @@ describe("runSkill CLI", () => {
 
     // Run the skill
     captureStdout();
-    await runSkill(["run", "rc-skill", "--state-dir", stateDir, "--json"]);
+    await executeSkillHostCommand(["run", "rc-skill", "--state-dir", stateDir, "--json"]);
     restoreStdout();
     const runResult = getCapturedJson() as { skillRunId: string };
 
     // Close with review required
     captureStdout();
-    await runSkill([
+    await executeSkillHostCommand([
       "close", runResult.skillRunId,
       "--review", "required",
       '{"summary":"review me"}',
@@ -230,7 +230,7 @@ describe("runSkill CLI", () => {
 
     // Review complete
     captureStdout();
-    await runSkill([
+    await executeSkillHostCommand([
       "review-complete", runResult.skillRunId,
       '{"summary":"done","lessons":["all good"]}',
       "--state-dir", stateDir, "--json",
@@ -247,7 +247,7 @@ describe("runSkill CLI", () => {
     createSkill(stateDir, "valid-skill");
 
     captureStdout();
-    await runSkill(["validate", "valid-skill", "--state-dir", stateDir, "--json"]);
+    await executeSkillHostCommand(["validate", "valid-skill", "--state-dir", stateDir, "--json"]);
     restoreStdout();
 
     const result = getCapturedJson() as { ok: boolean };
@@ -267,7 +267,7 @@ describe("runSkill CLI", () => {
     }), "utf-8");
 
     captureStdout();
-    await runSkill(["install", sourceDir, "--state-dir", stateDir, "--json"]);
+    await executeSkillHostCommand(["install", sourceDir, "--state-dir", stateDir, "--json"]);
     restoreStdout();
 
     const result = getCapturedJson() as { ok: boolean; name: string };
@@ -276,7 +276,7 @@ describe("runSkill CLI", () => {
 
     // Verify it appears in skill list
     captureStdout();
-    await runSkill(["list", "--state-dir", stateDir, "--json"]);
+    await executeSkillHostCommand(["list", "--state-dir", stateDir, "--json"]);
     restoreStdout();
     const listResult = getCapturedJson() as { skills: Array<{ name: string }> };
     expect(listResult.skills.map((s) => s.name)).toContain("to-install");
@@ -290,7 +290,7 @@ describe("runSkill CLI", () => {
     fs.writeFileSync(path.join(sourceDir, "SKILL.md"), "# source\n\nTest.", "utf-8");
 
     captureStdout();
-    await runSkill(["install", sourceDir, "custom-name", "--state-dir", stateDir, "--json"]);
+    await executeSkillHostCommand(["install", sourceDir, "custom-name", "--state-dir", stateDir, "--json"]);
     restoreStdout();
 
     const result = getCapturedJson() as { ok: boolean; name: string };
@@ -302,7 +302,7 @@ describe("runSkill CLI", () => {
     const stateDir = createStateDir();
 
     captureStdout();
-    await runSkill(["install", "/nonexistent", "--state-dir", stateDir, "--json"]);
+    await executeSkillHostCommand(["install", "/nonexistent", "--state-dir", stateDir, "--json"]);
     restoreStdout();
 
     const result = getCapturedJson() as { ok: boolean; error: string };
@@ -313,7 +313,7 @@ describe("runSkill CLI", () => {
     const stateDir = createStateDir();
 
     captureStdout();
-    await runSkill(["validate", "nope", "--state-dir", stateDir, "--json"]);
+    await executeSkillHostCommand(["validate", "nope", "--state-dir", stateDir, "--json"]);
     restoreStdout();
 
     const result = getCapturedJson() as { ok: boolean; error: string };

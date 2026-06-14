@@ -82,7 +82,9 @@ export class TypeScriptLspBackend implements CodeIntelBackend {
     diagnostics: CodeIntelDiagnostic[];
   }> {
     if (request.workspace) {
-      throw new Error("Workspace diagnostics are handled by the TypeScript compiler fallback");
+      throw new Error(
+        "Workspace diagnostics are handled by the host-owned TypeScript compiler implementation",
+      );
     }
     if (!request.path) {
       throw new Error("diagnostics requires a file path unless --workspace is set");
