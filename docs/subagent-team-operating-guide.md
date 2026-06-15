@@ -9,7 +9,7 @@ Create a team, add members, send work through IM, and observe lifecycle facts.
 ```text
 tiny-agent team create <teamId>
   -> tiny-agent team member add/update/status/heartbeat/terminate
-  -> tiny-agent im post --from user:main --to member:<teamId>/<memberId> --text <instruction>
+  -> tiny-agent im admin post --from user:main --to member:<teamId>/<memberId> --text <instruction>
   -> tiny-agent team lifecycle lease/reaper/shutdown for team-member-owned runs
 ```
 
@@ -69,13 +69,13 @@ tiny-agent team --team team-p6 member heartbeat coder-1 --evidence "commit abc12
 tiny-agent team --team team-p6 member terminate coder-1 --reason "task complete"
 
 tiny-agent team --team team-p6 member update coder-1 --json '{"assignment":{"id":"A-001","title":"Fix roster projection","status":"assigned"}}'
-tiny-agent im pair --a user:main --b member:team-p6/coder-1 --kind a2a
-tiny-agent im bind --run-id run-123 --self member:team-p6/coder-1 --peer user:main --kind a2a
-tiny-agent im post --from user:main --to member:team-p6/coder-1 --text "Fix roster projection and report commit/test evidence"
-tiny-agent im post --from user:main --to member:team-p6/coder-1 --text-stdin < assignment-instructions.md
+tiny-agent im admin pair --a user:main --b member:team-p6/coder-1 --kind a2a
+tiny-agent im admin bind --run-id run-123 --self member:team-p6/coder-1 --peer user:main --kind a2a
+tiny-agent im admin post --from user:main --to member:team-p6/coder-1 --text "Fix roster projection and report commit/test evidence"
+tiny-agent im admin post --from user:main --to member:team-p6/coder-1 --text-stdin < assignment-instructions.md
 ```
 
-`im post` is the normal dispatch path. Use the roster to discover or record the member's `runId` and endpoint metadata; public IM owns delivery. The team roster can store an optional `assignment` label for observability, but it does not mirror IM delivery state.
+`im admin post` is the external direct-file dispatch path. Use the roster to discover or record the member's `runId` and endpoint metadata; public IM owns delivery. The team roster can store an optional `assignment` label for observability, but it does not mirror IM delivery state.
 
 Lifecycle commands require explicit team ownership. `--run` is an optional execution fact; it never selects or owns the team:
 
@@ -114,7 +114,7 @@ roster_event
 3. Bind active team-member-owned runs back to roster members with `tiny-agent team member update <memberId> --json '{"runId":"run-..."}'`.
 4. Optionally record a visible assignment label with `tiny-agent team --team <teamId> member update <memberId> --json '{"assignment":{...}}'`.
 5. Ensure the member endpoint pair exists and is bound to the team-member-owned run.
-6. Send concrete instructions with `tiny-agent im post --from user:main --to member:<teamId>/<memberId> --text ...`.
+6. Send concrete instructions with `tiny-agent im admin post --from user:main --to member:<teamId>/<memberId> --text ...`.
 7. Include workspace/git/ledger requirements inside the assignment text when needed.
 8. Record optional facts as metadata or handoff evidence after they exist.
 9. Use lifecycle lease/heartbeat/reaper/shutdown for team-member-owned runs.

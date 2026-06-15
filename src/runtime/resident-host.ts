@@ -13,9 +13,12 @@ import type {
 } from "./run-supervisor.js";
 
 export type ResidentSocketHostKind =
+  | "terminal-host"
   | "codeq-host"
   | "skill-host"
-  | "mcp-host";
+  | "mcp-host"
+  | "im-host"
+  | "model-gateway";
 
 export type ResidentHostPaths = {
   processId: string;
@@ -41,6 +44,7 @@ export function residentHostProcessId(
   kind: ResidentSocketHostKind,
   runId: string,
 ): string {
+  assertRuntimeKind(kind);
   assertRunId(runId);
   return `${kind}:${runId}`;
 }
@@ -395,7 +399,14 @@ function assertRunId(runId: string): void {
 }
 
 function assertRuntimeKind(kind: ResidentSocketHostKind): asserts kind is RuntimeProcessKind & ResidentSocketHostKind {
-  if (kind !== "codeq-host" && kind !== "skill-host" && kind !== "mcp-host") {
+  if (
+    kind !== "terminal-host" &&
+    kind !== "codeq-host" &&
+    kind !== "skill-host" &&
+    kind !== "mcp-host" &&
+    kind !== "im-host" &&
+    kind !== "model-gateway"
+  ) {
     throw new Error(`Unsupported resident host kind: ${kind}`);
   }
 }

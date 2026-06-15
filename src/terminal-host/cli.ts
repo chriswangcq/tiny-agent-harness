@@ -1,8 +1,8 @@
 import { ManagedTerminalRuntime } from "../bash/managed-terminal-runtime.js";
-import { serveTerminalHost } from "./server.js";
-import type { Readable, Writable } from "node:stream";
+import { listenTerminalHostSocket } from "./server.js";
 
 type TerminalHostCliOptions = {
+  socketPath: string;
   defaultSessionId: string;
   cwd: string;
   promptNonce: string;
@@ -14,13 +14,9 @@ type TerminalHostCliOptions = {
 export async function runTerminalHostCli(
   args: string[],
   io: {
-    stdin: Readable;
-    stdout: Writable;
-    stderr: Writable;
+    stderr: { write(text: string): unknown };
     env: NodeJS.ProcessEnv;
   } = {
-    stdin: process.stdin,
-    stdout: process.stdout,
     stderr: process.stderr,
     env: process.env,
   },
@@ -45,15 +41,19 @@ export async function runTerminalHostCli(
     screenCols: options.cols,
   });
 
-  await serveTerminalHost({
+  const server = await listenTerminalHostSocket({
     terminal: runtime.createRunPort(),
-    input: io.stdin,
-    output: io.stdout,
+    socketPath: options.socketPath,
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("close", resolve);
+    server.once("error", reject);
   });
   return 0;
 }
 
 function parseTerminalHostCliOptions(args: string[]): TerminalHostCliOptions {
+  let socketPath: string | undefined;
   let defaultSessionId = "default";
   let cwd = process.cwd();
   let promptNonce = `terminal-host-${Date.now()}`;
@@ -64,7 +64,10 @@ function parseTerminalHostCliOptions(args: string[]): TerminalHostCliOptions {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]!;
     const value = args[index + 1];
-    if (arg === "--default-session" && value) {
+    if (arg === "--socket" && value) {
+      socketPath = value;
+      index += 1;
+    } else if (arg === "--default-session" && value) {
       defaultSessionId = value;
       index += 1;
     } else if (arg === "--cwd" && value) {
@@ -87,7 +90,12 @@ function parseTerminalHostCliOptions(args: string[]): TerminalHostCliOptions {
     }
   }
 
+  if (!socketPath) {
+    throw new Error("Usage: tiny-agent terminal-host --socket <path>");
+  }
+
   return {
+    socketPath,
     defaultSessionId,
     cwd,
     promptNonce,

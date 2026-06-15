@@ -100,9 +100,9 @@ roster_event -> TeamRosterEvent
 The team module does not provide task subcommands. Work instructions are explicit public IM messages sent to a member endpoint:
 
 ```bash
-tiny-agent im pair --a user:main --b member:<teamId>/<memberId> --kind a2a
-tiny-agent im bind --run-id <runId> --self member:<teamId>/<memberId> --peer user:main --kind a2a
-tiny-agent im post --from user:main --to member:<teamId>/<memberId> --text "<instruction>"
+tiny-agent im admin pair --a user:main --b member:<teamId>/<memberId> --kind a2a
+tiny-agent im admin bind --run-id <runId> --self member:<teamId>/<memberId> --peer user:main --kind a2a
+tiny-agent im admin post --from user:main --to member:<teamId>/<memberId> --text "<instruction>"
 ```
 
 If the instruction needs a durable label, store it as `TeamMember.assignment` with `tiny-agent team --team <teamId> member update <memberId> --json <patch>`. The roster records observable member facts; it does not mirror or acknowledge IM delivery.
@@ -122,7 +122,7 @@ tiny-agent team --team <teamId> member status <memberId> <status>
 tiny-agent team --team <teamId> member heartbeat <memberId> [--evidence <text>]
 tiny-agent team --team <teamId> member terminate <memberId> [--reason <text>]
 
-tiny-agent im post --from user:main --to member:<teamId>/<memberId> --text "<instruction>"
+tiny-agent im admin post --from user:main --to member:<teamId>/<memberId> --text "<instruction>"
 ```
 
 There is no compatibility path for removed roster command names. For non-lifecycle team commands, create a team first and pass `--team <teamId>`; state is stored under the project state root, not process-local memory.

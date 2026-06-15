@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
@@ -40,10 +39,15 @@ import { STATIC_TOOL_CATALOG } from "../tools/catalog.js";
 import { ENVIRONMENT_EVENT_LEVELS } from "../types/environment.js";
 import type { UserMessage } from "../types/environment.js";
 import { Environment } from "../environment/environment.js";
-import { PublicImService, createNodeImStore, type PublicImRunReceiveMessage } from "../im/index.js";
+import {
+  launchImHost,
+  type LaunchedImHost,
+  type PublicImRunReceiveMessage,
+} from "../im/index.js";
 import { SkillRunStore } from "../skill/store.js";
 import { buildCliTerminalEnv } from "./terminal-env.js";
 import {
+  DEFAULT_RUN_USER_ENDPOINT,
   ackPublicRunUserMessage,
   createRunImSelfEndpoint,
   ensureDefaultRunImBinding,
@@ -131,25 +135,32 @@ function ensureRunScopedPaths(runDir: string): RunScopedPaths {
   return paths;
 }
 
-function createCliTerminalHost(options: {
+async function createCliTerminalHost(options: {
   runId: string;
   runDir: string;
   stateDir: string;
   paths: RunScopedPaths;
   skillsDir: string;
   transcriptPath: string;
+  imHostSocket: string;
   codeqHostSocket: string;
   skillHostSocket: string;
   mcpHostSocket: string;
   supervisor: RunSupervisor;
-}): LaunchedTerminalHost {
+}): Promise<LaunchedTerminalHost> {
   const promptNonce = `cli-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const paths = residentHostPaths({
+    kind: "terminal-host",
+    runId: options.runId,
+    runDir: options.runDir,
+  });
   const terminalEnv = buildCliTerminalEnv(process.env, {
     runId: options.runId,
     runDir: options.runDir,
     stateDir: options.runDir,
     projectStateDir: options.stateDir,
     imStateDir: options.stateDir,
+    imHostSocket: options.imHostSocket,
     imRunId: options.runId,
     imSelfEndpoint: createRunImSelfEndpoint(options.runId),
     imUserEndpoint: "user:main",
@@ -169,6 +180,8 @@ function createCliTerminalHost(options: {
     ...process.execArgv,
     process.argv[1]!,
     "terminal-host",
+    "--socket",
+    paths.socketPath,
     "--default-session",
     "default",
     "--cwd",
@@ -183,21 +196,70 @@ function createCliTerminalHost(options: {
     "80",
   ];
 
-  return launchTerminalHost({
+  return await launchTerminalHost({
     supervisor: options.supervisor,
-    processId: `terminal-host:${options.runId}:default`,
+    processId: paths.processId,
     owner: { scope: "run", runId: options.runId },
     executable: process.execPath,
     args: hostArgs,
     cwd: process.cwd(),
     env: terminalEnv,
-    statePath: path.join(options.runDir, "terminal-host.json"),
-    logPath: path.join(options.paths.sessionsDir, "terminal-host.stderr.log"),
+    socketPath: paths.socketPath,
+    statePath: paths.statePath,
+    logPath: paths.logPath,
     requestTimeoutMs: 30_000,
+    startupTimeoutMs: 10_000,
     newRequestId: (() => {
       let sequence = 0;
       return () => `terminal-host-${options.runId}-${++sequence}`;
     })(),
+  });
+}
+
+async function createCliImHost(options: {
+  runId: string;
+  runDir: string;
+  stateDir: string;
+  selfEndpoint: string;
+  userEndpoint: string;
+  supervisor: RunSupervisor;
+}): Promise<LaunchedImHost> {
+  const paths = residentHostPaths({
+    kind: "im-host",
+    runId: options.runId,
+    runDir: options.runDir,
+  });
+  const hostArgs = [
+    ...process.execArgv,
+    process.argv[1]!,
+    "im",
+    "host",
+    "--socket",
+    paths.socketPath,
+    "--state-dir",
+    options.stateDir,
+    "--run-id",
+    options.runId,
+    "--self",
+    options.selfEndpoint,
+    "--user",
+    options.userEndpoint,
+  ];
+  return await launchImHost({
+    supervisor: options.supervisor,
+    processId: paths.processId,
+    owner: { scope: "run", runId: options.runId },
+    executable: process.execPath,
+    args: hostArgs,
+    cwd: process.cwd(),
+    env: process.env,
+    socketPath: paths.socketPath,
+    statePath: paths.statePath,
+    logPath: paths.logPath,
+    projectStateDir: options.stateDir,
+    selfEndpoint: options.selfEndpoint,
+    userEndpoint: options.userEndpoint,
+    startupTimeoutMs: 10_000,
   });
 }
 
@@ -325,43 +387,39 @@ async function createCliMcpHost(options: {
   });
 }
 
-function createCliRunImService(): PublicImService {
-  return new PublicImService({
-    store: createNodeImStore(),
-    clock: { nowIso: () => new Date().toISOString() },
-    ids: {
-      newMessageId: (seed) => {
-        const scope = seed.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "");
-        return `run-im-${scope}-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
-      },
-    },
-  });
-}
-
-function createCliModelGateway(options: {
+async function createCliModelGateway(options: {
   runId: string;
   runDir: string;
   model: string;
   supervisor: RunSupervisor;
-}): LaunchedModelGateway {
+}): Promise<LaunchedModelGateway> {
+  const paths = residentHostPaths({
+    kind: "model-gateway",
+    runId: options.runId,
+    runDir: options.runDir,
+  });
   const gatewayArgs = [
     ...process.execArgv,
     process.argv[1]!,
     "model-gateway",
+    "--socket",
+    paths.socketPath,
     "--model",
     options.model,
   ];
-  return launchModelGateway({
+  return await launchModelGateway({
     supervisor: options.supervisor,
-    processId: `model-gateway:${options.runId}:${options.model}`,
+    processId: paths.processId,
     owner: { scope: "run", runId: options.runId },
     executable: process.execPath,
     args: gatewayArgs,
     cwd: process.cwd(),
     env: process.env,
-    statePath: path.join(options.runDir, "model-gateway.json"),
-    logPath: path.join(options.runDir, "model-gateway.stderr.log"),
+    socketPath: paths.socketPath,
+    statePath: paths.statePath,
+    logPath: paths.logPath,
     requestTimeoutMs: 180_000,
+    startupTimeoutMs: 10_000,
     newRequestId: (() => {
       let sequence = 0;
       return () => `model-gateway-${options.runId}-${++sequence}`;
@@ -706,8 +764,7 @@ async function runUnifiedUi(args: string[]): Promise<void> {
 
 async function waitForFirstMessage(
   options: {
-    service: PublicImService;
-    stateRoot: string;
+    socketPath: string;
     runId: string;
   },
   environment: Environment,
@@ -785,7 +842,7 @@ async function main(): Promise<void> {
 
   if (firstArg === "im") {
     const { runIm } = await import("./im.js");
-    await runIm(process.argv.slice(3));
+    process.exitCode = await runIm(process.argv.slice(3));
     return;
   }
 
@@ -930,7 +987,6 @@ async function main(): Promise<void> {
 
   const environment = new Environment();
 
-  const imService = createCliRunImService();
   let skillRunStore: SkillRunStore;
 
   // --- Create or load run/session state ---
@@ -942,6 +998,12 @@ async function main(): Promise<void> {
   let initialHistory: ModelContextItem[] = [];
   let task: string;
   let runPaths: RunScopedPaths;
+  let imHost: LaunchedImHost | undefined;
+
+  const disposeStartedImHost = async (): Promise<void> => {
+    await imHost?.dispose();
+    imHost = undefined;
+  };
 
   if (resumeRunId) {
     runDir = resolveRunDir(runsDir, resumeRunId);
@@ -963,12 +1025,24 @@ async function main(): Promise<void> {
     initialState = new AgentRunState(loadedState);
     initialHistory = appendResumeReminder(loadHistoryForRun(runDir));
 
-    await ensureDefaultRunImBinding({
-      service: imService,
-      stateRoot: baseDir,
+    imHost = await createCliImHost({
       runId,
+      runDir,
+      stateDir: baseDir,
+      selfEndpoint: createRunImSelfEndpoint(runId),
+      userEndpoint: DEFAULT_RUN_USER_ENDPOINT,
+      supervisor: runProcessSupervisor,
     });
-    publishLatestRun(runsDir, runId, runDir);
+    try {
+      await ensureDefaultRunImBinding({
+        socketPath: imHost.socketPath,
+        runId,
+      });
+      publishLatestRun(runsDir, runId, runDir);
+    } catch (error) {
+      await disposeStartedImHost();
+      throw error;
+    }
   } else {
     runId = `run-${Date.now()}`;
     runDir = path.join(runsDir, runId);
@@ -978,50 +1052,62 @@ async function main(): Promise<void> {
       skillsDir,
     });
     environment.setEventsPath(runPaths.environmentEventsPath);
-    await ensureDefaultRunImBinding({
-      service: imService,
-      stateRoot: baseDir,
+    imHost = await createCliImHost({
       runId,
+      runDir,
+      stateDir: baseDir,
+      selfEndpoint: createRunImSelfEndpoint(runId),
+      userEndpoint: DEFAULT_RUN_USER_ENDPOINT,
+      supervisor: runProcessSupervisor,
     });
 
-    transcriptPath = path.join(runDir, "transcript.jsonl");
-    transcript = new TranscriptStore(runDir);
-    const initialDisplayTask =
-      taskArg ?? `Waiting for first user message on public IM endpoint ${createRunImSelfEndpoint(runId)}`;
-
-    // Make the run visible to TUI immediately, even before the first IM message.
-    // The real run_started event is still recorded by RunOrchestrator once a
-    // task exists; this snapshot is only the attachable waiting-room state.
-    transcript.ensureDir();
-    fs.closeSync(fs.openSync(transcriptPath, "a"));
-    transcript.saveState({
-      ...AgentRunState.create({
+    try {
+      await ensureDefaultRunImBinding({
+        socketPath: imHost.socketPath,
         runId,
-        task: initialDisplayTask,
-        cwd: process.cwd(),
-        transcriptPath,
-      }).data,
-      status: taskArg ? "created" : "waiting_for_io",
-      updatedAt: new Date().toISOString(),
-    });
-    publishLatestRun(runsDir, runId, runDir);
+      });
 
-    if (taskArg) {
-      task = taskArg;
-    } else {
-      console.log(
-        `[tiny-agent] Waiting for user message on public IM endpoint: ${createRunImSelfEndpoint(runId)}`,
-      );
-      const firstMessage = await waitForFirstMessage(
-        {
-          service: imService,
-          stateRoot: baseDir,
+      transcriptPath = path.join(runDir, "transcript.jsonl");
+      transcript = new TranscriptStore(runDir);
+      const initialDisplayTask =
+        taskArg ?? `Waiting for first user message on public IM endpoint ${createRunImSelfEndpoint(runId)}`;
+
+      // Make the run visible to TUI immediately, even before the first IM message.
+      // The real run_started event is still recorded by RunOrchestrator once a
+      // task exists; this snapshot is only the attachable waiting-room state.
+      transcript.ensureDir();
+      fs.closeSync(fs.openSync(transcriptPath, "a"));
+      transcript.saveState({
+        ...AgentRunState.create({
           runId,
-        },
-        environment,
-      );
-      task = firstMessage.task;
-      console.log(`[tiny-agent] Received task: ${task}`);
+          task: initialDisplayTask,
+          cwd: process.cwd(),
+          transcriptPath,
+        }).data,
+        status: taskArg ? "created" : "waiting_for_io",
+        updatedAt: new Date().toISOString(),
+      });
+      publishLatestRun(runsDir, runId, runDir);
+
+      if (taskArg) {
+        task = taskArg;
+      } else {
+        console.log(
+          `[tiny-agent] Waiting for user message on public IM endpoint: ${createRunImSelfEndpoint(runId)}`,
+        );
+        const firstMessage = await waitForFirstMessage(
+          {
+            socketPath: imHost.socketPath,
+            runId,
+          },
+          environment,
+        );
+        task = firstMessage.task;
+        console.log(`[tiny-agent] Received task: ${task}`);
+      }
+    } catch (error) {
+      await disposeStartedImHost();
+      throw error;
     }
 
     initialState = AgentRunState.create({
@@ -1054,21 +1140,24 @@ async function main(): Promise<void> {
     });
   }
 
+  if (!imHost) {
+    die("Run IM host failed to start.");
+  }
+  const imHostSocketPath = imHost.socketPath;
+
   // --- IM → Environment bridge: poll public run bindings for new user messages ---
   let imPollingActive = true;
   const imPollInterval = setInterval(async () => {
     if (!imPollingActive) return;
     try {
       const messages = await receivePublicRunUserMessages({
-        service: imService,
-        stateRoot: baseDir,
+        socketPath: imHostSocketPath,
         runId,
       });
       for (const message of messages) {
         appendPublicImUserMessage(environment, message);
         await ackPublicRunUserMessage({
-          service: imService,
-          stateRoot: baseDir,
+          socketPath: imHostSocketPath,
           runId,
           messageId: message.id,
         });
@@ -1110,19 +1199,20 @@ async function main(): Promise<void> {
       stateDir: baseDir,
       supervisor: runProcessSupervisor,
     });
-    terminalHost = createCliTerminalHost({
+    terminalHost = await createCliTerminalHost({
       runId,
       runDir,
       stateDir: baseDir,
       paths: runPaths,
       skillsDir,
       transcriptPath,
+      imHostSocket: imHostSocketPath,
       codeqHostSocket: codeIntelHost.socketPath,
       skillHostSocket: skillHost.socketPath,
       mcpHostSocket: mcpHost.socketPath,
       supervisor: runProcessSupervisor,
     });
-    modelGateway = createCliModelGateway({
+    modelGateway = await createCliModelGateway({
       runId,
       runDir,
       model: deepseek.model,
@@ -1170,6 +1260,7 @@ async function main(): Promise<void> {
       mcpHost?.dispose(),
       skillHost?.dispose(),
       codeIntelHost?.dispose(),
+      imHost?.dispose(),
     ]);
   }
 }

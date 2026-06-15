@@ -51,6 +51,7 @@ const STATEFUL_PROCESS_CLASSIFICATIONS = {
       "child shell process",
       "screen buffer",
       "visual-line cursor window",
+      "resident socket request boundary",
     ],
     durableStateOwner: "runs/<runId>/terminal-host.json",
     reason:
@@ -100,14 +101,31 @@ const STATEFUL_PROCESS_CLASSIFICATIONS = {
     reason:
       "MCP client operations connect to local or remote MCP servers through a run-owned host instead of one-shot public CLI clients.",
   },
+  "im-host": {
+    kind: "im-host",
+    residency: "stateful-subprocess",
+    authority: "ImHost",
+    liveResources: [
+      "resident socket request boundary",
+      "run default endpoint context",
+      "public IM file-state proxy boundary",
+    ],
+    durableStateOwner: "runs/<runId>/im-host.json and project im/",
+    reason:
+      "The run-owned IM host does not own durable messages; it proxies explicit requests to file-backed public IM state while centralizing the run default context.",
+  },
   "model-gateway": {
     kind: "model-gateway",
     residency: "stateful-subprocess",
     authority: "ModelGatewayHost",
-    liveResources: ["provider request stream", "cancellation boundary", "transport pipe"],
-    durableStateOwner: "model gateway process record",
+    liveResources: [
+      "provider request stream",
+      "cancellation boundary",
+      "resident socket request boundary",
+    ],
+    durableStateOwner: "runs/<runId>/model-gateway.json",
     reason:
-      "The gateway isolates provider streaming, cancellation, and request lifecycle from the run loop.",
+      "The run-owned gateway isolates provider streaming, cancellation, and request lifecycle behind the resident socket contract.",
   },
 } as const satisfies Record<RuntimeProcessKind, StatefulProcessClassification>;
 

@@ -1,7 +1,3 @@
-import {
-  createRuntimeProcess,
-  type RuntimeProcessRecord,
-} from "../runtime/process-registry.js";
 import type { ModelPort } from "../run/orchestrator.js";
 import type {
   FimStepOutput,
@@ -124,36 +120,57 @@ export function parseModelGatewayRequest(raw: string): ModelGatewayRequest {
   return parsed as ModelGatewayGenerateRequest;
 }
 
-export function modelGatewayProcessId(projectId: string, modelId: string): string {
-  return `model-gateway:${projectId}:${modelId}`;
-}
-
-export function createModelGatewayProcessRecord(input: {
-  projectId: string;
-  modelId: string;
-  now: string;
-  executable?: string;
-  statePath?: string;
-  logPath?: string;
-}): RuntimeProcessRecord {
-  return createRuntimeProcess({
-    id: modelGatewayProcessId(input.projectId, input.modelId),
-    kind: "model-gateway",
-    owner: {
-      scope: "project",
-      projectId: input.projectId,
-    },
-    command: {
-      executable: input.executable ?? "tiny-agent",
-      args: ["model-gateway", "--model", input.modelId],
-    },
-    now: input.now,
-    statePath: input.statePath,
-    logPath: input.logPath,
-    metadata: {
-      modelId: input.modelId,
-    },
-  });
+export function parseModelGatewayResponse(
+  raw: string,
+  expectedId?: string,
+): ModelGatewayResponse {
+  const parsed = JSON.parse(raw) as unknown;
+  if (!isRecord(parsed)) {
+    throw new Error("Invalid model gateway response: expected object");
+  }
+  if (parsed.schemaVersion !== 1) {
+    throw new Error("Invalid model gateway response: schemaVersion must be 1");
+  }
+  if (typeof parsed.id !== "string" || parsed.id.length === 0) {
+    throw new Error("Invalid model gateway response: id must be non-empty");
+  }
+  if (expectedId !== undefined && parsed.id !== expectedId) {
+    throw new Error(
+      `Invalid model gateway response: expected id ${expectedId}, got ${parsed.id}`,
+    );
+  }
+  if (typeof parsed.ok !== "boolean") {
+    throw new Error("Invalid model gateway response: ok must be boolean");
+  }
+  if (parsed.ok === false) {
+    if (parsed.type !== "model.error") {
+      throw new Error("Invalid model gateway error response: type must be model.error");
+    }
+    if (!isRecord(parsed.error)) {
+      throw new Error("Invalid model gateway error response: error must be object");
+    }
+    if (typeof parsed.error.message !== "string") {
+      throw new Error("Invalid model gateway error response: error.message must be string");
+    }
+    if (
+      parsed.error.code !== "BAD_REQUEST" &&
+      parsed.error.code !== "MODEL_ERROR" &&
+      parsed.error.code !== "CANCELLED"
+    ) {
+      throw new Error("Invalid model gateway error response: unsupported error.code");
+    }
+    return parsed as Extract<ModelGatewayResponse, { ok: false }>;
+  }
+  if (
+    parsed.type !== "model.generateTurn.result" &&
+    parsed.type !== "model.shutdown.result"
+  ) {
+    throw new Error("Invalid model gateway success response: unsupported type");
+  }
+  if (parsed.type === "model.generateTurn.result" && !isRecord(parsed.output)) {
+    throw new Error("Invalid model generate response: output must be object");
+  }
+  return parsed as Extract<ModelGatewayResponse, { ok: true }>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -492,7 +492,7 @@ describe("parseDsmlDecision", () => {
 
   it("rejects raw text after V3 separator without JSON fallback", () => {
     const raw =
-      `${REMOVED_SHELL_TOOL}<｜tool▁sep｜>tiny-agent im send --from "$TAH_IM_SELF_ENDPOINT" --to "$TAH_IM_USER_ENDPOINT" --kind status --text Done`;
+      `${REMOVED_SHELL_TOOL}<｜tool▁sep｜>tiny-agent im send --kind status --text Done`;
     const result = parseDsmlDecision(raw);
     expect(result).toMatchObject({
       status: "invalid",

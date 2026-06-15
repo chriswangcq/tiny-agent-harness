@@ -30,7 +30,7 @@
 - Terminal facts 包含 best-effort `foregroundProcess`。它是调试和决策线索，不是可靠的路由判定。
 - FIM prompt 这类大调试 payload 会写到 run 目录下的 `debug/prompts/`，transcript/model output 只保留 `promptRef`。streamed thinking progress 写到 `debug/thinking/`，最终 `model_output_received` 只保留 `traceRef`。
 - `tiny-agent codeq`、`tiny-agent skill` 和 `tiny-agent mcp` 是 CLI 能力，不是新的模型可见 tool；agent 通过 terminal/session 工具执行它们。当前 run 会注入对应 host socket，公开 CLI 只连接 run-owned resident host，缺少 socket 时明确失败。
-- `subagent` 当前是轻量 team 控制面：roster/lifecycle domain 保持纯函数，CLI adapter 负责 project-scoped roster 落盘；work instructions 通过显式 `tiny-agent im post --from <endpoint> --to <endpoint>` 进入 public IM endpoint pair；local worker launcher 仍是显式请求的可选 adapter。
+- `subagent` 当前是轻量 team 控制面：roster/lifecycle domain 保持纯函数，CLI adapter 负责 project-scoped roster 落盘；work instructions 通过显式 `tiny-agent im admin post --from <endpoint> --to <endpoint>` 从外部控制面进入 public IM endpoint pair；local worker launcher 仍是显式请求的可选 adapter。
 
 ## Durable Artifacts
 

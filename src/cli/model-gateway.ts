@@ -1,5 +1,5 @@
 import { DeepSeekFimAdapter } from "../model/adapter.js";
-import { serveModelGateway } from "../model/gateway-host.js";
+import { listenModelGatewaySocket } from "../model/gateway-host.js";
 import {
   loadDeepSeekRuntimeConfig,
   missingDeepSeekApiKeyMessage,
@@ -7,10 +7,14 @@ import {
 
 export async function runModelGatewayCli(args: string[]): Promise<number> {
   let modelOverride: string | undefined;
+  let socketPath: string | undefined;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]!;
     const value = args[index + 1];
-    if (arg === "--model" && value) {
+    if (arg === "--socket" && value) {
+      socketPath = value;
+      index += 1;
+    } else if (arg === "--model" && value) {
       modelOverride = value;
       index += 1;
     } else {
@@ -24,6 +28,10 @@ export async function runModelGatewayCli(args: string[]): Promise<number> {
     process.stderr.write(`${missingDeepSeekApiKeyMessage(deepseek.configPath)}\n`);
     return 1;
   }
+  if (!socketPath) {
+    process.stderr.write("Usage: tiny-agent model-gateway --socket <path> [--model <model>]\n");
+    return 2;
+  }
 
   const model = new DeepSeekFimAdapter({
     apiKey: deepseek.apiKey,
@@ -33,10 +41,13 @@ export async function runModelGatewayCli(args: string[]): Promise<number> {
     decisionMaxTokens: 2048,
   });
 
-  await serveModelGateway({
+  const server = await listenModelGatewaySocket({
     model,
-    input: process.stdin,
-    output: process.stdout,
+    socketPath,
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("close", resolve);
+    server.once("error", reject);
   });
   return 0;
 }

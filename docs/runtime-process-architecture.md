@@ -11,7 +11,9 @@ to make every long-lived process visible, owned, recoverable, and testable.
 - `runtime events` own audit/replay facts around process and capability
   lifecycle changes.
 - `Terminal Host` owns PTY sessions, screen buffers, visual-line cursors, and
-  terminal observations for the default run terminal path.
+  terminal observations for the default run terminal path. It is a run-owned
+  `tiny-agent terminal-host --socket <run-socket>` sidecar launched by
+  `tiny-agent run`.
 - `Codeq host` is a run-owned `tiny-agent codeq host --socket <run-socket>`
   sidecar launched by `tiny-agent run`.
 - `Skill host` is a run-owned `tiny-agent skill host --socket <run-socket>`
@@ -20,7 +22,8 @@ to make every long-lived process visible, owned, recoverable, and testable.
   sidecar launched by `tiny-agent run`; MCP server business state still belongs
   to the configured MCP server, not to the public CLI process.
 - `Model gateway` owns the default run `ModelPort` boundary and provider
-  isolation.
+  isolation. It is a run-owned `tiny-agent model-gateway --socket <run-socket>`
+  sidecar launched by `tiny-agent run`.
 
 ## Process Kinds
 
@@ -56,12 +59,12 @@ represented by files:
 | Process kind | Live resource authority |
 | --- | --- |
 | `run` | Agent control flow, in-flight model/tool turns, child runtime ports |
-| `terminal-host` | PTY fd, child shell process, screen buffer, visual-line cursor |
+| `terminal-host` | PTY fd, child shell process, screen buffer, visual-line cursor, resident socket request boundary |
 | `pty-session` | PTY fd and session child process |
 | `codeq-host` | LSP process/session and open-document cache |
 | `skill-host` | Run-scoped skill command queue, execution environment, environment event append boundary |
 | `mcp-host` | MCP client request queue and MCP transport/session lifecycle |
-| `model-gateway` | Provider stream, cancellation boundary, transport pipe |
+| `model-gateway` | Provider stream, cancellation boundary, resident socket request boundary |
 
 Durable file operations still have explicit storage owners. Public CLI access
 to Skill and MCP goes through the run-owned host socket; the host then performs
@@ -108,26 +111,31 @@ the registry remains the named state owner.
 
 Current compatibility paths are explicit:
 
-- `tiny-agent run` launches a supervisor-recorded `tiny-agent terminal-host`
-  child process for terminal/session tools.
+- `tiny-agent run` launches a supervisor-recorded
+  `tiny-agent terminal-host --socket <run-socket>` child process for
+  terminal/session tools. Run requests use the same resident socket contract as
+  the other resident hosts.
 - `ManagedTerminalRuntime` remains the internal implementation of
   `tiny-agent terminal-host` and direct terminal tests; it is not the run
   process terminal authority.
-- `tiny-agent run` launches a supervisor-recorded `tiny-agent model-gateway`
-  child process for model turns.
+- `tiny-agent run` launches a supervisor-recorded
+  `tiny-agent model-gateway --socket <run-socket>` child process for model
+  turns. Run model requests use the same resident socket contract as the other
+  resident hosts.
 - `DeepSeekFimAdapter` remains the internal implementation of
   `tiny-agent model-gateway` for the DeepSeek provider; it is not constructed by
   the default run CLI path.
-- `tiny-agent run` launches a supervisor-recorded `tiny-agent codeq host`
-  child process for code intelligence. Ordinary `tiny-agent codeq ...`
-  commands are one-shot clients to the run-scoped host socket from
-  `TAH_CODEQ_HOST_SOCKET`; there is no direct CLI fallback and no cross-run
-  host sharing.
-- `tiny-agent run` launches supervisor-recorded `tiny-agent skill host` and
-  `tiny-agent mcp host` child processes. Ordinary `tiny-agent skill ...` and
-  `tiny-agent mcp ...` commands are socket clients to `TAH_SKILL_HOST_SOCKET`
-  and `TAH_MCP_HOST_SOCKET`; missing sockets fail explicitly. There is no
-  direct CLI fallback and no cross-run host sharing.
+- `tiny-agent run` launches a supervisor-recorded
+  `tiny-agent codeq host --socket <run-socket>` child process for code
+  intelligence. Ordinary `tiny-agent codeq ...` commands are one-shot clients
+  to the run-scoped host socket from `TAH_CODEQ_HOST_SOCKET`; there is no direct
+  CLI fallback and no cross-run host sharing.
+- `tiny-agent run` launches supervisor-recorded
+  `tiny-agent skill host --socket <run-socket>` and
+  `tiny-agent mcp host --socket <run-socket>` child processes. Ordinary
+  `tiny-agent skill ...` and `tiny-agent mcp ...` commands are socket clients
+  to `TAH_SKILL_HOST_SOCKET` and `TAH_MCP_HOST_SOCKET`; missing sockets fail
+  explicitly. There is no direct CLI fallback and no cross-run host sharing.
 - MCP is explicit: the project registry is durable configuration, while
   `tools`/`call` transport lifecycles run inside the run-owned MCP host. Local
   stdio MCP servers may be launched by the host for a request; remote MCP

@@ -106,7 +106,7 @@ export function parseTeamArgs(args: string[]): TeamParseResult {
   if (group !== "member") {
     return {
       ok: false,
-      error: `Unknown team group: "${group}". Expected "create" or "member". Use tiny-agent im post to send work instructions.`,
+      error: `Unknown team group: "${group}". Expected "create" or "member". Use tiny-agent im admin post to send work instructions from an external control edge.`,
       helpText: HELP_TEXT,
     };
   }
@@ -491,7 +491,7 @@ export function executeTeamCommand(
     tool: TOOL_NAME,
     cwd,
     errorCode: "UNKNOWN_TEAM_COMMAND",
-    error: "Unknown team command. Use tiny-agent im post to send work instructions.",
+    error: "Unknown team command. Use tiny-agent im admin post to send work instructions from an external control edge.",
   });
 }
 
@@ -641,9 +641,9 @@ Team subcommands:
                                                Team roster management
   tiny-agent team lifecycle <subcommand> --team <teamId>
                                                Team-scoped worker lease/reaper/shutdown
-  tiny-agent im pair --a user:main --b member:<teamId>/<memberId> --kind a2a
-  tiny-agent im bind --run-id <runId> --self member:<teamId>/<memberId> --peer user:main --kind a2a
-  tiny-agent im post --from user:main --to member:<teamId>/<memberId> --text <instruction>
+  tiny-agent im admin pair --a user:main --b member:<teamId>/<memberId> --kind a2a
+  tiny-agent im admin bind --run-id <runId> --self member:<teamId>/<memberId> --peer user:main --kind a2a
+  tiny-agent im admin post --from user:main --to member:<teamId>/<memberId> --text <instruction>
                                                Send work instructions
 
 Groups:
@@ -660,7 +660,7 @@ Examples:
   tiny-agent team create team-p6
   tiny-agent team --team team-p6 member add w1 coder default --metadata '{"workspace":"/ws","branch":"codex/p6/01"}'
   tiny-agent team --team team-p6 member status w1 active
-  tiny-agent im post --from user:main --to member:team-p6/coder-1 --text "Inspect issue and report evidence"
+  tiny-agent im admin post --from user:main --to member:team-p6/coder-1 --text "Inspect issue and report evidence"
   tiny-agent team lifecycle lifecycle-status w1 --team team-p6 --run run-123
 
 For group-specific help:

@@ -9,6 +9,9 @@ describe("main CLI help", () => {
     expect(HELP_TEXT).toContain("tiny-agent skill <subcommand>");
     expect(HELP_TEXT).toContain("tiny-agent codeq <subcommand>");
     expect(HELP_TEXT).toContain("tiny-agent team <group>");
+    expect(HELP_TEXT).toContain("TAH_IM_HOST_SOCKET");
+    expect(HELP_TEXT).toContain("tiny-agent im admin post");
+    expect(HELP_TEXT).toContain("tiny-agent im send --kind <status|error> --text-stdin");
     expect(HELP_TEXT).toContain("tiny-agent <task>");
     expect(HELP_TEXT).toContain("Alias for tiny-agent run --task <task>");
     expect(HELP_TEXT).toContain("tiny-agent ui  --resume <runId|latest>");

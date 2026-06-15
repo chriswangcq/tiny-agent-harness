@@ -5,6 +5,7 @@ export type RuntimeProcessKind =
   | "codeq-host"
   | "skill-host"
   | "mcp-host"
+  | "im-host"
   | "model-gateway";
 
 export type RuntimeProcessStatus =

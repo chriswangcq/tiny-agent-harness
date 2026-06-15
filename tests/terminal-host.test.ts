@@ -1,8 +1,14 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createTerminalHostRunPort,
   handleTerminalHostRequest,
+  listenTerminalHostSocket,
   parseTerminalHostRequest,
+  parseTerminalHostResponse,
+  requestTerminalHostSocket,
   serializeTerminalHostResponse,
 } from "../src/terminal-host/index.js";
 import type { ToolObservation, ToolRequest } from "../src/types/tools.js";
@@ -72,6 +78,21 @@ describe("terminal host protocol", () => {
       type: "terminal.execute",
     });
     expect(
+      parseTerminalHostResponse(
+        JSON.stringify({
+          schemaVersion: 1,
+          id: "req-1",
+          ok: true,
+          type: "terminal.execute.result",
+          observation: makeObservation(),
+        }),
+        "req-1",
+      ),
+    ).toMatchObject({
+      id: "req-1",
+      type: "terminal.execute.result",
+    });
+    expect(
       serializeTerminalHostResponse({
         schemaVersion: 1,
         id: "req-1",
@@ -94,6 +115,20 @@ describe("terminal host protocol", () => {
         }),
       ),
     ).toThrow(/terminal_tool/);
+  });
+
+  it("rejects responses with mismatched ids", () => {
+    expect(() =>
+      parseTerminalHostResponse(
+        JSON.stringify({
+          schemaVersion: 1,
+          id: "other",
+          ok: true,
+          type: "terminal.shutdown.result",
+        }),
+        "req-1",
+      ),
+    ).toThrow("expected id req-1");
   });
 });
 
@@ -154,5 +189,62 @@ describe("handleTerminalHostRequest", () => {
         message: "pty failed",
       },
     });
+  });
+});
+
+describe("listenTerminalHostSocket", () => {
+  it("serves execute and shutdown requests over the resident socket", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "terminal-host-socket-"));
+    const socketPath = path.join(dir, "terminal-host.sock");
+    const server = await listenTerminalHostSocket({
+      socketPath,
+      terminal: {
+        async execute() {
+          return makeObservation();
+        },
+      },
+    });
+
+    try {
+      await expect(
+        requestTerminalHostSocket({
+          socketPath,
+          timeoutMs: 1_000,
+          request: {
+            schemaVersion: 1,
+            id: "execute-1",
+            type: "terminal.execute",
+            request: makeRequest(),
+          },
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        type: "terminal.execute.result",
+      });
+
+      const closed = new Promise<void>((resolve) => server.once("close", resolve));
+      await expect(
+        requestTerminalHostSocket({
+          socketPath,
+          timeoutMs: 1_000,
+          request: {
+            schemaVersion: 1,
+            id: "shutdown-1",
+            type: "terminal.shutdown",
+            reason: "test",
+          },
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        type: "terminal.shutdown.result",
+      });
+      await closed;
+      expect(fs.existsSync(socketPath)).toBe(false);
+    } finally {
+      if (server.listening) {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

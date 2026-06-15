@@ -56,7 +56,7 @@ Resolver 不自动发现、读取或迁移项目内 `.tiny-agent/project.json`�
 规则：
 
 - CLI 输出给 agent 的路径可以使用绝对 state-root 路径，方便 TUI 或外部工具直接打开。
-- PTY 内 `TAH_STATE_DIR` 等于当前 run dir，用于 skill-runs、environment 等 run-scoped host 内部命令；`TAH_PROJECT_STATE_DIR` 和 `TAH_IM_STATE_DIR` 等于 home project state root，用于 public IM、MCP registry、team lifecycle/reaper 等跨 run 控制面。`TAH_CODEQ_HOST_SOCKET`、`TAH_SKILL_HOST_SOCKET`、`TAH_MCP_HOST_SOCKET` 指向当前 run 的 resident hosts；对应公开 CLI 缺少 socket 时必须失败。
+- PTY 内 `TAH_STATE_DIR` 等于当前 run dir，用于 skill-runs、environment 等 run-scoped host 内部命令；`TAH_PROJECT_STATE_DIR` 和 `TAH_IM_STATE_DIR` 等于 home project state root，用于 public IM、MCP registry、team lifecycle/reaper 等跨 run 控制面。`TAH_IM_HOST_SOCKET`、`TAH_CODEQ_HOST_SOCKET`、`TAH_SKILL_HOST_SOCKET`、`TAH_MCP_HOST_SOCKET` 指向当前 run 的 resident hosts；对应公开 CLI 缺少 socket 时必须失败。
 - 不同项目不能共享同一个 state root，除非用户显式传 `--state-dir`。
 
 ## CLI Surface
@@ -67,7 +67,7 @@ Resolver 不自动发现、读取或迁移项目内 `.tiny-agent/project.json`�
 tiny-agent       # run orchestrator, agent run state, terminal/session tool execution
 tiny-agent ui    # one-command launcher: start/resume run and attach TUI
 tiny-agent tui   # transcript / state player
-tiny-agent im               # local mock user-message transport
+tiny-agent im               # IM host client; direct-file work lives under im admin
 tiny-agent skill            # Skill host client; discovery, run, close, review-complete
 tiny-agent mcp              # MCP host client; registry/tools/call through terminal/session tools
 tiny-agent codeq            # CodeQ host client; code intelligence through terminal/session tools
@@ -449,12 +449,12 @@ im-run-binding-<runId>.lock
 im-cursor-<channelId>-<consumerId>.lock
 ```
 
-`tiny-agent im post --from <endpoint> --to <endpoint>` append 到发送方向的 channel log。`tiny-agent im recv --as <endpoint> --with <endpoint> --cursor <id>` 读取 cursor 后的新消息；`tiny-agent im ack --as <endpoint> --with <endpoint> --message-id <id>` 推进 consumer cursor。Run poller 使用 `run-recv/run-ack` 按 `im/run-bindings/<runId>.json` 汇总多个 pair。`tiny-agent im listen` 不能长期持锁；它只能循环短暂读文件，然后 sleep / wait。
+普通 `tiny-agent im ...` 是当前 run 的 IM host socket client，PTY 内依赖 `TAH_IM_HOST_SOCKET`，缺少 socket 必须失败。需要直接读写 public IM 文件状态的外部/TUI/bootstrap/debug 边界使用 `tiny-agent im admin ...`：`tiny-agent im admin post --from <endpoint> --to <endpoint>` append 到发送方向的 channel log，`tiny-agent im admin recv --as <endpoint> --with <endpoint> --cursor <id>` 读取 cursor 后的新消息，`tiny-agent im admin ack --as <endpoint> --with <endpoint> --message-id <id>` 推进 consumer cursor。Run poller 通过 im-host 使用 `run-recv/run-ack` 按 `im/run-bindings/<runId>.json` 汇总多个 pair。`tiny-agent im admin listen` 不能长期持锁；它只能循环短暂读文件，然后 sleep / wait。
 
 ### Skill
 
-`tiny-agent skill host` 负责 skill discovery 和 skill run lifecycle。公开
-`tiny-agent skill ...` 只是当前 run 的 Skill host socket client。
+`tiny-agent skill host --socket <run-socket>` 负责 skill discovery 和 skill run
+lifecycle。公开 `tiny-agent skill ...` 只是当前 run 的 Skill host socket client。
 
 文件：
 
@@ -492,7 +492,10 @@ run-<runId>.skill-run-<id>.lock -> skills.registry.lock -> run-<runId>.environme
 
 ### MCP Registry
 
-`tiny-agent mcp host` 负责 project-scoped MCP server registry 访问和 MCP tool invocation。它不是 model-visible provider tool；agent 只能通过 PTY 中的 `tiny-agent mcp ...` 命令使用它，而普通命令只是当前 run 的 MCP host socket client。
+`tiny-agent mcp host --socket <run-socket>` 负责 project-scoped MCP server registry
+访问和 MCP tool invocation。它不是 model-visible provider tool；agent 只能通过
+PTY 中的 `tiny-agent mcp ...` 命令使用它，而普通命令只是当前 run 的 MCP host
+socket client。
 
 文件：
 
@@ -582,12 +585,12 @@ src/state/jsonl.ts      # locked append/read by offset
 
 然后按这个顺序接 CLI：
 
-1. `tiny-agent im`：最小 public IM channel log，验证锁、append 和 cursor。
-2. `tiny-agent skill host`：接 state root、skill-run lock、environment event；公开 `tiny-agent skill ...` 只验证 socket client envelope。
+1. `tiny-agent im host --socket <run-socket>` 与 `tiny-agent im admin`：最小 public IM channel log，验证锁、append 和 cursor；普通 `tiny-agent im ...` 只验证 socket client envelope。
+2. `tiny-agent skill host --socket <run-socket>`：接 state root、skill-run lock、environment event；公开 `tiny-agent skill ...` 只验证 socket client envelope。
 3. `tiny-agent`：接真实 file-backed Environment、run lease、latest pointer。
 4. `tiny-agent tui`：只读 state，不拿写锁。
 
-这个顺序能最快验证文件锁，因为 `tiny-agent im post`、host 内部的 `skill run`、`tiny-agent` 会同时写 environment ledger。
+这个顺序能最快验证文件锁，因为 `tiny-agent im admin post` 或 run-owned im-host 内部 IM 写入、host 内部的 `skill run`、`tiny-agent` 会同时写 environment ledger。
 
 ## Non Goals
 

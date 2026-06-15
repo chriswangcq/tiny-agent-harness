@@ -3,108 +3,380 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Readable } from "node:stream";
-import { runIm } from "../src/cli/im.js";
+import { runIm, type ImCliDeps } from "../src/cli/im.js";
 import {
   planImRunBindingLayout,
+  type ImHostRequest,
+  type ImHostResponse,
   type PublicImRunReceiveMessage,
 } from "../src/im/index.js";
 
+type HostClientRequest = Parameters<ImCliDeps["requestHost"]>[0];
+
 describe("runIm public IM CLI", () => {
-  let tmpDir: string | undefined;
-  let originalWrite: typeof process.stdout.write | undefined;
-  let captured: string[] = [];
-  let originalTahStateDir: string | undefined;
-  let originalTahImStateDir: string | undefined;
+  let tmpDirs: string[] = [];
 
-  function createStateDir(): string {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "im-cli-test-"));
-    return tmpDir;
+  function createStateDir(prefix = "im-cli-test-"): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    tmpDirs.push(dir);
+    return dir;
   }
 
-  function useTahStateDir(stateDir: string): void {
-    originalTahStateDir = process.env.TAH_STATE_DIR;
-    process.env.TAH_STATE_DIR = stateDir;
+  function makeHostResult(
+    request: ImHostRequest,
+    data: Record<string, unknown>,
+  ): ImHostResponse {
+    return {
+      schemaVersion: 1,
+      id: request.id,
+      ok: true,
+      type: "im.result",
+      command: request.type as Exclude<ImHostRequest["type"], "im.shutdown">,
+      data,
+    };
   }
 
-  function useTahImStateDir(stateDir: string): void {
-    originalTahImStateDir = process.env.TAH_IM_STATE_DIR;
-    process.env.TAH_IM_STATE_DIR = stateDir;
+  async function runCaptured(
+    args: string[],
+    options: {
+      env?: Record<string, string | undefined>;
+      stdin?: Readable;
+      requestHost?: ImCliDeps["requestHost"];
+      newRequestId?: () => string;
+    } = {},
+  ): Promise<{
+    code: number;
+    stdout: string;
+    stderr: string;
+    stdoutJson: Record<string, any> | null;
+    stderrJson: Record<string, any> | null;
+  }> {
+    let stdout = "";
+    let stderr = "";
+    const code = await runIm(args, {
+      env: options.env ?? {},
+      stdin: options.stdin ?? Readable.from([]),
+      stdout: {
+        write: (text: string) => {
+          stdout += text;
+          return true;
+        },
+      },
+      stderr: {
+        write: (text: string) => {
+          stderr += text;
+          return true;
+        },
+      },
+      timeoutMs: 1234,
+      newRequestId: options.newRequestId ?? (() => "im-cli-test-request"),
+      requestHost:
+        options.requestHost ??
+        (async (call) =>
+          makeHostResult(call.request, {
+            ok: true,
+          })),
+      sleep: async () => undefined,
+    });
+
+    return {
+      code,
+      stdout,
+      stderr,
+      stdoutJson: parseJsonLine(stdout),
+      stderrJson: parseJsonLine(stderr),
+    };
   }
 
-  function captureStdout(): void {
-    captured = [];
-    originalWrite = process.stdout.write;
-    process.stdout.write = ((chunk: string | Uint8Array) => {
-      captured.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
-      return true;
-    }) as typeof process.stdout.write;
-  }
-
-  function restoreStdout(): void {
-    if (originalWrite) {
-      process.stdout.write = originalWrite;
-      originalWrite = undefined;
-    }
-  }
-
-  async function runJson(args: string[], stdin?: Readable): Promise<Record<string, any>> {
-    captureStdout();
-    await runIm([...args, "--json"], stdin ? { stdin } : {});
-    restoreStdout();
-    return JSON.parse(captured.join("")) as Record<string, any>;
+  function parseJsonLine(text: string): Record<string, any> | null {
+    const trimmed = text.trim();
+    return trimmed.startsWith("{") ? (JSON.parse(trimmed) as Record<string, any>) : null;
   }
 
   afterEach(() => {
-    restoreStdout();
-    if (originalTahStateDir === undefined) {
-      delete process.env.TAH_STATE_DIR;
-    } else {
-      process.env.TAH_STATE_DIR = originalTahStateDir;
+    for (const dir of tmpDirs) {
+      if (fs.existsSync(dir)) {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     }
-    if (originalTahImStateDir === undefined) {
-      delete process.env.TAH_IM_STATE_DIR;
-    } else {
-      process.env.TAH_IM_STATE_DIR = originalTahImStateDir;
-    }
-    originalTahStateDir = undefined;
-    originalTahImStateDir = undefined;
-    if (tmpDir && fs.existsSync(tmpDir)) {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
-    tmpDir = undefined;
+    tmpDirs = [];
   });
 
-  it("creates public pair metadata", async () => {
-    const stateDir = createStateDir();
+  it("ordinary post sends a typed request to the run-scoped IM host", async () => {
+    const calls: HostClientRequest[] = [];
+    const result = await runCaptured(
+      [
+        "post",
+        "--from",
+        "user:main",
+        "--to",
+        "member:team-p6/coder-1",
+        "--text",
+        "first",
+        "--json",
+      ],
+      {
+        env: { TAH_IM_HOST_SOCKET: "/tmp/run/im-host.sock" },
+        requestHost: async (call) => {
+          calls.push(call);
+          return makeHostResult(call.request, {
+            message: {
+              id: "msg-1",
+              text: "first",
+              from: "user:main",
+              to: "member:team-p6/coder-1",
+            },
+            id: "msg-1",
+            from: "user:main",
+            to: "member:team-p6/coder-1",
+          });
+        },
+      },
+    );
 
-    const result = await runJson([
-      "pair",
-      "--a",
-      "user:main",
-      "--b",
-      "member:team-p6/coder-1",
-      "--kind",
-      "a2user",
-      "--state-dir",
-      stateDir,
-    ]);
-
-    expect(result).toMatchObject({
+    expect(result.code).toBe(0);
+    expect(result.stdoutJson).toMatchObject({
       ok: true,
       tool: "im",
-      pair: {
-        kind: "a2user",
-        endpoints: ["member:team-p6/coder-1", "user:main"],
-      },
+      id: "msg-1",
+      from: "user:main",
+      to: "member:team-p6/coder-1",
     });
-    expect(fs.existsSync(path.join(stateDir, "im", "pairs", `${result.pair.pairId}.json`)))
-      .toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.socketPath).toBe("/tmp/run/im-host.sock");
+    expect(calls[0]!.timeoutMs).toBe(1234);
+    expect(calls[0]!.request).toMatchObject({
+      schemaVersion: 1,
+      id: "im-cli-test-request",
+      type: "im.post",
+      from: "user:main",
+      to: "member:team-p6/coder-1",
+      text: "first",
+      metadata: { source: "cli" },
+    });
   });
 
-  it("post + recv roundtrip with endpoint pair cursor semantics", async () => {
+  it("ordinary send reads text-stdin and allows host defaults for endpoints", async () => {
+    const calls: HostClientRequest[] = [];
+    const result = await runCaptured(
+      ["send", "--kind", "status", "--text-stdin", "--json"],
+      {
+        env: { TAH_IM_HOST_SOCKET: "/tmp/run/im-host.sock" },
+        stdin: Readable.from(["## report\n\n- done\n"]),
+        newRequestId: () => "send-1",
+        requestHost: async (call) => {
+          calls.push(call);
+          return makeHostResult(call.request, {
+            id: "msg-status",
+            from: "run:run-1",
+            to: "user:main",
+            kind: "status",
+            message: { id: "msg-status", text: "## report\n\n- done\n" },
+          });
+        },
+      },
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.stdoutJson).toMatchObject({
+      ok: true,
+      kind: "status",
+      id: "msg-status",
+    });
+    expect(calls[0]!.request).toMatchObject({
+      id: "send-1",
+      type: "im.send",
+      kind: "status",
+      text: "## report\n\n- done\n",
+    });
+    expect((calls[0]!.request as Record<string, unknown>).from).toBeUndefined();
+    expect((calls[0]!.request as Record<string, unknown>).to).toBeUndefined();
+  });
+
+  it("ordinary recv and ack use host requests and preserve envelope output", async () => {
+    const calls: HostClientRequest[] = [];
+    const responses = [
+      {
+        count: 1,
+        nextCursor: "msg-1",
+        messages: [{ id: "msg-1", text: "hello" }],
+      },
+      {
+        as: "run:run-1",
+        with: "user:main",
+        messageId: "msg-1",
+      },
+    ];
+
+    const recv = await runCaptured(
+      ["recv", "--as", "run:run-1", "--with", "user:main", "--cursor", "msg-0", "--json"],
+      {
+        env: { TAH_IM_HOST_SOCKET: "/tmp/run/im-host.sock" },
+        requestHost: async (call) => {
+          calls.push(call);
+          return makeHostResult(call.request, responses.shift()!);
+        },
+      },
+    );
+    const ack = await runCaptured(
+      ["ack", "--as", "run:run-1", "--with", "user:main", "--message-id", "msg-1", "--json"],
+      {
+        env: { TAH_IM_HOST_SOCKET: "/tmp/run/im-host.sock" },
+        requestHost: async (call) => {
+          calls.push(call);
+          return makeHostResult(call.request, responses.shift()!);
+        },
+      },
+    );
+
+    expect(recv.code).toBe(0);
+    expect(ack.code).toBe(0);
+    expect(recv.stdoutJson).toMatchObject({ ok: true, count: 1, nextCursor: "msg-1" });
+    expect(ack.stdoutJson).toMatchObject({ ok: true, messageId: "msg-1" });
+    expect(calls.map((call) => call.request.type)).toEqual(["im.recv", "im.ack"]);
+    expect(calls[0]!.request).toMatchObject({
+      as: "run:run-1",
+      with: "user:main",
+      cursor: "msg-0",
+    });
+  });
+
+  it("ordinary recv and ack can omit endpoints for IM host defaults", async () => {
+    const calls: HostClientRequest[] = [];
+
+    const recv = await runCaptured(["recv", "--json"], {
+      env: { TAH_IM_HOST_SOCKET: "/tmp/run/im-host.sock" },
+      requestHost: async (call) => {
+        calls.push(call);
+        return makeHostResult(call.request, {
+          as: "run:run-1",
+          with: "user:main",
+          count: 1,
+          messages: [{ id: "msg-1", text: "from default pair" }],
+        });
+      },
+    });
+    const ack = await runCaptured(["ack", "--message-id", "msg-1", "--json"], {
+      env: { TAH_IM_HOST_SOCKET: "/tmp/run/im-host.sock" },
+      requestHost: async (call) => {
+        calls.push(call);
+        return makeHostResult(call.request, {
+          as: "run:run-1",
+          with: "user:main",
+          messageId: "msg-1",
+        });
+      },
+    });
+
+    expect(recv.code).toBe(0);
+    expect(ack.code).toBe(0);
+    expect(recv.stdoutJson).toMatchObject({ ok: true, count: 1 });
+    expect(ack.stdoutJson).toMatchObject({ ok: true, messageId: "msg-1" });
+    expect(calls.map((call) => call.request.type)).toEqual(["im.recv", "im.ack"]);
+    expect((calls[0]!.request as Record<string, unknown>).as).toBeUndefined();
+    expect((calls[0]!.request as Record<string, unknown>).with).toBeUndefined();
+    expect((calls[1]!.request as Record<string, unknown>).as).toBeUndefined();
+    expect((calls[1]!.request as Record<string, unknown>).with).toBeUndefined();
+    expect(calls[1]!.request).toMatchObject({
+      type: "im.ack",
+      messageId: "msg-1",
+    });
+  });
+
+  it("ordinary run-recv and run-ack allow host default run context", async () => {
+    const calls: HostClientRequest[] = [];
+
+    await runCaptured(["run-recv", "--json"], {
+      env: { TAH_IM_HOST_SOCKET: "/tmp/run/im-host.sock" },
+      requestHost: async (call) => {
+        calls.push(call);
+        return makeHostResult(call.request, {
+          runId: "run-1",
+          self: "run:run-1",
+          count: 0,
+          messages: [],
+          nextCursors: {},
+        });
+      },
+    });
+    await runCaptured(["run-ack", "--message-id", "msg-1", "--json"], {
+      env: { TAH_IM_HOST_SOCKET: "/tmp/run/im-host.sock" },
+      requestHost: async (call) => {
+        calls.push(call);
+        return makeHostResult(call.request, {
+          runId: "run-1",
+          peer: "user:main",
+          messageId: "msg-1",
+        });
+      },
+    });
+
+    expect(calls.map((call) => call.request.type)).toEqual([
+      "im.run-recv",
+      "im.run-ack",
+    ]);
+    expect((calls[0]!.request as Record<string, unknown>).runId).toBeUndefined();
+    expect(calls[1]!.request).toMatchObject({
+      type: "im.run-ack",
+      messageId: "msg-1",
+    });
+    expect((calls[1]!.request as Record<string, unknown>).peer).toBeUndefined();
+  });
+
+  it("ordinary text output is rendered from host result data", async () => {
+    const result = await runCaptured(["post", "--text", "hello text"], {
+      env: { TAH_IM_HOST_SOCKET: "/tmp/run/im-host.sock" },
+      requestHost: async (call) =>
+        makeHostResult(call.request, {
+          message: { text: "hello text" },
+          from: "user:main",
+          to: "run:run-1",
+        }),
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "message.text=hello text",
+      "from=user:main",
+      "to=run:run-1",
+    ]);
+  });
+
+  it("ordinary commands fail without an IM host socket", async () => {
+    const result = await runCaptured(["post", "--text", "hello", "--json"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderrJson).toMatchObject({
+      ok: false,
+      tool: "im",
+      errorCode: "IM_HOST_NOT_FOUND",
+    });
+  });
+
+  it("ordinary commands reject --state-dir instead of falling back to files", async () => {
+    const stateDir = createStateDir();
+    const result = await runCaptured([
+      "post",
+      "--text",
+      "hello",
+      "--state-dir",
+      stateDir,
+      "--json",
+    ]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderrJson).toMatchObject({
+      ok: false,
+      errorCode: "IM_STATE_DIR_NOT_ALLOWED",
+    });
+    expect(fs.existsSync(path.join(stateDir, "im"))).toBe(false);
+  });
+
+  it("admin direct-file post + recv + ack keep endpoint-pair cursor semantics", async () => {
     const stateDir = createStateDir();
 
-    const first = await runJson([
+    const first = await runCaptured([
+      "admin",
       "post",
       "--from",
       "user:main",
@@ -114,8 +386,10 @@ describe("runIm public IM CLI", () => {
       "first",
       "--state-dir",
       stateDir,
+      "--json",
     ]);
-    await runJson([
+    await runCaptured([
+      "admin",
       "post",
       "--from",
       "user:main",
@@ -125,9 +399,11 @@ describe("runIm public IM CLI", () => {
       "second",
       "--state-dir",
       stateDir,
+      "--json",
     ]);
 
-    const initial = await runJson([
+    const initial = await runCaptured([
+      "admin",
       "recv",
       "--as",
       "member:team-p6/coder-1",
@@ -135,26 +411,30 @@ describe("runIm public IM CLI", () => {
       "user:main",
       "--state-dir",
       stateDir,
+      "--json",
     ]);
-    expect(initial.count).toBe(2);
-    expect(initial.messages.map((message: { text: string }) => message.text)).toEqual([
+    expect(initial.stdoutJson!.count).toBe(2);
+    expect(initial.stdoutJson!.messages.map((message: { text: string }) => message.text)).toEqual([
       "first",
       "second",
     ]);
 
-    await runJson([
+    await runCaptured([
+      "admin",
       "ack",
       "--as",
       "member:team-p6/coder-1",
       "--with",
       "user:main",
       "--message-id",
-      first.id,
+      first.stdoutJson!.id,
       "--state-dir",
       stateDir,
+      "--json",
     ]);
 
-    const afterAck = await runJson([
+    const afterAck = await runCaptured([
+      "admin",
       "recv",
       "--as",
       "member:team-p6/coder-1",
@@ -162,17 +442,17 @@ describe("runIm public IM CLI", () => {
       "user:main",
       "--state-dir",
       stateDir,
+      "--json",
     ]);
-    expect(afterAck.count).toBe(1);
-    expect(afterAck.messages[0].text).toBe("second");
+    expect(afterAck.stdoutJson!.count).toBe(1);
+    expect(afterAck.stdoutJson!.messages[0].text).toBe("second");
   });
 
-  it("sends agent status from stdin over the public pair", async () => {
+  it("admin direct-file send reads stdin and stores agent status messages", async () => {
     const stateDir = createStateDir();
-    const text = "## report\n\n- done\n";
-
-    const sent = await runJson(
+    const sent = await runCaptured(
       [
+        "admin",
         "send",
         "--from",
         "member:team-p6/coder-1",
@@ -183,17 +463,13 @@ describe("runIm public IM CLI", () => {
         "--text-stdin",
         "--state-dir",
         stateDir,
+        "--json",
       ],
-      Readable.from([text]),
+      { stdin: Readable.from(["## report\n\n- done\n"]) },
     );
-    expect(sent).toMatchObject({
-      ok: true,
-      kind: "status",
-      from: "member:team-p6/coder-1",
-      to: "user:main",
-    });
 
-    const received = await runJson([
+    const received = await runCaptured([
+      "admin",
       "recv",
       "--as",
       "user:main",
@@ -201,20 +477,28 @@ describe("runIm public IM CLI", () => {
       "member:team-p6/coder-1",
       "--state-dir",
       stateDir,
+      "--json",
     ]);
-    expect(received.count).toBe(1);
-    expect(received.messages[0]).toMatchObject({
-      id: sent.id,
+
+    expect(sent.stdoutJson).toMatchObject({
+      ok: true,
+      kind: "status",
+      from: "member:team-p6/coder-1",
+      to: "user:main",
+    });
+    expect(received.stdoutJson!.messages[0]).toMatchObject({
+      id: sent.stdoutJson!.id,
       role: "agent",
       kind: "status",
-      text,
+      text: "## report\n\n- done\n",
     });
   });
 
-  it("binds a run to a2user and a2a pairs and aggregates inbound messages", async () => {
+  it("admin direct-file run binding aggregates inbound messages and acks by peer", async () => {
     const stateDir = createStateDir();
 
-    await runJson([
+    await runCaptured([
+      "admin",
       "bind",
       "--run-id",
       "run-123",
@@ -226,8 +510,10 @@ describe("runIm public IM CLI", () => {
       "a2user",
       "--state-dir",
       stateDir,
+      "--json",
     ]);
-    await runJson([
+    await runCaptured([
+      "admin",
       "bind",
       "--run-id",
       "run-123",
@@ -239,8 +525,10 @@ describe("runIm public IM CLI", () => {
       "a2a",
       "--state-dir",
       stateDir,
+      "--json",
     ]);
-    const userMessage = await runJson([
+    const userMessage = await runCaptured([
+      "admin",
       "post",
       "--from",
       "user:main",
@@ -250,8 +538,10 @@ describe("runIm public IM CLI", () => {
       "from user",
       "--state-dir",
       stateDir,
+      "--json",
     ]);
-    const reviewerMessage = await runJson([
+    const reviewerMessage = await runCaptured([
+      "admin",
       "send",
       "--from",
       "member:team-p6/reviewer-1",
@@ -263,82 +553,97 @@ describe("runIm public IM CLI", () => {
       "from reviewer",
       "--state-dir",
       stateDir,
+      "--json",
     ]);
 
-    const received = await runJson([
+    const received = await runCaptured([
+      "admin",
       "run-recv",
       "--run-id",
       "run-123",
       "--state-dir",
       stateDir,
+      "--json",
     ]);
-    expect(received.count).toBe(2);
+    expect(received.stdoutJson!.count).toBe(2);
     expect(
-      received.messages.map((message: PublicImRunReceiveMessage) => message.text),
+      received.stdoutJson!.messages.map((message: PublicImRunReceiveMessage) => message.text),
     ).toEqual(["from user", "from reviewer"]);
     expect(
-      received.messages.map((message: PublicImRunReceiveMessage) => message.binding.kind),
+      received.stdoutJson!.messages.map((message: PublicImRunReceiveMessage) => message.binding.kind),
     ).toEqual(["a2user", "a2a"]);
 
-    await runJson([
+    await runCaptured([
+      "admin",
       "run-ack",
       "--run-id",
       "run-123",
       "--peer",
       "user:main",
       "--message-id",
-      userMessage.id,
+      userMessage.stdoutJson!.id,
       "--state-dir",
       stateDir,
+      "--json",
     ]);
 
-    const afterAck = await runJson([
+    const afterAck = await runCaptured([
+      "admin",
       "run-recv",
       "--run-id",
       "run-123",
       "--state-dir",
       stateDir,
+      "--json",
     ]);
-    expect(afterAck.messages.map((message: { id: string }) => message.id)).toEqual([
-      reviewerMessage.id,
+    expect(afterAck.stdoutJson!.messages.map((message: { id: string }) => message.id)).toEqual([
+      reviewerMessage.stdoutJson!.id,
     ]);
 
     const bindingLayout = planImRunBindingLayout(stateDir, "run-123");
     expect(fs.existsSync(bindingLayout.bindingFile)).toBe(true);
   });
 
-  it("uses TAH_STATE_DIR as the default public IM root", async () => {
+  it("admin uses TAH_STATE_DIR as the default public IM root", async () => {
     const stateDir = createStateDir();
-    useTahStateDir(stateDir);
 
-    await runJson([
-      "post",
-      "--from",
-      "user:main",
-      "--to",
-      "member:team-p6/coder-1",
-      "--text",
-      "hello env root",
-    ]);
+    await runCaptured(
+      [
+        "admin",
+        "post",
+        "--from",
+        "user:main",
+        "--to",
+        "member:team-p6/coder-1",
+        "--text",
+        "hello env root",
+        "--json",
+      ],
+      { env: { TAH_STATE_DIR: stateDir } },
+    );
 
-    const received = await runJson([
-      "recv",
-      "--as",
-      "member:team-p6/coder-1",
-      "--with",
-      "user:main",
-    ]);
-    expect(received.messages[0].text).toBe("hello env root");
+    const received = await runCaptured(
+      [
+        "admin",
+        "recv",
+        "--as",
+        "member:team-p6/coder-1",
+        "--with",
+        "user:main",
+        "--json",
+      ],
+      { env: { TAH_STATE_DIR: stateDir } },
+    );
+    expect(received.stdoutJson!.messages[0].text).toBe("hello env root");
   });
 
-  it("prefers TAH_IM_STATE_DIR over TAH_STATE_DIR for public IM storage", async () => {
+  it("admin prefers TAH_IM_STATE_DIR over TAH_STATE_DIR for public IM storage", async () => {
     const publicStateDir = createStateDir();
-    const runLocalStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "im-cli-run-local-"));
-    useTahStateDir(runLocalStateDir);
-    useTahImStateDir(publicStateDir);
+    const runLocalStateDir = createStateDir("im-cli-run-local-");
 
-    try {
-      await runJson([
+    await runCaptured(
+      [
+        "admin",
         "post",
         "--from",
         "user:main",
@@ -346,116 +651,60 @@ describe("runIm public IM CLI", () => {
         "member:team-p6/coder-1",
         "--text",
         "hello explicit im root",
-      ]);
+        "--json",
+      ],
+      {
+        env: {
+          TAH_STATE_DIR: runLocalStateDir,
+          TAH_IM_STATE_DIR: publicStateDir,
+        },
+      },
+    );
 
-      const received = await runJson([
+    const received = await runCaptured(
+      [
+        "admin",
         "recv",
         "--as",
         "member:team-p6/coder-1",
         "--with",
         "user:main",
-      ]);
-      expect(received.messages[0].text).toBe("hello explicit im root");
-      expect(fs.existsSync(path.join(publicStateDir, "im"))).toBe(true);
-      expect(fs.existsSync(path.join(runLocalStateDir, "im"))).toBe(false);
-    } finally {
-      fs.rmSync(runLocalStateDir, { recursive: true, force: true });
-    }
+        "--json",
+      ],
+      {
+        env: {
+          TAH_STATE_DIR: runLocalStateDir,
+          TAH_IM_STATE_DIR: publicStateDir,
+        },
+      },
+    );
+    expect(received.stdoutJson!.messages[0].text).toBe("hello explicit im root");
+    expect(fs.existsSync(path.join(publicStateDir, "im"))).toBe(true);
+    expect(fs.existsSync(path.join(runLocalStateDir, "im"))).toBe(false);
   });
 
-  it("prints usable text output when --json is omitted", async () => {
+  it("admin malformed endpoints return a failure envelope without process.exit monkeypatching", async () => {
     const stateDir = createStateDir();
-
-    captureStdout();
-    await runIm([
+    const result = await runCaptured([
+      "admin",
       "post",
       "--from",
-      "user:main",
+      "not-an-endpoint",
       "--to",
       "member:team-p6/coder-1",
       "--text",
-      "hello text mode",
+      "hello",
       "--state-dir",
       stateDir,
+      "--json",
     ]);
-    restoreStdout();
 
-    const lines = captured.join("").trim().split("\n");
-    expect(lines).toContain("message.text=hello text mode");
-    expect(lines).toContain("from=user:main");
-    expect(lines).toContain("to=member:team-p6/coder-1");
-  });
-
-  it("returns a failure envelope for missing endpoint arguments", async () => {
-    const stateDir = createStateDir();
-    const originalExit = process.exit;
-    const originalStderrWrite = process.stderr.write;
-    const capturedStderr: string[] = [];
-    process.stderr.write = ((chunk: string | Uint8Array) => {
-      capturedStderr.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
-      return true;
-    }) as typeof process.stderr.write;
-    process.exit = ((code?: string | number | null) => {
-      throw new Error(`process.exit ${code ?? 0}`);
-    }) as typeof process.exit;
-
-    try {
-      await expect(
-        runIm(["post", "--to", "member:team-p6/coder-1", "--text", "hello", "--state-dir", stateDir]),
-      ).rejects.toThrow("process.exit 1");
-    } finally {
-      process.exit = originalExit;
-      process.stderr.write = originalStderrWrite;
-    }
-
-    const error = JSON.parse(capturedStderr.join(""));
-    expect(error).toMatchObject({
-      ok: false,
-      tool: "im",
-      errorCode: "IM_ERROR",
-      error: "tiny-agent im post requires --from",
-    });
-  });
-
-  it("returns a failure envelope for malformed endpoints", async () => {
-    const stateDir = createStateDir();
-    const originalExit = process.exit;
-    const originalStderrWrite = process.stderr.write;
-    const capturedStderr: string[] = [];
-    process.stderr.write = ((chunk: string | Uint8Array) => {
-      capturedStderr.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
-      return true;
-    }) as typeof process.stderr.write;
-    process.exit = ((code?: string | number | null) => {
-      throw new Error(`process.exit ${code ?? 0}`);
-    }) as typeof process.exit;
-
-    try {
-      await expect(
-        runIm([
-          "post",
-          "--from",
-          "not-an-endpoint",
-          "--to",
-          "member:team-p6/coder-1",
-          "--text",
-          "hello",
-          "--state-dir",
-          stateDir,
-          "--json",
-        ]),
-      ).rejects.toThrow("process.exit 1");
-    } finally {
-      process.exit = originalExit;
-      process.stderr.write = originalStderrWrite;
-    }
-
-    const error = JSON.parse(capturedStderr.join(""));
-    expect(error).toMatchObject({
+    expect(result.code).toBe(1);
+    expect(result.stderrJson).toMatchObject({
       ok: false,
       tool: "im",
       errorCode: "IM_ERROR",
     });
-    expect(error.error).toMatch(/Invalid IM endpoint/);
+    expect(result.stderrJson!.error).toMatch(/Invalid IM endpoint/);
   });
 });

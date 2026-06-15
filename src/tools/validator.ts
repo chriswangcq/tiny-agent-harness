@@ -429,7 +429,7 @@ function validateTerminalWriteText(text: string): string | undefined {
   if (usesImSendTextArgument(text)) {
     return (
       "Invalid terminal_write arguments: agent IM replies must use " +
-      "`tiny-agent im send --from \"$TAH_IM_SELF_ENDPOINT\" --to \"$TAH_IM_USER_ENDPOINT\" --kind status --text-stdin`. " +
+      "`tiny-agent im send --kind status --text-stdin`. " +
       "Use stdin forms such as a quoted heredoc or input redirection instead of shell arguments. " +
       "Do not use `tiny-agent im send --text` from the agent."
     );

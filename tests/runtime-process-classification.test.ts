@@ -15,6 +15,7 @@ const CURRENT_PROCESS_KINDS: RuntimeProcessKind[] = [
   "codeq-host",
   "skill-host",
   "mcp-host",
+  "im-host",
   "model-gateway",
 ];
 
@@ -38,6 +39,21 @@ describe("runtime process classification", () => {
     expect(isStatefulRuntimeProcessKind("run")).toBe(true);
     expect(isStatefulRuntimeProcessKind("im-channel")).toBe(false);
     expect(isStatefulRuntimeProcessKind("team-roster")).toBe(false);
+  });
+
+  it("classifies terminal and model hosts as resident socket authorities", () => {
+    const terminal = classifyRuntimeProcessKind("terminal-host");
+    expect(terminal.liveResources).toContain("resident socket request boundary");
+
+    const modelGateway = classifyRuntimeProcessKind("model-gateway");
+    expect(modelGateway.liveResources).toContain("resident socket request boundary");
+    expect(modelGateway.liveResources).not.toContain("transport pipe");
+    expect(modelGateway.durableStateOwner).toBe("runs/<runId>/model-gateway.json");
+
+    const imHost = classifyRuntimeProcessKind("im-host");
+    expect(imHost.liveResources).toContain("resident socket request boundary");
+    expect(imHost.liveResources).toContain("public IM file-state proxy boundary");
+    expect(imHost.durableStateOwner).toBe("runs/<runId>/im-host.json and project im/");
   });
 
   it("classifies representative file-backed edger CLI operations", () => {

@@ -11,7 +11,7 @@ Agent model
   -> terminal_write("tiny-agent mcp ...")
   -> shell process
   -> tiny-agent mcp socket client
-  -> run-owned tiny-agent mcp host
+  -> run-owned tiny-agent mcp host --socket <run-socket>
   -> MCP JSON-RPC server process or remote MCP endpoint
 ```
 

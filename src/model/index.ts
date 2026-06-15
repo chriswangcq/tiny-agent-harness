@@ -1,8 +1,7 @@
 export {
   createModelGatewayPort,
-  createModelGatewayProcessRecord,
-  modelGatewayProcessId,
   parseModelGatewayRequest,
+  parseModelGatewayResponse,
   serializeModelGatewayRequest,
   serializeModelGatewayResponse,
 } from "./gateway.js";
@@ -16,11 +15,11 @@ export type {
 } from "./gateway.js";
 export {
   handleModelGatewayRequest,
-  serveModelGateway,
+  listenModelGatewaySocket,
 } from "./gateway-host.js";
 export {
-  ChildProcessModelGatewayTransport,
-} from "./gateway-transport.js";
+  requestModelGatewaySocket,
+} from "./gateway-client.js";
 export {
   launchModelGateway,
 } from "./gateway-launcher.js";

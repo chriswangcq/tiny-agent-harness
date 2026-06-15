@@ -5,12 +5,12 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import {
   createCodeIntelHostRuntime,
-  createCodeIntelHostProcessRecord,
   handleCodeIntelHostRequest,
   launchCodeIntelHost,
   listenCodeIntelHostSocket,
   parseCodeIntelHostRequest,
   requestCodeIntelHostSocket,
+  runCodeIntelHostCli,
 } from "../src/code-intel/index.js";
 import { defaultConfig } from "../src/code-intel/config.js";
 import type { CodeIntelBackend } from "../src/code-intel/index.js";
@@ -31,43 +31,10 @@ function makeRuntime(): CodeIntelRuntime {
 }
 
 describe("code-intel host process planning", () => {
-  it("creates run-owned codeq-host process records", () => {
-    const record = createCodeIntelHostProcessRecord({
-      runId: "run-1",
-      workspaceRoot: "/repo",
-      socketPath: "/state/runs/run-1/codeq-host.sock",
-      now: "2026-06-11T00:00:00.000Z",
-      executable: "tiny-agent",
-      statePath: "/state/runs/run-1/codeq-host.json",
-      logPath: "/state/runs/run-1/codeq-host.stderr.log",
-    });
-
-    expect(record).toMatchObject({
-      id: "codeq-host:run-1",
-      kind: "codeq-host",
-      owner: {
-        scope: "run",
-        runId: "run-1",
-      },
-      status: "planned",
-      command: {
-        executable: "tiny-agent",
-        args: [
-          "codeq",
-          "host",
-          "--cwd",
-          "/repo",
-          "--socket",
-          "/state/runs/run-1/codeq-host.sock",
-        ],
-        cwd: "/repo",
-      },
-      metadata: {
-        runId: "run-1",
-        workspaceRoot: "/repo",
-        socketPath: "/state/runs/run-1/codeq-host.sock",
-      },
-    });
+  it("requires an explicit resident socket for codeq host", async () => {
+    await expect(runCodeIntelHostCli(["--cwd", "/repo"])).rejects.toThrow(
+      "Usage: tiny-agent codeq host --socket <path>",
+    );
   });
 
   it("launches a run-owned codeq-host and waits for socket readiness", async () => {

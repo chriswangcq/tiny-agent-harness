@@ -1,9 +1,7 @@
-import * as readline from "node:readline";
-import type { Readable, Writable } from "node:stream";
 import type { TerminalPort } from "../run/orchestrator.js";
+import { listenResidentHostSocket } from "../runtime/resident-host.js";
 import {
   parseTerminalHostRequest,
-  serializeTerminalHostResponse,
   terminalHostErrorResponse,
   type TerminalHostRequest,
   type TerminalHostResponse,
@@ -39,43 +37,36 @@ export async function handleTerminalHostRequest(
   }
 }
 
-export async function serveTerminalHost(options: {
+export async function listenTerminalHostSocket(options: {
   terminal: TerminalPort;
-  input: Readable;
-  output: Writable;
+  socketPath: string;
   onShutdown?: () => Promise<void> | void;
-}): Promise<void> {
-  const lines = readline.createInterface({
-    input: options.input,
-    crlfDelay: Infinity,
+}) {
+  return await listenResidentHostSocket({
+    socketPath: options.socketPath,
+    handleLine: async (line) => {
+      let request: TerminalHostRequest;
+      try {
+        request = parseTerminalHostRequest(line);
+      } catch (error) {
+        return {
+          responseLine: JSON.stringify(
+            terminalHostErrorResponse({
+              message: error instanceof Error ? error.message : String(error),
+              code: "BAD_REQUEST",
+            }),
+          ),
+        };
+      }
+
+      const response = await handleTerminalHostRequest(options.terminal, request);
+      if (request.type === "terminal.shutdown") {
+        await options.onShutdown?.();
+      }
+      return {
+        responseLine: JSON.stringify(response),
+        close: request.type === "terminal.shutdown",
+      };
+    },
   });
-
-  for await (const line of lines) {
-    if (line.trim().length === 0) {
-      continue;
-    }
-
-    let request: TerminalHostRequest;
-    try {
-      request = parseTerminalHostRequest(line);
-    } catch (error) {
-      options.output.write(
-        serializeTerminalHostResponse(
-          terminalHostErrorResponse({
-            message: error instanceof Error ? error.message : String(error),
-            code: "BAD_REQUEST",
-          }),
-        ),
-      );
-      continue;
-    }
-
-    const response = await handleTerminalHostRequest(options.terminal, request);
-    options.output.write(serializeTerminalHostResponse(response));
-    if (request.type === "terminal.shutdown") {
-      await options.onShutdown?.();
-      lines.close();
-      break;
-    }
-  }
 }

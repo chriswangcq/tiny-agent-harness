@@ -67,7 +67,7 @@ describe("ToolCallValidator terminal input tools", () => {
       makeCall("terminal_write", {
         expectedInputSeq: 1,
         text:
-          "tiny-agent im send --from \"$TAH_IM_SELF_ENDPOINT\" --to \"$TAH_IM_USER_ENDPOINT\" --kind status --text-stdin <<'IM'\n" +
+          "tiny-agent im send --kind status --text-stdin <<'IM'\n" +
           "Done.\n" +
           "IM\n",
       }),
@@ -80,7 +80,7 @@ describe("ToolCallValidator terminal input tools", () => {
     const result = new ToolCallValidator().validate(
       makeCall("terminal_write", {
         expectedInputSeq: 1,
-        text: "tiny-agent im send --from \"$TAH_IM_SELF_ENDPOINT\" --to \"$TAH_IM_USER_ENDPOINT\" --kind status --text 'hello'\n",
+        text: "tiny-agent im send --kind status --text 'hello'\n",
       }),
     );
 
@@ -96,7 +96,7 @@ describe("ToolCallValidator terminal input tools", () => {
     const result = new ToolCallValidator().validate(
       makeCall("terminal_write", {
         expectedInputSeq: 1,
-        text: "im send --from \"$TAH_IM_SELF_ENDPOINT\" --to \"$TAH_IM_USER_ENDPOINT\" --kind status --text-stdin <<'IM'\nDone.\nIM\n",
+        text: "im send --kind status --text-stdin <<'IM'\nDone.\nIM\n",
       }),
     );
 
@@ -111,7 +111,7 @@ describe("ToolCallValidator terminal input tools", () => {
     const result = new ToolCallValidator().validate(
       makeCall("terminal_write", {
         expectedInputSeq: 1,
-        text: "node dist/cli/main.js im send --from \"$TAH_IM_SELF_ENDPOINT\" --to \"$TAH_IM_USER_ENDPOINT\" --kind status --text-stdin <<'IM'\nDone.\nIM\n",
+        text: "node dist/cli/main.js im send --kind status --text-stdin <<'IM'\nDone.\nIM\n",
       }),
     );
 

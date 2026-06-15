@@ -33,7 +33,7 @@
 User / IM
   |
   v
-PublicImService / run binding  ->  Environment  ->  system reminder
+public IM channel log  ->  run-owned im-host poller  ->  Environment  ->  system reminder
   |                    ^
   v                    |
 RunOrchestrator <-> AgentRunState
@@ -277,7 +277,7 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 ### 4.12 Sub-agent Team Domain
 
-`src/subagent` 当前是 sub-agent team 的轻量控制面：核心是 project-scoped roster/lifecycle 模型。team adapter 负责 team roster snapshot 落盘，不再拥有 task FSM 或 IM dispatch。派工由上层显式调用 public IM，例如 `tiny-agent im post --from user:main --to member:<teamId>/<memberId> --text ...` 完成；team-member-owned run 通过 `tiny-agent im bind --run-id <runId> --self member:<teamId>/<memberId> --peer user:main` 关联 endpoint pair。它提供：
+`src/subagent` 当前是 sub-agent team 的轻量控制面：核心是 project-scoped roster/lifecycle 模型。team adapter 负责 team roster snapshot 落盘，不再拥有 task FSM 或 IM dispatch。派工由上层显式调用 public IM direct-file admin 边界，例如 `tiny-agent im admin post --from user:main --to member:<teamId>/<memberId> --text ...` 完成；team-member-owned run 通过 `tiny-agent im admin bind --run-id <runId> --self member:<teamId>/<memberId> --peer user:main` 关联 endpoint pair。它提供：
 
 - `TeamRosterState`：member / status / run binding / assignment label / applied event ids。
 - `applyTeamRosterEvent(...)`：纯 FSM reducer，处理 add/update/status/heartbeat/terminate。
@@ -300,7 +300,7 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 `src/subagent/lifecycle-runtime-adapter.ts` 是纯 adapter，接收显式 `TeamSnapshot`（含 `rosterState` 与 `processExistence?: Record<string, boolean>`）和注入 port（时钟、事件追加、进程 shutdown、roster event），提供 `recordHeartbeat`、`enumerateWorkers`、`runReaper`、`requestShutdown`。它内部调用 `supervisor-lifecycle.ts` 的纯决策函数（`interpretHeartbeat`、`evaluateLease`、`computeLifecycleState`、`decideReaperAction`）来推导 `WorkerLifecycleState`（healthy / stale / expired / grace_period / shutdown / terminated / missing_process / unknown）。
 
-CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-agent team --help` 暴露 `tiny-agent team create|member|lifecycle`，派工通过 `tiny-agent im post`。普通 team 命令的 effect boundary 在 `src/subagent/team-cli-adapter.ts`；lifecycle 命令的 effect boundary 在 `src/subagent/lifecycle-cli-adapter.ts`。新的 ownership model 要求 lifecycle write path 显式绑定 `teamId`，不能从 run id 隐式猜 team。
+CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-agent team --help` 暴露 `tiny-agent team create|member|lifecycle`，外部派工通过 `tiny-agent im admin post`。普通 team 命令的 effect boundary 在 `src/subagent/team-cli-adapter.ts`；lifecycle 命令的 effect boundary 在 `src/subagent/lifecycle-cli-adapter.ts`。新的 ownership model 要求 lifecycle write path 显式绑定 `teamId`，不能从 run id 隐式猜 team。
 
 **Reaper shutdown chain**: the `runReaper` adapter function identifies stale active workers (heartbeat age past threshold, member status not `terminated` or `offline`). For each stale worker it emits a `shutdown_requested` lifecycle event, attempts graceful shutdown, then records `shutdown_completed` or `shutdown_failed`. Successful shutdown marks the roster member status `terminated`. This unified chain ensures stale workers are cleanly retired and do not accumulate in the team snapshot.
 

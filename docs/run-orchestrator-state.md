@@ -2,7 +2,7 @@
 
 本文记录 tiny-agent-harness 第一版 run loop、agent run state、effect 和 event 协议。
 
-> Current implementation note: tiny-agent has no model-level `final` turn. User-visible replies are delivered by running endpoint-based `tiny-agent im send --text-stdin` through the current PTY session, then returning to `io_wait` to wait for the next environment event. Text that appears only in thinking is not delivered to the user.
+> Current implementation note: tiny-agent has no model-level `final` turn. User-visible replies are delivered by running host-backed `tiny-agent im send --kind status --text-stdin` through the current PTY session, then returning to `io_wait` to wait for the next environment event. Text that appears only in thinking is not delivered to the user.
 
 ## Design Principles
 
@@ -18,7 +18,7 @@
 ```text
 RunOrchestrator
   owns: loop, side effects, IO boundaries
-  calls: ModelGateway-backed ModelPort, Environment, ToolReviewer, TerminalHost-backed TerminalPort, PublicImService run binding poller, TranscriptStore
+  calls: ModelGateway-backed ModelPort, Environment, ToolReviewer, TerminalHost-backed TerminalPort, ImHost-backed run IM client, TranscriptStore
 
 AgentRunState
   owns: status, step index, transcript pointers, pending tool call/review, pending IO wait
@@ -38,8 +38,8 @@ ModelContextSession
 PromptBuilder
   owns: DeepSeek v4 chat-template compatible message serialization
 
-PublicImService / run IM binding
-  owns: endpoint pair creation, run binding, user message polling, and agent reply delivery through im CLI
+ImHost / run IM binding
+  owns: run-scoped socket boundary for endpoint pair creation, run binding, user message polling, ack, and agent reply delivery through im CLI
 
 Environment
   owns: latest external events and consumed-event cursors
@@ -119,10 +119,10 @@ type AgentRunState = {
 model output -> optional tool validation -> optional tool review -> optional tool execution -> observation
 ```
 
-如果任务已经完成，模型仍然不直接返回用户可见正文；Agent 应通过 current PTY session 调用 endpoint-based `tiny-agent im send --text-stdin` 发送用户可见答复，然后返回 `io_wait`，让 run 等待下一条用户消息或环境事件。`tiny-agent im post` 只用于外部/本地 demo 注入用户消息，不能作为 agent 回复出口。所有 Agent 回复都应走 public IM；普通文本回复可以直接用 quoted heredoc，例如：
+如果任务已经完成，模型仍然不直接返回用户可见正文；Agent 应通过 current PTY session 调用 host-backed `tiny-agent im send --kind status --text-stdin` 发送用户可见答复，然后返回 `io_wait`，让 run 等待下一条用户消息或环境事件。`tiny-agent im admin post` 只用于外部/本地 demo 注入用户消息，不能作为 agent 回复出口。所有 Agent 回复都应走 public IM；普通文本回复可以直接用 quoted heredoc，例如：
 
 ```bash
-tiny-agent im send --from "$TAH_IM_SELF_ENDPOINT" --to "$TAH_IM_USER_ENDPOINT" --kind status --text-stdin <<'IM'
+tiny-agent im send --kind status --text-stdin <<'IM'
 Done.
 IM
 ```

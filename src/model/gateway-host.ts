@@ -1,9 +1,7 @@
-import * as readline from "node:readline";
-import type { Readable, Writable } from "node:stream";
 import type { ModelPort } from "../run/orchestrator.js";
+import { listenResidentHostSocket } from "../runtime/resident-host.js";
 import {
   parseModelGatewayRequest,
-  serializeModelGatewayResponse,
   type ModelGatewayRequest,
   type ModelGatewayResponse,
 } from "./gateway.js";
@@ -45,47 +43,40 @@ export async function handleModelGatewayRequest(
   }
 }
 
-export async function serveModelGateway(options: {
+export async function listenModelGatewaySocket(options: {
   model: ModelPort;
-  input: Readable;
-  output: Writable;
+  socketPath: string;
   onShutdown?: () => Promise<void> | void;
-}): Promise<void> {
-  const lines = readline.createInterface({
-    input: options.input,
-    crlfDelay: Infinity,
+}) {
+  return await listenResidentHostSocket({
+    socketPath: options.socketPath,
+    handleLine: async (line) => {
+      let request: ModelGatewayRequest;
+      try {
+        request = parseModelGatewayRequest(line);
+      } catch (error) {
+        return {
+          responseLine: JSON.stringify({
+            schemaVersion: 1,
+            id: "unknown",
+            ok: false,
+            type: "model.error",
+            error: {
+              code: "BAD_REQUEST",
+              message: error instanceof Error ? error.message : String(error),
+            },
+          }),
+        };
+      }
+
+      const response = await handleModelGatewayRequest(options.model, request);
+      if (request.type === "model.shutdown") {
+        await options.onShutdown?.();
+      }
+      return {
+        responseLine: JSON.stringify(response),
+        close: request.type === "model.shutdown",
+      };
+    },
   });
-
-  for await (const line of lines) {
-    if (line.trim().length === 0) {
-      continue;
-    }
-
-    let request: ModelGatewayRequest;
-    try {
-      request = parseModelGatewayRequest(line);
-    } catch (error) {
-      options.output.write(
-        serializeModelGatewayResponse({
-          schemaVersion: 1,
-          id: "unknown",
-          ok: false,
-          type: "model.error",
-          error: {
-            code: "BAD_REQUEST",
-            message: error instanceof Error ? error.message : String(error),
-          },
-        }),
-      );
-      continue;
-    }
-
-    const response = await handleModelGatewayRequest(options.model, request);
-    options.output.write(serializeModelGatewayResponse(response));
-    if (request.type === "model.shutdown") {
-      await options.onShutdown?.();
-      lines.close();
-      break;
-    }
-  }
 }

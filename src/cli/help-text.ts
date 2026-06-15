@@ -17,21 +17,17 @@ Usage:
   tiny-agent --help                                   Show this help
 
 IM subcommands:
-  tiny-agent im pair   --a <endpoint> --b <endpoint> [--kind <kind>]
-                                                 Create/read a public endpoint pair
-  tiny-agent im bind   --run-id <id> --self <endpoint> --peer <endpoint>
-                                                 Bind a run to a public IM pair
-  tiny-agent im post   --from <endpoint> --to <endpoint> --text <text>
-                                                 Inject a user message
-  tiny-agent im recv   --as <endpoint> --with <endpoint> [--cursor <id>]
-                                                 Receive messages for an endpoint pair
-  tiny-agent im send   --from <endpoint> --to <endpoint> --kind <status|error>
-                                                 Send an agent message
-  tiny-agent im ack    --as <endpoint> --with <endpoint> --message-id <id>
-                                                 Acknowledge an endpoint-pair cursor
-  tiny-agent im run-recv --run-id <id>            Receive messages from all run bindings
-  tiny-agent im run-ack  --run-id <id> --peer <endpoint> --message-id <id>
-                                                 Acknowledge one run binding peer channel
+  tiny-agent im send --kind <status|error> --text-stdin
+                                                 Send via current run im-host
+  tiny-agent im recv [--cursor <id>]              Receive via current run im-host
+  tiny-agent im ack --message-id <id>             Ack via current run im-host
+  tiny-agent im run-recv [--run-id <id>]          Receive from run bindings via im-host
+  tiny-agent im run-ack --message-id <id> [--peer <endpoint>]
+                                                 Ack one run binding via im-host
+  tiny-agent im host --socket <path> --state-dir <dir>
+                                                 Start a run-owned IM host
+  tiny-agent im admin <subcommand> [--state-dir <dir>]
+                                                 Direct-file admin/bootstrap IM
 
 Skill subcommands:
   tiny-agent skill list                          List available skills
@@ -49,14 +45,16 @@ Team groups:
   tiny-agent team lifecycle <subcommand>   Run-scoped lease, lifecycle-status, reaper, shutdown
 
 Work dispatch:
-  tiny-agent im post --from user:main --to member:<team>/<member> --text <text>
-                                            Send work instructions through public IM
+  tiny-agent im admin post --from user:main --to member:<team>/<member> --text <text>
+                                            External direct-file work dispatch
 
 Environment variables:
   DEEPSEEK_API_KEY   One-off override for providers.deepseek.apiKey
   DEEPSEEK_BASE_URL  One-off override for providers.deepseek.baseUrl
   MODEL_NAME         One-off override for providers.deepseek.model
   TAH_STATE_DIR      Override product state root
+  TAH_IM_HOST_SOCKET Current run IM host socket
+  TAH_IM_STATE_DIR   Project public IM state root for admin/edge commands
   TAH_CODEQ_HOST_SOCKET  Current run CodeQ host socket
   TAH_SKILL_HOST_SOCKET  Current run Skill host socket
   TAH_MCP_HOST_SOCKET    Current run MCP host socket
@@ -64,5 +62,5 @@ Environment variables:
 User config:
   ~/.tiny-agent/config.json
 
-Most CLI subcommands accept --json for machine-readable output. Use --state-dir to override the product state root. Skill, CodeQ, and MCP operational commands require a run host socket from the PTY environment or --host-socket.
+Most CLI subcommands accept --json for machine-readable output. Use --state-dir to override the product state root. IM, Skill, CodeQ, and MCP operational commands require a run host socket from the PTY environment or --host-socket; use tiny-agent im admin for explicit direct-file IM bootstrap/debug work.
 `;

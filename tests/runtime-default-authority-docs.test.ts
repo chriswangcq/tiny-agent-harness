@@ -50,8 +50,37 @@ describe("runtime default authority documentation", () => {
     expect(architecture).toMatch(
       /`Model gateway` owns the default run `ModelPort` boundary/,
     );
-    expect(architecture).toContain("tiny-agent model-gateway");
-    expect(architecture).toContain("tiny-agent terminal-host");
+    expect(architecture).toContain("tiny-agent model-gateway --socket <run-socket>");
+    expect(architecture).toContain("tiny-agent terminal-host --socket <run-socket>");
+    expect(architecture).not.toContain("transport pipe");
+  });
+
+  it("documents every resident host socket artifact in state layout", () => {
+    const stateLayout = fs.readFileSync(
+      path.resolve("docs/state-layout.md"),
+      "utf-8",
+    );
+
+    expect(stateLayout).toContain(
+      "{terminal-host,codeq-host,skill-host,mcp-host,model-gateway}.*",
+    );
+  });
+
+  it("guards against reintroducing old terminal or model resident transports", () => {
+    const sourceFiles = [
+      "src/terminal-host/index.ts",
+      "src/model/index.ts",
+      "src/runtime/index.ts",
+    ].map((file) => fs.readFileSync(path.resolve(file), "utf-8"));
+
+    for (const source of sourceFiles) {
+      expect(source).not.toContain("ChildProcessTerminalHostTransport");
+      expect(source).not.toContain("ChildProcessModelGatewayTransport");
+      expect(source).not.toContain("ChildProcessJsonlTransport");
+      expect(source).not.toContain("serveTerminalHost");
+      expect(source).not.toContain("serveModelGateway");
+      expect(source).not.toContain("createModelGatewayProcessRecord");
+    }
   });
 
   it("documents team supervisor ownership above runs", () => {

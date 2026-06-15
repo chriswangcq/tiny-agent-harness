@@ -139,11 +139,12 @@ describe("envelope helpers", () => {
 // Real CLI boundary tests — IM
 // ---------------------------------------------------------------------------
 describe("IM CLI real output envelope", () => {
-  it("success: im post produces envelope with tool, version, ok, id, and endpoints", () => {
+  it("success: im admin post produces envelope with tool, version, ok, id, and endpoints", () => {
     const tmp = mkdtempSync(join(tmpdir(), "im-env-test-"));
     try {
       const result = runCli([
         "im",
+        "admin",
         "post",
         "--json",
         "--from",
@@ -168,22 +169,51 @@ describe("IM CLI real output envelope", () => {
     }
   });
 
-  it("error: im post without endpoints produces failure envelope on stderr", () => {
-    const result = runCli(["im", "post", "--json"]);
+  it("error: ordinary im post without host socket produces failure envelope on stderr", () => {
+    const result = runCli(["im", "post", "--json", "--text", "hello"]);
     const stderr = result.stderr as Record<string, unknown> | null;
     expect(stderr).not.toBeNull();
     expect(stderr!.ok).toBe(false);
     expect(stderr!.tool).toBe("im");
     expect(stderr!.version).toBeDefined();
-    expect(stderr!.errorCode).toBeDefined();
-    expect(stderr!.error).toBeDefined();
+    expect(stderr!.errorCode).toBe("IM_HOST_NOT_FOUND");
+    expect(String(stderr!.error)).toContain("TAH_IM_HOST_SOCKET");
   });
 
-  it("success: im recv produces envelope with tool, ok, messages", () => {
+  it("error: ordinary im post rejects direct --state-dir access", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "im-env-test-"));
+    const forbiddenStateDirFlag = "--state" + "-dir";
+    try {
+      const result = runCli([
+        "im",
+        "post",
+        "--json",
+        "--from",
+        "user:main",
+        "--to",
+        "member:team-p6/coder-1",
+        "--text",
+        "hello",
+        forbiddenStateDirFlag,
+        tmp,
+      ]);
+      const stderr = result.stderr as Record<string, unknown> | null;
+      expect(stderr).not.toBeNull();
+      expect(stderr!.ok).toBe(false);
+      expect(stderr!.tool).toBe("im");
+      expect(stderr!.errorCode).toBe("IM_STATE_DIR_NOT_ALLOWED");
+      expect(existsSync(join(tmp, "im"))).toBe(false);
+    } finally {
+      if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("success: im admin recv produces envelope with tool, ok, messages", () => {
     const tmp = mkdtempSync(join(tmpdir(), "im-env-test-"));
     try {
       runCli([
         "im",
+        "admin",
         "post",
         "--json",
         "--from",
@@ -197,6 +227,7 @@ describe("IM CLI real output envelope", () => {
       ]);
       const result = runCli([
         "im",
+        "admin",
         "recv",
         "--json",
         "--as",
@@ -279,6 +310,7 @@ describe("Team CLI real output envelope", () => {
       expect(
         runCli([
           "im",
+          "admin",
           "bind",
           "--json",
           "--state-dir",
@@ -297,6 +329,7 @@ describe("Team CLI real output envelope", () => {
       expect(
         runCli([
           "im",
+          "admin",
           "post",
           "--json",
           "--state-dir",
@@ -317,6 +350,7 @@ describe("Team CLI real output envelope", () => {
 
       const runMessages = runCli([
         "im",
+        "admin",
         "run-recv",
         "--json",
         "--state-dir",

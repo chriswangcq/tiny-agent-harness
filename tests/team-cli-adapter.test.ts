@@ -90,7 +90,7 @@ describe("team CLI adapter", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.errorCode).toBe("PARSE_ERROR");
-      expect(result.error).toContain("Use tiny-agent im post");
+      expect(result.error).toContain("Use tiny-agent im admin post");
     }
   });
 

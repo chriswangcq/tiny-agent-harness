@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import {
+  listenTerminalHostSocket,
   launchTerminalHost,
-  type TerminalHostResponse,
 } from "../src/terminal-host/index.js";
 import type {
   SpawnedProcessPort,
@@ -77,74 +78,85 @@ function makeObservation(): ToolObservation {
 }
 
 describe("launchTerminalHost", () => {
-  it("starts a supervisor-recorded terminal-host process and speaks JSONL IPC", async () => {
-    const child = new FakeChild();
-    const starts: StartManagedProcessInput[] = [];
-    child.stdin.on("data", (chunk) => {
-      const request = JSON.parse(chunk.toString()) as { id: string; type: string };
-      const response: TerminalHostResponse =
-        request.type === "terminal.shutdown"
-          ? {
-              schemaVersion: 1,
-              id: request.id,
-              ok: true,
-              type: "terminal.shutdown.result",
-            }
-          : {
-              schemaVersion: 1,
-              id: request.id,
-              ok: true,
-              type: "terminal.execute.result",
-              observation: makeObservation(),
-            };
-      child.stdout.write(`${JSON.stringify(response)}\n`);
-    });
-
-    const launched = launchTerminalHost({
-      supervisor: {
-        startProcess(input) {
-          starts.push(input);
-          return {
-            process: {
-              schemaVersion: 1,
-              id: input.processId,
-              kind: "terminal-host",
-              owner: input.owner,
-              status: "running",
-              command: {
-                executable: input.executable,
-                args: input.args,
-              },
-              createdAt: "2026-06-11T00:00:00.000Z",
-              updatedAt: "2026-06-11T00:00:00.000Z",
-              pid: child.pid,
-            },
-            child,
-          };
+  it("starts a supervisor-recorded terminal-host process and speaks over the resident socket", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "terminal-host-launcher-"));
+    const socketPath = path.join(dir, "terminal-host.sock");
+    const server = await listenTerminalHostSocket({
+      socketPath,
+      terminal: {
+        async execute() {
+          return makeObservation();
         },
       },
-      processId: "terminal-host:run-1:default",
-      owner: { scope: "run", runId: "run-1" },
-      executable: "node",
-      args: ["dist/cli/main.js", "terminal-host"],
-      cwd: "/repo",
-      env: {},
-      newRequestId: () => "req-1",
     });
+    const child = new FakeChild();
+    const starts: StartManagedProcessInput[] = [];
+    let sequence = 0;
 
-    await expect(launched.terminal.execute(makeRequest())).resolves.toMatchObject({
-      result: "ok",
-      request: "session_observe",
-    });
-    expect(starts[0]).toMatchObject({
-      processId: "terminal-host:run-1:default",
-      kind: "terminal-host",
-      stdio: ["pipe", "pipe", "pipe"],
-      owner: { scope: "run", runId: "run-1" },
-    });
+    try {
+      const launched = await launchTerminalHost({
+        supervisor: {
+          startProcess(input) {
+            starts.push(input);
+            return {
+              process: {
+                schemaVersion: 1,
+                id: input.processId,
+                kind: "terminal-host",
+                owner: input.owner,
+                status: "running",
+                command: {
+                  executable: input.executable,
+                  args: input.args,
+                },
+                createdAt: "2026-06-11T00:00:00.000Z",
+                updatedAt: "2026-06-11T00:00:00.000Z",
+                pid: child.pid,
+              },
+              child,
+            };
+          },
+        },
+        processId: "terminal-host:run-1",
+        owner: { scope: "run", runId: "run-1" },
+        executable: "node",
+        args: ["dist/cli/main.js", "terminal-host", "--socket", socketPath],
+        cwd: "/repo",
+        env: {},
+        socketPath,
+        newRequestId: () => `req-${++sequence}`,
+      });
 
-    await launched.dispose();
-    expect(child.killed).toBe(false);
+      await expect(launched.terminal.execute(makeRequest())).resolves.toMatchObject({
+        result: "ok",
+        request: "session_observe",
+      });
+      expect(starts[0]).toMatchObject({
+        processId: "terminal-host:run-1",
+        kind: "terminal-host",
+        stdio: ["ignore", "pipe", "pipe"],
+        owner: { scope: "run", runId: "run-1" },
+        metadata: {
+          runId: "run-1",
+          socketPath,
+        },
+      });
+      expect(starts[0]?.args).toEqual([
+        "dist/cli/main.js",
+        "terminal-host",
+        "--socket",
+        socketPath,
+      ]);
+      expect(launched.socketPath).toBe(socketPath);
+
+      await launched.dispose();
+      expect(child.killed).toBe(true);
+    } finally {
+      if (server.listening) {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("keeps CLI main from directly constructing ManagedTerminalRuntime", () => {

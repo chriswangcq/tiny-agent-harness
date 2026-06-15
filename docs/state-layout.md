@@ -181,6 +181,7 @@ Managed PTY 启动时会把当前 run 信息和 run-owned host socket 注入 she
 | `TAH_STATE_DIR` | CLI 默认 run 状态目录；在 PTY 中等于当前 run 目录 |
 | `TAH_PROJECT_STATE_DIR` | 当前项目的 home-scoped state root；供 MCP registry、team lifecycle/reaper 等跨 run 控制面使用 |
 | `TAH_IM_STATE_DIR` | public IM state root；在 PTY 中等于当前 project state root |
+| `TAH_IM_HOST_SOCKET` | 当前 run 的 IM host socket；`tiny-agent im ...` 普通命令必须通过它调用 |
 | `TAH_IM_RUN_ID` | 当前 run id，供 `tiny-agent im run-recv/run-ack` 默认定位 |
 | `TAH_IM_SELF_ENDPOINT` | 当前 run 的默认回复 endpoint，例如 `run:<runId>` |
 | `TAH_IM_USER_ENDPOINT` | 默认用户 endpoint，当前为 `user:main` |
@@ -196,7 +197,7 @@ Managed PTY 启动时会把当前 run 信息和 run-owned host socket 注入 she
 | `TAH_TRANSCRIPT_PATH` | 当前 run transcript JSONL |
 | `TAH_ENVIRONMENT_EVENTS_PATH` | 当前 run environment events JSONL |
 
-因此 agent 在 PTY 中执行 `tiny-agent im send --from "$TAH_IM_SELF_ENDPOINT" --to "$TAH_IM_USER_ENDPOINT" --text-stdin`、`tiny-agent skill ...`、`tiny-agent codeq ...`、`tiny-agent mcp ...` 或 `tiny-agent team ...` 时，不需要额外传 `--state-dir`。Skill、CodeQ 和 MCP 的公开 CLI 依赖 host socket；人工调试这些能力时应显式传 `--host-socket <path>` 连接某个 run host。
+因此 agent 在 PTY 中执行 `tiny-agent im send --kind status --text-stdin`、`tiny-agent skill ...`、`tiny-agent codeq ...`、`tiny-agent mcp ...` 或 `tiny-agent team ...` 时，不需要额外传 `--state-dir`。IM、Skill、CodeQ 和 MCP 的公开 CLI 依赖 host socket；人工调试这些能力时应显式传 `--host-socket <path>` 连接某个 run host。需要直接操作 public IM 文件态的外部/bootstrap/debug 边界使用 `tiny-agent im admin ...`。
 
 ### PTY session 生命周期
 
@@ -226,7 +227,7 @@ TUI 启动器的 stdout/stderr 日志，用于排查 UI 启动问题。不属于
 |------|----------|
 | Public IM endpoints/pairs/channels/run bindings | `~/.tiny-agent/projects/<projectId>/im/` |
 | PTY raw logs | `~/.tiny-agent/projects/<projectId>/runs/<runId>/sessions/` |
-| Resident host socket/state | `~/.tiny-agent/projects/<projectId>/runs/<runId>/{codeq,skill,mcp}-host.*` |
+| Resident host socket/state | `~/.tiny-agent/projects/<projectId>/runs/<runId>/{terminal-host,codeq-host,skill-host,mcp-host,model-gateway}.*` |
 | Environment events | `~/.tiny-agent/projects/<projectId>/runs/<runId>/environment/events.jsonl` |
 | Skill runs | `~/.tiny-agent/projects/<projectId>/runs/<runId>/skill-runs/` |
 | Model context snapshot | `~/.tiny-agent/projects/<projectId>/runs/<runId>/session.json` |

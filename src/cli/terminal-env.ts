@@ -24,6 +24,7 @@ export type CliTerminalEnvOptions = {
   stateDir?: string;
   projectStateDir?: string;
   imStateDir?: string;
+  imHostSocket?: string;
   imRunId?: string;
   imSelfEndpoint?: string;
   imUserEndpoint?: string;
@@ -53,12 +54,14 @@ export function buildCliTerminalEnv(
   delete cleaned.TAH_IM_DIR;
   delete cleaned.TAH_RUN_CHANNEL;
   delete cleaned.TAH_IM_CHANNEL;
+  delete cleaned.TAH_IM_HOST_SOCKET;
 
   assignIfDefined(cleaned, "TAH_RUN_ID", options.runId);
   assignIfDefined(cleaned, "TAH_RUN_DIR", options.runDir);
   assignIfDefined(cleaned, "TAH_STATE_DIR", options.stateDir ?? options.runDir);
   assignIfDefined(cleaned, "TAH_PROJECT_STATE_DIR", options.projectStateDir);
   assignIfDefined(cleaned, "TAH_IM_STATE_DIR", options.imStateDir);
+  assignIfDefined(cleaned, "TAH_IM_HOST_SOCKET", options.imHostSocket);
   assignIfDefined(cleaned, "TAH_IM_RUN_ID", options.imRunId ?? options.runId);
   assignIfDefined(cleaned, "TAH_IM_SELF_ENDPOINT", options.imSelfEndpoint);
   assignIfDefined(cleaned, "TAH_IM_USER_ENDPOINT", options.imUserEndpoint);

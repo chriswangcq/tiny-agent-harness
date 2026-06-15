@@ -21,11 +21,13 @@ describe("buildCliTerminalEnv", () => {
       TAH_RUN_CHANNEL: "stale",
       TAH_IM_CHANNEL: "stale",
       TAH_IM_DIR: "/old/run/im",
+      TAH_IM_HOST_SOCKET: "/old/run/im-host.sock",
     });
     expect(result.PATH).toBe("/usr/bin");
     expect(result).not.toHaveProperty("TAH_RUN_CHANNEL");
     expect(result).not.toHaveProperty("TAH_IM_CHANNEL");
     expect(result).not.toHaveProperty("TAH_IM_DIR");
+    expect(result).not.toHaveProperty("TAH_IM_HOST_SOCKET");
   });
 
   it("injects current run identity and run-scoped paths", () => {
@@ -41,6 +43,7 @@ describe("buildCliTerminalEnv", () => {
       skillsDir: "/repo/.tiny-agent/skills",
       transcriptPath: "/repo/.tiny-agent/runs/run-123/transcript.jsonl",
       environmentEventsPath: "/repo/.tiny-agent/runs/run-123/environment/events.jsonl",
+      imHostSocket: "/repo/.tiny-agent/runs/run-123/im-host.sock",
       codeqHostSocket: "/repo/.tiny-agent/runs/run-123/codeq-host.sock",
       skillHostSocket: "/repo/.tiny-agent/runs/run-123/skill-host.sock",
       mcpHostSocket: "/repo/.tiny-agent/runs/run-123/mcp-host.sock",
@@ -52,6 +55,7 @@ describe("buildCliTerminalEnv", () => {
       TAH_STATE_DIR: "/repo/.tiny-agent/runs/run-123",
       TAH_PROJECT_STATE_DIR: "/repo/.tiny-agent",
       TAH_IM_STATE_DIR: "/repo/.tiny-agent",
+      TAH_IM_HOST_SOCKET: "/repo/.tiny-agent/runs/run-123/im-host.sock",
       TAH_IM_RUN_ID: "run-123",
       TAH_IM_SELF_ENDPOINT: "run:run-123",
       TAH_IM_USER_ENDPOINT: "user:main",

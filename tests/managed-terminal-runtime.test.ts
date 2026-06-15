@@ -320,7 +320,7 @@ describe("ManagedTerminalRuntime", () => {
         kind: "terminal_write",
         expectedInputSeq: 0,
         text:
-          "tiny-agent im send --from run:run-1 --to user:main --kind status --text-stdin <<'IM'\n" +
+          "tiny-agent im send --kind status --text-stdin <<'IM'\n" +
           "body\n" +
           "IM\n",
       },
@@ -328,7 +328,7 @@ describe("ManagedTerminalRuntime", () => {
     setTimeout(() => {
       ptyMock.spawned[0]?.emit(
         [
-          "$ tiny-agent im send --from run:run-1 --to user:main --kind status --text-stdin <<'IM'",
+          "$ tiny-agent im send --kind status --text-stdin <<'IM'",
           ...Array.from({ length: 60 }, (_, index) => `> line-${index}`),
           "ok=true",
           "id=agent-1",
@@ -368,7 +368,7 @@ describe("ManagedTerminalRuntime", () => {
       request: {
         kind: "terminal_write",
         expectedInputSeq: 0,
-        text: "tiny-agent im send --from \"$TAH_IM_SELF_ENDPOINT\" --to \"$TAH_IM_USER_ENDPOINT\" --text-stdin\n",
+        text: "tiny-agent im send --kind status --text-stdin\n",
       },
     });
     setTimeout(() => {

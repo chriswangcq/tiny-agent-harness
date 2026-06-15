@@ -1,11 +1,6 @@
-import * as readline from "node:readline";
-import type { Readable, Writable } from "node:stream";
-import type { RuntimeProcessRecord } from "../runtime/process-registry.js";
 import {
-  createResidentHostProcessRecord,
   listenResidentHostSocket,
   requestResidentHostJson,
-  residentHostProcessId,
 } from "../runtime/resident-host.js";
 import {
   createCodeIntelRuntime,
@@ -118,46 +113,6 @@ export function createCodeIntelHostRuntime(
   return new CodeIntelHostRuntime(runtime);
 }
 
-export function codeIntelHostProcessId(
-  runId: string,
-): string {
-  return residentHostProcessId("codeq-host", runId);
-}
-
-export function createCodeIntelHostProcessRecord(input: {
-  runId: string;
-  workspaceRoot: string;
-  socketPath: string;
-  now: string;
-  executable?: string;
-  statePath?: string;
-  logPath?: string;
-}): RuntimeProcessRecord {
-  return createResidentHostProcessRecord({
-    kind: "codeq-host",
-    runId: input.runId,
-    socketPath: input.socketPath,
-    command: {
-      executable: input.executable ?? "tiny-agent",
-      args: [
-        "codeq",
-        "host",
-        "--cwd",
-        input.workspaceRoot,
-        "--socket",
-        input.socketPath,
-      ],
-      cwd: input.workspaceRoot,
-    },
-    now: input.now,
-    statePath: input.statePath,
-    logPath: input.logPath,
-    metadata: {
-      workspaceRoot: input.workspaceRoot,
-    },
-  });
-}
-
 export async function handleCodeIntelHostRequest(
   executor: CodeIntelHostCommandExecutor,
   request: CodeIntelHostRequest,
@@ -218,12 +173,6 @@ export function parseCodeIntelHostRequest(raw: string): CodeIntelHostRequest {
   return parsed as CodeIntelHostExecuteRequest;
 }
 
-export function serializeCodeIntelHostResponse(
-  response: CodeIntelHostResponse,
-): string {
-  return `${JSON.stringify(response)}\n`;
-}
-
 export function parseCodeIntelHostResponse(
   raw: string,
   expectedId?: string,
@@ -254,52 +203,6 @@ export function parseCodeIntelHostResponse(
     throw new Error("Invalid codeq host response: ok and type are required");
   }
   return parsed as CodeIntelHostResponse;
-}
-
-export async function serveCodeIntelHost(options: {
-  executor: CodeIntelHostCommandExecutor;
-  input: Readable;
-  output: Writable;
-  onShutdown?: () => Promise<void> | void;
-}): Promise<void> {
-  const lines = readline.createInterface({
-    input: options.input,
-    crlfDelay: Infinity,
-  });
-
-  try {
-    for await (const line of lines) {
-      if (line.trim().length === 0) {
-        continue;
-      }
-
-      let request: CodeIntelHostRequest;
-      try {
-        request = parseCodeIntelHostRequest(line);
-      } catch (error) {
-        options.output.write(
-          serializeCodeIntelHostResponse(
-            codeIntelHostErrorResponse({
-              id: "unknown",
-              code: "BAD_REQUEST",
-              message: error instanceof Error ? error.message : String(error),
-            }),
-          ),
-        );
-        continue;
-      }
-
-      const response = await handleCodeIntelHostRequest(options.executor, request);
-      options.output.write(serializeCodeIntelHostResponse(response));
-      if (request.type === "codeq.shutdown") {
-        await options.onShutdown?.();
-        lines.close();
-        break;
-      }
-    }
-  } finally {
-    await options.executor.dispose();
-  }
 }
 
 export async function listenCodeIntelHostSocket(options: {
@@ -340,30 +243,24 @@ export async function requestCodeIntelHostSocket(options: {
 
 export async function runCodeIntelHostCli(args: string[]): Promise<number> {
   const { cwd, socketPath } = parseHostOptions(args);
-  const executor = createCodeIntelHostRuntime(createCodeIntelRuntime(cwd));
-  if (socketPath) {
-    try {
-      const server = await listenCodeIntelHostSocket({
-        socketPath,
-        handleRequest: async (request) =>
-          handleCodeIntelHostRequest(executor, request),
-        onShutdown: async () => executor.dispose(),
-      });
-      await new Promise<void>((resolve, reject) => {
-        server.once("close", resolve);
-        server.once("error", reject);
-      });
-    } finally {
-      await executor.dispose();
-    }
-    return 0;
+  if (!socketPath) {
+    throw new Error("Usage: tiny-agent codeq host --socket <path>");
   }
-
-  await serveCodeIntelHost({
-    executor,
-    input: process.stdin,
-    output: process.stdout,
-  });
+  const executor = createCodeIntelHostRuntime(createCodeIntelRuntime(cwd));
+  try {
+    const server = await listenCodeIntelHostSocket({
+      socketPath,
+      handleRequest: async (request) =>
+        handleCodeIntelHostRequest(executor, request),
+      onShutdown: async () => executor.dispose(),
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("close", resolve);
+      server.once("error", reject);
+    });
+  } finally {
+    await executor.dispose();
+  }
   return 0;
 }
 

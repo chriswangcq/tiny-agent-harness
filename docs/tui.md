@@ -582,7 +582,7 @@ m -> type message -> Enter
 执行：
 
 ```text
-TUI -> PublicImService.postMessage / im CLI -> EnvironmentEvent(user_message_received)
+TUI -> public IM admin/file edge -> run-owned im-host poller -> EnvironmentEvent(user_message_received)
 ```
 
 Agent 下一轮通过 environment reminder 看到它。

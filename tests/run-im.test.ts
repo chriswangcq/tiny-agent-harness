@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  PublicImService,
-  createInMemoryImStore,
-  type PublicImServicePorts,
-} from "../src/im/index.js";
+import type { ImHostRequest, ImHostResponse } from "../src/im/index.js";
 import {
   DEFAULT_RUN_USER_ENDPOINT,
   ackPublicRunUserMessage,
@@ -13,29 +9,24 @@ import {
   receivePublicRunUserMessages,
   resolveRunImEndpoints,
   selectUserPeerMessages,
+  type RunImHostRequest,
 } from "../src/cli/run-im.js";
 
-function fakePorts(): PublicImServicePorts {
-  let idCounter = 0;
-  let nowCounter = 0;
+function hostResult(
+  request: ImHostRequest,
+  data: Record<string, unknown>,
+): ImHostResponse {
   return {
-    store: createInMemoryImStore(),
-    clock: {
-      nowIso: () => {
-        nowCounter += 1;
-        return `2026-06-11T00:00:${String(nowCounter).padStart(2, "0")}.000Z`;
-      },
-    },
-    ids: {
-      newMessageId: (seed) => {
-        idCounter += 1;
-        return `msg-${seed.replace(/[^a-zA-Z0-9]+/g, "-")}-${idCounter}`;
-      },
-    },
+    schemaVersion: 1,
+    id: request.id,
+    ok: true,
+    type: "im.result",
+    command: request.type as Exclude<ImHostRequest["type"], "im.shutdown">,
+    data,
   };
 }
 
-describe("public run IM adapter", () => {
+describe("public run IM host client", () => {
   it("derives default run and user endpoints", () => {
     expect(createRunImSelfEndpoint("run-123")).toBe("run:run-123");
     expect(resolveRunImEndpoints({ runId: "run-123" })).toEqual({
@@ -44,97 +35,154 @@ describe("public run IM adapter", () => {
     });
   });
 
-  it("binds the default run a2user pair", async () => {
-    const service = new PublicImService(fakePorts());
+  it("binds the default run a2user pair through im-host", async () => {
+    const calls: RunImHostRequest[] = [];
 
     const binding = await ensureDefaultRunImBinding({
-      service,
-      stateRoot: "/state",
+      socketPath: "/tmp/run/im-host.sock",
       runId: "run-123",
+      newRequestId: () => "bind-1",
+      requestHost: async (call) => {
+        calls.push(call);
+        return hostResult(call.request, {
+          binding: {
+            runId: "run-123",
+            self: "run:run-123",
+            bindings: [
+              {
+                kind: "a2user",
+                peer: "user:main",
+              },
+            ],
+          },
+        });
+      },
     });
 
     expect(binding).toMatchObject({
       runId: "run-123",
       self: "run:run-123",
-      bindings: [
-        {
-          kind: "a2user",
-          peer: "user:main",
-        },
-      ],
+      bindings: [{ kind: "a2user", peer: "user:main" }],
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      socketPath: "/tmp/run/im-host.sock",
+      timeoutMs: 30_000,
+    });
+    expect(calls[0]!.request).toMatchObject({
+      schemaVersion: 1,
+      id: "bind-1",
+      type: "im.bind",
+      runId: "run-123",
+      self: "run:run-123",
+      peer: "user:main",
+      kind: "a2user",
     });
   });
 
-  it("receives all run messages but selects only user-peer messages", async () => {
-    const service = new PublicImService(fakePorts());
-    await ensureDefaultRunImBinding({ service, stateRoot: "/state", runId: "run-123" });
-    await service.bindRun({
-      stateRoot: "/state",
-      runId: "run-123",
-      self: "run:run-123",
-      peer: "member:team-p6/reviewer-1",
-      kind: "a2a",
-    });
-
-    const userMessage = await service.postMessage({
-      stateRoot: "/state",
-      from: "user:main",
-      to: "run:run-123",
+  it("receives all run messages through im-host and selects only user-peer messages", async () => {
+    const calls: RunImHostRequest[] = [];
+    const userMessage = {
+      id: "msg-user",
       text: "start task",
-    });
-    await service.sendMessage({
-      stateRoot: "/state",
-      from: "member:team-p6/reviewer-1",
-      to: "run:run-123",
-      kind: "status",
+      binding: { peer: "user:main", kind: "a2user" },
+    };
+    const reviewerMessage = {
+      id: "msg-reviewer",
       text: "review note",
+      binding: { peer: "member:team-p6/reviewer-1", kind: "a2a" },
+    };
+
+    const all = await receivePublicRunIm({
+      socketPath: "/tmp/run/im-host.sock",
+      runId: "run-123",
+      newRequestId: () => "recv-1",
+      requestHost: async (call) => {
+        calls.push(call);
+        return hostResult(call.request, {
+          runId: "run-123",
+          self: "run:run-123",
+          count: 2,
+          nextCursors: {},
+          messages: [userMessage, reviewerMessage],
+        });
+      },
     });
 
-    const all = await receivePublicRunIm({ service, stateRoot: "/state", runId: "run-123" });
     expect(all.messages.map((message) => message.text)).toEqual([
       "start task",
       "review note",
     ]);
     expect(selectUserPeerMessages(all).map((message) => message.id)).toEqual([
-      userMessage.id,
+      "msg-user",
     ]);
+    expect(calls[0]!.request).toMatchObject({
+      id: "recv-1",
+      type: "im.run-recv",
+      runId: "run-123",
+    });
+
     await expect(
-      receivePublicRunUserMessages({ service, stateRoot: "/state", runId: "run-123" }),
-    ).resolves.toMatchObject([{ id: userMessage.id }]);
+      receivePublicRunUserMessages({
+        socketPath: "/tmp/run/im-host.sock",
+        runId: "run-123",
+        requestHost: async (call) =>
+          hostResult(call.request, {
+            runId: "run-123",
+            self: "run:run-123",
+            count: 2,
+            nextCursors: {},
+            messages: [userMessage, reviewerMessage],
+          }),
+      }),
+    ).resolves.toMatchObject([{ id: "msg-user" }]);
   });
 
-  it("acks only the default user peer channel", async () => {
-    const service = new PublicImService(fakePorts());
-    await ensureDefaultRunImBinding({ service, stateRoot: "/state", runId: "run-123" });
-    await service.bindRun({
-      stateRoot: "/state",
-      runId: "run-123",
-      self: "run:run-123",
-      peer: "member:team-p6/reviewer-1",
-      kind: "a2a",
-    });
-    const userMessage = await service.postMessage({
-      stateRoot: "/state",
-      from: "user:main",
-      to: "run:run-123",
-      text: "start task",
-    });
-    const reviewerMessage = await service.sendMessage({
-      stateRoot: "/state",
-      from: "member:team-p6/reviewer-1",
-      to: "run:run-123",
-      kind: "status",
-      text: "review note",
-    });
+  it("acks only the default user peer channel through im-host", async () => {
+    const calls: RunImHostRequest[] = [];
 
     await ackPublicRunUserMessage({
-      service,
-      stateRoot: "/state",
+      socketPath: "/tmp/run/im-host.sock",
       runId: "run-123",
-      messageId: userMessage.id,
+      messageId: "msg-user",
+      newRequestId: () => "ack-1",
+      requestHost: async (call) => {
+        calls.push(call);
+        return hostResult(call.request, {
+          runId: "run-123",
+          peer: "user:main",
+          messageId: "msg-user",
+        });
+      },
     });
 
-    const all = await receivePublicRunIm({ service, stateRoot: "/state", runId: "run-123" });
-    expect(all.messages.map((message) => message.id)).toEqual([reviewerMessage.id]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.request).toMatchObject({
+      schemaVersion: 1,
+      id: "ack-1",
+      type: "im.run-ack",
+      runId: "run-123",
+      peer: "user:main",
+      messageId: "msg-user",
+    });
+  });
+
+  it("surfaces im-host errors from run IM operations", async () => {
+    await expect(
+      receivePublicRunIm({
+        socketPath: "/tmp/run/im-host.sock",
+        runId: "run-123",
+        requestHost: async (call) => ({
+          schemaVersion: 1,
+          id: call.request.id,
+          ok: false,
+          type: "im.error",
+          error: {
+            code: "IM_ERROR",
+            message: "binding missing",
+          },
+        }),
+      }),
+    ).rejects.toThrow("binding missing");
   });
 });

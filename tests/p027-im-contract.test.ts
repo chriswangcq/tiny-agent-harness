@@ -88,7 +88,7 @@ describe("P027 IM CLI Contract", () => {
 
   it("terminal_write 'tiny-agent im send --text ...' is INVALID (must use --text-stdin)", () => {
     const call = makeImSendWrite(
-      `tiny-agent im send --from "$TAH_IM_SELF_ENDPOINT" --to "$TAH_IM_USER_ENDPOINT" --kind status --text "hello"\n`
+      `tiny-agent im send --kind status --text "hello"\n`
     );
     const result = validator.validate(call);
     expect(result.status).toBe("invalid");
@@ -99,7 +99,7 @@ describe("P027 IM CLI Contract", () => {
 
   it("terminal_write 'tiny-agent im send --text-stdin' is VALID", () => {
     const call = makeImSendWrite(
-      `tiny-agent im send --from "$TAH_IM_SELF_ENDPOINT" --to "$TAH_IM_USER_ENDPOINT" --kind status --text-stdin <<'IM'\nreport\nIM\n`
+      `tiny-agent im send --kind status --text-stdin <<'IM'\nreport\nIM\n`
     );
     const result = validator.validate(call);
     expect(result.status).toBe("valid");
