@@ -191,6 +191,23 @@ describe("ManagedPtySession", () => {
     });
   });
 
+  it("decodes output from a safe UTF-8 boundary when a cursor splits multibyte text", () => {
+    const session = new ManagedPtySession({
+      id: "managed",
+      promptNonce: "nonce",
+      cwd: "/repo",
+    });
+    session.spawn();
+
+    ptyMock.spawned[0]?.emit("a你b\n");
+    const splitInsideChineseCharacter = Buffer.byteLength("a", "utf-8") + 1;
+    const read = session.readOutputSince(splitInsideChineseCharacter);
+
+    expect(read.startOffset).toBe(Buffer.byteLength("a你", "utf-8"));
+    expect(read.chunk).toBe("b\n");
+    expect(read.chunk).not.toContain("�");
+  });
+
   it("marks the terminal as terminated when the PTY is killed", () => {
     const session = new ManagedPtySession({
       id: "managed",

@@ -18,6 +18,7 @@ import type {
   ConversationItem,
   RunHeaderView,
   SessionView,
+  TuiNoticeItem,
 } from "./types.js";
 import { TuiInteractionState } from "./interaction-state.js";
 import {
@@ -34,6 +35,28 @@ import wcwidth from "wcwidth";
 import { buildScreenGrid, screenGridToDisplayLines } from './screen-projection.js';
 const INPUT_BAR_HEIGHT = 5;
 const INPUT_INNER_ROWS = INPUT_BAR_HEIGHT - 2;
+const DEFAULT_STREAMING_ANIMATION_INTERVAL_MS = 220;
+
+export type TuiAnimationTimerHandle = unknown;
+
+export type TuiAnimationTimer = {
+  setInterval(
+    handler: () => void,
+    intervalMs: number,
+  ): TuiAnimationTimerHandle;
+  clearInterval(handle: TuiAnimationTimerHandle): void;
+};
+
+export type BlessedRendererOptions = {
+  animationTimer?: TuiAnimationTimer;
+  animationIntervalMs?: number;
+};
+
+const SYSTEM_ANIMATION_TIMER: TuiAnimationTimer = {
+  setInterval: (handler, intervalMs) => setInterval(handler, intervalMs),
+  clearInterval: (handle) =>
+    clearInterval(handle as ReturnType<typeof setInterval>),
+};
 
 export class BlessedRenderer implements TuiRenderer {
   private screen: blessed.Widgets.Screen;
@@ -55,8 +78,18 @@ export class BlessedRenderer implements TuiRenderer {
   private pendingRawShiftEnterEchoes: string[] = [];
   private frameScroll: TuiFrameScroll = {};
   private animationFrame = 0;
+  private animationTimerHandle: TuiAnimationTimerHandle | undefined;
+  private readonly animationTimer: TuiAnimationTimer;
+  private readonly animationIntervalMs: number;
 
-  constructor() {
+  constructor(options: BlessedRendererOptions = {}) {
+    this.animationTimer = options.animationTimer ?? SYSTEM_ANIMATION_TIMER;
+    this.animationIntervalMs = Math.max(
+      16,
+      Math.floor(
+        options.animationIntervalMs ?? DEFAULT_STREAMING_ANIMATION_INTERVAL_MS,
+      ),
+    );
     this.screen = blessed.screen({
       smartCSR: true,
       fullUnicode: true,
@@ -84,7 +117,7 @@ export class BlessedRenderer implements TuiRenderer {
       top: "center",
       left: "center",
       width: 54,
-      height: 16,
+      height: 22,
       border: { type: "line" },
       label: " Help ",
       hidden: true,
@@ -97,6 +130,15 @@ export class BlessedRenderer implements TuiRenderer {
         "  Type to compose, Enter to send",
         "  Shift+Enter insert newline",
         "  Escape      switch to browse mode",
+        "",
+        "{bold}Project commands{/bold}:",
+        "  :new <task>      start and attach a new run",
+        "  :new             start a run waiting for IM",
+        "  :open <runId>    attach an existing run",
+        "  :open latest     attach latest run",
+        "  :resume <runId>  start old run and attach",
+        "  :stop [runId]    request run process stop",
+        "  :refresh         reload run list",
         "",
         "{bold}Browse mode{/bold}:",
         "  Tab         switch loop/conversation",
@@ -118,7 +160,7 @@ export class BlessedRenderer implements TuiRenderer {
       width: "100%",
       height: INPUT_BAR_HEIGHT,
       border: { type: "line" },
-      label: " [INPUT] message> (Enter=send, Shift+Enter=newline, Esc=browse) ",
+      label: " [INPUT] message or :new/:open/:resume/:stop/:refresh ",
       tags: false,
       style: {
         fg: "white",
@@ -142,13 +184,18 @@ export class BlessedRenderer implements TuiRenderer {
     this.lastView = view;
     this.ui.syncWithView(view.conversation, view.loop);
     this.animationFrame++;
+    const frameSize = {
+      width: this.screen.cols,
+      height: Math.max(1, this.screen.rows - INPUT_BAR_HEIGHT),
+    };
     this.renderPaneModel(
       buildTuiPaneModel(view, this.ui, this.expandedFrames, {
-        width: this.screen.cols,
-        height: Math.max(1, this.screen.rows - INPUT_BAR_HEIGHT),
+        width: frameSize.width,
+        height: frameSize.height,
       }, this.frameScroll, { animationFrame: this.animationFrame }),
     );
 
+    this.updateStreamingAnimation(view, frameSize);
     this.renderScreen();
   }
 
@@ -161,6 +208,7 @@ export class BlessedRenderer implements TuiRenderer {
   }
 
   close(): void {
+    this.stopStreamingAnimation();
     this.disableModifiedKeyReporting();
     this.screen.destroy();
   }
@@ -358,6 +406,9 @@ export class BlessedRenderer implements TuiRenderer {
         }
       },
     );
+    this.screen.on("resize", () => {
+      this.rerenderLastView();
+    });
   }
 
   private handleInputKey(
@@ -558,13 +609,37 @@ export class BlessedRenderer implements TuiRenderer {
     }
   }
 
+  private updateStreamingAnimation(
+    view: TuiViewModel,
+    frameSize: TuiFrameSize,
+  ): void {
+    if (shouldAnimateStreamingThinking(view, this.ui, frameSize)) {
+      this.startStreamingAnimation();
+    } else {
+      this.stopStreamingAnimation();
+    }
+  }
+
+  private startStreamingAnimation(): void {
+    if (this.animationTimerHandle !== undefined) return;
+    this.animationTimerHandle = this.animationTimer.setInterval(() => {
+      this.rerenderLastView();
+    }, this.animationIntervalMs);
+  }
+
+  private stopStreamingAnimation(): void {
+    if (this.animationTimerHandle === undefined) return;
+    this.animationTimer.clearInterval(this.animationTimerHandle);
+    this.animationTimerHandle = undefined;
+  }
+
   private updateStyles(): void {
     const inputBorder = this.inputBar.style.border as Record<string, string>;
 
     if (this.ui.mode === "input") {
       inputBorder.fg = "cyan";
       this.inputBar.setLabel(
-        " [INPUT] message> (Enter=send, Shift+Enter=newline, Esc=browse) ",
+        " [INPUT] message or :new/:open/:resume/:stop/:refresh ",
       );
     } else {
       inputBorder.fg = "gray";
@@ -737,6 +812,33 @@ export function renderTuiFrame(
   return exactFrame([header, ...bodyRows], width, height);
 }
 
+export function shouldAnimateStreamingThinking(
+  view: TuiViewModel,
+  state: TuiInteractionState,
+  size: TuiFrameSize,
+): boolean {
+  const width = Math.max(1, size.width);
+  const height = Math.max(1, size.height);
+  const bodyHeight = Math.max(0, height - 1);
+  const layout = planTuiLayout({
+    width,
+    bodyHeight,
+    ptyViewport: ptyViewportFromSession(selectPtySession(view.sessions)),
+  });
+  if (
+    layout.rightWidth <= 0 ||
+    layout.detailPaneWidth <= 2 ||
+    layout.topHeight <= 2
+  ) {
+    return false;
+  }
+
+  const detailFrame = resolveLoopDetailFrame(view.loop, {
+    selectedFrameId: state.selectedLoopFrameId,
+  });
+  return detailFrame ? isStreamingThinkingFrame(detailFrame) : false;
+}
+
 export function buildTuiPaneModel(
   view: TuiViewModel,
   state: TuiInteractionState,
@@ -762,6 +864,7 @@ export function buildTuiPaneModel(
   );
   const runBrowserLines = buildRunBrowserFrameLines(
     view.runBrowser,
+    view.notices ?? [],
     conversationContentWidth,
   );
   const conversationPaneLines =
@@ -1008,11 +1111,19 @@ function renderHeaderLine(run: RunHeaderView): string {
 
 function buildRunBrowserFrameLines(
   runBrowser: RunBrowserView | undefined,
+  notices: readonly TuiNoticeItem[],
   width: number,
 ): string[] {
-  if (!runBrowser) return [];
   const safeWidth = Math.max(1, width);
   const lines: string[] = [];
+  if (notices.length > 0) {
+    lines.push("Notices");
+    for (const notice of notices.slice(-5)) {
+      lines.push(...wrapDisplayText(`  ${formatNoticeTime(notice.timestamp)} ${notice.text}`, safeWidth));
+    }
+    lines.push("");
+  }
+  if (!runBrowser) return lines;
   lines.push(truncateDisplayText(`Runs (${runBrowser.totalCount})`, safeWidth));
   if (runBrowser.isEmpty || runBrowser.rows.length === 0) {
     lines.push("  No runs found", "");
@@ -1123,6 +1234,11 @@ function formatRunBrowserControlErrorReason(
     case "unsafe_mutation":
       return "intent only";
   }
+}
+
+function formatNoticeTime(timestamp: string): string {
+  const match = /T(\d{2}:\d{2}:\d{2})/u.exec(timestamp);
+  return match?.[1] ?? timestamp;
 }
 
 function buildConversationFrameLines(

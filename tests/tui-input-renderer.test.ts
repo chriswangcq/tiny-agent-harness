@@ -16,6 +16,7 @@ import {
   renderTuiFrame,
   sanitizeDisplayText,
   selectPtySession,
+  shouldAnimateStreamingThinking,
   truncateDisplayText,
   wrapDisplayText,
 } from "../src/tui/renderer.js";
@@ -450,6 +451,46 @@ describe("TUI input rendering", () => {
     expect(first).toContain("model thinking");
     expect(first).toContain("Need inspect ●");
     expect(second).toContain("Need inspect ⬤");
+  });
+
+  it("activates local streaming animation only for the visible selected thinking detail", () => {
+    const state = new TuiInteractionState();
+    const vm = {
+      ...view(),
+      loop: [
+        {
+          ...frame("frame-old"),
+          id: "frame-old",
+          phase: "tool" as const,
+          status: "ok" as const,
+          title: "terminal_write ok",
+        },
+        {
+          ...frame("frame-stream"),
+          id: "frame-stream",
+          phase: "model" as const,
+          status: "running" as const,
+          title: "model thinking",
+          summary: "thinking... 11 chars",
+          detail: "## thinking\nNeed inspect",
+        },
+      ],
+    };
+    state.syncWithView(vm.conversation, vm.loop);
+
+    expect(
+      shouldAnimateStreamingThinking(vm, state, { width: 120, height: 34 }),
+    ).toBe(true);
+
+    state.enterBrowse(vm.loop, "loop", vm.conversation);
+    state.moveSelection(vm.loop, -1, vm.conversation);
+
+    expect(
+      shouldAnimateStreamingThinking(vm, state, { width: 120, height: 34 }),
+    ).toBe(false);
+    expect(
+      shouldAnimateStreamingThinking(vm, state, { width: 20, height: 34 }),
+    ).toBe(false);
   });
 
   it("keeps streaming thinking detail followed to the latest text", () => {

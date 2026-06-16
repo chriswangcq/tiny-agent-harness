@@ -28,6 +28,19 @@ export type EdgerCliClassification = {
 };
 
 const STATEFUL_PROCESS_CLASSIFICATIONS = {
+  "runtime-replica": {
+    kind: "runtime-replica",
+    residency: "stateful-subprocess",
+    authority: "RuntimeReplica",
+    liveResources: [
+      "run-local runtime socket request boundary",
+      "project IM service request boundary",
+      "active-active file-backed public runtime access",
+    ],
+    durableStateOwner: "runs/<runId>/runtime-replica.json, processes.json, and project-scoped stores",
+    reason:
+      "Each run owns its own runtime replica. Replicas share project durable truth through file locks, so public runtime access has no global resident leader.",
+  },
   run: {
     kind: "run",
     residency: "stateful-subprocess",
@@ -101,19 +114,6 @@ const STATEFUL_PROCESS_CLASSIFICATIONS = {
     reason:
       "MCP client operations connect to local or remote MCP servers through a run-owned host instead of one-shot public CLI clients.",
   },
-  "im-host": {
-    kind: "im-host",
-    residency: "stateful-subprocess",
-    authority: "ImHost",
-    liveResources: [
-      "resident socket request boundary",
-      "run default endpoint context",
-      "public IM file-state proxy boundary",
-    ],
-    durableStateOwner: "runs/<runId>/im-host.json and project im/",
-    reason:
-      "The run-owned IM host does not own durable messages; it proxies explicit requests to file-backed public IM state while centralizing the run default context.",
-  },
   "model-gateway": {
     kind: "model-gateway",
     residency: "stateful-subprocess",
@@ -135,7 +135,7 @@ const EDGER_CLI_CLASSIFICATIONS = {
     residency: "one-shot-edger-cli",
     durableStateOwner: "im/",
     reason:
-      "IM commands append channel logs, update pair metadata, or advance file-backed cursors under locks.",
+      "IM durable truth is project-scoped channel, pair, binding, and cursor files; live operational access is served by any run-owned runtime replica.",
   },
   "team-roster": {
     operation: "team-roster",

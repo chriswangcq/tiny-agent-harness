@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PromptBuilder } from "../src/model/prompt-builder.js";
+import { PROMPT_REPLACEMENT_CHARACTER_MARKER } from "../src/model/prompt-observation-projection.js";
 import type { HistoryEntry } from "../src/model/prompt-builder.js";
 import type { TerminalObservation } from "../src/terminal/types.js";
 
@@ -54,10 +55,17 @@ describe("PromptBuilder", () => {
     expect(prompt.messages[0]!.content).toContain("session_restart");
     expect(prompt.messages[0]!.content).toContain("session_terminate");
     expect(prompt.messages[0]!.content).toContain("terminal.inputSeq");
+    expect(prompt.messages[0]!.content).toContain("never auto-submits a shell line");
+    expect(prompt.messages[0]!.content).toContain("`echo 'hello world'` only types text at the prompt");
+    expect(prompt.messages[0]!.content).toContain("`echo 'hello world'\\n` submits it");
     expect(prompt.messages[0]!.content).toContain("screen.text");
     expect(prompt.messages[0]!.content).toContain("screen.logRef.path");
     expect(prompt.messages[0]!.content).toContain("tiny-agent im send --kind status --text-stdin");
-    expect(prompt.messages[0]!.content).toContain("run-owned IM host supplies the default from/to endpoints");
+    expect(prompt.messages[0]!.content).toContain("sends through the runtime replica");
+    expect(prompt.messages[0]!.content).toContain("Terminal stdout is not an IM reply");
+    expect(prompt.messages[0]!.content).toContain("Never answer a [user@channel] message with shell-only output");
+    expect(prompt.messages[0]!.content).toContain("`echo hihi`");
+    expect(prompt.messages[0]!.content).toContain("retry the IM send with the fresh inputSeq");
     expect(prompt.messages[0]!.content).toContain("--text-stdin");
     expect(prompt.messages[0]!.content).toContain("CLI capabilities are installed on PATH");
     expect(prompt.messages[0]!.content).toContain("`tiny-agent im`, `tiny-agent skill`, `tiny-agent codeq`, `tiny-agent mcp`, and `tiny-agent team`");
@@ -129,6 +137,53 @@ describe("PromptBuilder", () => {
     expect(toolMsg.role).toBe("tool");
     expect(toolMsg.tool_call_id).toBe("call-1");
     expect(toolMsg.content).toBe(JSON.stringify(terminalObservation()));
+  });
+
+  it("projects corrupted PTY text before serializing terminal observations into the prompt", () => {
+    const observation = terminalObservation({
+      screen: {
+        text: "bad � byte\nok\n",
+        rows: 24,
+        cols: 80,
+        truncated: false,
+        logRef: { path: "managed-pty://default" },
+      },
+      terminalEvents: [
+        {
+          kind: "output",
+          bytes: 12,
+          preview: "preview �",
+          logRef: "managed-pty://default",
+        },
+      ],
+    });
+    const history: HistoryEntry[] = [
+      {
+        role: "tool_result",
+        toolCallId: "call-1",
+        observation,
+      },
+    ];
+
+    const prompt = new PromptBuilder().buildNextPrompt("inspect", history);
+    const toolMsg = prompt.messages[1]! as Record<string, unknown>;
+    const content = toolMsg.content as string;
+    const projected = JSON.parse(content) as Record<string, any>;
+
+    expect(content).not.toContain("�");
+    expect(projected.screen.text).toContain(PROMPT_REPLACEMENT_CHARACTER_MARKER);
+    expect(projected.terminalEvents[0].preview).toContain(
+      PROMPT_REPLACEMENT_CHARACTER_MARKER,
+    );
+    expect(projected.screen.logRef.path).toBe("managed-pty://default");
+    expect(projected.promptProjection).toMatchObject({
+      kind: "pty_prompt_safety",
+      utf8ReplacementCharacters: {
+        count: 2,
+        marker: PROMPT_REPLACEMENT_CHARACTER_MARKER,
+      },
+    });
+    expect(observation.screen.text).toContain("�");
   });
 
   it("buildNextPrompt includes agent observations from validation failures", () => {

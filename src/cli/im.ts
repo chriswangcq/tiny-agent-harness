@@ -1,16 +1,16 @@
 import * as crypto from "node:crypto";
-import * as path from "node:path";
 import {
-  PublicImService,
-  createNodeImStore,
+  createRunImSelfEndpoint,
+  DEFAULT_RUN_USER_ENDPOINT,
   type PublicImPairKind,
   type PublicImMessageKind,
-  type ImHostRequest,
-  type ImHostResponse,
-  requestImHostSocket,
-  runImHostCli,
+  type RuntimeImRequest,
+  type RuntimeImResponse,
 } from "../im/index.js";
-import { StateRootResolver } from "../state/root.js";
+import {
+  RUNTIME_HOST_SOCKET_ENV,
+  requestRuntimeReplicaIm,
+} from "../runtime/runtime-replica.js";
 import { failureEnvelope, successEnvelope } from "./envelope.js";
 
 type StdinSource = AsyncIterable<string | Buffer | Uint8Array>;
@@ -33,7 +33,7 @@ type ImSubcommand =
 
 type ImClientRequest = {
   socketPath: string;
-  request: ImHostRequest;
+  request: RuntimeImRequest;
   timeoutMs: number;
 };
 
@@ -44,7 +44,7 @@ export type ImCliDeps = {
   env: Record<string, string | undefined>;
   timeoutMs: number;
   newRequestId: () => string;
-  requestHost: (request: ImClientRequest) => Promise<ImHostResponse>;
+  requestHost: (request: ImClientRequest) => Promise<RuntimeImResponse>;
   sleep: (ms: number) => Promise<void>;
 };
 
@@ -52,7 +52,7 @@ type RunImOptions = Partial<ImCliDeps> & {
   stdin?: StdinSource;
 };
 
-const DEFAULT_IM_HOST_TIMEOUT_MS = 30_000;
+const DEFAULT_RUNTIME_HOST_TIMEOUT_MS = 30_000;
 
 class ImCliError extends Error {
   constructor(
@@ -69,18 +69,14 @@ function defaultImCliDeps(options: RunImOptions = {}): ImCliDeps {
     stdout: options.stdout ?? process.stdout,
     stderr: options.stderr ?? process.stderr,
     env: options.env ?? process.env,
-    timeoutMs: options.timeoutMs ?? DEFAULT_IM_HOST_TIMEOUT_MS,
+    timeoutMs: options.timeoutMs ?? DEFAULT_RUNTIME_HOST_TIMEOUT_MS,
     newRequestId:
       options.newRequestId ?? (() => `im-cli-${crypto.randomUUID()}`),
-    requestHost: options.requestHost ?? requestImHostSocket,
+    requestHost: options.requestHost ?? requestRuntimeReplicaIm,
     sleep:
       options.sleep ??
       ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
   };
-}
-
-function die(message: string, errorCode = "IM_ERROR"): never {
-  throw new ImCliError(message, errorCode);
 }
 
 function fail(message: string, errorCode = "IM_ERROR"): never {
@@ -158,37 +154,9 @@ export async function runIm(
   const deps = defaultImCliDeps(options);
   const topLevel = argv[0];
 
-  if (topLevel === "host") {
-    try {
-      return await runImHostCli(argv.slice(1));
-    } catch (error) {
-      writeFailure(
-        deps,
-        "IM_HOST_ERROR",
-        error instanceof Error ? error.message : String(error),
-      );
-      return 1;
-    }
-  }
-
   if (!topLevel || topLevel === "--help" || topLevel === "-h") {
     deps.stdout.write(imUsage());
     return 0;
-  }
-
-  if (topLevel === "admin") {
-    try {
-      await executeImAdminCommand(argv.slice(1), deps);
-      return 0;
-    } catch (error) {
-      const errorCode = error instanceof ImCliError ? error.errorCode : "IM_ERROR";
-      writeFailure(
-        deps,
-        errorCode,
-        error instanceof Error ? error.message : String(error),
-      );
-      return 1;
-    }
   }
 
   if (!isImSubcommand(topLevel)) {
@@ -210,88 +178,6 @@ export async function runIm(
   }
 }
 
-async function executeImAdminCommand(
-  argv: string[],
-  deps: ImCliDeps,
-): Promise<void> {
-  const subcommand = argv[0];
-  const rest = argv.slice(1);
-
-  if (!subcommand || subcommand === "--help" || subcommand === "-h") {
-    deps.stdout.write(adminUsage());
-    return;
-  }
-  if (!isImSubcommand(subcommand)) {
-    fail(adminUsage());
-  }
-
-  const parsed = parseArgs(rest);
-  const jsonMode = parsed.flags.json === "true";
-  const textStdin = parsed.flags["text-stdin"] === "true";
-  delete parsed.flags.json;
-  delete parsed.flags["text-stdin"];
-
-  if (parsed.flags["host-socket"] !== undefined) {
-    fail("tiny-agent im admin does not accept --host-socket; admin is the explicit direct-file boundary.");
-  }
-  if (parsed.flags["host-timeout-ms"] !== undefined) {
-    fail("tiny-agent im admin does not accept --host-timeout-ms; admin is the explicit direct-file boundary.");
-  }
-
-  const stateRoot = resolveStateDir(parsed.flags["state-dir"], deps.env);
-  delete parsed.flags["state-dir"];
-  const service = createCliPublicImService();
-
-  switch (subcommand) {
-    case "pair":
-      await cmdPair(service, stateRoot, parsed.flags, jsonMode, deps);
-      break;
-    case "bind":
-      await cmdBind(service, stateRoot, parsed.flags, jsonMode, deps);
-      break;
-    case "post":
-      await cmdPost(
-        service,
-        stateRoot,
-        parsed.flags,
-        jsonMode,
-        textStdin,
-        deps.stdin,
-        deps,
-      );
-      break;
-    case "send":
-      await cmdSend(
-        service,
-        stateRoot,
-        parsed.flags,
-        jsonMode,
-        textStdin,
-        deps.stdin,
-        deps,
-      );
-      break;
-    case "recv":
-      await cmdRecv(service, stateRoot, parsed.flags, jsonMode, deps);
-      break;
-    case "ack":
-      await cmdAck(service, stateRoot, parsed.flags, jsonMode, deps);
-      break;
-    case "run-recv":
-      await cmdRunRecv(service, stateRoot, parsed.flags, jsonMode, deps);
-      break;
-    case "run-ack":
-      await cmdRunAck(service, stateRoot, parsed.flags, jsonMode, deps);
-      break;
-    case "listen":
-      if (textStdin) {
-        fail("tiny-agent im admin listen does not accept --text-stdin");
-      }
-      await cmdListen(service, stateRoot, parsed.flags, jsonMode, deps);
-      break;
-  }
-}
-
 async function executeImClientCommand(
   subcommand: ImSubcommand,
   rest: string[],
@@ -308,13 +194,13 @@ async function executeImClientCommand(
 
   if (!clientOptions.socketPath) {
     fail(
-      "tiny-agent im requires a run-scoped IM host socket. Set TAH_IM_HOST_SOCKET or pass --host-socket <path>.",
-      "IM_HOST_NOT_FOUND",
+      `tiny-agent im requires a runtime replica socket. Set ${RUNTIME_HOST_SOCKET_ENV} or pass --runtime-host-socket <path>.`,
+      "RUNTIME_HOST_NOT_FOUND",
     );
   }
 
   if (subcommand === "listen") {
-    await cmdHostListen(
+    await cmdRuntimeListen(
       clientOptions.socketPath,
       timeoutMs,
       parsed.flags,
@@ -325,14 +211,15 @@ async function executeImClientCommand(
     return;
   }
 
-  const request = await buildImHostRequest({
+  const request = await buildRuntimeImRequest({
     subcommand,
     flags: parsed.flags,
+    env: deps.env,
     textStdin,
     stdin: deps.stdin,
     newRequestId: deps.newRequestId,
   });
-  const data = await requestImHostCommand({
+  const data = await requestRuntimeImCommand({
     socketPath: clientOptions.socketPath,
     timeoutMs,
     request,
@@ -348,16 +235,20 @@ function parseImClientOptions(
   socketPath?: string;
   timeoutMs?: number;
 } {
-  let socketPath = env.TAH_IM_HOST_SOCKET;
+  let socketPath = env[RUNTIME_HOST_SOCKET_ENV];
   let timeoutMs: number | undefined;
 
-  if (flags["host-socket"] !== undefined) {
-    const value = flags["host-socket"];
+  if (flags["runtime-host-socket"] !== undefined) {
+    const value = flags["runtime-host-socket"];
     if (!value || value === "true") {
-      fail("Usage: tiny-agent im <command> --host-socket <path>");
+      fail("Usage: tiny-agent im <command> --runtime-host-socket <path>");
     }
     socketPath = value;
-    delete flags["host-socket"];
+    delete flags["runtime-host-socket"];
+  }
+
+  if (flags["host-socket"] !== undefined) {
+    fail("tiny-agent im no longer accepts --host-socket; use --runtime-host-socket <path>.");
   }
 
   if (flags["host-timeout-ms"] !== undefined) {
@@ -371,7 +262,7 @@ function parseImClientOptions(
 
   if (flags["state-dir"] !== undefined) {
     fail(
-      "tiny-agent im ordinary commands do not accept --state-dir; start an im host with --state-dir or use the explicit admin boundary.",
+      "tiny-agent im does not accept --state-dir; start a runtime replica edge and pass --runtime-host-socket <path>.",
       "IM_STATE_DIR_NOT_ALLOWED",
     );
   }
@@ -379,13 +270,14 @@ function parseImClientOptions(
   return { socketPath, timeoutMs };
 }
 
-async function buildImHostRequest(options: {
+async function buildRuntimeImRequest(options: {
   subcommand: Exclude<ImSubcommand, "listen">;
   flags: Record<string, string>;
+  env: Record<string, string | undefined>;
   textStdin: boolean;
   stdin: StdinSource;
   newRequestId: () => string;
-}): Promise<ImHostRequest> {
+}): Promise<RuntimeImRequest> {
   const base = {
     schemaVersion: 1 as const,
     id: options.newRequestId(),
@@ -404,17 +296,17 @@ async function buildImHostRequest(options: {
       return {
         ...base,
         type: "im.bind",
-        runId: options.flags["run-id"],
-        self: options.flags.self,
-        peer: options.flags.peer,
+        runId: options.flags["run-id"] ?? requireRunId(options.env, "tiny-agent im bind requires --run-id outside a run"),
+        self: options.flags.self ?? requireSelfEndpoint(options.env, "tiny-agent im bind requires --self outside a run"),
+        peer: options.flags.peer ?? defaultUserEndpoint(options.env),
         kind: options.flags.kind as PublicImPairKind | undefined,
       };
     case "post":
       return {
         ...base,
         type: "im.post",
-        from: options.flags.from,
-        to: options.flags.to,
+        from: options.flags.from ?? defaultUserEndpoint(options.env),
+        to: options.flags.to ?? requireSelfEndpoint(options.env, "tiny-agent im post requires --to outside a run"),
         text: await resolveTextOption({
           flags: options.flags,
           textStdin: options.textStdin,
@@ -435,8 +327,8 @@ async function buildImHostRequest(options: {
       return {
         ...base,
         type: "im.send",
-        from: options.flags.from,
-        to: options.flags.to,
+        from: options.flags.from ?? requireSelfEndpoint(options.env, "tiny-agent im send requires --from outside a run"),
+        to: options.flags.to ?? defaultUserEndpoint(options.env),
         kind,
         text: await resolveTextOption({
           flags: options.flags,
@@ -451,16 +343,16 @@ async function buildImHostRequest(options: {
       return {
         ...base,
         type: "im.recv",
-        as: options.flags.as,
-        with: options.flags.with,
+        as: options.flags.as ?? requireSelfEndpoint(options.env, "tiny-agent im recv requires --as outside a run"),
+        with: options.flags.with ?? defaultUserEndpoint(options.env),
         cursor: options.flags.cursor,
       };
     case "ack":
       return {
         ...base,
         type: "im.ack",
-        as: options.flags.as,
-        with: options.flags.with,
+        as: options.flags.as ?? requireSelfEndpoint(options.env, "tiny-agent im ack requires --as outside a run"),
+        with: options.flags.with ?? defaultUserEndpoint(options.env),
         messageId: requiredClientFlag(
           options.flags,
           "message-id",
@@ -471,14 +363,14 @@ async function buildImHostRequest(options: {
       return {
         ...base,
         type: "im.run-recv",
-        runId: options.flags["run-id"],
+        runId: options.flags["run-id"] ?? requireRunId(options.env, "tiny-agent im run-recv requires --run-id outside a run"),
       };
     case "run-ack":
       return {
         ...base,
         type: "im.run-ack",
-        runId: options.flags["run-id"],
-        peer: options.flags.peer,
+        runId: options.flags["run-id"] ?? requireRunId(options.env, "tiny-agent im run-ack requires --run-id outside a run"),
+        peer: options.flags.peer ?? defaultUserEndpoint(options.env),
         messageId: requiredClientFlag(
           options.flags,
           "message-id",
@@ -488,7 +380,7 @@ async function buildImHostRequest(options: {
   }
 }
 
-async function cmdHostListen(
+async function cmdRuntimeListen(
   socketPath: string,
   timeoutMs: number,
   flags: Record<string, string>,
@@ -502,7 +394,7 @@ async function cmdHostListen(
   let cursor = flags.cursor;
 
   if (!json) {
-    deps.stdout.write("[im] Listening on run-scoped IM host\n");
+    deps.stdout.write("[im] Listening on runtime replica\n");
     deps.stdout.write("[im] Press Ctrl+C to stop\n");
   }
 
@@ -515,15 +407,15 @@ async function cmdHostListen(
 
   try {
     while (!stopped) {
-      const request: ImHostRequest = {
+      const request: RuntimeImRequest = {
         schemaVersion: 1,
         id: deps.newRequestId(),
         type: "im.recv",
-        as: flags.as,
-        with: flags.with,
+        as: flags.as ?? requireSelfEndpoint(deps.env, "tiny-agent im listen requires --as outside a run"),
+        with: flags.with ?? defaultUserEndpoint(deps.env),
         cursor,
       };
-      const data = await requestImHostCommand({
+      const data = await requestRuntimeImCommand({
         socketPath,
         timeoutMs,
         request,
@@ -552,10 +444,10 @@ async function cmdHostListen(
   }
 }
 
-async function requestImHostCommand(options: {
+async function requestRuntimeImCommand(options: {
   socketPath: string;
   timeoutMs: number;
-  request: ImHostRequest;
+  request: RuntimeImRequest;
   deps: Pick<ImCliDeps, "requestHost">;
 }): Promise<Record<string, unknown>> {
   const response = await options.deps.requestHost({
@@ -568,10 +460,13 @@ async function requestImHostCommand(options: {
     fail(response.error.message, response.error.code);
   }
   if (response.type !== "im.result") {
-    fail(`Unexpected IM host response: ${response.type}`, "IM_HOST_ERROR");
+    fail(
+      `Unexpected runtime IM response: ${String((response as { type?: unknown }).type)}`,
+      "RUNTIME_IM_ERROR",
+    );
   }
   if (!isRecord(response.data)) {
-    fail("Invalid IM host response: data must be an object", "IM_HOST_ERROR");
+    fail("Invalid runtime IM response: data must be an object", "RUNTIME_IM_ERROR");
   }
   if (
     (options.request.type === "im.recv" || options.request.type === "im.run-recv") &&
@@ -597,6 +492,36 @@ function requiredClientFlag(
     fail(message);
   }
   return value;
+}
+
+function requireRunId(
+  env: Record<string, string | undefined>,
+  message: string,
+): string {
+  const runId = env.TAH_IM_RUN_ID ?? env.TAH_RUN_ID;
+  if (!runId || runId.length === 0) {
+    fail(message);
+  }
+  return runId;
+}
+
+function requireSelfEndpoint(
+  env: Record<string, string | undefined>,
+  message: string,
+): string {
+  const endpoint =
+    env.TAH_IM_SELF_ENDPOINT ??
+    (env.TAH_IM_RUN_ID || env.TAH_RUN_ID
+      ? createRunImSelfEndpoint((env.TAH_IM_RUN_ID ?? env.TAH_RUN_ID)!)
+      : undefined);
+  if (!endpoint || endpoint.length === 0) {
+    fail(message);
+  }
+  return endpoint;
+}
+
+function defaultUserEndpoint(env: Record<string, string | undefined>): string {
+  return env.TAH_IM_USER_ENDPOINT ?? DEFAULT_RUN_USER_ENDPOINT;
 }
 
 async function resolveTextOption(options: {
@@ -652,317 +577,19 @@ function isImSubcommand(value: string | undefined): value is ImSubcommand {
 
 function imUsage(): string {
   return (
-    "Usage: tiny-agent im <send|recv|ack|run-recv|run-ack|listen> [--host-socket <path>] [options]\n" +
-    "       tiny-agent im host --socket <path> --state-dir <dir> [--run-id <id>] [--self <endpoint>] [--user <endpoint>]\n" +
-    "       tiny-agent im admin <pair|bind|post|send|recv|ack|run-recv|run-ack|listen> [--state-dir <dir>] [options]\n" +
-    "Run-host client commands:\n" +
+    "Usage: tiny-agent im <send|recv|ack|run-recv|run-ack|listen> [--runtime-host-socket <path>] [options]\n" +
+    "Runtime-host client commands:\n" +
+    "  tiny-agent im pair --a <endpoint> --b <endpoint> [--kind <kind>] [--json]\n" +
+    "  tiny-agent im bind [--run-id <id>] [--self <endpoint>] [--peer <endpoint>] [--kind <kind>] [--json]\n" +
+    "  tiny-agent im post [--from <endpoint>] [--to <endpoint>] (--text <text>|--text-stdin) [--json]\n" +
     "  tiny-agent im send [--from <endpoint>] [--to <endpoint>] --kind <status|error> (--text <text>|--text-stdin) [--json]\n" +
     "  tiny-agent im recv [--as <endpoint>] [--with <endpoint>] [--cursor <id>] [--json]\n" +
     "  tiny-agent im ack [--as <endpoint>] [--with <endpoint>] --message-id <id> [--json]\n" +
     "  tiny-agent im run-recv [--run-id <id>] [--json]\n" +
     "  tiny-agent im run-ack [--run-id <id>] [--peer <endpoint>] --message-id <id> [--json]\n" +
     "  tiny-agent im listen [--as <endpoint>] [--with <endpoint>] [--cursor <id>] [--json]\n" +
-    "Direct-file admin examples:\n" +
-    "  tiny-agent im admin pair --a <endpoint> --b <endpoint> [--kind <kind>] [--json]\n" +
-    "  tiny-agent im admin bind --run-id <id> --self <endpoint> --peer <endpoint> [--kind <kind>] [--json]\n" +
-    "  tiny-agent im admin post --from <endpoint> --to <endpoint> (--text <text>|--text-stdin) [--json]\n" +
-    "Ordinary commands require TAH_IM_HOST_SOCKET or --host-socket. Direct file access is reserved for the explicit admin boundary."
+    `Commands require ${RUNTIME_HOST_SOCKET_ENV} or --runtime-host-socket. External edges should start tiny-agent runtime replica --mode edge and pass its socket.`
   );
-}
-
-function adminUsage(): string {
-  return (
-    "Usage: tiny-agent im admin <pair|bind|post|send|recv|ack|run-recv|run-ack|listen> [--state-dir <dir>] [options]\n" +
-    "  tiny-agent im admin pair --a <endpoint> --b <endpoint> [--kind <kind>] [--json]\n" +
-    "  tiny-agent im admin bind --run-id <id> --self <endpoint> --peer <endpoint> [--kind <kind>] [--json]\n" +
-    "  tiny-agent im admin post --from <endpoint> --to <endpoint> (--text <text>|--text-stdin) [--json]\n" +
-    "  tiny-agent im admin send --from <endpoint> --to <endpoint> --kind <status|error> (--text <text>|--text-stdin) [--json]\n" +
-    "  tiny-agent im admin recv --as <endpoint> --with <endpoint> [--cursor <id>] [--json]\n" +
-    "  tiny-agent im admin ack --as <endpoint> --with <endpoint> --message-id <id> [--json]\n" +
-    "  tiny-agent im admin run-recv --run-id <id> [--json]\n" +
-    "  tiny-agent im admin run-ack --run-id <id> --peer <endpoint> --message-id <id> [--json]\n" +
-    "Admin commands read/write public IM files directly and are for bootstrap/debug/user edges, not agent runtime replies."
-  );
-}
-
-function resolveStateDir(
-  explicitStateDir: string | undefined,
-  env: Record<string, string | undefined> = process.env,
-): string {
-  if (explicitStateDir) {
-    return path.resolve(explicitStateDir);
-  }
-  if (env.TAH_IM_STATE_DIR) {
-    return path.resolve(env.TAH_IM_STATE_DIR);
-  }
-  if (env.TAH_STATE_DIR) {
-    return path.resolve(env.TAH_STATE_DIR);
-  }
-  return new StateRootResolver().resolve().stateDir;
-}
-
-function createCliPublicImService(): PublicImService {
-  return new PublicImService({
-    store: createNodeImStore(),
-    clock: { nowIso: () => new Date().toISOString() },
-    ids: {
-      newMessageId: (seed) => {
-        const scope = seed.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "");
-        return `im-${scope}-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
-      },
-    },
-  });
-}
-
-async function cmdPair(
-  service: PublicImService,
-  stateRoot: string,
-  flags: Record<string, string>,
-  json: boolean,
-  deps: Pick<ImCliDeps, "stdout"> = { stdout: process.stdout },
-): Promise<void> {
-  const a = requiredFlag(flags, "a", "tiny-agent im admin pair requires --a and --b");
-  const b = requiredFlag(flags, "b", "tiny-agent im admin pair requires --a and --b");
-  const pair = await service.createPair({
-    stateRoot,
-    a,
-    b,
-    kind: flags.kind as PublicImPairKind | undefined,
-  });
-  output({ pair, stateRoot }, json, deps);
-}
-
-async function cmdBind(
-  service: PublicImService,
-  stateRoot: string,
-  flags: Record<string, string>,
-  json: boolean,
-  deps: Pick<ImCliDeps, "stdout"> = { stdout: process.stdout },
-): Promise<void> {
-  const runId = requiredFlag(flags, "run-id", "tiny-agent im admin bind requires --run-id");
-  const self = requiredFlag(flags, "self", "tiny-agent im admin bind requires --self");
-  const peer = requiredFlag(flags, "peer", "tiny-agent im admin bind requires --peer");
-  const binding = await service.bindRun({
-    stateRoot,
-    runId,
-    self,
-    peer,
-    kind: flags.kind as PublicImPairKind | undefined,
-  });
-  output({ binding, stateRoot }, json, deps);
-}
-
-async function cmdPost(
-  service: PublicImService,
-  stateRoot: string,
-  flags: Record<string, string>,
-  json: boolean,
-  textStdin: boolean,
-  stdin: StdinSource,
-  deps: Pick<ImCliDeps, "stdout"> = { stdout: process.stdout },
-): Promise<void> {
-  const from = requiredFlag(flags, "from", "tiny-agent im admin post requires --from");
-  const to = requiredFlag(flags, "to", "tiny-agent im admin post requires --to");
-  const text = await resolveTextOption({
-    flags,
-    textStdin,
-    stdin,
-    command: "post",
-  });
-  const message = await service.postMessage({
-    stateRoot,
-    from,
-    to,
-    text,
-    metadata: { source: "cli" },
-  });
-  output({ message, id: message.id, from: message.from, to: message.to }, json, deps);
-}
-
-async function cmdSend(
-  service: PublicImService,
-  stateRoot: string,
-  flags: Record<string, string>,
-  json: boolean,
-  textStdin: boolean,
-  stdin: StdinSource,
-  deps: Pick<ImCliDeps, "stdout"> = { stdout: process.stdout },
-): Promise<void> {
-  const from = requiredFlag(flags, "from", "tiny-agent im admin send requires --from");
-  const to = requiredFlag(flags, "to", "tiny-agent im admin send requires --to");
-  const kind = requiredFlag(flags, "kind", "tiny-agent im admin send requires --kind") as PublicImMessageKind;
-  if (kind !== "status" && kind !== "error") {
-    die("--kind must be one of: status, error");
-  }
-  const text = await resolveTextOption({
-    flags,
-    textStdin,
-    stdin,
-    command: "send",
-  });
-
-  const message = await service.sendMessage({
-    stateRoot,
-    from,
-    to,
-    kind,
-    text,
-    metadata: { source: "cli" },
-  });
-  output({ message, id: message.id, from: message.from, to: message.to, kind }, json, deps);
-}
-
-async function cmdRecv(
-  service: PublicImService,
-  stateRoot: string,
-  flags: Record<string, string>,
-  json: boolean,
-  deps: Pick<ImCliDeps, "stdout"> = { stdout: process.stdout },
-): Promise<void> {
-  const as = requiredFlag(flags, "as", "tiny-agent im admin recv requires --as");
-  const withEndpoint = requiredFlag(flags, "with", "tiny-agent im admin recv requires --with");
-  const result = await service.receiveForPair({
-    stateRoot,
-    as,
-    with: withEndpoint,
-    cursor: flags.cursor,
-  });
-  if (result.cursorFound === false) {
-    die(`tiny-agent im admin recv cursor was not found: ${flags.cursor}`, "IM_CURSOR_NOT_FOUND");
-  }
-  output(
-    {
-      as,
-      with: withEndpoint,
-      count: result.messages.length,
-      nextCursor: result.nextCursor,
-      messages: result.messages,
-    },
-    json,
-    deps,
-  );
-}
-
-async function cmdAck(
-  service: PublicImService,
-  stateRoot: string,
-  flags: Record<string, string>,
-  json: boolean,
-  deps: Pick<ImCliDeps, "stdout"> = { stdout: process.stdout },
-): Promise<void> {
-  const as = requiredFlag(flags, "as", "tiny-agent im admin ack requires --as");
-  const withEndpoint = requiredFlag(flags, "with", "tiny-agent im admin ack requires --with");
-  const messageId = requiredFlag(flags, "message-id", "tiny-agent im admin ack requires --message-id");
-  await service.ackPair({
-    stateRoot,
-    as,
-    with: withEndpoint,
-    messageId,
-  });
-  output({ as, with: withEndpoint, messageId }, json, deps);
-}
-
-async function cmdRunRecv(
-  service: PublicImService,
-  stateRoot: string,
-  flags: Record<string, string>,
-  json: boolean,
-  deps: Pick<ImCliDeps, "stdout"> = { stdout: process.stdout },
-): Promise<void> {
-  const runId = requiredFlag(flags, "run-id", "tiny-agent im admin run-recv requires --run-id");
-  const result = await service.receiveForRun({ stateRoot, runId });
-  output(
-    {
-      runId: result.runId,
-      self: result.self,
-      count: result.messages.length,
-      nextCursors: result.nextCursors,
-      messages: result.messages,
-    },
-    json,
-    deps,
-  );
-}
-
-async function cmdRunAck(
-  service: PublicImService,
-  stateRoot: string,
-  flags: Record<string, string>,
-  json: boolean,
-  deps: Pick<ImCliDeps, "stdout"> = { stdout: process.stdout },
-): Promise<void> {
-  const runId = requiredFlag(flags, "run-id", "tiny-agent im admin run-ack requires --run-id");
-  const peer = requiredFlag(flags, "peer", "tiny-agent im admin run-ack requires --peer");
-  const messageId = requiredFlag(flags, "message-id", "tiny-agent im admin run-ack requires --message-id");
-  await service.ackRunChannel({
-    stateRoot,
-    runId,
-    peer,
-    messageId,
-  });
-  output({ runId, peer, messageId }, json, deps);
-}
-
-async function cmdListen(
-  service: PublicImService,
-  stateRoot: string,
-  flags: Record<string, string>,
-  json: boolean,
-  deps: Pick<ImCliDeps, "stdout" | "sleep"> = {
-    stdout: process.stdout,
-    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  },
-): Promise<void> {
-  const as = requiredFlag(flags, "as", "tiny-agent im admin listen requires --as");
-  const withEndpoint = requiredFlag(flags, "with", "tiny-agent im admin listen requires --with");
-  let cursor = flags.cursor;
-
-  if (!json) {
-    deps.stdout.write(`[im] Listening as ${as} with ${withEndpoint}\n`);
-    deps.stdout.write("[im] Press Ctrl+C to stop\n");
-  }
-
-  const onExit = () => process.exit(0);
-  process.on("SIGINT", onExit);
-  process.on("SIGTERM", onExit);
-
-  while (true) {
-    const result = await service.receiveForPair({
-      stateRoot,
-      as,
-      with: withEndpoint,
-      cursor,
-    });
-    if (result.cursorFound === false) {
-      die(`tiny-agent im admin listen cursor was not found: ${cursor}`, "IM_CURSOR_NOT_FOUND");
-    }
-
-    for (const message of result.messages) {
-      if (json) {
-        deps.stdout.write(`${JSON.stringify(message)}\n`);
-      } else {
-        deps.stdout.write(`[${message.createdAt}] ${message.from}: ${message.text}\n`);
-      }
-    }
-
-    if (result.nextCursor) {
-      cursor = result.nextCursor;
-    }
-
-    await deps.sleep(500);
-  }
-}
-
-function requiredFlag(
-  flags: Record<string, string>,
-  name: string,
-  message: string,
-): string {
-  const value = flags[name];
-  if (value === undefined || value.length === 0 || value === "true") {
-    die(message);
-  }
-  return value;
 }
 
 async function readStdinText(stdin: StdinSource): Promise<string> {

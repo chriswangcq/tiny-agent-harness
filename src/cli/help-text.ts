@@ -5,10 +5,8 @@ Usage:
   tiny-agent <task>                                   Alias for tiny-agent run --task <task>
   tiny-agent run --resume <runId|latest>              Resume an existing run
   tiny-agent resume <runId|latest>                    Resume an existing run
-  tiny-agent ui  [--task <task>]                      Run + TUI in one command
-  tiny-agent ui  --resume <runId|latest>
-                                                        Resume + TUI in one command
-  tiny-agent tui --run <runId|latest>                 Attach TUI to existing run
+  tiny-agent ui [--state-dir <dir>]                   Open project UI console
+  tiny-agent runtime <subcommand> [options]           Runtime replica control
   tiny-agent im  <subcommand> [options]               IM message operations
   tiny-agent skill <subcommand> [options]             Skill host client
   tiny-agent codeq <subcommand> [options]             CodeQ host client
@@ -17,17 +15,27 @@ Usage:
   tiny-agent --help                                   Show this help
 
 IM subcommands:
+  tiny-agent im pair --a <endpoint> --b <endpoint>
+                                                 Create IM pair via runtime replica
+  tiny-agent im bind [--run-id <id>] [--self <endpoint>] [--peer <endpoint>]
+                                                 Bind run endpoint via runtime replica
+  tiny-agent im post --from <endpoint> --to <endpoint> --text <text>
+                                                 Post user/work message via runtime replica
   tiny-agent im send --kind <status|error> --text-stdin
-                                                 Send via current run im-host
-  tiny-agent im recv [--cursor <id>]              Receive via current run im-host
-  tiny-agent im ack --message-id <id>             Ack via current run im-host
-  tiny-agent im run-recv [--run-id <id>]          Receive from run bindings via im-host
+                                                 Send via runtime replica
+  tiny-agent im recv [--cursor <id>]              Receive via runtime replica
+  tiny-agent im ack --message-id <id>             Ack via runtime replica
+  tiny-agent im run-recv [--run-id <id>]          Receive from run bindings via runtime replica
   tiny-agent im run-ack --message-id <id> [--peer <endpoint>]
-                                                 Ack one run binding via im-host
-  tiny-agent im host --socket <path> --state-dir <dir>
-                                                 Start a run-owned IM host
-  tiny-agent im admin <subcommand> [--state-dir <dir>]
-                                                 Direct-file admin/bootstrap IM
+                                                 Ack one run binding via runtime replica
+
+Runtime subcommands:
+  tiny-agent runtime replica --mode run --run-id <runId> --socket <path> --state-dir <dir>
+                                                 Start run-owned runtime replica
+  tiny-agent runtime replica --mode edge --edge-id <edgeId> --socket <path> --state-dir <dir>
+                                                 Start external edge runtime replica
+  tiny-agent runtime health                       Check runtime replica
+  tiny-agent runtime capabilities                 List runtime replica capabilities
 
 Skill subcommands:
   tiny-agent skill list                          List available skills
@@ -45,16 +53,15 @@ Team groups:
   tiny-agent team lifecycle <subcommand>   Run-scoped lease, lifecycle-status, reaper, shutdown
 
 Work dispatch:
-  tiny-agent im admin post --from user:main --to member:<team>/<member> --text <text>
-                                            External direct-file work dispatch
+  tiny-agent im post --runtime-host-socket <edge-socket> --from user:main --to member:<team>/<member> --text <text>
+                                            External edge work dispatch
 
 Environment variables:
   DEEPSEEK_API_KEY   One-off override for providers.deepseek.apiKey
   DEEPSEEK_BASE_URL  One-off override for providers.deepseek.baseUrl
   MODEL_NAME         One-off override for providers.deepseek.model
   TAH_STATE_DIR      Override product state root
-  TAH_IM_HOST_SOCKET Current run IM host socket
-  TAH_IM_STATE_DIR   Project public IM state root for admin/edge commands
+  TAH_RUNTIME_HOST_SOCKET Current run runtime replica socket
   TAH_CODEQ_HOST_SOCKET  Current run CodeQ host socket
   TAH_SKILL_HOST_SOCKET  Current run Skill host socket
   TAH_MCP_HOST_SOCKET    Current run MCP host socket
@@ -62,5 +69,14 @@ Environment variables:
 User config:
   ~/.tiny-agent/config.json
 
-Most CLI subcommands accept --json for machine-readable output. Use --state-dir to override the product state root. IM, Skill, CodeQ, and MCP operational commands require a run host socket from the PTY environment or --host-socket; use tiny-agent im admin for explicit direct-file IM bootstrap/debug work.
+Most CLI subcommands accept --json for machine-readable output. Use --state-dir to override the product state root. IM operational commands require a runtime replica socket from the PTY environment or --runtime-host-socket; external tools should start an edge runtime replica and pass that socket. Skill, CodeQ, and MCP operational commands require their run host sockets.
+
+Project UI commands:
+  :new <task>      Start a new run and attach it
+  :new             Start a run that waits for its first IM message
+  :open <runId>    Attach an existing run without starting it
+  :open latest     Attach the latest run
+  :resume <runId>  Start an existing run process and attach it
+  :stop [runId]    Request SIGTERM for a running run process
+  :refresh         Reload the run list
 `;

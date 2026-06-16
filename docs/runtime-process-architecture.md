@@ -10,6 +10,11 @@ to make every long-lived process visible, owned, recoverable, and testable.
 - `processes.json` owns the current process registry snapshot.
 - `runtime events` own audit/replay facts around process and capability
   lifecycle changes.
+- `Runtime replica` owns a run-local runtime socket for public runtime
+  operations. Every run launches its own replica. Replicas are active-active:
+  they share project durable truth through file locks and do not elect a global
+  leader for ordinary IM access. Durable IM channel state remains
+  project-scoped under `im/`.
 - `Terminal Host` owns PTY sessions, screen buffers, visual-line cursors, and
   terminal observations for the default run terminal path. It is a run-owned
   `tiny-agent terminal-host --socket <run-socket>` sidecar launched by
@@ -29,6 +34,7 @@ to make every long-lived process visible, owned, recoverable, and testable.
 
 The shared registry supports:
 
+- `runtime-replica`
 - `run`
 - `terminal-host`
 - `pty-session`
@@ -58,6 +64,7 @@ represented by files:
 
 | Process kind | Live resource authority |
 | --- | --- |
+| `runtime-replica` | Run-local runtime socket request boundary, project IM service request boundary, active-active file-backed public runtime access |
 | `run` | Agent control flow, in-flight model/tool turns, child runtime ports |
 | `terminal-host` | PTY fd, child shell process, screen buffer, visual-line cursor, resident socket request boundary |
 | `pty-session` | PTY fd and session child process |
@@ -67,12 +74,19 @@ represented by files:
 | `model-gateway` | Provider stream, cancellation boundary, resident socket request boundary |
 
 Durable file operations still have explicit storage owners. Public CLI access
-to Skill and MCP goes through the run-owned host socket; the host then performs
-the file operation or adapter call at the boundary.
+to IM goes through the current run runtime replica. Public CLI access to Skill
+and MCP goes through the run-owned host socket; the host then performs the file
+operation or adapter call at the boundary.
+
+`<run-socket>` is an ephemeral live endpoint, not a durable runDir file. Run
+startup derives resident sockets under a short temporary socket root, and the
+actual `socketPath` is recorded in process metadata and host launch state for
+observability. Durable resident host `statePath` and `logPath` stay under
+`runs/<runId>/`.
 
 | Operation | Durable owner |
 | --- | --- |
-| IM pair/send/receive/ack | `im/` channel logs, metadata, and cursors |
+| IM pair/send/receive/ack | `im/` channel logs, metadata, and cursors; live access through `runtime-replica` |
 | Team roster/member commands | `teams/<teamId>/events.jsonl` plus snapshot |
 | Process registry queries/cleanup | `processes.json` |
 | MCP registry edits | `mcp-servers.json`, served through `mcp-host` for public CLI calls |
@@ -103,6 +117,12 @@ Recovery reads durable state:
 - run transcripts
 - run/session scoped files
 
+When loading `processes.json`, unsupported process kinds or statuses are
+removed from the current snapshot and the cleaned snapshot is written back.
+This is the one-shot durable boundary for retired process authorities; old
+records are not mapped to a new kind unless the required current owner fields
+are explicit.
+
 Recovery does not treat the OS process table as business truth. OS process
 inspection is an adapter input that can confirm or refute a durable record, but
 the registry remains the named state owner.
@@ -111,6 +131,11 @@ the registry remains the named state owner.
 
 Current compatibility paths are explicit:
 
+- `tiny-agent run` launches a supervisor-recorded run-owned
+  `tiny-agent runtime replica --mode run --run-id <runId> --socket <run-socket> --state-dir <project-state>`
+  process before binding public IM. Ordinary `tiny-agent im ...` commands are
+  socket clients to the current run `TAH_RUNTIME_HOST_SOCKET`; external control
+  edges start `tiny-agent runtime replica --mode edge` and pass its socket.
 - `tiny-agent run` launches a supervisor-recorded
   `tiny-agent terminal-host --socket <run-socket>` child process for
   terminal/session tools. Run requests use the same resident socket contract as

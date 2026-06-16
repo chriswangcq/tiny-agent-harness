@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
@@ -17,7 +18,6 @@ export type ResidentSocketHostKind =
   | "codeq-host"
   | "skill-host"
   | "mcp-host"
-  | "im-host"
   | "model-gateway";
 
 export type ResidentHostPaths = {
@@ -27,17 +27,45 @@ export type ResidentHostPaths = {
   logPath: string;
 };
 
+export type ResidentHostPathsInput = {
+  kind: ResidentSocketHostKind;
+  runId: string;
+  runDir: string;
+  socketRoot: string;
+  socketScope: string;
+};
+
+export const RESIDENT_HOST_SOCKET_PATH_MAX_BYTES = 100;
+
+const RESIDENT_HOST_SOCKET_DIR_NAME = "ta-rh";
+
+const RESIDENT_SOCKET_KIND_PREFIX: Record<ResidentSocketHostKind, string> = {
+  "terminal-host": "term",
+  "codeq-host": "codeq",
+  "skill-host": "skill",
+  "mcp-host": "mcp",
+  "model-gateway": "model",
+};
+
 export type LaunchedResidentSocketHost = ResidentHostPaths & {
   dispose: () => Promise<void>;
 };
 
 export type ResidentHostSocketLineResult = {
   responseLine: string;
+  afterResponse?: () => Promise<void> | void;
   close?: boolean;
+};
+
+export type ResidentHostSocketConnectionPort = {
+  sendLine(line: string): void;
+  close(): void;
+  onClose(handler: () => void): void;
 };
 
 export type ResidentHostSocketLineHandler = (
   line: string,
+  connection: ResidentHostSocketConnectionPort,
 ) => Promise<ResidentHostSocketLineResult>;
 
 export function residentHostProcessId(
@@ -49,18 +77,52 @@ export function residentHostProcessId(
   return `${kind}:${runId}`;
 }
 
-export function residentHostPaths(input: {
-  kind: ResidentSocketHostKind;
-  runId: string;
-  runDir: string;
-}): ResidentHostPaths {
+export function defaultResidentSocketRoot(input: { tmpDir: string }): string {
+  assertNonEmpty("Resident host tmpDir", input.tmpDir);
+  return path.join(input.tmpDir, RESIDENT_HOST_SOCKET_DIR_NAME);
+}
+
+export function residentHostPaths(input: ResidentHostPathsInput): ResidentHostPaths {
   const processId = residentHostProcessId(input.kind, input.runId);
+  const socketPath = residentHostSocketPath({
+    kind: input.kind,
+    runId: input.runId,
+    socketRoot: input.socketRoot,
+    socketScope: input.socketScope,
+  });
   return {
     processId,
-    socketPath: path.join(input.runDir, `${input.kind}.sock`),
+    socketPath,
     statePath: path.join(input.runDir, `${input.kind}.json`),
     logPath: path.join(input.runDir, `${input.kind}.stderr.log`),
   };
+}
+
+export function residentHostSocketPath(input: {
+  kind: ResidentSocketHostKind;
+  runId: string;
+  socketRoot: string;
+  socketScope: string;
+}): string {
+  assertRuntimeKind(input.kind);
+  assertRunId(input.runId);
+  assertNonEmpty("Resident host socketRoot", input.socketRoot);
+  assertNonEmpty("Resident host socketScope", input.socketScope);
+
+  const digest = createHash("sha256")
+    .update(input.socketScope)
+    .update("\0")
+    .update(input.runId)
+    .update("\0")
+    .update(input.kind)
+    .digest("hex")
+    .slice(0, 16);
+  const socketPath = path.join(
+    input.socketRoot,
+    `${RESIDENT_SOCKET_KIND_PREFIX[input.kind]}-${digest}.sock`,
+  );
+  assertResidentHostSocketPathBudget(socketPath);
+  return socketPath;
 }
 
 export function createResidentHostProcessRecord(input: {
@@ -189,8 +251,8 @@ export async function listenResidentHostSocket(options: {
   const server = net.createServer((socket) => {
     handleResidentHostSocketConnection({
       socket,
-      handleLine: async (line) => {
-        const result = await options.handleLine(line);
+      handleLine: async (line, connection) => {
+        const result = await options.handleLine(line, connection);
         if (result.close) {
           server.close();
         }
@@ -304,6 +366,46 @@ function handleResidentHostSocketConnection(options: {
   handleLine: ResidentHostSocketLineHandler;
 }): void {
   let buffer = "";
+  const closeHandlers = new Set<() => void>();
+  let closedForSend = false;
+  let cleanupRan = false;
+  const connection: ResidentHostSocketConnectionPort = {
+    sendLine(line) {
+      if (closedForSend || options.socket.destroyed) {
+        return;
+      }
+      options.socket.write(`${line}\n`);
+    },
+    close() {
+      closedForSend = true;
+      options.socket.end();
+    },
+    onClose(handler) {
+      if (cleanupRan) {
+        handler();
+        return;
+      }
+      closeHandlers.add(handler);
+    },
+  };
+  const runCloseHandlers = () => {
+    if (cleanupRan) {
+      return;
+    }
+    cleanupRan = true;
+    closedForSend = true;
+    for (const handler of closeHandlers) {
+      try {
+        handler();
+      } catch {
+        // Connection cleanup is best-effort; host state must not depend on one cleanup handler.
+      }
+    }
+    closeHandlers.clear();
+  };
+  options.socket.once("close", runCloseHandlers);
+  options.socket.once("end", runCloseHandlers);
+  options.socket.once("error", runCloseHandlers);
   options.socket.on("data", (chunk) => {
     buffer += chunk.toString("utf-8");
     while (true) {
@@ -313,7 +415,7 @@ function handleResidentHostSocketConnection(options: {
       }
       const line = buffer.slice(0, newlineIndex);
       buffer = buffer.slice(newlineIndex + 1);
-      void handleResidentHostSocketLine(options, line);
+      void handleResidentHostSocketLine({ ...options, connection }, line);
     }
   });
 }
@@ -322,6 +424,7 @@ async function handleResidentHostSocketLine(
   options: {
     socket: net.Socket;
     handleLine: ResidentHostSocketLineHandler;
+    connection: ResidentHostSocketConnectionPort;
   },
   line: string,
 ): Promise<void> {
@@ -329,11 +432,15 @@ async function handleResidentHostSocketLine(
     return;
   }
   try {
-    const result = await options.handleLine(line);
-    options.socket.write(`${result.responseLine}\n`);
+    const result = await options.handleLine(line, options.connection);
+    options.connection.sendLine(result.responseLine);
+    await result.afterResponse?.();
+    if (result.close) {
+      options.connection.close();
+    }
   } catch (error) {
-    options.socket.write(
-      `${JSON.stringify({
+    options.connection.sendLine(
+      JSON.stringify({
         schemaVersion: 1,
         id: "unknown",
         ok: false,
@@ -342,7 +449,7 @@ async function handleResidentHostSocketLine(
           code: "HOST_ERROR",
           message: error instanceof Error ? error.message : String(error),
         },
-      })}\n`,
+      }),
     );
   }
 }
@@ -398,13 +505,27 @@ function assertRunId(runId: string): void {
   }
 }
 
+function assertNonEmpty(label: string, value: string): void {
+  if (value.trim().length === 0) {
+    throw new Error(`${label} must be non-empty`);
+  }
+}
+
+function assertResidentHostSocketPathBudget(socketPath: string): void {
+  const byteLength = Buffer.byteLength(socketPath);
+  if (byteLength > RESIDENT_HOST_SOCKET_PATH_MAX_BYTES) {
+    throw new Error(
+      `Resident host socket path is ${byteLength} bytes, exceeding ${RESIDENT_HOST_SOCKET_PATH_MAX_BYTES} byte budget: ${socketPath}`,
+    );
+  }
+}
+
 function assertRuntimeKind(kind: ResidentSocketHostKind): asserts kind is RuntimeProcessKind & ResidentSocketHostKind {
   if (
     kind !== "terminal-host" &&
     kind !== "codeq-host" &&
     kind !== "skill-host" &&
     kind !== "mcp-host" &&
-    kind !== "im-host" &&
     kind !== "model-gateway"
   ) {
     throw new Error(`Unsupported resident host kind: ${kind}`);

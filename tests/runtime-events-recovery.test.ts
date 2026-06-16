@@ -129,4 +129,28 @@ describe("runtime recovery snapshot", () => {
       eventOffset: 42,
     });
   });
+
+  it("ignores unsupported process records instead of adding unknown counters", () => {
+    const current = markProcessRunning(planned("run", "proc-run"), {
+      now: NOW,
+      pid: 123,
+    });
+    const obsolete = {
+      ...current,
+      id: "project-runtime-host:project-1",
+      kind: "project-runtime-host",
+      owner: { scope: "project", projectId: "project-1" },
+    };
+
+    const snapshot = buildRuntimeRecoverySnapshot({
+      processes: [obsolete as any, current],
+      recoveredAt: "2026-06-11T00:00:01.000Z",
+      eventOffset: 42,
+    });
+
+    expect(snapshot.totalProcesses).toBe(1);
+    expect(snapshot.processesByKind).toMatchObject({ run: 1 });
+    expect(snapshot.processesByKind).not.toHaveProperty("project-runtime-host");
+    expect(snapshot.activeProcessIds).toEqual(["proc-run"]);
+  });
 });

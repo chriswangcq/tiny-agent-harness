@@ -1,4 +1,3 @@
-export { TranscriptReader } from "./transcript-reader.js";
 export { ViewModelBuilder } from "./view-model-builder.js";
 export {
   buildLoopFrameDetail,
@@ -15,8 +14,8 @@ export {
   summarizeLoopFrames,
 } from "./debugger.js";
 export { BlessedRenderer } from "./renderer.js";
-export { TuiController } from "./controller.js";
-export { SessionLogTailReader } from "./session-log-tail.js";
+export { ProjectUiController, parseProjectUiCommand } from "./controller.js";
+export { createRuntimeWorkbenchClient } from "./workbench-client.js";
 export {
   TeamLifecycleAuditReader,
   projectLifecycleAuditEvents,
@@ -63,6 +62,11 @@ export type {
   TuiLimits,
   TuiRenderer,
 } from "./types.js";
+export type {
+  RuntimeWorkbenchClientOptions,
+  TuiWorkbenchClientPort,
+  TuiWorkbenchSessionPort,
+} from "./workbench-client.js";
 
 // Team dashboard view model
 export {

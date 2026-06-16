@@ -5,7 +5,10 @@ import {
   createImPairAddress,
   PublicImService,
   createInMemoryImStore,
+  planImChannelLayout,
   planImRunBindingLayout,
+  readJsonlFile,
+  type PublicImMessage,
   type PublicImServicePorts,
 } from "../src/im/index.js";
 
@@ -215,6 +218,44 @@ describe("PublicImService", () => {
     ]);
   });
 
+  it("lets projection consumers read independently from run ack cursors", async () => {
+    const service = new PublicImService(fakePorts());
+    await service.bindRun({
+      stateRoot: "/state",
+      runId: "run-123",
+      self: "run:run-123",
+      peer: "user:main",
+      kind: "a2user",
+    });
+    const message = await service.postMessage({
+      stateRoot: "/state",
+      from: "user:main",
+      to: "run:run-123",
+      text: "visible to ui",
+    });
+    await service.ackRunChannel({
+      stateRoot: "/state",
+      runId: "run-123",
+      peer: "user:main",
+      messageId: message.id,
+    });
+
+    const runConsumerView = await service.receiveForPair({
+      stateRoot: "/state",
+      as: "run:run-123",
+      with: "user:main",
+    });
+    const uiConsumerView = await service.receiveForPair({
+      stateRoot: "/state",
+      as: "run:run-123",
+      with: "user:main",
+      consumer: "ui:project-ui/run-123/user-inbound",
+    });
+
+    expect(runConsumerView.messages).toEqual([]);
+    expect(uiConsumerView.messages.map((item) => item.id)).toEqual([message.id]);
+  });
+
   it("requests explicit write locks for pair, channel, run binding, and cursor writes", async () => {
     const ports = fakePorts();
     const service = new PublicImService(ports);
@@ -257,5 +298,65 @@ describe("PublicImService", () => {
     expect(acquired).toContain(
       `im-cursor-${inbound.channelId}-${runConsumer.consumerId}:im-cursor`,
     );
+  });
+
+  it("imports explicit messages by merging, sorting, and deduping under the channel lock", async () => {
+    const ports = fakePorts();
+    const service = new PublicImService(ports);
+    const stateRoot = "/state";
+    const existing = await service.postMessage({
+      stateRoot,
+      from: "user:main",
+      to: "run:run-123",
+      text: "new project message",
+    });
+
+    const result = await service.importMessages({
+      stateRoot,
+      from: "user:main",
+      to: "run:run-123",
+      messages: [
+        {
+          id: "legacy-2",
+          role: "user",
+          kind: "message",
+          text: "legacy later",
+          createdAt: "2026-06-10T00:00:02.000Z",
+        },
+        {
+          id: "legacy-1",
+          role: "user",
+          kind: "message",
+          text: "legacy earlier",
+          createdAt: "2026-06-10T00:00:01.000Z",
+        },
+        {
+          id: existing.id,
+          role: "user",
+          kind: "message",
+          text: "duplicate",
+          createdAt: existing.createdAt,
+        },
+      ],
+    });
+
+    const layout = planImChannelLayout(stateRoot, "user:main", "run:run-123");
+    const messages = await readJsonlFile<PublicImMessage>(
+      ports.store,
+      layout.messagesFile,
+    );
+
+    expect(result.importedIds).toEqual(["legacy-2", "legacy-1"]);
+    expect(result.duplicateIds).toEqual([existing.id]);
+    expect(messages.map((message) => message.id)).toEqual([
+      "legacy-1",
+      "legacy-2",
+      existing.id,
+    ]);
+    expect(
+      ports.store.lockEvents
+        .filter((event) => event.phase === "acquire")
+        .map((event) => `${event.lockName}:${event.purpose}`),
+    ).toContain(`im-channel-${layout.channel.channelId}:im-channel-import`);
   });
 });

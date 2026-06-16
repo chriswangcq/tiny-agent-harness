@@ -1,12 +1,23 @@
 export type RuntimeProcessKind =
+  | "runtime-replica"
   | "run"
   | "terminal-host"
   | "pty-session"
   | "codeq-host"
   | "skill-host"
   | "mcp-host"
-  | "im-host"
   | "model-gateway";
+
+export const RUNTIME_PROCESS_KINDS = [
+  "runtime-replica",
+  "run",
+  "terminal-host",
+  "pty-session",
+  "codeq-host",
+  "skill-host",
+  "mcp-host",
+  "model-gateway",
+] as const satisfies readonly RuntimeProcessKind[];
 
 export type RuntimeProcessStatus =
   | "planned"
@@ -15,6 +26,15 @@ export type RuntimeProcessStatus =
   | "stopping"
   | "exited"
   | "crashed";
+
+export const RUNTIME_PROCESS_STATUSES = [
+  "planned",
+  "starting",
+  "running",
+  "stopping",
+  "exited",
+  "crashed",
+] as const satisfies readonly RuntimeProcessStatus[];
 
 export type RuntimeProcessOwner =
   | {
@@ -81,6 +101,12 @@ export type RuntimeProcessSnapshot = {
   processes: RuntimeProcessRecord[];
 };
 
+export type RuntimeProcessSnapshotMigration = {
+  snapshot: RuntimeProcessSnapshot;
+  changed: boolean;
+  droppedProcessIds: string[];
+};
+
 export type ProcessFreshness =
   | { status: "not-running"; reason: RuntimeProcessStatus }
   | { status: "unknown"; reason: "missing-heartbeat" | "invalid-heartbeat" }
@@ -103,6 +129,17 @@ const TERMINAL_STATUSES: ReadonlySet<RuntimeProcessStatus> = new Set([
   "exited",
   "crashed",
 ]);
+
+const CURRENT_PROCESS_KINDS: ReadonlySet<string> = new Set(RUNTIME_PROCESS_KINDS);
+const CURRENT_PROCESS_STATUSES: ReadonlySet<string> = new Set(RUNTIME_PROCESS_STATUSES);
+
+export function isRuntimeProcessKind(value: unknown): value is RuntimeProcessKind {
+  return typeof value === "string" && CURRENT_PROCESS_KINDS.has(value);
+}
+
+export function isRuntimeProcessStatus(value: unknown): value is RuntimeProcessStatus {
+  return typeof value === "string" && CURRENT_PROCESS_STATUSES.has(value);
+}
 
 function assertNonEmpty(value: string, field: string): void {
   if (value.trim().length === 0) {
@@ -304,6 +341,52 @@ export function createEmptyProcessSnapshot(input: {
     version: 1,
     updatedAt: input.now,
     processes: [],
+  };
+}
+
+export function migrateRuntimeProcessSnapshot(input: {
+  snapshot: RuntimeProcessSnapshot;
+  now: string;
+}): RuntimeProcessSnapshotMigration {
+  const processes: RuntimeProcessRecord[] = [];
+  const droppedProcessIds: string[] = [];
+
+  for (const process of input.snapshot.processes as Array<RuntimeProcessRecord & {
+    kind?: unknown;
+    status?: unknown;
+  }>) {
+    if (
+      isRuntimeProcessKind(process.kind) &&
+      isRuntimeProcessStatus(process.status)
+    ) {
+      processes.push(process as RuntimeProcessRecord);
+      continue;
+    }
+    droppedProcessIds.push(
+      typeof process.id === "string" && process.id.length > 0
+        ? process.id
+        : "<unknown-process>",
+    );
+  }
+
+  if (droppedProcessIds.length === 0) {
+    return {
+      snapshot: input.snapshot,
+      changed: false,
+      droppedProcessIds,
+    };
+  }
+
+  processes.sort((a, b) => a.id.localeCompare(b.id));
+  return {
+    snapshot: {
+      schemaVersion: 1,
+      version: input.snapshot.version + 1,
+      updatedAt: input.now,
+      processes,
+    },
+    changed: true,
+    droppedProcessIds,
   };
 }
 

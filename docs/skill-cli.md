@@ -24,9 +24,10 @@ tiny-agent skill run coding-review --json '{"path":"src"}'
 Agent 如果想使用 skill，本质上是在 PTY 里确认 shell prompt 后执行 `tiny-agent skill ...`。因此 skill 执行前仍然经过 tool review，执行结果也通过 PTY observation 返回。
 
 当前实现是 run-scoped all-host：`tiny-agent run` 为每个 run 启动
-`tiny-agent skill host --socket <runDir>/skill-host.sock`，TerminalHost 注入
-`TAH_SKILL_HOST_SOCKET`。普通 `tiny-agent skill ...` 只是 socket client；缺少
-host socket 时明确失败，不直接构造 store/discovery，也不回退到本地执行路径。
+`tiny-agent skill host --socket <run-socket>`。`<run-socket>` 是短 tmp-root
+下的 ephemeral Unix socket，实际路径由 process metadata 和 TerminalHost env
+`TAH_SKILL_HOST_SOCKET` 记录/注入。普通 `tiny-agent skill ...` 只是 socket
+client；缺少 host socket 时明确失败，不直接构造 store/discovery，也不回退到本地执行路径。
 
 ## Responsibilities
 

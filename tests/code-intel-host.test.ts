@@ -40,6 +40,7 @@ describe("code-intel host process planning", () => {
   it("launches a run-owned codeq-host and waits for socket readiness", async () => {
     let startInput: unknown;
     let killSignal: NodeJS.Signals | number | undefined;
+    const socketPath = "/tmp/ta-rh/codeq-1234567890abcdef.sock";
     const child = {
       pid: 123,
       killed: false,
@@ -76,12 +77,12 @@ describe("code-intel host process planning", () => {
         "--cwd",
         "/repo",
         "--socket",
-        "/state/runs/run-1/codeq-host.sock",
+        socketPath,
       ],
       cwd: "/repo",
       env: {},
       workspaceRoot: "/repo",
-      socketPath: "/state/runs/run-1/codeq-host.sock",
+      socketPath,
       statePath: "/state/runs/run-1/codeq-host.json",
       startupTimeoutMs: 10,
       nowEpochMs: () => 0,
@@ -99,15 +100,15 @@ describe("code-intel host process planning", () => {
         "--cwd",
         "/repo",
         "--socket",
-        "/state/runs/run-1/codeq-host.sock",
+        socketPath,
       ],
       metadata: {
         runId: "run-1",
         workspaceRoot: "/repo",
-        socketPath: "/state/runs/run-1/codeq-host.sock",
+        socketPath,
       },
     });
-    expect(launched.socketPath).toBe("/state/runs/run-1/codeq-host.sock");
+    expect(launched.socketPath).toBe(socketPath);
 
     await launched.dispose();
     expect(killSignal).toBe("SIGTERM");

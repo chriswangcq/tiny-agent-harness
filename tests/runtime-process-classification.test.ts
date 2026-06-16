@@ -9,13 +9,13 @@ import {
 } from "../src/runtime/index.js";
 
 const CURRENT_PROCESS_KINDS: RuntimeProcessKind[] = [
+  "runtime-replica",
   "run",
   "terminal-host",
   "pty-session",
   "codeq-host",
   "skill-host",
   "mcp-host",
-  "im-host",
   "model-gateway",
 ];
 
@@ -50,10 +50,11 @@ describe("runtime process classification", () => {
     expect(modelGateway.liveResources).not.toContain("transport pipe");
     expect(modelGateway.durableStateOwner).toBe("runs/<runId>/model-gateway.json");
 
-    const imHost = classifyRuntimeProcessKind("im-host");
-    expect(imHost.liveResources).toContain("resident socket request boundary");
-    expect(imHost.liveResources).toContain("public IM file-state proxy boundary");
-    expect(imHost.durableStateOwner).toBe("runs/<runId>/im-host.json and project im/");
+    const runtime = classifyRuntimeProcessKind("runtime-replica");
+    expect(runtime.liveResources).toContain("run-local runtime socket request boundary");
+    expect(runtime.liveResources).toContain("project IM service request boundary");
+    expect(runtime.liveResources).toContain("active-active file-backed public runtime access");
+    expect(runtime.durableStateOwner).toContain("runtime-replica.json");
   });
 
   it("classifies representative file-backed edger CLI operations", () => {

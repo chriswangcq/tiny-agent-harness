@@ -15,6 +15,7 @@ import {
   appendJsonlFile,
   readJsonFile,
   readJsonlFile,
+  writeJsonlFile,
   writeJsonFile,
   type ImStorePort,
 } from "./store.js";
@@ -75,6 +76,24 @@ export type PublicImMessage = {
   text: string;
   createdAt: string;
   metadata?: Record<string, unknown>;
+};
+
+export type PublicImImportedMessage = {
+  id: string;
+  role: PublicImMessageRole;
+  kind: PublicImMessageKind;
+  text: string;
+  createdAt: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type PublicImImportResult = {
+  channelId: string;
+  importedCount: number;
+  duplicateCount: number;
+  totalCount: number;
+  importedIds: string[];
+  duplicateIds: string[];
 };
 
 export type PublicImReceiveResult = {
@@ -229,11 +248,17 @@ export class PublicImService {
     as: string;
     with: string;
     cursor?: string;
+    consumer?: string;
   }): Promise<PublicImReceiveResult> {
     const self = normalizeImEndpoint(input.as);
     const peer = normalizeImEndpoint(input.with);
     const channelLayout = planImChannelLayout(input.stateRoot, peer, self);
-    const cursorLayout = planImCursorLayout(input.stateRoot, peer, self, self);
+    const cursorLayout = planImCursorLayout(
+      input.stateRoot,
+      peer,
+      self,
+      input.consumer ?? self,
+    );
     const cursor =
       input.cursor ??
       (await this.ports.store.readText(cursorLayout.cursorFile))?.trim() ??
@@ -298,6 +323,83 @@ export class PublicImService {
       channelLayout.messagesFile,
     );
     return sliceAfterCursor(messages, input.cursor);
+  }
+
+  async importMessages(input: {
+    stateRoot: string;
+    from: string;
+    to: string;
+    messages: readonly PublicImImportedMessage[];
+  }): Promise<PublicImImportResult> {
+    if (input.messages.length === 0) {
+      const channel = createImDirectionalChannelAddress(input.from, input.to);
+      return {
+        channelId: channel.channelId,
+        importedCount: 0,
+        duplicateCount: 0,
+        totalCount: 0,
+        importedIds: [],
+        duplicateIds: [],
+      };
+    }
+
+    const from = normalizeImEndpoint(input.from);
+    const to = normalizeImEndpoint(input.to);
+    const pair = await this.createPair({
+      stateRoot: input.stateRoot,
+      a: from.canonical,
+      b: to.canonical,
+      kind: "direct",
+    });
+    const channel = createImDirectionalChannelAddress(from, to);
+    const channelLayout = planImChannelLayout(input.stateRoot, from, to);
+    const importedMessages = input.messages.map((message) =>
+      normalizeImportedMessage(message, pair.pairId, channel.channelId, from.canonical, to.canonical),
+    );
+
+    return this.ports.store.withWriteLock(
+      {
+        stateRoot: input.stateRoot,
+        lockName: channelLockName(channel.channelId),
+        purpose: "im-channel-import",
+      },
+      async () => {
+        await this.ensureChannelMetaUnlocked(
+          input.stateRoot,
+          from,
+          to,
+          pair,
+          importedMessages[0]!.createdAt,
+        );
+        const existing = await readJsonlFile<PublicImMessage>(
+          this.ports.store,
+          channelLayout.messagesFile,
+        );
+        const byId = new Map(existing.map((message) => [message.id, message]));
+        const importedIds: string[] = [];
+        const duplicateIds: string[] = [];
+
+        for (const message of importedMessages) {
+          if (byId.has(message.id)) {
+            duplicateIds.push(message.id);
+            continue;
+          }
+          byId.set(message.id, message);
+          importedIds.push(message.id);
+        }
+
+        const merged = [...byId.values()].sort(compareMessagesByTimeAndId);
+        await writeJsonlFile(this.ports.store, channelLayout.messagesFile, merged);
+        return {
+          channelId: channel.channelId,
+          importedCount: importedIds.length,
+          duplicateCount: duplicateIds.length,
+          totalCount: merged.length,
+          importedIds,
+          duplicateIds,
+        };
+      },
+    );
   }
 
   async ackPair(input: {
@@ -472,6 +574,45 @@ function upsertBinding(
   );
   next.push(binding);
   return next.sort((left, right) => `${left.kind}:${left.peer}`.localeCompare(`${right.kind}:${right.peer}`));
+}
+
+function normalizeImportedMessage(
+  input: PublicImImportedMessage,
+  pairId: string,
+  channelId: string,
+  from: string,
+  to: string,
+): PublicImMessage {
+  assertNonEmpty("message id", input.id);
+  assertNonEmpty("message text", input.text);
+  assertNonEmpty("message createdAt", input.createdAt);
+  return {
+    schemaVersion: PUBLIC_IM_SCHEMA_VERSION,
+    id: input.id,
+    pairId,
+    channelId,
+    from,
+    to,
+    role: input.role,
+    kind: input.kind,
+    text: input.text,
+    createdAt: input.createdAt,
+    ...(input.metadata ? { metadata: input.metadata } : {}),
+  };
+}
+
+function assertNonEmpty(name: string, value: string): void {
+  if (value.length === 0) {
+    throw new Error(`Invalid IM import message: ${name} must be non-empty`);
+  }
+}
+
+function compareMessagesByTimeAndId(
+  left: PublicImMessage,
+  right: PublicImMessage,
+): number {
+  const byTime = left.createdAt.localeCompare(right.createdAt);
+  return byTime !== 0 ? byTime : left.id.localeCompare(right.id);
 }
 
 function sliceAfterCursor(

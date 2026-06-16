@@ -58,6 +58,7 @@ describe("skill host-only CLI", () => {
   it("launches a run-owned skill-host with explicit metadata", async () => {
     let startInput: unknown;
     let killSignal: NodeJS.Signals | number | undefined;
+    const socketPath = "/tmp/ta-rh/skill-1234567890abcdef.sock";
     const child = {
       pid: 123,
       killed: false,
@@ -85,10 +86,10 @@ describe("skill host-only CLI", () => {
       processId: "skill-host:run-1",
       owner: { scope: "run", runId: "run-1" },
       executable: "node",
-      args: ["dist/cli/main.js", "skill", "host", "--socket", "/state/runs/run-1/skill-host.sock"],
+      args: ["dist/cli/main.js", "skill", "host", "--socket", socketPath],
       cwd: "/repo",
       env: {},
-      socketPath: "/state/runs/run-1/skill-host.sock",
+      socketPath,
       skillsDir: "/state/skills",
       skillRunsDir: "/state/runs/run-1/skill-runs",
       startupTimeoutMs: 10,
@@ -100,10 +101,10 @@ describe("skill host-only CLI", () => {
     expect(startInput).toMatchObject({
       kind: "skill-host",
       owner: { scope: "run", runId: "run-1" },
-      args: ["dist/cli/main.js", "skill", "host", "--socket", "/state/runs/run-1/skill-host.sock"],
+      args: ["dist/cli/main.js", "skill", "host", "--socket", socketPath],
       metadata: {
         runId: "run-1",
-        socketPath: "/state/runs/run-1/skill-host.sock",
+        socketPath,
         skillsDir: "/state/skills",
         skillRunsDir: "/state/runs/run-1/skill-runs",
       },

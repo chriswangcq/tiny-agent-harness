@@ -17,7 +17,7 @@ Agent model
 
 这意味着 MCP 能力增长不会改变 harness 内核。对 orchestrator 来说，`tiny-agent mcp tools`、`tiny-agent mcp call`、`tiny-agent skill run`、`tiny-agent codeq diagnostics`、`git`、`npm test` 都是同一类 terminal/session request：先 validation/review，再在 PTY 中执行，再通过一屏 observation 和 session log 回到模型。
 
-`tiny-agent run` 会为每个 run 启动一个同生共死的 `tiny-agent mcp host --socket <runDir>/mcp-host.sock`。TerminalHost 把 `TAH_MCP_HOST_SOCKET` 注入 PTY。普通 `tiny-agent mcp ...` 只作为 socket client 转发 argv；缺少 socket 时明确失败，不创建临时直连 client，也不回退到 public CLI 内部实现。
+`tiny-agent run` 会为每个 run 启动一个同生共死的 `tiny-agent mcp host --socket <run-socket>`。`<run-socket>` 是短 tmp-root 下的 ephemeral Unix socket，实际路径由 process metadata 和 TerminalHost env `TAH_MCP_HOST_SOCKET` 记录/注入。普通 `tiny-agent mcp ...` 只作为 socket client 转发 argv；缺少 socket 时明确失败，不创建临时直连 client，也不回退到 public CLI 内部实现。
 
 ## CLI Surface
 

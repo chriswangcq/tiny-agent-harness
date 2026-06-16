@@ -2,6 +2,7 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import {
   createEmptyProcessSnapshot,
+  migrateRuntimeProcessSnapshot,
   upsertProcessRecord,
   type RuntimeProcessRecord,
   type RuntimeProcessSnapshot,
@@ -49,7 +50,14 @@ export class JsonProcessRegistryStore {
     if (typeof parsed.updatedAt !== "string") {
       throw new Error(`Invalid process registry timestamp at ${this.filePath}`);
     }
-    return parsed as RuntimeProcessSnapshot;
+    const migration = migrateRuntimeProcessSnapshot({
+      snapshot: parsed as RuntimeProcessSnapshot,
+      now: this.nowIso(),
+    });
+    if (migration.changed) {
+      this.save(migration.snapshot);
+    }
+    return migration.snapshot;
   }
 
   list(): RuntimeProcessRecord[] {

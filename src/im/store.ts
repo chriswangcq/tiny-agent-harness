@@ -161,6 +161,18 @@ export async function appendJsonlFile(
   await store.appendText(filePath, `${JSON.stringify(value)}\n`);
 }
 
+export async function writeJsonlFile(
+  store: ImStorePort,
+  filePath: string,
+  values: readonly unknown[],
+): Promise<void> {
+  const body =
+    values.length === 0
+      ? ""
+      : `${values.map((value) => JSON.stringify(value)).join("\n")}\n`;
+  await store.writeText(filePath, body);
+}
+
 export async function readJsonlFile<T>(
   store: ImStorePort,
   filePath: string,

@@ -26,7 +26,7 @@ Provider credentials 和默认模型配置不属于 project state，放在用户
 
 `<projectId>` 由项目根目录 basename 和项目根绝对路径 sha256 短 hash 确定，例如 `tiny-agent-harness-4f2a1b7c9e01`。这样 runtime 状态不污染源码目录，同时同一项目的 `tiny-agent` 主入口及其 `im`、`skill`、`tui`、`mcp`、`team` 子命令仍看到同一套状态。
 
-当前实现进一步把 run 产生的执行状态收敛到 `runs/<runId>/`：environment events、PTY session log、skill-runs、resident host socket/state、model context 和 debug artifacts 都随 run 自包含。public IM 是 project-scoped 服务，通过 endpoint pair、directional channel log 和 run binding 关联具体 run。项目级目录保留跨 run 共享的 skill definitions、MCP server registry、IM、team 控制面、run 容器、启动器日志、锁和临时文件。
+当前实现进一步把 run 产生的执行状态收敛到 `runs/<runId>/`：environment events、PTY session log、skill-runs、resident host state/log、model context 和 debug artifacts 都随 run 自包含。resident host socket 是短 tmp-root 下的 ephemeral live endpoint，不是 durable runDir 文件；实际 `socketPath` 通过 process metadata、host state 和 PTY env 注入可观测。public IM 是 project-scoped 服务，通过 endpoint pair、directional channel log 和 run binding 关联具体 run。项目级目录保留跨 run 共享的 skill definitions、MCP server registry、IM、team 控制面、run 容器、启动器日志、锁和临时文件。
 
 ## State Root Resolution
 
@@ -56,7 +56,7 @@ Resolver 不自动发现、读取或迁移项目内 `.tiny-agent/project.json`�
 规则：
 
 - CLI 输出给 agent 的路径可以使用绝对 state-root 路径，方便 TUI 或外部工具直接打开。
-- PTY 内 `TAH_STATE_DIR` 等于当前 run dir，用于 skill-runs、environment 等 run-scoped host 内部命令；`TAH_PROJECT_STATE_DIR` 和 `TAH_IM_STATE_DIR` 等于 home project state root，用于 public IM、MCP registry、team lifecycle/reaper 等跨 run 控制面。`TAH_IM_HOST_SOCKET`、`TAH_CODEQ_HOST_SOCKET`、`TAH_SKILL_HOST_SOCKET`、`TAH_MCP_HOST_SOCKET` 指向当前 run 的 resident hosts；对应公开 CLI 缺少 socket 时必须失败。
+- PTY 内 `TAH_STATE_DIR` 等于当前 run dir，用于 skill-runs、environment 等 run-scoped host 内部命令；`TAH_PROJECT_STATE_DIR` 等于 home project state root，用于 MCP registry、team lifecycle/reaper 等跨 run 控制面。`TAH_RUNTIME_HOST_SOCKET` 指向 runtime replica socket；`TAH_CODEQ_HOST_SOCKET`、`TAH_SKILL_HOST_SOCKET`、`TAH_MCP_HOST_SOCKET` 指向当前 run 的短 tmp-root resident host socket；对应公开 CLI 缺少 socket 时必须失败。
 - 不同项目不能共享同一个 state root，除非用户显式传 `--state-dir`。
 
 ## CLI Surface
@@ -65,9 +65,9 @@ Resolver 不自动发现、读取或迁移项目内 `.tiny-agent/project.json`�
 
 ```text
 tiny-agent       # run orchestrator, agent run state, terminal/session tool execution
-tiny-agent ui    # one-command launcher: start/resume run and attach TUI
-tiny-agent tui   # transcript / state player
-tiny-agent im               # IM host client; direct-file work lives under im admin
+tiny-agent ui    # project UI console; create/open/resume runs internally
+tiny-agent runtime          # runtime replica control
+tiny-agent im               # Runtime replica IM client
 tiny-agent skill            # Skill host client; discovery, run, close, review-complete
 tiny-agent mcp              # MCP host client; registry/tools/call through terminal/session tools
 tiny-agent codeq            # CodeQ host client; code intelligence through terminal/session tools
@@ -178,6 +178,8 @@ sub-agent runtime       # 当前只有纯 domain/FSM，不独立调度子进程
 - `runs/<runId>/debug/prompts/` 保存由 transcript/model-context 通过 `promptRef` 引用的大 prompt artifact。
 - `runs/<runId>/debug/thinking/` 保存 streamed thinking trace artifact；transcript 只保存 `traceRef`。
 - `runs/<runId>/environment/events.jsonl` 是本 run 的外部环境事件 ledger。
+- `runs/<runId>/runtime-replica.{json,stderr.log}` 是 run-owned runtime replica 的 durable state/log。
+- `runs/<runId>/{terminal-host,codeq-host,skill-host,mcp-host,model-gateway}.{json,stderr.log}` 是 run-owned resident host 的 durable state/log；socket 文件本身在短 tmp-root 下，进程退出后可删除。
 - `im/` 是 project-scoped public IM store；run 只通过 `im/run-bindings/<runId>.json` 关联 endpoint pair。
 - `runs/<runId>/sessions/<safe-session-id>-<sha256-10>.log` 是完整 raw PTY 输出，observation 返回 bounded semantic visual window，并通过 `screen.window` 给出 visual-line cursor、通过 `screen.logRef.path` 指向 raw log。
 - `runs/<runId>/skill-runs/<id>/execution.txt` 和 `review-task.txt` 只给 agent 通过 bash 原生命令读取，不直接塞进 prompt。
@@ -449,7 +451,7 @@ im-run-binding-<runId>.lock
 im-cursor-<channelId>-<consumerId>.lock
 ```
 
-普通 `tiny-agent im ...` 是当前 run 的 IM host socket client，PTY 内依赖 `TAH_IM_HOST_SOCKET`，缺少 socket 必须失败。需要直接读写 public IM 文件状态的外部/TUI/bootstrap/debug 边界使用 `tiny-agent im admin ...`：`tiny-agent im admin post --from <endpoint> --to <endpoint>` append 到发送方向的 channel log，`tiny-agent im admin recv --as <endpoint> --with <endpoint> --cursor <id>` 读取 cursor 后的新消息，`tiny-agent im admin ack --as <endpoint> --with <endpoint> --message-id <id>` 推进 consumer cursor。Run poller 通过 im-host 使用 `run-recv/run-ack` 按 `im/run-bindings/<runId>.json` 汇总多个 pair。`tiny-agent im admin listen` 不能长期持锁；它只能循环短暂读文件，然后 sleep / wait。
+普通 `tiny-agent im ...` 是 runtime replica socket client，PTY 内依赖 `TAH_RUNTIME_HOST_SOCKET`，缺少 socket 必须失败。外部/TUI/bootstrap/debug 边界先启动 `tiny-agent runtime replica --mode edge --edge-id <edgeId> --socket <path> --state-dir <project-state>`，再通过 `tiny-agent im ... --runtime-host-socket <path>` 访问 public IM：`post` append 到发送方向的 channel log，`recv --as <endpoint> --with <endpoint> --cursor <id>` 读取 cursor 后的新消息，`ack --message-id <id>` 推进 consumer cursor。Run poller 通过 runtime replica 使用 `run-recv/run-ack` 按 `im/run-bindings/<runId>.json` 汇总多个 pair。`tiny-agent im listen --runtime-host-socket <path>` 不能长期持锁；它只能循环短暂读文件，然后 sleep / wait。
 
 ### Skill
 
@@ -585,12 +587,12 @@ src/state/jsonl.ts      # locked append/read by offset
 
 然后按这个顺序接 CLI：
 
-1. `tiny-agent im host --socket <run-socket>` 与 `tiny-agent im admin`：最小 public IM channel log，验证锁、append 和 cursor；普通 `tiny-agent im ...` 只验证 socket client envelope。
+1. `tiny-agent runtime replica --mode run --run-id <runId> --socket <run-socket>`、`tiny-agent runtime replica --mode edge --edge-id <edgeId> --socket <edge-socket>` 与 `tiny-agent im ... --runtime-host-socket <socket>`：最小 public IM channel log，验证锁、append、cursor 和 active-active runtime replica socket client envelope。
 2. `tiny-agent skill host --socket <run-socket>`：接 state root、skill-run lock、environment event；公开 `tiny-agent skill ...` 只验证 socket client envelope。
 3. `tiny-agent`：接真实 file-backed Environment、run lease、latest pointer。
-4. `tiny-agent tui`：只读 state，不拿写锁。
+4. `tiny-agent ui`：通过 project UI 只读浏览 state；启动、恢复、停止 run process 走显式 run-control 边界，不把 UI 当成 run state writer。
 
-这个顺序能最快验证文件锁，因为 `tiny-agent im admin post` 或 run-owned im-host 内部 IM 写入、host 内部的 `skill run`、`tiny-agent` 会同时写 environment ledger。
+这个顺序能最快验证文件锁，因为 runtime-replica 内部 IM 写入、host 内部的 `skill run`、`tiny-agent` 会同时写 environment ledger。
 
 ## Non Goals
 

@@ -58,6 +58,7 @@ describe("mcp host-only CLI", () => {
   it("launches a run-owned mcp-host with explicit metadata", async () => {
     let startInput: unknown;
     let killSignal: NodeJS.Signals | number | undefined;
+    const socketPath = "/tmp/ta-rh/mcp-1234567890abcdef.sock";
     const child = {
       pid: 123,
       killed: false,
@@ -85,10 +86,10 @@ describe("mcp host-only CLI", () => {
       processId: "mcp-host:run-1",
       owner: { scope: "run", runId: "run-1" },
       executable: "node",
-      args: ["dist/cli/main.js", "mcp", "host", "--socket", "/state/runs/run-1/mcp-host.sock"],
+      args: ["dist/cli/main.js", "mcp", "host", "--socket", socketPath],
       cwd: "/repo",
       env: {},
-      socketPath: "/state/runs/run-1/mcp-host.sock",
+      socketPath,
       projectStateDir: "/state",
       startupTimeoutMs: 10,
       nowEpochMs: () => 0,
@@ -99,10 +100,10 @@ describe("mcp host-only CLI", () => {
     expect(startInput).toMatchObject({
       kind: "mcp-host",
       owner: { scope: "run", runId: "run-1" },
-      args: ["dist/cli/main.js", "mcp", "host", "--socket", "/state/runs/run-1/mcp-host.sock"],
+      args: ["dist/cli/main.js", "mcp", "host", "--socket", socketPath],
       metadata: {
         runId: "run-1",
-        socketPath: "/state/runs/run-1/mcp-host.sock",
+        socketPath,
         projectStateDir: "/state",
       },
     });

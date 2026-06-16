@@ -56,6 +56,15 @@ describe("static tool catalog", () => {
     expect(writeSchema.required).toEqual(["expectedInputSeq", "text"]);
     expect(writeSchema.properties).not.toHaveProperty("session");
     expect(writeSchema.additionalProperties).toBe(false);
+    expect(TERMINAL_WRITE_TOOL_DEFINITION.description).toContain(
+      "never auto-submits/runs a shell line",
+    );
+    expect(TERMINAL_WRITE_TOOL_DEFINITION.description).toContain(
+      "\"echo 'hello world'\\n\" submits it",
+    );
+    expect(String(writeSchema.properties?.text?.description)).toContain(
+      "no newline means no Enter and no command execution",
+    );
 
     expect(keySchema.required).toEqual(["expectedInputSeq", "key"]);
     expect(keySchema.properties).not.toHaveProperty("session");

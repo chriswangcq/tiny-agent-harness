@@ -13,6 +13,7 @@ import type { RiskFindingSummary, RunBrowserView } from "./debugger.js";
 export type TuiViewModel = {
   run: RunHeaderView;
   conversation: ConversationItem[];
+  notices?: TuiNoticeItem[];
   loop: LoopFrame[];
   sessions: SessionView[];
   activeSkills: ActiveSkillView[];
@@ -59,6 +60,12 @@ export type ConversationItem =
       timestamp: string;
       text: string;
     };
+
+export type TuiNoticeItem = {
+  id: string;
+  timestamp: string;
+  text: string;
+};
 
 // ─── Loop Frames ───────────────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { mkdtempSync, existsSync, lstatSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -44,6 +44,19 @@ function runCli(args: string[], options?: { env?: NodeJS.ProcessEnv }): { stdout
     stdout: parseCliOutput(result.stdout),
     stderr: parseCliOutput(result.stderr),
   };
+}
+
+async function waitForSocket(socketPath: string, child: ChildProcess): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (existsSync(socketPath) && lstatSync(socketPath).isSocket()) {
+      return;
+    }
+    if (child.exitCode !== null) {
+      throw new Error(`runtime replica exited before socket was ready: ${socketPath}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`timed out waiting for runtime replica socket: ${socketPath}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -139,7 +152,7 @@ describe("envelope helpers", () => {
 // Real CLI boundary tests — IM
 // ---------------------------------------------------------------------------
 describe("IM CLI real output envelope", () => {
-  it("success: im admin post produces envelope with tool, version, ok, id, and endpoints", () => {
+  it("error: removed IM admin path produces failure envelope and does not write IM files", () => {
     const tmp = mkdtempSync(join(tmpdir(), "im-env-test-"));
     try {
       const result = runCli([
@@ -156,28 +169,28 @@ describe("IM CLI real output envelope", () => {
         "--state-dir",
         tmp,
       ]);
-      const env = result.stdout as Record<string, unknown> | null;
+      const env = result.stderr as Record<string, unknown> | null;
       expect(env).not.toBeNull();
-      expect(env!.ok).toBe(true);
+      expect(env!.ok).toBe(false);
       expect(env!.tool).toBe("im");
       expect(env!.version).toBeDefined();
-      expect(env!.id).toBeDefined();
-      expect(env!.from).toBe("user:main");
-      expect(env!.to).toBe("member:team-p6/coder-1");
+      expect(env!.errorCode).toBe("IM_ERROR");
+      expect(String(env!.error)).toContain("Usage: tiny-agent im");
+      expect(existsSync(join(tmp, "im"))).toBe(false);
     } finally {
       if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
     }
   });
 
-  it("error: ordinary im post without host socket produces failure envelope on stderr", () => {
+  it("error: ordinary im post without runtime host socket produces failure envelope on stderr", () => {
     const result = runCli(["im", "post", "--json", "--text", "hello"]);
     const stderr = result.stderr as Record<string, unknown> | null;
     expect(stderr).not.toBeNull();
     expect(stderr!.ok).toBe(false);
     expect(stderr!.tool).toBe("im");
     expect(stderr!.version).toBeDefined();
-    expect(stderr!.errorCode).toBe("IM_HOST_NOT_FOUND");
-    expect(String(stderr!.error)).toContain("TAH_IM_HOST_SOCKET");
+    expect(stderr!.errorCode).toBe("RUNTIME_HOST_NOT_FOUND");
+    expect(String(stderr!.error)).toContain("TAH_RUNTIME_HOST_SOCKET");
   });
 
   it("error: ordinary im post rejects direct --state-dir access", () => {
@@ -208,54 +221,31 @@ describe("IM CLI real output envelope", () => {
     }
   });
 
-  it("success: im admin recv produces envelope with tool, ok, messages", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "im-env-test-"));
-    try {
-      runCli([
-        "im",
-        "admin",
-        "post",
-        "--json",
-        "--from",
-        "user:main",
-        "--to",
-        "member:team-p6/coder-1",
-        "--text",
-        "hi",
-        "--state-dir",
-        tmp,
-      ]);
-      const result = runCli([
-        "im",
-        "admin",
-        "recv",
-        "--json",
-        "--as",
-        "member:team-p6/coder-1",
-        "--with",
-        "user:main",
-        "--state-dir",
-        tmp,
-      ]);
-      const env = result.stdout as Record<string, unknown> | null;
-      expect(env).not.toBeNull();
-      expect(env!.ok).toBe(true);
-      expect(env!.tool).toBe("im");
-      expect(env!.version).toBeDefined();
-      expect(env!.as).toBe("member:team-p6/coder-1");
-      expect(env!.with).toBe("user:main");
-      expect(env!.count).toBeGreaterThanOrEqual(1);
-      expect(Array.isArray(env!.messages)).toBe(true);
-    } finally {
-      if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
-    }
-  });
 });
 
 describe("Team CLI real output envelope", () => {
-  it("persists team roster state and uses IM for work instructions", () => {
+  it("persists team roster state and uses an edge runtime replica for work instructions", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "team-env-test-"));
+    const socketPath = join(tmpdir(), `tiny-agent-edge-${process.pid}-${Date.now()}.sock`);
+    const runtimeReplica = spawn(
+      process.execPath,
+      [
+        "dist/cli/main.js",
+        "runtime",
+        "replica",
+        "--mode",
+        "edge",
+        "--edge-id",
+        "team-envelope-test",
+        "--socket",
+        socketPath,
+        "--state-dir",
+        tmp,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
     try {
+      await waitForSocket(socketPath, runtimeReplica);
       expect(runCli(["team", "create", "team-p6", "--state-dir", tmp]).stdout)
         .toMatchObject({ ok: true, tool: "team" });
       expect(
@@ -310,11 +300,10 @@ describe("Team CLI real output envelope", () => {
       expect(
         runCli([
           "im",
-          "admin",
           "bind",
           "--json",
-          "--state-dir",
-          tmp,
+          "--runtime-host-socket",
+          socketPath,
           "--run-id",
           "run-worker-1",
           "--self",
@@ -329,11 +318,10 @@ describe("Team CLI real output envelope", () => {
       expect(
         runCli([
           "im",
-          "admin",
           "post",
           "--json",
-          "--state-dir",
-          tmp,
+          "--runtime-host-socket",
+          socketPath,
           "--from",
           "user:main",
           "--to",
@@ -350,11 +338,10 @@ describe("Team CLI real output envelope", () => {
 
       const runMessages = runCli([
         "im",
-        "admin",
         "run-recv",
         "--json",
-        "--state-dir",
-        tmp,
+        "--runtime-host-socket",
+        socketPath,
         "--run-id",
         "run-worker-1",
       ]).stdout as Record<string, any>;
@@ -385,7 +372,9 @@ describe("Team CLI real output envelope", () => {
         "roster_event",
       ]);
     } finally {
+      runtimeReplica.kill("SIGTERM");
       if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
+      if (existsSync(socketPath)) rmSync(socketPath, { force: true });
     }
   });
 });

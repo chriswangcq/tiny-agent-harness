@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ImHostRequest, ImHostResponse } from "../src/im/index.js";
+import type { RuntimeImRequest, RuntimeImResponse } from "../src/im/index.js";
 import {
   DEFAULT_RUN_USER_ENDPOINT,
   ackPublicRunUserMessage,
@@ -9,24 +9,25 @@ import {
   receivePublicRunUserMessages,
   resolveRunImEndpoints,
   selectUserPeerMessages,
-  type RunImHostRequest,
+  type RunImRuntimeRequest,
 } from "../src/cli/run-im.js";
 
 function hostResult(
-  request: ImHostRequest,
+  request: RuntimeImRequest,
   data: Record<string, unknown>,
-): ImHostResponse {
+): RuntimeImResponse {
   return {
     schemaVersion: 1,
     id: request.id,
     ok: true,
     type: "im.result",
-    command: request.type as Exclude<ImHostRequest["type"], "im.shutdown">,
+    command: request.type,
     data,
   };
 }
 
-describe("public run IM host client", () => {
+describe("public run IM runtime client", () => {
+  const runtimeSocketPath = "/tmp/project/runtime.sock";
   it("derives default run and user endpoints", () => {
     expect(createRunImSelfEndpoint("run-123")).toBe("run:run-123");
     expect(resolveRunImEndpoints({ runId: "run-123" })).toEqual({
@@ -35,11 +36,11 @@ describe("public run IM host client", () => {
     });
   });
 
-  it("binds the default run a2user pair through im-host", async () => {
-    const calls: RunImHostRequest[] = [];
+  it("binds the default run a2user pair through runtime replica", async () => {
+    const calls: RunImRuntimeRequest[] = [];
 
     const binding = await ensureDefaultRunImBinding({
-      socketPath: "/tmp/run/im-host.sock",
+      socketPath: runtimeSocketPath,
       runId: "run-123",
       newRequestId: () => "bind-1",
       requestHost: async (call) => {
@@ -66,7 +67,7 @@ describe("public run IM host client", () => {
     });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
-      socketPath: "/tmp/run/im-host.sock",
+      socketPath: runtimeSocketPath,
       timeoutMs: 30_000,
     });
     expect(calls[0]!.request).toMatchObject({
@@ -80,8 +81,8 @@ describe("public run IM host client", () => {
     });
   });
 
-  it("receives all run messages through im-host and selects only user-peer messages", async () => {
-    const calls: RunImHostRequest[] = [];
+  it("receives all run messages through runtime replica and selects only user-peer messages", async () => {
+    const calls: RunImRuntimeRequest[] = [];
     const userMessage = {
       id: "msg-user",
       text: "start task",
@@ -94,7 +95,7 @@ describe("public run IM host client", () => {
     };
 
     const all = await receivePublicRunIm({
-      socketPath: "/tmp/run/im-host.sock",
+      socketPath: runtimeSocketPath,
       runId: "run-123",
       newRequestId: () => "recv-1",
       requestHost: async (call) => {
@@ -124,7 +125,7 @@ describe("public run IM host client", () => {
 
     await expect(
       receivePublicRunUserMessages({
-        socketPath: "/tmp/run/im-host.sock",
+        socketPath: runtimeSocketPath,
         runId: "run-123",
         requestHost: async (call) =>
           hostResult(call.request, {
@@ -138,11 +139,11 @@ describe("public run IM host client", () => {
     ).resolves.toMatchObject([{ id: "msg-user" }]);
   });
 
-  it("acks only the default user peer channel through im-host", async () => {
-    const calls: RunImHostRequest[] = [];
+  it("acks only the default user peer channel through runtime replica", async () => {
+    const calls: RunImRuntimeRequest[] = [];
 
     await ackPublicRunUserMessage({
-      socketPath: "/tmp/run/im-host.sock",
+      socketPath: runtimeSocketPath,
       runId: "run-123",
       messageId: "msg-user",
       newRequestId: () => "ack-1",
@@ -167,10 +168,10 @@ describe("public run IM host client", () => {
     });
   });
 
-  it("surfaces im-host errors from run IM operations", async () => {
+  it("surfaces runtime IM errors from run IM operations", async () => {
     await expect(
       receivePublicRunIm({
-        socketPath: "/tmp/run/im-host.sock",
+        socketPath: runtimeSocketPath,
         runId: "run-123",
         requestHost: async (call) => ({
           schemaVersion: 1,

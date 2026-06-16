@@ -38,12 +38,15 @@ describe("runtime default authority documentation", () => {
     }
   });
 
-  it("documents TerminalHost and ModelGateway as default run authorities", () => {
+  it("documents runtime replica, TerminalHost, and ModelGateway as default authorities", () => {
     const architecture = fs.readFileSync(
       path.resolve("docs/runtime-process-architecture.md"),
       "utf-8",
     );
 
+    expect(architecture).toMatch(
+      /`Runtime replica` owns a run-local runtime socket/,
+    );
     expect(architecture).toMatch(
       /`Terminal Host` owns PTY sessions, screen buffers, visual-line cursors, and/,
     );
@@ -52,18 +55,23 @@ describe("runtime default authority documentation", () => {
     );
     expect(architecture).toContain("tiny-agent model-gateway --socket <run-socket>");
     expect(architecture).toContain("tiny-agent terminal-host --socket <run-socket>");
+    expect(architecture).toContain("tiny-agent runtime replica --mode run --run-id <runId> --socket <run-socket>");
+    expect(architecture).not.toContain("tiny-agent im host --socket <run-socket>");
     expect(architecture).not.toContain("transport pipe");
   });
 
-  it("documents every resident host socket artifact in state layout", () => {
+  it("documents every resident host state/log artifact in state layout", () => {
     const stateLayout = fs.readFileSync(
       path.resolve("docs/state-layout.md"),
       "utf-8",
     );
 
     expect(stateLayout).toContain(
-      "{terminal-host,codeq-host,skill-host,mcp-host,model-gateway}.*",
+      "{terminal-host,codeq-host,skill-host,mcp-host,model-gateway}.{json,stderr.log}",
     );
+    expect(stateLayout).toContain("runtime-replica.{json,stderr.log}");
+    expect(stateLayout).toContain("Resident host sockets");
+    expect(stateLayout).toContain("ephemeral");
   });
 
   it("guards against reintroducing old terminal or model resident transports", () => {

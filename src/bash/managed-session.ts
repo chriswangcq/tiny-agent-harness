@@ -177,11 +177,11 @@ export class ManagedPtySession {
     startOffset: number;
     endOffset: number;
   } {
-    const startOffset = Math.max(0, Math.min(byteOffset, this.outputBytes));
     const output =
       this.outputLogPath === undefined
         ? Buffer.concat(this.outputChunks, this.outputBytes)
         : readOutputLog(this.outputLogPath);
+    const startOffset = utf8SafeStartOffset(output, byteOffset);
     return {
       chunk: output.subarray(startOffset).toString("utf-8"),
       startOffset,
@@ -234,6 +234,21 @@ function readOutputLog(outputLogPath: string): Buffer {
   } catch {
     return Buffer.alloc(0);
   }
+}
+
+function utf8SafeStartOffset(output: Buffer, byteOffset: number): number {
+  let startOffset = Math.max(0, Math.min(byteOffset, output.length));
+  while (
+    startOffset < output.length &&
+    isUtf8ContinuationByte(output[startOffset]!)
+  ) {
+    startOffset += 1;
+  }
+  return startOffset;
+}
+
+function isUtf8ContinuationByte(byte: number): boolean {
+  return (byte & 0b1100_0000) === 0b1000_0000;
 }
 
 function positiveInteger(value: number | undefined): number | undefined {

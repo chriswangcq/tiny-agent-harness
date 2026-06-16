@@ -28,11 +28,14 @@ export type SpawnedProcessPort = {
   stdout?: NodeJS.ReadableStream | null;
   stderr?: NodeJS.ReadableStream | null;
   kill(signal?: NodeJS.Signals | number): boolean;
+  unref?: () => void;
   once(
     event: "exit",
     listener: (code: number | null, signal: NodeJS.Signals | null) => void,
   ): unknown;
 };
+
+export type ProcessStdioMode = "ignore" | "pipe";
 
 export type ProcessSpawnerPort = {
   spawn(
@@ -41,7 +44,8 @@ export type ProcessSpawnerPort = {
     options: {
       cwd: string;
       env: NodeJS.ProcessEnv;
-      stdio: readonly ["ignore" | "pipe", "pipe", "pipe"];
+      stdio: readonly [ProcessStdioMode, ProcessStdioMode, ProcessStdioMode];
+      detached?: boolean;
     },
   ): SpawnedProcessPort;
 };
@@ -72,7 +76,8 @@ export type StartRunProcessInput = {
 
 export type StartManagedProcessInput = StartRunProcessInput & {
   kind: RuntimeProcessKind;
-  stdio?: readonly ["ignore" | "pipe", "pipe", "pipe"];
+  stdio?: readonly [ProcessStdioMode, ProcessStdioMode, ProcessStdioMode];
+  detached?: boolean;
 };
 
 export type StartedRunProcess = {
@@ -121,6 +126,7 @@ export class RunSupervisor {
         cwd: input.cwd,
         env: input.env,
         stdio: input.stdio ?? ["ignore", "pipe", "pipe"],
+        detached: input.detached,
       });
     } catch (error) {
       const crashed = markProcessCrashed(starting, {

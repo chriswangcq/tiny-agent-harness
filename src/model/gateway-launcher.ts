@@ -63,11 +63,12 @@ export async function launchModelGateway(
   return {
     model: createModelGatewayPort({
       transport: {
-        request: (request) =>
+        request: (request, options) =>
           requestModelGatewaySocket({
             socketPath: input.socketPath,
             request,
             timeoutMs,
+            onProgress: options?.onProgress,
           }),
       },
       newRequestId: input.newRequestId,

@@ -1,6 +1,7 @@
 import type { ModelPort } from "../run/orchestrator.js";
 import type {
   FimStepOutput,
+  ModelProgressEvent,
   ModelStepContext,
   ToolDefinition,
 } from "../types/index.js";
@@ -29,6 +30,13 @@ export type ModelGatewayResponse =
       schemaVersion: 1;
       id: string;
       ok: true;
+      type: "model.generateTurn.progress";
+      progress: ModelProgressEvent;
+    }
+  | {
+      schemaVersion: 1;
+      id: string;
+      ok: true;
       type: "model.generateTurn.result";
       output: FimStepOutput;
     }
@@ -49,8 +57,20 @@ export type ModelGatewayResponse =
       };
     };
 
+export type ModelGatewayTerminalResponse = Exclude<
+  ModelGatewayResponse,
+  { type: "model.generateTurn.progress" }
+>;
+
+export type ModelGatewayRequestOptions = {
+  onProgress?: (event: ModelProgressEvent) => void | Promise<void>;
+};
+
 export interface ModelGatewayTransportPort {
-  request(request: ModelGatewayRequest): Promise<ModelGatewayResponse>;
+  request(
+    request: ModelGatewayRequest,
+    options?: ModelGatewayRequestOptions,
+  ): Promise<ModelGatewayTerminalResponse>;
 }
 
 export type ModelGatewayPortDeps = {
@@ -61,13 +81,16 @@ export type ModelGatewayPortDeps = {
 export function createModelGatewayPort(deps: ModelGatewayPortDeps): ModelPort {
   return {
     async generateTurn(context, options) {
-      const response = await deps.transport.request({
-        schemaVersion: 1,
-        id: deps.newRequestId(),
-        type: "model.generateTurn",
-        context,
-        tools: options.tools,
-      });
+      const response = await deps.transport.request(
+        {
+          schemaVersion: 1,
+          id: deps.newRequestId(),
+          type: "model.generateTurn",
+          context,
+          tools: options.tools,
+        },
+        { onProgress: options.onProgress },
+      );
       if (!response.ok) {
         throw new Error(
           `Model gateway request failed: ${response.error.code}: ${response.error.message}`,
@@ -163,12 +186,27 @@ export function parseModelGatewayResponse(
   }
   if (
     parsed.type !== "model.generateTurn.result" &&
-    parsed.type !== "model.shutdown.result"
+    parsed.type !== "model.shutdown.result" &&
+    parsed.type !== "model.generateTurn.progress"
   ) {
     throw new Error("Invalid model gateway success response: unsupported type");
   }
   if (parsed.type === "model.generateTurn.result" && !isRecord(parsed.output)) {
     throw new Error("Invalid model generate response: output must be object");
+  }
+  if (parsed.type === "model.generateTurn.progress") {
+    if (!isRecord(parsed.progress)) {
+      throw new Error("Invalid model gateway progress: progress must be object");
+    }
+    if (parsed.progress.type !== "thinking_delta") {
+      throw new Error("Invalid model gateway progress: type must be thinking_delta");
+    }
+    if (typeof parsed.progress.content !== "string") {
+      throw new Error("Invalid model gateway progress: content must be string");
+    }
+    if (typeof parsed.progress.sequence !== "number") {
+      throw new Error("Invalid model gateway progress: sequence must be number");
+    }
   }
   return parsed as Extract<ModelGatewayResponse, { ok: true }>;
 }

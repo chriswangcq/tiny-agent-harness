@@ -4,7 +4,7 @@
 
 - **Home-scoped project store**：默认状态根是 `~/.tiny-agent/projects/<projectId>/`，项目源码目录不再自动创建 `.tiny-agent/`。
 - **User-scoped runtime config**：provider credentials 和默认模型配置放在 `~/.tiny-agent/config.json`，不放进项目源码目录，也不混入 project state。
-- **Run 是执行单元**：一个 run 的执行状态（session、environment、skill-runs、host socket/state、debug artifacts）在 `runs/run-<ts>/` 下，可独立归档、恢复和清理。public IM 是 project-scoped 服务，run 通过显式 run binding 关联 endpoint pair。Team/supervisor/worker member state 属于 project-scoped `teams/<teamId>/` 控制面，run 通过显式 team metadata 或 team run reference 被关联。
+- **Run 是执行单元**：一个 run 的执行状态（session、environment、skill-runs、resident host state/log、debug artifacts）在 `runs/run-<ts>/` 下，可独立归档、恢复和清理。resident host socket 是短 tmp-root 下的 ephemeral live endpoint，实际 `socketPath` 记录在 process metadata / host state 中。public IM 是 project-scoped 服务，run 通过显式 run binding 关联 endpoint pair。Team/supervisor/worker member state 属于 project-scoped `teams/<teamId>/` 控制面，run 通过显式 team metadata 或 team run reference 被关联。
 - **Skills 项目公共**：技能定义是跨 run 共享的知识资产，放在项目级 `skills/` 下。
 - **MCP 项目公共**：MCP server registry 是项目能力配置，放在 project state root 下；公开 CLI 调用进入 run-owned `mcp-host`，再通过 run 的 PTY/transcript/session log 审计。
 
@@ -25,7 +25,7 @@
 │
 ├── mcp-servers.json                # 公共：MCP server registry（跨 run 共享）
 │
-├── im/                             # 公共：public IM endpoint pairs / channels / run bindings
+	├── im/                             # 公共：public IM endpoint pairs / channels / run bindings
 │   ├── endpoints/
 │   │   └── <endpointId>.json
 │   ├── pairs/
@@ -36,19 +36,25 @@
 │   │       ├── messages.jsonl
 │   │       └── cursors/
 │   │           └── <consumerId>.cursor
-│   └── run-bindings/
-│       └── <runId>.json
-│
-├── runs/
+	│   └── run-bindings/
+	│       └── <runId>.json
+	│
+	├── runs/
 │   ├── latest.json                 # 指向最新 run
 │   └── run-<ts>/                   # 单个 run 执行单元
-│       ├── state.json              # AgentRunState 状态机快照
-│       ├── codeq-host.sock         # run-owned resident host socket
-│       ├── codeq-host.json         # run-owned resident host state
-│       ├── skill-host.sock         # run-owned resident host socket
+	│       ├── state.json              # AgentRunState 状态机快照
+	│       ├── runtime-replica.json    # run-owned runtime replica state
+	│       ├── runtime-replica.stderr.log
+	│       ├── terminal-host.json      # run-owned resident host state
+	│       ├── terminal-host.stderr.log
+	│       ├── codeq-host.json         # run-owned resident host state
+│       ├── codeq-host.stderr.log
 │       ├── skill-host.json         # run-owned resident host state
-│       ├── mcp-host.sock           # run-owned resident host socket
+│       ├── skill-host.stderr.log
 │       ├── mcp-host.json           # run-owned resident host state
+│       ├── mcp-host.stderr.log
+│       ├── model-gateway.json      # run-owned resident host state
+│       ├── model-gateway.stderr.log
 │       ├── transcript.jsonl        # 完整执行转录（每行一个 RunEvent）
 │       │
 │       ├── sessions/               # 本 run 的终端 session raw PTY log
@@ -148,8 +154,9 @@ public IM 是 project-scoped 服务，不属于任何单个 run。endpoint pair 
 | 子目录 | 内容 | 格式 |
 |--------|------|------|
 | `state.json` | AgentRunState 快照 | JSON |
-| `codeq-host.sock` / `skill-host.sock` / `mcp-host.sock` | 当前 run 的 resident host socket | Unix socket |
-| `codeq-host.json` / `skill-host.json` / `mcp-host.json` | 当前 run 的 resident host 状态记录 | JSON |
+| `{terminal-host,codeq-host,skill-host,mcp-host,model-gateway}.json` | 当前 run 的 resident host 状态记录，包含可观测 socketPath | JSON |
+| `{terminal-host,codeq-host,skill-host,mcp-host,model-gateway}.stderr.log` | 当前 run 的 resident host stderr 诊断日志 | 文本 |
+| Resident host sockets | 短 tmp-root 下的 ephemeral Unix socket；不放进 `runs/<runId>/`，实际路径由 process metadata/env 注入记录 | Unix socket |
 | `transcript.jsonl` | 完整执行事件流 | JSONL |
 | `sessions/` | 终端 PTY raw log；文件名为 sanitize 后的 session id 加短 hash，避免路径穿越和重名 | 纯文本 |
 | `environment/` | 环境事件（one-shot events + persistent facts） | JSONL |
@@ -172,7 +179,7 @@ Team 是 workflow/supervisor owner，位于 project state root 下。AgentRun �
 
 ### PTY 启动环境变量
 
-Managed PTY 启动时会把当前 run 信息和 run-owned host socket 注入 shell 环境，供 agent 在 bash 内调用 `tiny-agent im`、`tiny-agent skill` 等子命令时自动落到当前 run：
+Managed PTY 启动时会把当前 run 信息、runtime replica socket 和 run-owned host socket 注入 shell 环境，供 agent 在 bash 内调用 `tiny-agent im`、`tiny-agent skill` 等子命令时自动落到当前 run：
 
 | 环境变量 | 含义 |
 |----------|------|
@@ -180,8 +187,7 @@ Managed PTY 启动时会把当前 run 信息和 run-owned host socket 注入 she
 | `TAH_RUN_DIR` | 当前 `runs/run-<ts>/` 目录 |
 | `TAH_STATE_DIR` | CLI 默认 run 状态目录；在 PTY 中等于当前 run 目录 |
 | `TAH_PROJECT_STATE_DIR` | 当前项目的 home-scoped state root；供 MCP registry、team lifecycle/reaper 等跨 run 控制面使用 |
-| `TAH_IM_STATE_DIR` | public IM state root；在 PTY 中等于当前 project state root |
-| `TAH_IM_HOST_SOCKET` | 当前 run 的 IM host socket；`tiny-agent im ...` 普通命令必须通过它调用 |
+| `TAH_RUNTIME_HOST_SOCKET` | runtime replica socket；`tiny-agent im ...` 普通命令必须通过它调用 |
 | `TAH_IM_RUN_ID` | 当前 run id，供 `tiny-agent im run-recv/run-ack` 默认定位 |
 | `TAH_IM_SELF_ENDPOINT` | 当前 run 的默认回复 endpoint，例如 `run:<runId>` |
 | `TAH_IM_USER_ENDPOINT` | 默认用户 endpoint，当前为 `user:main` |
@@ -197,7 +203,7 @@ Managed PTY 启动时会把当前 run 信息和 run-owned host socket 注入 she
 | `TAH_TRANSCRIPT_PATH` | 当前 run transcript JSONL |
 | `TAH_ENVIRONMENT_EVENTS_PATH` | 当前 run environment events JSONL |
 
-因此 agent 在 PTY 中执行 `tiny-agent im send --kind status --text-stdin`、`tiny-agent skill ...`、`tiny-agent codeq ...`、`tiny-agent mcp ...` 或 `tiny-agent team ...` 时，不需要额外传 `--state-dir`。IM、Skill、CodeQ 和 MCP 的公开 CLI 依赖 host socket；人工调试这些能力时应显式传 `--host-socket <path>` 连接某个 run host。需要直接操作 public IM 文件态的外部/bootstrap/debug 边界使用 `tiny-agent im admin ...`。
+因此 agent 在 PTY 中执行 `tiny-agent im send --kind status --text-stdin`、`tiny-agent skill ...`、`tiny-agent codeq ...`、`tiny-agent mcp ...` 或 `tiny-agent team ...` 时，不需要额外传 `--state-dir`。IM 公开 CLI 依赖 runtime replica socket；Skill、CodeQ 和 MCP 公开 CLI 依赖 run-owned host socket。人工或外部控制边界调试 IM 时先启动 `tiny-agent runtime replica --mode edge`，再显式传 `--runtime-host-socket <path>`；调试 run-owned hosts 时显式传 `--host-socket <path>`。
 
 ### PTY session 生命周期
 
@@ -226,8 +232,10 @@ TUI 启动器的 stdout/stderr 日志，用于排查 UI 启动问题。不属于
 | 能力 | 当前路径 |
 |------|----------|
 | Public IM endpoints/pairs/channels/run bindings | `~/.tiny-agent/projects/<projectId>/im/` |
+| Runtime replica state/log | `~/.tiny-agent/projects/<projectId>/runs/<runId>/runtime-replica.{json,stderr.log}` |
 | PTY raw logs | `~/.tiny-agent/projects/<projectId>/runs/<runId>/sessions/` |
-| Resident host socket/state | `~/.tiny-agent/projects/<projectId>/runs/<runId>/{terminal-host,codeq-host,skill-host,mcp-host,model-gateway}.*` |
+| Resident host state/log | `~/.tiny-agent/projects/<projectId>/runs/<runId>/{terminal-host,codeq-host,skill-host,mcp-host,model-gateway}.{json,stderr.log}` |
+| Resident host sockets | short tmp root such as `<tmp>/ta-rh/<kind>-<hash>.sock`（ephemeral；实际路径记录在 process metadata/env） |
 | Environment events | `~/.tiny-agent/projects/<projectId>/runs/<runId>/environment/events.jsonl` |
 | Skill runs | `~/.tiny-agent/projects/<projectId>/runs/<runId>/skill-runs/` |
 | Model context snapshot | `~/.tiny-agent/projects/<projectId>/runs/<runId>/session.json` |

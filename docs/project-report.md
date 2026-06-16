@@ -33,7 +33,7 @@
 User / IM
   |
   v
-public IM channel log  ->  run-owned im-host poller  ->  Environment  ->  system reminder
+public IM channel log  ->  runtime-replica IM service  ->  run poller  ->  Environment  ->  system reminder
   |                    ^
   v                    |
 RunOrchestrator <-> AgentRunState
@@ -277,7 +277,7 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 ### 4.12 Sub-agent Team Domain
 
-`src/subagent` 当前是 sub-agent team 的轻量控制面：核心是 project-scoped roster/lifecycle 模型。team adapter 负责 team roster snapshot 落盘，不再拥有 task FSM 或 IM dispatch。派工由上层显式调用 public IM direct-file admin 边界，例如 `tiny-agent im admin post --from user:main --to member:<teamId>/<memberId> --text ...` 完成；team-member-owned run 通过 `tiny-agent im admin bind --run-id <runId> --self member:<teamId>/<memberId> --peer user:main` 关联 endpoint pair。它提供：
+`src/subagent` 当前是 sub-agent team 的轻量控制面：核心是 project-scoped roster/lifecycle 模型。team adapter 负责 team roster snapshot 落盘，不再拥有 task FSM 或 IM dispatch。派工由上层显式调用 edge runtime replica socket，例如 `tiny-agent im post --runtime-host-socket <edge-socket> --from user:main --to member:<teamId>/<memberId> --text ...` 完成；team-member-owned run 通过 `tiny-agent im bind --runtime-host-socket <edge-socket> --run-id <runId> --self member:<teamId>/<memberId> --peer user:main` 关联 endpoint pair。它提供：
 
 - `TeamRosterState`：member / status / run binding / assignment label / applied event ids。
 - `applyTeamRosterEvent(...)`：纯 FSM reducer，处理 add/update/status/heartbeat/terminate。
@@ -300,7 +300,7 @@ DeepSeek V4 DSML 解析失败不再只是一个字符串错误。`src/model/dsml
 
 `src/subagent/lifecycle-runtime-adapter.ts` 是纯 adapter，接收显式 `TeamSnapshot`（含 `rosterState` 与 `processExistence?: Record<string, boolean>`）和注入 port（时钟、事件追加、进程 shutdown、roster event），提供 `recordHeartbeat`、`enumerateWorkers`、`runReaper`、`requestShutdown`。它内部调用 `supervisor-lifecycle.ts` 的纯决策函数（`interpretHeartbeat`、`evaluateLease`、`computeLifecycleState`、`decideReaperAction`）来推导 `WorkerLifecycleState`（healthy / stale / expired / grace_period / shutdown / terminated / missing_process / unknown）。
 
-CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-agent team --help` 暴露 `tiny-agent team create|member|lifecycle`，外部派工通过 `tiny-agent im admin post`。普通 team 命令的 effect boundary 在 `src/subagent/team-cli-adapter.ts`；lifecycle 命令的 effect boundary 在 `src/subagent/lifecycle-cli-adapter.ts`。新的 ownership model 要求 lifecycle write path 显式绑定 `teamId`，不能从 run id 隐式猜 team。
+CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-agent team --help` 暴露 `tiny-agent team create|member|lifecycle`，外部派工通过 `tiny-agent im post --runtime-host-socket <edge-socket>`。普通 team 命令的 effect boundary 在 `src/subagent/team-cli-adapter.ts`；lifecycle 命令的 effect boundary 在 `src/subagent/lifecycle-cli-adapter.ts`。新的 ownership model 要求 lifecycle write path 显式绑定 `teamId`，不能从 run id 隐式猜 team。
 
 **Reaper shutdown chain**: the `runReaper` adapter function identifies stale active workers (heartbeat age past threshold, member status not `terminated` or `offline`). For each stale worker it emits a `shutdown_requested` lifecycle event, attempts graceful shutdown, then records `shutdown_completed` or `shutdown_failed`. Successful shutdown marks the roster member status `terminated`. This unified chain ensures stale workers are cleanly retired and do not accumulate in the team snapshot.
 
@@ -450,7 +450,7 @@ CLI 可发现性：`tiny-agent --help` 暴露 `tiny-agent team <group>`，`tiny-
 | --- | --- | --- |
 | 持续验证要跟上 | 最新审计中 `npm run typecheck`、`npm run build` 和全量 `npm test` 已通过；后续改动仍要保持这条线常绿。 | 把 typecheck/build/test/diff check 固定为提交前检查。 |
 | 文档与实现快速变化 | README、docs、system prompt 已覆盖 terminal/session、MCP、IM、skill、TUI、state layout、sub-agent domain 和 recovery/replay；这些边界仍会继续演进。 | 每次功能落地后同步更新对应设计文档和 project report。 |
-| 状态持久化仍需持续校准 | 主路径已经把 IM、environment、skill-runs、resident host socket/state、debug artifacts 和 session logs 收敛到明确目录；但人工调试路径、host socket 注入和锁粒度仍要持续验证。 | 用集成测试覆盖 run-scoped env 注入、多 CLI 共用 state root、并发写、resume/replay。 |
+| 状态持久化仍需持续校准 | 主路径已经把 IM、environment、skill-runs、resident host state/log、debug artifacts 和 session logs 收敛到明确目录；resident host socket 是短 tmp-root ephemeral endpoint，实际路径由 process metadata/env 记录。人工调试路径、host socket 注入和锁粒度仍要持续验证。 | 用集成测试覆盖 run-scoped env 注入、多 CLI 共用 state root、并发写、resume/replay。 |
 | terminal/session 约束对模型要求高 | 模型必须学会通过 shell 调 skill/codeq/im 等 CLI，并在 heredoc、前台 stdin consumer、`--text-stdin` 和 session 管理之间做正确选择，而不是直接获得 typed business tool affordance。 | 在 system prompt 和 examples 中强化 heredoc / `--text-stdin` / session observe 的边界，并避免示例污染大生成文件路径。 |
 | 低级 session noise 仍需观察 | 当前 `io_wait` 采用 priority-based wait；默认 wait 已提升为 meaningful event 阈值，level-0 `session_output_available` 不再唤醒普通 wait，用户消息仍以 level `100` 打断窄 wait。剩余风险在于长期运行 session 的事件体量和 reminder 可读性。 | 持续治理 event taxonomy：对低价值 session noise 做去重、聚合或 persistent fact 化，并用 TUI/debugger 展示 wake reason。 |
 | review 目前默认 approve | 默认 runtime 仍是 demo approve，但已有纯 policy evaluator / ToolPolicyReviewer 可作为产品模式基础。 | 增加显式配置开关、workspace policy、网络/文件权限和人工确认模式。 |

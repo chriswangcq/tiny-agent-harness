@@ -41,7 +41,7 @@ const terminalWriteSchema: JsonSchema = {
     text: {
       type: "string",
       description:
-        "Exact bytes to write to the current terminal session. It does not append Enter.",
+        "Exact bytes to write to the current terminal session. It never appends Enter or auto-runs a shell line; no newline means no Enter and no command execution. Include \\n explicitly, e.g. \"echo 'hello world'\\n\".",
     },
     waitForReturnMs: WaitForReturnMsProperty,
   },
@@ -147,7 +147,7 @@ const sessionTerminateSchema: JsonSchema = {
 export const TERMINAL_WRITE_TOOL_DEFINITION: ToolDefinition = {
   name: "terminal_write",
   description:
-    "Write exact text to the current PTY session. This never appends Enter; include a newline or use terminal_key with enter. The observation returns one terminal screen and the latest terminal.inputSeq.",
+    "Write exact text to the current PTY session. This never appends Enter and never auto-submits/runs a shell line; include a newline or use terminal_key with enter. Example: text \"echo 'hello world'\" only types it, while \"echo 'hello world'\\n\" submits it. The observation returns one terminal screen and the latest terminal.inputSeq.",
   inputSchema: terminalWriteSchema,
 };
 

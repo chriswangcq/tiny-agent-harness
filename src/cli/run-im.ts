@@ -2,39 +2,39 @@ import { randomUUID } from "node:crypto";
 import {
   DEFAULT_RUN_USER_ENDPOINT,
   createRunImSelfEndpoint,
-  requestImHostSocket,
-  type ImHostRequest,
-  type ImHostResponse,
+  type RuntimeImRequest,
+  type RuntimeImResponse,
   type PublicImRunBindingRecord,
   type PublicImRunReceiveMessage,
   type PublicImRunReceiveResult,
 } from "../im/index.js";
+import { requestRuntimeReplicaIm } from "../runtime/runtime-replica.js";
 
 export { DEFAULT_RUN_USER_ENDPOINT, createRunImSelfEndpoint };
 
-const DEFAULT_RUN_IM_HOST_TIMEOUT_MS = 30_000;
+const DEFAULT_RUN_IM_TIMEOUT_MS = 30_000;
 
-export type RunImHostRequest = {
+export type RunImRuntimeRequest = {
   socketPath: string;
-  request: ImHostRequest;
+  request: RuntimeImRequest;
   timeoutMs: number;
 };
 
-export type RunImHostRequestPort = (
-  request: RunImHostRequest,
-) => Promise<ImHostResponse>;
+export type RunImRuntimeRequestPort = (
+  request: RunImRuntimeRequest,
+) => Promise<RuntimeImResponse>;
 
-export type PublicRunImHostInput = {
+export type PublicRunImRuntimeInput = {
   socketPath: string;
   runId: string;
   selfEndpoint?: string;
   userEndpoint?: string;
   timeoutMs?: number;
   newRequestId?: () => string;
-  requestHost?: RunImHostRequestPort;
+  requestHost?: RunImRuntimeRequestPort;
 };
 
-export type PublicRunImAckInput = PublicRunImHostInput & {
+export type PublicRunImAckInput = PublicRunImRuntimeInput & {
   messageId: string;
 };
 
@@ -50,10 +50,10 @@ export function resolveRunImEndpoints(input: {
 }
 
 export async function ensureDefaultRunImBinding(
-  input: PublicRunImHostInput,
+  input: PublicRunImRuntimeInput,
 ): Promise<PublicImRunBindingRecord> {
   const endpoints = resolveRunImEndpoints(input);
-  const data = await requestRunImHostData(input, {
+  const data = await requestRunImRuntimeData(input, {
     schemaVersion: 1,
     id: createRunImRequestId(input),
     type: "im.bind",
@@ -66,9 +66,9 @@ export async function ensureDefaultRunImBinding(
 }
 
 export async function receivePublicRunIm(
-  input: PublicRunImHostInput,
+  input: PublicRunImRuntimeInput,
 ): Promise<PublicImRunReceiveResult> {
-  const data = await requestRunImHostData(input, {
+  const data = await requestRunImRuntimeData(input, {
     schemaVersion: 1,
     id: createRunImRequestId(input),
     type: "im.run-recv",
@@ -85,7 +85,7 @@ export function selectUserPeerMessages(
 }
 
 export async function receivePublicRunUserMessages(
-  input: PublicRunImHostInput,
+  input: PublicRunImRuntimeInput,
 ): Promise<PublicImRunReceiveMessage[]> {
   const result = await receivePublicRunIm(input);
   return selectUserPeerMessages(result, input.userEndpoint ?? DEFAULT_RUN_USER_ENDPOINT);
@@ -94,7 +94,7 @@ export async function receivePublicRunUserMessages(
 export async function ackPublicRunUserMessage(
   input: PublicRunImAckInput,
 ): Promise<void> {
-  await requestRunImHostData(input, {
+  await requestRunImRuntimeData(input, {
     schemaVersion: 1,
     id: createRunImRequestId(input),
     type: "im.run-ack",
@@ -104,30 +104,32 @@ export async function ackPublicRunUserMessage(
   });
 }
 
-async function requestRunImHostData(
-  input: PublicRunImHostInput,
-  request: ImHostRequest,
+async function requestRunImRuntimeData(
+  input: PublicRunImRuntimeInput,
+  request: RuntimeImRequest,
 ): Promise<Record<string, unknown>> {
-  const requestHost = input.requestHost ?? requestImHostSocket;
+  const requestHost = input.requestHost ?? requestRuntimeReplicaIm;
   const response = await requestHost({
     socketPath: input.socketPath,
     request,
-    timeoutMs: input.timeoutMs ?? DEFAULT_RUN_IM_HOST_TIMEOUT_MS,
+    timeoutMs: input.timeoutMs ?? DEFAULT_RUN_IM_TIMEOUT_MS,
   });
 
   if (response.type === "im.error") {
     throw new Error(response.error.message);
   }
   if (response.type !== "im.result") {
-    throw new Error(`Unexpected IM host response: ${response.type}`);
+    throw new Error(
+      `Unexpected runtime IM response: ${String((response as { type?: unknown }).type)}`,
+    );
   }
   if (!isRecord(response.data)) {
-    throw new Error("Invalid IM host response: data must be an object");
+    throw new Error("Invalid runtime IM response: data must be an object");
   }
   return response.data;
 }
 
-function createRunImRequestId(input: PublicRunImHostInput): string {
+function createRunImRequestId(input: PublicRunImRuntimeInput): string {
   return input.newRequestId?.() ?? `run-im-${randomUUID()}`;
 }
 
@@ -137,7 +139,7 @@ function requireRecordField<T>(
 ): T {
   const value = data[field];
   if (!isRecord(value)) {
-    throw new Error(`Invalid IM host response: ${field} must be an object`);
+    throw new Error(`Invalid runtime IM response: ${field} must be an object`);
   }
   return value as T;
 }

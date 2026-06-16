@@ -100,6 +100,8 @@ Description:
 Write exact text bytes to the current PTY session. This tool never accepts a session id.
 Use it for shell commands, heredocs, REPL input, interactive answers, and stdin text.
 It does not append Enter unless text contains "\n".
+It does not auto-submit a shell line or run a command by itself.
+For example, text `echo 'hello world'` only types those bytes at the prompt; text `echo 'hello world'\n` submits the command.
 expectedInputSeq must match the current session's latest terminal.inputSeq.
 By default, the write returns after an immediate one-screen glance.
 Use io_wait to wait for environment events such as session_input_ready or session_returned_to_prompt.
@@ -120,7 +122,7 @@ Schema:
     },
     "text": {
       "type": "string",
-      "description": "Exact UTF-8 text bytes to write. Include newline explicitly when submitting a line."
+      "description": "Exact UTF-8 text bytes to write. Include newline explicitly when submitting a line; no newline means no Enter and no command execution."
     },
     "waitForReturnMs": {
       "type": "number",

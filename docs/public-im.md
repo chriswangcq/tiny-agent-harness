@@ -37,8 +37,7 @@ PTY 中会注入：
 
 | 环境变量 | 含义 |
 | --- | --- |
-| `TAH_IM_STATE_DIR` | project state root，public IM 的存储根 |
-| `TAH_IM_HOST_SOCKET` | 当前 run 的 IM host socket；普通 `tiny-agent im ...` 必须通过它调用 |
+| `TAH_RUNTIME_HOST_SOCKET` | 当前 run 的 runtime replica socket；普通 `tiny-agent im ...` 必须通过它调用 |
 | `TAH_IM_RUN_ID` | 当前 run id |
 | `TAH_IM_SELF_ENDPOINT` | 当前 run 回复时使用的 endpoint |
 | `TAH_IM_USER_ENDPOINT` | 默认用户 endpoint，当前为 `user:main` |
@@ -53,7 +52,7 @@ IM
 
 ## CLI
 
-普通 `tiny-agent im ...` 是当前 run 的 im-host socket client。它从 `TAH_IM_HOST_SOCKET` 连接 run-owned host，并由 host 使用当前 run 的默认 endpoint、peer 和 run binding。缺少 socket 时普通命令必须失败，不能回退到直接文件读写。
+普通 `tiny-agent im ...` 是 runtime-replica socket client。它从 `TAH_RUNTIME_HOST_SOCKET` 连接当前 run own 的 runtime replica；CLI 在 run PTY 边界用 `TAH_IM_RUN_ID`、`TAH_IM_SELF_ENDPOINT` 和 `TAH_IM_USER_ENDPOINT` 显式补齐 `runId/from/to/as/with/peer` 字段。runtime replica 不保存某个 run 的默认 endpoint 上下文。缺少 runtime socket 时普通命令必须失败，不能回退到文件读写。
 
 Agent 在 PTY 内发送回复：
 
@@ -65,36 +64,37 @@ tiny-agent im run-recv
 tiny-agent im run-ack --message-id <messageId> --peer user:main
 ```
 
-外部/TUI/bootstrap/debug 边界需要显式选择 direct-file admin 命令。创建或读取 endpoint pair：
+外部/TUI/bootstrap/debug 边界需要先启动 edge runtime replica，再把它的 socket 显式传给 `tiny-agent im ...`。创建或读取 endpoint pair：
 
 ```bash
-tiny-agent im admin pair --a user:main --b run:run-123 --kind a2user
+tiny-agent runtime replica --mode edge --edge-id operator --socket /tmp/ta-rh/operator-runtime.sock --state-dir <project-state>
+tiny-agent im pair --runtime-host-socket /tmp/ta-rh/operator-runtime.sock --a user:main --b run:run-123 --kind a2user
 ```
 
 把 run 绑定到 pair：
 
 ```bash
-tiny-agent im admin bind --run-id run-123 --self run:run-123 --peer user:main --kind a2user
+tiny-agent im bind --runtime-host-socket /tmp/ta-rh/operator-runtime.sock --run-id run-123 --self run:run-123 --peer user:main --kind a2user
 ```
 
 外部用户或 TUI 注入消息：
 
 ```bash
-tiny-agent im admin post --from user:main --to run:run-123 --text "fix the failing tests"
+tiny-agent im post --runtime-host-socket /tmp/ta-rh/operator-runtime.sock --from user:main --to run:run-123 --text "fix the failing tests"
 ```
 
 按 pair 读取：
 
 ```bash
-tiny-agent im admin recv --as run:run-123 --with user:main --cursor <messageId>
-tiny-agent im admin ack --as run:run-123 --with user:main --message-id <messageId>
+tiny-agent im recv --runtime-host-socket /tmp/ta-rh/operator-runtime.sock --as run:run-123 --with user:main --cursor <messageId>
+tiny-agent im ack --runtime-host-socket /tmp/ta-rh/operator-runtime.sock --as run:run-123 --with user:main --message-id <messageId>
 ```
 
 按 run binding 读取：
 
 ```bash
-tiny-agent im admin run-recv --run-id run-123
-tiny-agent im admin run-ack --run-id run-123 --peer user:main --message-id <messageId>
+tiny-agent im run-recv --runtime-host-socket /tmp/ta-rh/operator-runtime.sock --run-id run-123
+tiny-agent im run-ack --runtime-host-socket /tmp/ta-rh/operator-runtime.sock --run-id run-123 --peer user:main --message-id <messageId>
 ```
 
 `receive` 不是一个隐藏的进程内队列。它读取 append-only channel log，并返回 cursor 之后的消息；`ack` 把 consumer cursor 推进到指定 message id。TUI 可以用 projection-safe read 查看 channel log，而不消费 run 的 cursor。
@@ -124,9 +124,9 @@ Writes are serialized with directory locks under `locks/`: pair metadata uses `i
 
 ## Runtime Flow
 
-1. Run startup 启动 run-owned `tiny-agent im host --socket <run-socket>`，host 创建默认 endpoint pair 和 run binding。
-2. TUI 或用户端调用 `tiny-agent im admin post --from user:main --to run:<runId>`。
-3. Run poller 通过 im-host 调用 `run-recv` 读取所有绑定 pair 的新用户消息。
+1. Run startup 启动 run-owned `tiny-agent runtime replica --mode run --run-id <runId> --socket <run-socket>`，然后通过该 replica 创建默认 endpoint pair 和 run binding。
+2. TUI 或用户端启动 edge runtime replica，并调用 `tiny-agent im post --runtime-host-socket <edge-socket> --from user:main --to run:<runId>`。
+3. Run poller 通过 runtime replica 调用 `run-recv` 读取所有绑定 pair 的新用户消息。
 4. Poller 把 user message 转成 `EnvironmentEvent(user_message_received)`。
 5. Agent 通过 terminal session 执行 host-backed `tiny-agent im send --kind status --text-stdin` 回复。
 6. TUI 通过 projection-safe channel read 显示 user/agent 消息，不推进 run cursor。
@@ -135,7 +135,7 @@ Writes are serialized with directory locks under `locks/`: pair metadata uses `i
 
 - IM 是 project-scoped public service，不能重新放回 run-scoped directory。
 - Run binding 是索引，不是消息存储。
-- `im admin post/send` 必须显式携带 `from` 和 `to` endpoint；普通 `im send` 使用当前 run host 的默认 endpoint。
+- 外部 `im post/send` 必须显式携带 `--runtime-host-socket`、`from` 和 `to` endpoint；PTY 内普通 `im send` 在 CLI client 边界从 run PTY env 显式补齐 endpoint。
 - `receive` 返回 cursor 之后的消息；`ack` 显式推进 cursor。
 - TUI/read-only projections 不消费 run cursor。
 - Agent 回复必须用 `--text-stdin`，不要把长正文塞进 shell argument。

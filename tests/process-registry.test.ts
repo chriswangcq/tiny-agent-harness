@@ -7,6 +7,7 @@ import {
   classifyProcessFreshness,
   createRunProcessRecord,
   createRuntimeProcess,
+  migrateRuntimeProcessSnapshot,
   markProcessCrashed,
   markProcessExited,
   markProcessRunning,
@@ -14,6 +15,8 @@ import {
   markRunProcessRunning,
   recordProcessHeartbeat,
   runProcessId,
+  type RuntimeProcessRecord,
+  type RuntimeProcessSnapshot,
 } from "../src/runtime/index.js";
 
 const NOW = "2026-06-11T00:00:00.000Z";
@@ -118,6 +121,47 @@ describe("process registry transitions", () => {
       }),
     ).toEqual({ status: "stale", ageMs: 6000 });
   });
+
+  it("migrates unsupported durable process records out of the current snapshot", () => {
+    const current = makeProcess();
+    const obsolete = {
+      ...current,
+      id: "project-runtime-host:project-1",
+      kind: "project-runtime-host",
+      owner: { scope: "project", projectId: "project-1" },
+      status: "running",
+    } as unknown as RuntimeProcessRecord;
+    const invalidStatus = {
+      ...current,
+      id: "runtime-replica:bad-status",
+      kind: "runtime-replica",
+      status: "paused",
+    } as unknown as RuntimeProcessRecord;
+    const snapshot: RuntimeProcessSnapshot = {
+      schemaVersion: 1,
+      version: 7,
+      updatedAt: NOW,
+      processes: [obsolete, current, invalidStatus],
+    };
+
+    const migration = migrateRuntimeProcessSnapshot({
+      snapshot,
+      now: LATER,
+    });
+
+    expect(migration).toMatchObject({
+      changed: true,
+      droppedProcessIds: [
+        "project-runtime-host:project-1",
+        "runtime-replica:bad-status",
+      ],
+      snapshot: {
+        version: 8,
+        updatedAt: LATER,
+      },
+    });
+    expect(migration.snapshot.processes).toEqual([current]);
+  });
 });
 
 describe("run process helpers", () => {
@@ -213,6 +257,57 @@ describe("JsonProcessRegistryStore", () => {
         fs.readFileSync(path.join(tmpDir, "processes.json"), "utf-8"),
       );
       expect(raw.processes).toHaveLength(1);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists a one-shot migration that removes unsupported durable process records", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "process-store-migration-"));
+    const filePath = path.join(tmpDir, "processes.json");
+    try {
+      const current = makeProcess();
+      const obsolete = {
+        ...current,
+        id: "project-runtime-host:project-1",
+        kind: "project-runtime-host",
+        owner: { scope: "project", projectId: "project-1" },
+      };
+      fs.writeFileSync(
+        filePath,
+        JSON.stringify({
+          schemaVersion: 1,
+          version: 3,
+          updatedAt: NOW,
+          processes: [obsolete, current],
+        }, null, 2),
+        "utf-8",
+      );
+
+      const store = new JsonProcessRegistryStore({
+        filePath,
+        nowIso: () => LATER,
+      });
+
+      const loaded = store.load();
+      expect(loaded.version).toBe(4);
+      expect(loaded.updatedAt).toBe(LATER);
+      expect(loaded.processes).toHaveLength(1);
+      expect(loaded.processes[0]).toMatchObject({
+        id: current.id,
+        kind: current.kind,
+      });
+      const persisted = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      expect(persisted).toMatchObject({
+        version: 4,
+        updatedAt: LATER,
+      });
+      expect(persisted.processes).toHaveLength(1);
+      expect(persisted.processes[0]).toMatchObject({
+        id: current.id,
+        kind: current.kind,
+      });
+      expect(store.find("project-runtime-host:project-1")).toBeUndefined();
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

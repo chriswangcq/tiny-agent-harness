@@ -539,6 +539,19 @@ export class ViewModelBuilder {
     });
   }
 
+  addSystemMessage(input: {
+    id: string;
+    timestamp: string;
+    text: string;
+  }): void {
+    this.addConversationItem({
+      id: `system:${input.id}`,
+      kind: "system",
+      timestamp: input.timestamp,
+      text: input.text,
+    });
+  }
+
   applyState(state: AgentRunStateData): void {
     this.header = {
       ...this.header,

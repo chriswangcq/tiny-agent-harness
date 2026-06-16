@@ -69,19 +69,16 @@ TUI reads those facts and renders them.
 
 ```bash
 tiny-agent ui
-tiny-agent ui --task "fix tests"
-tiny-agent ui --resume latest
-tiny-agent ui --resume run-2026-05-25T20-00-00Z
-tiny-agent tui --run latest
-tiny-agent tui --run run-2026-05-25T20-00-00Z
 ```
 
 语义：
 
-- `tiny-agent ui`: 后台启动 run，创建默认 public IM run binding，等待第一条用户消息，同时打开 live TUI。
-- `tiny-agent ui --task "fix tests"`: 后台启动 run 并直接注入初始任务，同时打开 live TUI。
-- `tiny-agent ui --resume <runId|latest>`: 恢复已有 run，并把 TUI attach 到恢复后的 run。
-- `tiny-agent tui --run latest`: 只 attach 到最近 run，不启动或恢复 run。
+- `tiny-agent ui`: 打开项目级 UI console；外层 CLI 不再绑定具体 run。
+- `:new <task>`: 在 UI 内启动新 run，并 attach 到该 run。
+- `:new`: 在 UI 内启动等待第一条 IM 的 run。
+- `:open <runId|latest>`: 只 attach 到已有 run，不启动或恢复 run。
+- `:resume <runId|latest>`: 在 UI 内恢复已有 run，并 attach 到该 run。
+- `:stop [runId|latest]`: 对 running/starting 的 run process 请求 `SIGTERM`；不直接改写 `state.json`。
 - 当前 TUI 默认 live tail transcript；完整 replay speed control 仍是后续能力。
 
 ## Data Sources
@@ -582,7 +579,7 @@ m -> type message -> Enter
 执行：
 
 ```text
-TUI -> public IM admin/file edge -> run-owned im-host poller -> EnvironmentEvent(user_message_received)
+TUI -> public IM admin/file edge -> runtime-replica IM service -> run poller -> EnvironmentEvent(user_message_received)
 ```
 
 Agent 下一轮通过 environment reminder 看到它。
@@ -637,11 +634,7 @@ render
 
 Replay 模式从头读取 transcript，并按速度播放：
 
-```bash
-tiny-agent tui --run run-123 --replay --speed 2
-```
-
-第一版可以只做 instant replay，即从头构建 view model，然后停在最后。
+第一版只做 live/project view；后续 replay 也应作为 UI 内部模式，而不是新的 run-bound CLI。
 
 ## Error Handling
 
@@ -667,7 +660,7 @@ TUI 遇到坏数据不应该崩。
 
 当前渲染路径：
 
-1. `TuiController` 读取 transcript / state / IM / session log projection。
+1. `ProjectUiController` 读取 run index、当前 active run 的 transcript / state / IM / session log projection。
 2. `ViewModelBuilder` 构建 `TuiViewModel`。
 3. `buildTuiPaneModel` 从显式输入计算 header、conversation、loop、detail、PTY pane 的 title、尺寸和可见内容。
 4. `BlessedRenderer` 把这些 pane model 写入独立 `neo-blessed` widgets，并调用 `screen.render()`。
@@ -719,15 +712,16 @@ type TuiLimits = {
 
 最小可用 TUI：
 
-1. `tiny-agent tui --run latest`
-2. 读取 `state.json` 和 `transcript.jsonl`
-3. 上半屏 conversation pane
-4. 下半屏 loop player
-5. live tail transcript
-6. independent follow bottom / scroll / loop frame selection / detail pane
-7. terminal log path、固定 PTY viewport 和 output excerpt 显示
-8. active skill reminder 显示
-9. `q` 退出 TUI，不停止 run
+1. `tiny-agent ui`
+2. UI 内 `:new` / `:open` / `:resume` / `:stop` 管理 active run
+3. 读取 run index、当前 active run 的 `state.json` 和 `transcript.jsonl`
+4. 上半屏 conversation pane
+5. 下半屏 loop player
+6. live tail transcript
+7. independent follow bottom / scroll / loop frame selection / detail pane
+8. terminal log path、固定 PTY viewport 和 output excerpt 显示
+9. active skill reminder 显示
+10. `q` 退出 TUI，不停止 run
 
 可以暂缓：
 

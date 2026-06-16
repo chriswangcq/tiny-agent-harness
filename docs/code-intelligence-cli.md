@@ -25,8 +25,9 @@ tiny-agent codeq references src/run/orchestrator.ts:37:18 --json
 这样 LSP 能力会经过现有 PTY session、tool review、observation、transcript 和 log path，不会绕过审计边界。
 
 当前实现是 **run-scoped all-host**：`tiny-agent run` 启动同生共死的
-`tiny-agent codeq host --socket <runs/<runId>/codeq-host.sock>` sidecar，
-TerminalHost env 注入 `TAH_CODEQ_HOST_SOCKET`。普通
+`tiny-agent codeq host --socket <run-socket>` sidecar。`<run-socket>` 是短
+tmp-root 下的 ephemeral Unix socket，实际路径由 process metadata 和
+TerminalHost env `TAH_CODEQ_HOST_SOCKET` 记录/注入。普通
 `tiny-agent codeq ...` 只是 host client；没有 socket 时返回结构化失败，
 不会创建 direct LSP backend，也不会跨 run 共享 host。
 
@@ -502,8 +503,15 @@ Dry-run rename output:
 
 `tiny-agent run` starts one `codeq-host` for the run:
 
+Ephemeral live endpoint:
+
 ```text
-runs/<runId>/codeq-host.sock
+<tmp>/ta-rh/codeq-<hash>.sock
+```
+
+Durable run resources:
+
+```text
 runs/<runId>/codeq-host.json
 runs/<runId>/codeq-host.stderr.log
 ```
@@ -511,7 +519,7 @@ runs/<runId>/codeq-host.stderr.log
 TerminalHost receives:
 
 ```text
-TAH_CODEQ_HOST_SOCKET=<runs/<runId>/codeq-host.sock>
+TAH_CODEQ_HOST_SOCKET=<actual ephemeral codeq-host socketPath>
 TAH_CODEQ_HOST_RUN_ID=<runId>
 ```
 

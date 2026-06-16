@@ -42,7 +42,7 @@ describe("parseTeamArgs", () => {
     const result = parseTeamArgs(["task", "assign", "t1", "w1"]);
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toContain("Use tiny-agent im admin post");
+      expect(result.error).toContain("Use tiny-agent im post --runtime-host-socket <edge-socket>");
       expect(result.helpText).toBe(HELP_TEXT);
     }
   });
@@ -273,7 +273,7 @@ describe("executeTeamCommand", () => {
     expect(task.ok).toBe(false);
     if (!task.ok) {
       expect(task.errorCode).toBe("PARSE_ERROR");
-      expect(task.error).toContain("Use tiny-agent im admin post");
+      expect(task.error).toContain("Use tiny-agent im post --runtime-host-socket <edge-socket>");
     }
   });
 });

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
-import { spawn } from "node:child_process";
 
 import { RunOrchestrator } from "../run/orchestrator.js";
 import type { RunPorts } from "../run/orchestrator.js";
@@ -24,9 +24,12 @@ import {
   JsonlRuntimeEventSink,
   JsonProcessRegistryStore,
   RunSupervisor,
+  defaultResidentSocketRoot,
+  ensureRuntimeReplica,
+  nodeProcessSpawner,
+  runtimeReplicaPaths,
   residentHostPaths,
-  type ProcessSpawnerPort,
-  type SpawnedProcessPort,
+  type LaunchedRuntimeReplica,
 } from "../runtime/index.js";
 import { launchTerminalHost, type LaunchedTerminalHost } from "../terminal-host/index.js";
 import { launchModelGateway, type LaunchedModelGateway } from "../model/index.js";
@@ -39,11 +42,7 @@ import { STATIC_TOOL_CATALOG } from "../tools/catalog.js";
 import { ENVIRONMENT_EVENT_LEVELS } from "../types/environment.js";
 import type { UserMessage } from "../types/environment.js";
 import { Environment } from "../environment/environment.js";
-import {
-  launchImHost,
-  type LaunchedImHost,
-  type PublicImRunReceiveMessage,
-} from "../im/index.js";
+import { type PublicImRunReceiveMessage } from "../im/index.js";
 import { SkillRunStore } from "../skill/store.js";
 import { buildCliTerminalEnv } from "./terminal-env.js";
 import {
@@ -138,11 +137,13 @@ function ensureRunScopedPaths(runDir: string): RunScopedPaths {
 async function createCliTerminalHost(options: {
   runId: string;
   runDir: string;
+  residentSocketRoot: string;
+  residentSocketScope: string;
   stateDir: string;
   paths: RunScopedPaths;
   skillsDir: string;
   transcriptPath: string;
-  imHostSocket: string;
+  runtimeHostSocket: string;
   codeqHostSocket: string;
   skillHostSocket: string;
   mcpHostSocket: string;
@@ -153,15 +154,16 @@ async function createCliTerminalHost(options: {
     kind: "terminal-host",
     runId: options.runId,
     runDir: options.runDir,
+    socketRoot: options.residentSocketRoot,
+    socketScope: options.residentSocketScope,
   });
   const terminalEnv = buildCliTerminalEnv(process.env, {
     runId: options.runId,
     runDir: options.runDir,
     stateDir: options.runDir,
     projectStateDir: options.stateDir,
-    imStateDir: options.stateDir,
-    imHostSocket: options.imHostSocket,
-    imRunId: options.runId,
+    runtimeHostSocket: options.runtimeHostSocket,
+	    imRunId: options.runId,
     imSelfEndpoint: createRunImSelfEndpoint(options.runId),
     imUserEndpoint: "user:main",
     skillRunsDir: options.paths.skillRunsDir,
@@ -216,62 +218,19 @@ async function createCliTerminalHost(options: {
   });
 }
 
-async function createCliImHost(options: {
-  runId: string;
-  runDir: string;
-  stateDir: string;
-  selfEndpoint: string;
-  userEndpoint: string;
-  supervisor: RunSupervisor;
-}): Promise<LaunchedImHost> {
-  const paths = residentHostPaths({
-    kind: "im-host",
-    runId: options.runId,
-    runDir: options.runDir,
-  });
-  const hostArgs = [
-    ...process.execArgv,
-    process.argv[1]!,
-    "im",
-    "host",
-    "--socket",
-    paths.socketPath,
-    "--state-dir",
-    options.stateDir,
-    "--run-id",
-    options.runId,
-    "--self",
-    options.selfEndpoint,
-    "--user",
-    options.userEndpoint,
-  ];
-  return await launchImHost({
-    supervisor: options.supervisor,
-    processId: paths.processId,
-    owner: { scope: "run", runId: options.runId },
-    executable: process.execPath,
-    args: hostArgs,
-    cwd: process.cwd(),
-    env: process.env,
-    socketPath: paths.socketPath,
-    statePath: paths.statePath,
-    logPath: paths.logPath,
-    projectStateDir: options.stateDir,
-    selfEndpoint: options.selfEndpoint,
-    userEndpoint: options.userEndpoint,
-    startupTimeoutMs: 10_000,
-  });
-}
-
 async function createCliCodeIntelHost(options: {
   runId: string;
   runDir: string;
+  residentSocketRoot: string;
+  residentSocketScope: string;
   supervisor: RunSupervisor;
 }): Promise<LaunchedCodeIntelHost> {
   const paths = residentHostPaths({
     kind: "codeq-host",
     runId: options.runId,
     runDir: options.runDir,
+    socketRoot: options.residentSocketRoot,
+    socketScope: options.residentSocketScope,
   });
   const hostArgs = [
     ...process.execArgv,
@@ -302,6 +261,8 @@ async function createCliCodeIntelHost(options: {
 async function createCliSkillHost(options: {
   runId: string;
   runDir: string;
+  residentSocketRoot: string;
+  residentSocketScope: string;
   stateDir: string;
   paths: RunScopedPaths;
   skillsDir: string;
@@ -311,6 +272,8 @@ async function createCliSkillHost(options: {
     kind: "skill-host",
     runId: options.runId,
     runDir: options.runDir,
+    socketRoot: options.residentSocketRoot,
+    socketScope: options.residentSocketScope,
   });
   const hostEnv = buildCliTerminalEnv(process.env, {
     runId: options.runId,
@@ -349,6 +312,8 @@ async function createCliSkillHost(options: {
 async function createCliMcpHost(options: {
   runId: string;
   runDir: string;
+  residentSocketRoot: string;
+  residentSocketScope: string;
   stateDir: string;
   supervisor: RunSupervisor;
 }): Promise<LaunchedMcpHost> {
@@ -356,6 +321,8 @@ async function createCliMcpHost(options: {
     kind: "mcp-host",
     runId: options.runId,
     runDir: options.runDir,
+    socketRoot: options.residentSocketRoot,
+    socketScope: options.residentSocketScope,
   });
   const hostEnv = buildCliTerminalEnv(process.env, {
     runId: options.runId,
@@ -390,6 +357,8 @@ async function createCliMcpHost(options: {
 async function createCliModelGateway(options: {
   runId: string;
   runDir: string;
+  residentSocketRoot: string;
+  residentSocketScope: string;
   model: string;
   supervisor: RunSupervisor;
 }): Promise<LaunchedModelGateway> {
@@ -397,6 +366,8 @@ async function createCliModelGateway(options: {
     kind: "model-gateway",
     runId: options.runId,
     runDir: options.runDir,
+    socketRoot: options.residentSocketRoot,
+    socketScope: options.residentSocketScope,
   });
   const gatewayArgs = [
     ...process.execArgv,
@@ -562,56 +533,6 @@ function appendResumeReminder(items: ModelContextItem[]): ModelContextItem[] {
   ];
 }
 
-async function waitForNewLatestRun(options: {
-  runsDir: string;
-  previousRunId?: string;
-  child: SpawnedProcessPort;
-  timeoutMs: number;
-}): Promise<string> {
-  let childExit:
-    | {
-        code: number | null;
-        signal: NodeJS.Signals | null;
-      }
-    | undefined;
-
-  options.child.once("exit", (code, signal) => {
-    childExit = { code, signal };
-  });
-
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < options.timeoutMs) {
-    const runId = readLatestRunId(options.runsDir);
-    if (runId && runId !== options.previousRunId) {
-      return runId;
-    }
-
-    if (childExit) {
-      throw new Error(
-        `agent run exited before creating a run (code=${childExit.code}, signal=${childExit.signal})`,
-      );
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-
-  throw new Error("timed out waiting for agent run to create latest run");
-}
-
-function readProjectIdFromStateRoot(baseDir: string): string {
-  try {
-    const parsed = JSON.parse(
-      fs.readFileSync(path.join(baseDir, "project.json"), "utf-8"),
-    ) as { projectId?: string };
-    if (parsed.projectId) {
-      return parsed.projectId;
-    }
-  } catch {
-    // Fall through to a stable local fallback.
-  }
-  return path.basename(baseDir) || "project";
-}
-
 function createRuntimeEventIdFactory(prefix: string): () => string {
   let sequence = 0;
   return () => `${prefix}-${Date.now()}-${++sequence}`;
@@ -621,145 +542,6 @@ function createRuntimeEventSink(baseDir: string): JsonlRuntimeEventSink {
   return new JsonlRuntimeEventSink({
     filePath: path.join(baseDir, "runtime", "events.jsonl"),
   });
-}
-
-const nodeProcessSpawner: ProcessSpawnerPort = {
-  spawn(executable, args, options) {
-    return spawn(executable, [...args], {
-      cwd: options.cwd,
-      env: options.env,
-      stdio: [...options.stdio] as ["ignore" | "pipe", "pipe", "pipe"],
-    });
-  },
-};
-
-async function runUnifiedUi(args: string[]): Promise<void> {
-  const { task, stateDir, resumeRunId, unexpectedArgs } = parseCliOptions(args);
-  dieOnUnexpectedArgs("tiny-agent ui", unexpectedArgs);
-  const deepseek = loadDeepSeekRuntimeConfig();
-
-  if (!deepseek.apiKey) {
-    die(missingDeepSeekApiKeyMessage(deepseek.configPath));
-  }
-  if (task && resumeRunId) {
-    die("tiny-agent ui accepts either --task or --resume, not both.");
-  }
-
-  const baseDir = resolveCliStateRoot(stateDir);
-  const runsDir = path.join(baseDir, "runs");
-  const launcherDir = path.join(baseDir, "launcher");
-  fs.mkdirSync(launcherDir, { recursive: true });
-
-  const previousRunId = readLatestRunId(runsDir);
-  const logPath = path.join(launcherDir, `ui-${Date.now()}.log`);
-  const logStream = fs.createWriteStream(logPath, { flags: "a" });
-
-  const resumeTargetRunId =
-    resumeRunId === undefined
-      ? undefined
-      : resumeRunId === "latest"
-        ? readLatestRunId(runsDir)
-        : resumeRunId;
-  if (resumeRunId !== undefined && !resumeTargetRunId) {
-    die("No latest run is available to resume.");
-  }
-  if (resumeTargetRunId !== undefined) {
-    resolveRunDir(runsDir, resumeTargetRunId);
-  }
-
-  const runArgs =
-    resumeTargetRunId !== undefined
-      ? [
-          ...process.execArgv,
-          process.argv[1]!,
-          "resume",
-          resumeTargetRunId,
-          "--state-dir",
-          baseDir,
-        ]
-      : [
-          ...process.execArgv,
-          process.argv[1]!,
-          "run",
-          "--state-dir",
-          baseDir,
-        ];
-  if (task) {
-    runArgs.push("--task", task);
-  }
-
-  const supervisor = new RunSupervisor({
-    store: new JsonProcessRegistryStore({
-      filePath: path.join(baseDir, "processes.json"),
-      nowIso: () => new Date().toISOString(),
-    }),
-    spawner: nodeProcessSpawner,
-    nowIso: () => new Date().toISOString(),
-    nowEpochMs: () => Date.now(),
-    events: createRuntimeEventSink(baseDir),
-    newEventId: createRuntimeEventIdFactory("runtime-ui"),
-    eventProducer: "tiny-agent-ui",
-  });
-  const runProcessId = `run-launch-${Date.now()}`;
-  const { child } = supervisor.startRunProcess({
-    processId: runProcessId,
-    owner: { scope: "project", projectId: readProjectIdFromStateRoot(baseDir) },
-    executable: process.execPath,
-    args: runArgs,
-    cwd: process.cwd(),
-    env: process.env,
-    logPath,
-    statePath: baseDir,
-    metadata: {
-      resume: resumeTargetRunId ?? null,
-    },
-  });
-
-  child.stdout?.pipe(logStream, { end: false });
-  child.stderr?.pipe(logStream, { end: false });
-  child.once("exit", () => {
-    logStream.end();
-  });
-
-  const stopChild = () => {
-    if (!child.killed && child.exitCode === null) {
-      child.kill("SIGTERM");
-    }
-  };
-  process.once("exit", stopChild);
-  process.once("SIGINT", () => {
-    stopChild();
-    process.exit(130);
-  });
-  process.once("SIGTERM", () => {
-    stopChild();
-    process.exit(143);
-  });
-
-  const runId =
-    resumeTargetRunId ??
-    (await waitForNewLatestRun({
-      runsDir,
-      previousRunId,
-      child,
-      timeoutMs: 5_000,
-    }));
-  supervisor.attachRunId({
-    processId: runProcessId,
-    runId,
-    runDir: path.join(runsDir, runId),
-  });
-
-  console.log(`[tiny-agent] ${resumeTargetRunId ? "Resumed" : "Started"} background run: ${runId}`);
-  console.log(`[tiny-agent] Agent log: ${logPath}`);
-  console.log(
-    resumeTargetRunId
-      ? "[tiny-agent] Opening TUI."
-      : "[tiny-agent] Opening TUI. Press m to send the first task.",
-  );
-
-  const { runTui } = await import("./tui.js");
-  runTui(["--run", runId, "--state-dir", baseDir]);
 }
 
 async function waitForFirstMessage(
@@ -829,14 +611,15 @@ async function main(): Promise<void> {
   }
 
   // --- Route subcommands ---
-  if (firstArg === "tui") {
-    const { runTui } = await import("./tui.js");
-    runTui(process.argv.slice(3));
+  if (firstArg === "ui") {
+    const { runProjectUi } = await import("./ui.js");
+    await runProjectUi(process.argv.slice(3));
     return;
   }
 
-  if (firstArg === "ui") {
-    await runUnifiedUi(process.argv.slice(3));
+  if (firstArg === "runtime") {
+    const { runRuntimeCli } = await import("../runtime/runtime-replica.js");
+    process.exitCode = await runRuntimeCli(process.argv.slice(3));
     return;
   }
 
@@ -950,7 +733,7 @@ async function main(): Promise<void> {
         "  tiny-agent run [--task <task>] [--state-dir <dir>]\n" +
         "  tiny-agent <task> [--state-dir <dir>]  # alias for tiny-agent run --task <task>\n" +
         "  tiny-agent resume <runId|latest> [--state-dir <dir>]\n" +
-        "  tiny-agent ui [--task <task>|--resume <runId|latest>] [--state-dir <dir>]",
+        "  tiny-agent ui [--state-dir <dir>]",
     );
   }
 
@@ -962,6 +745,8 @@ async function main(): Promise<void> {
 
   // --- Create directory structure ---
   const baseDir = resolveCliStateRoot(stateDirArg);
+  const residentSocketRoot = defaultResidentSocketRoot({ tmpDir: os.tmpdir() });
+  const residentSocketScope = baseDir;
   const runsDir = path.join(baseDir, "runs");
   const skillsDir = path.join(baseDir, "skills");
   for (const dir of [runsDir, skillsDir]) {
@@ -998,12 +783,7 @@ async function main(): Promise<void> {
   let initialHistory: ModelContextItem[] = [];
   let task: string;
   let runPaths: RunScopedPaths;
-  let imHost: LaunchedImHost | undefined;
-
-  const disposeStartedImHost = async (): Promise<void> => {
-    await imHost?.dispose();
-    imHost = undefined;
-  };
+  let runtimeReplica: LaunchedRuntimeReplica;
 
   if (resumeRunId) {
     runDir = resolveRunDir(runsDir, resumeRunId);
@@ -1025,22 +805,33 @@ async function main(): Promise<void> {
     initialState = new AgentRunState(loadedState);
     initialHistory = appendResumeReminder(loadHistoryForRun(runDir));
 
-    imHost = await createCliImHost({
-      runId,
+    const runtimePaths = runtimeReplicaPaths({
       runDir,
-      stateDir: baseDir,
-      selfEndpoint: createRunImSelfEndpoint(runId),
-      userEndpoint: DEFAULT_RUN_USER_ENDPOINT,
-      supervisor: runProcessSupervisor,
+      runId,
+      socketRoot: residentSocketRoot,
+      socketScope: residentSocketScope,
     });
+    runtimeReplica = await ensureRuntimeReplica({
+      paths: runtimePaths,
+      runId,
+      stateDir: baseDir,
+      supervisor: runProcessSupervisor,
+      executable: process.execPath,
+      execArgv: process.execArgv,
+      mainScript: process.argv[1]!,
+      cwd: process.cwd(),
+      env: process.env,
+      startupTimeoutMs: 10_000,
+    });
+
     try {
       await ensureDefaultRunImBinding({
-        socketPath: imHost.socketPath,
+        socketPath: runtimeReplica.socketPath,
         runId,
       });
       publishLatestRun(runsDir, runId, runDir);
     } catch (error) {
-      await disposeStartedImHost();
+      await runtimeReplica.dispose();
       throw error;
     }
   } else {
@@ -1052,18 +843,27 @@ async function main(): Promise<void> {
       skillsDir,
     });
     environment.setEventsPath(runPaths.environmentEventsPath);
-    imHost = await createCliImHost({
-      runId,
+    const runtimePaths = runtimeReplicaPaths({
       runDir,
-      stateDir: baseDir,
-      selfEndpoint: createRunImSelfEndpoint(runId),
-      userEndpoint: DEFAULT_RUN_USER_ENDPOINT,
-      supervisor: runProcessSupervisor,
+      runId,
+      socketRoot: residentSocketRoot,
+      socketScope: residentSocketScope,
     });
-
+    runtimeReplica = await ensureRuntimeReplica({
+      paths: runtimePaths,
+      runId,
+      stateDir: baseDir,
+      supervisor: runProcessSupervisor,
+      executable: process.execPath,
+      execArgv: process.execArgv,
+      mainScript: process.argv[1]!,
+      cwd: process.cwd(),
+      env: process.env,
+      startupTimeoutMs: 10_000,
+    });
     try {
       await ensureDefaultRunImBinding({
-        socketPath: imHost.socketPath,
+        socketPath: runtimeReplica.socketPath,
         runId,
       });
 
@@ -1097,7 +897,7 @@ async function main(): Promise<void> {
         );
         const firstMessage = await waitForFirstMessage(
           {
-            socketPath: imHost.socketPath,
+            socketPath: runtimeReplica.socketPath,
             runId,
           },
           environment,
@@ -1106,7 +906,7 @@ async function main(): Promise<void> {
         console.log(`[tiny-agent] Received task: ${task}`);
       }
     } catch (error) {
-      await disposeStartedImHost();
+      await runtimeReplica.dispose();
       throw error;
     }
 
@@ -1140,10 +940,7 @@ async function main(): Promise<void> {
     });
   }
 
-  if (!imHost) {
-    die("Run IM host failed to start.");
-  }
-  const imHostSocketPath = imHost.socketPath;
+  const runtimeReplicaSocketPath = runtimeReplica.socketPath;
 
   // --- IM → Environment bridge: poll public run bindings for new user messages ---
   let imPollingActive = true;
@@ -1151,13 +948,13 @@ async function main(): Promise<void> {
     if (!imPollingActive) return;
     try {
       const messages = await receivePublicRunUserMessages({
-        socketPath: imHostSocketPath,
+        socketPath: runtimeReplicaSocketPath,
         runId,
       });
       for (const message of messages) {
         appendPublicImUserMessage(environment, message);
         await ackPublicRunUserMessage({
-          socketPath: imHostSocketPath,
+          socketPath: runtimeReplicaSocketPath,
           runId,
           messageId: message.id,
         });
@@ -1183,11 +980,15 @@ async function main(): Promise<void> {
     codeIntelHost = await createCliCodeIntelHost({
       runId,
       runDir,
+      residentSocketRoot,
+      residentSocketScope,
       supervisor: runProcessSupervisor,
     });
     skillHost = await createCliSkillHost({
       runId,
       runDir,
+      residentSocketRoot,
+      residentSocketScope,
       stateDir: baseDir,
       paths: runPaths,
       skillsDir,
@@ -1196,17 +997,21 @@ async function main(): Promise<void> {
     mcpHost = await createCliMcpHost({
       runId,
       runDir,
+      residentSocketRoot,
+      residentSocketScope,
       stateDir: baseDir,
       supervisor: runProcessSupervisor,
     });
     terminalHost = await createCliTerminalHost({
       runId,
       runDir,
+      residentSocketRoot,
+      residentSocketScope,
       stateDir: baseDir,
       paths: runPaths,
       skillsDir,
       transcriptPath,
-      imHostSocket: imHostSocketPath,
+      runtimeHostSocket: runtimeReplicaSocketPath,
       codeqHostSocket: codeIntelHost.socketPath,
       skillHostSocket: skillHost.socketPath,
       mcpHostSocket: mcpHost.socketPath,
@@ -1215,6 +1020,8 @@ async function main(): Promise<void> {
     modelGateway = await createCliModelGateway({
       runId,
       runDir,
+      residentSocketRoot,
+      residentSocketScope,
       model: deepseek.model,
       supervisor: runProcessSupervisor,
     });
@@ -1260,7 +1067,7 @@ async function main(): Promise<void> {
       mcpHost?.dispose(),
       skillHost?.dispose(),
       codeIntelHost?.dispose(),
-      imHost?.dispose(),
+      runtimeReplica.dispose(),
     ]);
   }
 }

@@ -8,9 +8,11 @@ export {
 export type {
   ModelGatewayGenerateRequest,
   ModelGatewayPortDeps,
+  ModelGatewayRequestOptions,
   ModelGatewayRequest,
   ModelGatewayResponse,
   ModelGatewayShutdownRequest,
+  ModelGatewayTerminalResponse,
   ModelGatewayTransportPort,
 } from "./gateway.js";
 export {

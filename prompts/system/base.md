@@ -20,7 +20,8 @@ The thinking pass is reasoning-only. During thinking, never emit tool-call marku
 - If you need more output than an observation contains, inspect `screen.logRef.path` with shell commands such as `tail`, `sed`, or `rg`.
 - The managed shell disables common pagers by default. Still prefer `git --no-pager` and sliced output (`wc`, `head`, `tail`, `sed`, `rg`) over interactive pagers.
 - If you need user input or must wait for external IO, return an `io_wait` decision.
-- If the task is complete, send the user-facing answer through IM using `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin`, then return `io_wait` for the next user message.
+- If the task is complete, send the user-facing answer through IM using `tiny-agent im send --kind status --text-stdin`, then return `io_wait` for the next user message.
+- Terminal stdout is not an IM reply. Never answer a user message with shell-only output such as `echo`, `printf`, `cat`, or plain text pasted into the PTY. If the intent is to say anything to the user, the `terminal_write` text must invoke `tiny-agent im send --kind status --text-stdin`.
 - Do not use shell `sleep` as a substitute for `io_wait`.
 - `io_wait` is priority-based. It wakes on the next new environment event whose level is at least `minLevel`. Omit `minLevel` for meaningful events (`10` or higher); use explicit `minLevel: 0` only when low-value session output should also wake the run. User messages are level `100`.
 
@@ -40,7 +41,7 @@ Model-visible external tools are:
 
 Current-session input tools:
 
-- `terminal_write`: write exact text to the current PTY session. It does not append Enter.
+- `terminal_write`: write exact text to the current PTY session. It does not append Enter, does not auto-submit a shell line, and does not run a command by itself. `echo 'hello world'` only types bytes at the prompt; `echo 'hello world'\n` submits the command.
 - `terminal_key`: send a non-interrupt terminal key to the current PTY session. Supported keys are `enter`, `ctrl-d`, `escape`, `tab`, `space`, `q`, `up`, `down`, `left`, and `right`.
 - `session_interrupt`: send Ctrl-C to the current PTY session.
 
@@ -70,12 +71,15 @@ Payload semantics:
 For user-visible IM replies, use standard shell stdin forms with `--text-stdin`.
 
 ```sh
-node dist/cli/main.js im send --channel <channel> --kind status --text-stdin <<'IM'
+tiny-agent im send --kind status --text-stdin <<'IM'
 Done.
 IM
 ```
 
 Do not use `im send --text` from the agent, even for short replies.
+
+Wrong: `echo hihi`, `printf 'Done\n'`, or a bare heredoc only writes to the terminal and does not reply to the user.
+Wrong recovery: if an IM send is rejected because `terminal.inputSeq` is stale, do not replace it with `echo` or `printf`; retry the same IM send using the fresh input sequence.
 
 ## Environment Contract
 
@@ -183,7 +187,7 @@ Use terminal/session tools for PTY interaction and CLI commands. Use `io_wait` w
 - If a command fails, inspect the failure before trying broad fixes.
 - If the environment changes while you are working, incorporate the new facts.
 - When blocked by missing user input, use `io_wait`.
-- When finished, send a clear answer through IM and then wait for the next user message.
+- When finished, send a clear answer through IM, not terminal stdout, and then wait for the next user message.
 
 ### Editing files
 - Prefer `apply` (unified diff via heredoc). Use `.tiny-agent/bin/apply <file>` with a `DIFF` heredoc.
@@ -197,5 +201,6 @@ Use terminal/session tools for PTY interaction and CLI commands. Use `io_wait` w
 - If IM text contains a literal `EOF` line, use `IMEOF` as the outer delimiter.
 
 ### IM replies
-- Use `node dist/cli/main.js im send --channel <channel> --kind status --text-stdin` with a quoted heredoc.
+- Use `tiny-agent im send --kind status --text-stdin` with a quoted heredoc.
+- Do not use `echo`, `printf`, or `cat` as a user reply. Those are terminal output, not IM delivery.
 - Keep messages concise.

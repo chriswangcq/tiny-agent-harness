@@ -3,6 +3,12 @@ import type {
   RuntimeProcessRecord,
   RuntimeProcessStatus,
 } from "./process-registry.js";
+import {
+  RUNTIME_PROCESS_KINDS,
+  RUNTIME_PROCESS_STATUSES,
+  isRuntimeProcessKind,
+  isRuntimeProcessStatus,
+} from "./process-registry.js";
 
 export type RuntimeRecoverySnapshot = {
   schemaVersion: 1;
@@ -15,40 +21,29 @@ export type RuntimeRecoverySnapshot = {
   terminalProcessIds: string[];
 };
 
-const PROCESS_STATUSES: RuntimeProcessStatus[] = [
-  "planned",
-  "starting",
-  "running",
-  "stopping",
-  "exited",
-  "crashed",
-];
-
-const PROCESS_KINDS: RuntimeProcessKind[] = [
-  "run",
-  "terminal-host",
-  "pty-session",
-  "codeq-host",
-  "skill-host",
-  "mcp-host",
-  "model-gateway",
-];
-
 export function buildRuntimeRecoverySnapshot(input: {
   processes: readonly RuntimeProcessRecord[];
   recoveredAt: string;
   eventOffset: number;
 }): RuntimeRecoverySnapshot {
   const processesByStatus = Object.fromEntries(
-    PROCESS_STATUSES.map((status) => [status, 0]),
+    RUNTIME_PROCESS_STATUSES.map((status) => [status, 0]),
   ) as Record<RuntimeProcessStatus, number>;
   const processesByKind = Object.fromEntries(
-    PROCESS_KINDS.map((kind) => [kind, 0]),
+    RUNTIME_PROCESS_KINDS.map((kind) => [kind, 0]),
   ) as Record<RuntimeProcessKind, number>;
   const activeProcessIds: string[] = [];
   const terminalProcessIds: string[] = [];
+  let totalProcesses = 0;
 
   for (const process of input.processes) {
+    if (
+      !isRuntimeProcessKind(process.kind) ||
+      !isRuntimeProcessStatus(process.status)
+    ) {
+      continue;
+    }
+    totalProcesses += 1;
     processesByStatus[process.status] += 1;
     processesByKind[process.kind] += 1;
     if (
@@ -70,7 +65,7 @@ export function buildRuntimeRecoverySnapshot(input: {
     schemaVersion: 1,
     recoveredAt: input.recoveredAt,
     eventOffset: input.eventOffset,
-    totalProcesses: input.processes.length,
+    totalProcesses,
     processesByStatus,
     processesByKind,
     activeProcessIds,

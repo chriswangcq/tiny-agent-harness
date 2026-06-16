@@ -5,10 +5,14 @@ import {
   type ModelGatewayRequest,
   type ModelGatewayResponse,
 } from "./gateway.js";
+import type { ModelProgressEvent } from "../types/index.js";
 
 export async function handleModelGatewayRequest(
   model: ModelPort,
   request: ModelGatewayRequest,
+  options: {
+    onProgress?: (event: ModelProgressEvent) => void | Promise<void>;
+  } = {},
 ): Promise<ModelGatewayResponse> {
   if (request.type === "model.shutdown") {
     return {
@@ -27,6 +31,7 @@ export async function handleModelGatewayRequest(
       type: "model.generateTurn.result",
       output: await model.generateTurn(request.context, {
         tools: request.tools,
+        onProgress: options.onProgress,
       }),
     };
   } catch (error) {
@@ -50,7 +55,7 @@ export async function listenModelGatewaySocket(options: {
 }) {
   return await listenResidentHostSocket({
     socketPath: options.socketPath,
-    handleLine: async (line) => {
+    handleLine: async (line, connection) => {
       let request: ModelGatewayRequest;
       try {
         request = parseModelGatewayRequest(line);
@@ -69,7 +74,19 @@ export async function listenModelGatewaySocket(options: {
         };
       }
 
-      const response = await handleModelGatewayRequest(options.model, request);
+      const response = await handleModelGatewayRequest(options.model, request, {
+        onProgress: async (progress) => {
+          connection.sendLine(
+            JSON.stringify({
+              schemaVersion: 1,
+              id: request.id,
+              ok: true,
+              type: "model.generateTurn.progress",
+              progress,
+            } satisfies ModelGatewayResponse),
+          );
+        },
+      });
       if (request.type === "model.shutdown") {
         await options.onShutdown?.();
       }
