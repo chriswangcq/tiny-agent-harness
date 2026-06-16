@@ -449,11 +449,13 @@ describe("TUI input rendering", () => {
     ).join("\n");
 
     expect(first).toContain("model thinking");
+    expect(first).toContain("running ●");
+    expect(second).toContain("running ⬤");
     expect(first).toContain("Need inspect ●");
     expect(second).toContain("Need inspect ⬤");
   });
 
-  it("activates local streaming animation only for the visible selected thinking detail", () => {
+  it("activates local streaming animation for visible loop activity even when detail selection differs", () => {
     const state = new TuiInteractionState();
     const vm = {
       ...view(),
@@ -487,7 +489,7 @@ describe("TUI input rendering", () => {
 
     expect(
       shouldAnimateStreamingThinking(vm, state, { width: 120, height: 34 }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldAnimateStreamingThinking(vm, state, { width: 20, height: 34 }),
     ).toBe(false);

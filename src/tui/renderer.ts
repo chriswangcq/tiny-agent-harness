@@ -814,7 +814,7 @@ export function renderTuiFrame(
 
 export function shouldAnimateStreamingThinking(
   view: TuiViewModel,
-  state: TuiInteractionState,
+  _state: TuiInteractionState,
   size: TuiFrameSize,
 ): boolean {
   const width = Math.max(1, size.width);
@@ -827,16 +827,13 @@ export function shouldAnimateStreamingThinking(
   });
   if (
     layout.rightWidth <= 0 ||
-    layout.detailPaneWidth <= 2 ||
+    layout.loopPaneWidth <= 2 ||
     layout.topHeight <= 2
   ) {
     return false;
   }
 
-  const detailFrame = resolveLoopDetailFrame(view.loop, {
-    selectedFrameId: state.selectedLoopFrameId,
-  });
-  return detailFrame ? isStreamingThinkingFrame(detailFrame) : false;
+  return view.loop.some((frame) => isStreamingThinkingFrame(frame));
 }
 
 export function buildTuiPaneModel(
@@ -900,7 +897,12 @@ export function buildTuiPaneModel(
   const detailFrame = resolveLoopDetailFrame(view.loop, {
     selectedFrameId: state.selectedLoopFrameId,
   });
-  const loopLines = buildLoopFrameLines(view.loop, state, expandedFrames);
+  const loopLines = buildLoopFrameLines(
+    view.loop,
+    state,
+    expandedFrames,
+    options,
+  );
   const loop: TuiPaneModel = {
     title: loopPaneTitle(view.loop, state.pane === "loop"),
     width: layout.loopPaneWidth,
@@ -1291,6 +1293,7 @@ function buildLoopFrameLines(
   frames: LoopFrame[],
   state: TuiInteractionState,
   expandedFrames: ReadonlySet<string>,
+  options: TuiFrameRenderOptions = {},
 ): string[] {
   const lines: string[] = [];
   let currentStep = -1;
@@ -1300,9 +1303,12 @@ function buildLoopFrameLines(
       lines.push(`step ${String(currentStep).padStart(3, "0")}`);
     }
     const marker = frame.id === state.selectedLoopFrameId ? ">" : " ";
+    const statusText = isStreamingThinkingFrame(frame)
+      ? `${frame.status.padEnd(8)}${streamingThinkingCursor(options.animationFrame ?? 0)}`
+      : frame.status.padEnd(8);
     let line =
       `${marker} ${frame.phase.padEnd(12)} ` +
-      `${frame.status.padEnd(8)} ${sanitizeDisplayText(frame.title)}`;
+      `${statusText} ${sanitizeDisplayText(frame.title)}`;
     if (frame.summary) {
       line += ` ${displayPreview(frame.summary, 80)}`;
     }
