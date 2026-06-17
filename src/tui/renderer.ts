@@ -30,6 +30,12 @@ import type {
   RunBrowserControlIntentDisplay,
   RunBrowserView,
 } from "./debugger.js";
+import {
+  createTuiInputEditorState,
+  reduceTuiInputEditor,
+  type TuiInputEditorAction,
+  type TuiInputEditorState,
+} from "./input-editor.js";
 import wcwidth from "wcwidth";
 
 import { buildScreenGrid, screenGridToDisplayLines } from './screen-projection.js';
@@ -72,7 +78,7 @@ export class BlessedRenderer implements TuiRenderer {
   private expandedFrames = new Set<string>();
   private keyHandler?: (key: TuiKey) => void;
   private messageHandler?: (text: string) => void;
-  private inputBuffer = "";
+  private inputState: TuiInputEditorState = createTuiInputEditorState();
   private inputCursor = { row: 0, col: 0 };
   private lastRawShiftEnterSequence: string | undefined;
   private pendingRawShiftEnterEchoes: string[] = [];
@@ -302,22 +308,21 @@ export class BlessedRenderer implements TuiRenderer {
   }
 
   private submitInput(): void {
-    const text = this.inputBuffer.trimEnd();
-    this.inputBuffer = "";
+    const result = this.applyInputAction({ kind: "submit" });
     this.refreshInputBar();
-    if (text.trim()) {
-      this.messageHandler?.(text);
+    if (result.submittedText !== undefined) {
+      this.messageHandler?.(result.submittedText);
     }
   }
 
   private insertInputNewline(): void {
-    this.inputBuffer += "\n";
+    this.applyInputAction({ kind: "insert-newline" });
     this.refreshInputBar();
   }
 
   private updateInputBarContent(): void {
     const input = renderInputBufferForBox(
-      this.inputBuffer,
+      this.inputState.buffer,
       this.inputContentWidth(),
       INPUT_INNER_ROWS,
       this.ui.mode === "input",
@@ -427,10 +432,7 @@ export class BlessedRenderer implements TuiRenderer {
       return;
     }
     if (key.name === "backspace") {
-      // Remove one visible character, including emoji grapheme clusters.
-      const chars = graphemeClusters(this.inputBuffer);
-      chars.pop();
-      this.inputBuffer = chars.join("");
+      this.applyInputAction({ kind: "backspace" });
       this.refreshInputBar();
       return;
     }
@@ -446,9 +448,21 @@ export class BlessedRenderer implements TuiRenderer {
       if (this.consumeRawShiftEnterEcho(ch, key)) {
         return;
       }
-      this.inputBuffer += ch;
+      this.applyInputAction({ kind: "insert-text", text: ch });
       this.refreshInputBar();
     }
+  }
+
+  private applyInputAction(action: TuiInputEditorAction): {
+    submittedText?: string;
+  } {
+    const result = reduceTuiInputEditor(this.inputState, action, {
+      graphemeClusters,
+    });
+    this.inputState = result.state;
+    return result.submittedText === undefined
+      ? {}
+      : { submittedText: result.submittedText };
   }
 
   private handleBrowseKey(

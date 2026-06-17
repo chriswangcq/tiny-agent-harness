@@ -3,19 +3,23 @@
 // Owns the project-level terminal UI. Runtime state, run projection, IM, and
 // run lifecycle commands flow through a realtime workbench socket client.
 
-import { createRunImSelfEndpoint } from "../im/index.js";
 import type {
   WorkbenchCommand,
   WorkbenchEvent,
   WorkbenchViewUpdated,
 } from "../runtime/project-workbench.js";
 import { BlessedRenderer } from "./renderer.js";
-import type {
-  ConversationItem,
-  TuiKey,
-  TuiNoticeItem,
-  TuiViewModel,
-} from "./types.js";
+import type { TuiKey, TuiViewModel } from "./types.js";
+import {
+  addControllerNotice,
+  addPendingUserEcho,
+  applyWorkbenchViewUpdate,
+  buildControllerRenderView,
+  createTuiControllerState,
+  pendingUserEchoFromPost,
+  setControllerSelectedRun,
+  type TuiControllerState,
+} from "./controller-state.js";
 import { ViewModelBuilder } from "./view-model-builder.js";
 import {
   createRuntimeWorkbenchClient,
@@ -58,10 +62,7 @@ export class ProjectUiController {
   private readonly emptyViewFactory: () => TuiViewModel;
   private connectPromise: Promise<void> | undefined;
   private session: TuiWorkbenchSessionPort | undefined;
-  private selectedRunId: string | undefined;
-  private lastWorkbenchView: TuiViewModel | undefined;
-  private readonly localNotices: TuiNoticeItem[] = [];
-  private readonly pendingUserEchoes: ConversationItem[] = [];
+  private uiState: TuiControllerState = createTuiControllerState();
 
   constructor(options: ProjectUiControllerOptions) {
     this.renderer = options.renderer ?? new BlessedRenderer();
@@ -112,7 +113,7 @@ export class ProjectUiController {
     }
     this.connectPromise = this.workbenchClient
       .subscribe({
-        selectedRunId: this.selectedRunId,
+        selectedRunId: this.uiState.selectedRunId,
         onEvent: (event) => this.applyWorkbenchEvent(event),
         onError: (error) => {
           this.addSystemMessage(`Workbench socket error: ${error.message}`);
@@ -149,7 +150,8 @@ export class ProjectUiController {
   }
 
   async submitUserMessage(text: string): Promise<void> {
-    if (!this.selectedRunId) {
+    const selectedRunId = this.uiState.selectedRunId;
+    if (!selectedRunId) {
       this.addSystemMessage(
         "No active run. Use :new <task> to start one or :open latest to attach an existing run.",
       );
@@ -162,13 +164,14 @@ export class ProjectUiController {
         kind: "send-message",
         text,
       });
-      this.pendingUserEchoes.push(
+      this.uiState = addPendingUserEcho(
+        this.uiState,
         pendingUserEchoFromPost({
           data,
           fallback: {
             id: this.newRequestId(),
             timestamp: this.nowIso(),
-            channel: createRunImSelfEndpoint(this.selectedRunId),
+            runId: selectedRunId,
             text,
           },
         }),
@@ -215,7 +218,7 @@ export class ProjectUiController {
         ...(task ? { task } : {}),
       });
       const runId = requireString(data.runId, "create-run result runId");
-      this.selectedRunId = runId;
+      this.uiState = setControllerSelectedRun(this.uiState, runId);
       this.addSystemMessage(`Started run ${runId}.`);
       this.renderCurrentView();
     } catch (error) {
@@ -230,7 +233,7 @@ export class ProjectUiController {
     try {
       const data = await this.sendWorkbenchCommand({ kind: "open-run", runId });
       if (typeof data.selectedRunId === "string") {
-        this.selectedRunId = data.selectedRunId;
+        this.uiState = setControllerSelectedRun(this.uiState, data.selectedRunId);
       }
     } catch (error) {
       this.addSystemMessage(`Failed to open run: ${errorMessage(error)}`);
@@ -247,7 +250,7 @@ export class ProjectUiController {
         runId: runIdOrLatest,
       });
       const runId = requireString(data.runId, "resume-run result runId");
-      this.selectedRunId = runId;
+      this.uiState = setControllerSelectedRun(this.uiState, runId);
       this.addSystemMessage(
         data.alreadyRunning === true
           ? `Run ${runId} is already running.`
@@ -261,7 +264,7 @@ export class ProjectUiController {
   }
 
   private async stopRun(runIdOrLatest: string | undefined): Promise<void> {
-    const target = runIdOrLatest || this.selectedRunId || "latest";
+    const target = runIdOrLatest || this.uiState.selectedRunId || "latest";
     this.addSystemMessage(`Stopping run ${target}.`);
     this.renderCurrentView();
     try {
@@ -317,25 +320,21 @@ export class ProjectUiController {
   }
 
   private applyViewUpdate(event: WorkbenchViewUpdated): void {
-    this.selectedRunId = event.selectedRunId;
-    this.lastWorkbenchView = event.view;
+    this.uiState = applyWorkbenchViewUpdate(this.uiState, event);
     this.renderCurrentView();
   }
 
   private renderCurrentView(): void {
     this.renderer.render(
-      overlayLocalConversation(
-        overlayLocalNotices(
-          this.lastWorkbenchView ?? this.emptyViewFactory(),
-          this.localNotices,
-        ),
-        this.pendingUserEchoes,
-      ),
+      buildControllerRenderView({
+        state: this.uiState,
+        emptyView: this.emptyViewFactory(),
+      }),
     );
   }
 
   private addSystemMessage(text: string): void {
-    this.localNotices.push({
+    this.uiState = addControllerNotice(this.uiState, {
       id: this.newRequestId(),
       timestamp: this.nowIso(),
       text,
@@ -381,75 +380,6 @@ export function parseProjectUiCommand(text: string): ProjectUiCommand | undefine
   }
 }
 
-function overlayLocalConversation(
-  view: TuiViewModel,
-  localItems: readonly ConversationItem[],
-): TuiViewModel {
-  const seen = new Set(view.conversation.map((item) => item.id));
-  const conversation = [...view.conversation];
-  for (const item of localItems) {
-    if (seen.has(item.id)) {
-      continue;
-    }
-    seen.add(item.id);
-    conversation.push(item);
-  }
-  return {
-    ...view,
-    conversation,
-  };
-}
-
-function overlayLocalNotices(
-  view: TuiViewModel,
-  notices: readonly TuiNoticeItem[],
-): TuiViewModel {
-  if (notices.length === 0) {
-    return view;
-  }
-  const seen = new Set((view.notices ?? []).map((notice) => notice.id));
-  const merged = [...(view.notices ?? [])];
-  for (const notice of notices) {
-    if (seen.has(notice.id)) {
-      continue;
-    }
-    seen.add(notice.id);
-    merged.push(notice);
-  }
-  return {
-    ...view,
-    notices: merged,
-  };
-}
-
-function pendingUserEchoFromPost(input: {
-  data: Record<string, unknown>;
-  fallback: {
-    id: string;
-    timestamp: string;
-    channel: string;
-    text: string;
-  };
-}): ConversationItem {
-  const posted = isRecord(input.data.posted) ? input.data.posted : input.data;
-  const message = isRecord(posted.message) ? posted.message : undefined;
-  const id = typeof message?.id === "string" ? `user:${message.id}` : input.fallback.id;
-  const timestamp =
-    typeof message?.createdAt === "string"
-      ? message.createdAt
-      : input.fallback.timestamp;
-  const channel =
-    typeof message?.to === "string" ? message.to : input.fallback.channel;
-  const text = typeof message?.text === "string" ? message.text : input.fallback.text;
-  return {
-    id,
-    kind: "user",
-    timestamp,
-    channel,
-    text,
-  };
-}
-
 function projectUiHelpText(): string {
   return [
     "Project UI commands:",
@@ -468,10 +398,6 @@ function requireString(value: unknown, label: string): string {
     throw new Error(`Invalid ${label}`);
   }
   return value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function errorMessage(error: unknown): string {
