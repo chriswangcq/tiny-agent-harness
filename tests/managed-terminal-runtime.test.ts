@@ -63,6 +63,11 @@ function makeRuntime(options: {
   startupReadDelayMs?: number;
   foregroundInspector?: ForegroundInspector;
   sessionsDir?: string;
+  terminalMode?: {
+    kind: "noncanonical";
+    minBytes: number;
+    timeoutDeciseconds: number;
+  };
 } = {}): ManagedTerminalRuntime {
   return new ManagedTerminalRuntime({
     defaultSessionId: "default",
@@ -74,6 +79,7 @@ function makeRuntime(options: {
     postWriteReadDelayMs: options.postWriteReadDelayMs ?? 0,
     startupReadDelayMs: options.startupReadDelayMs ?? 0,
     foregroundInspector: options.foregroundInspector ?? (() => null),
+    terminalMode: options.terminalMode,
   });
 }
 
@@ -213,6 +219,20 @@ describe("ManagedTerminalRuntime", () => {
     }
     expect(write).toMatchObject({ currentSession: "build", result: "ok" });
     expect(ptyMock.spawned[1]?.writes.at(-1)).toBe("pwd\n");
+  });
+
+  it("passes explicit terminal mode into new PTY sessions", async () => {
+    const port = makeRuntime({
+      terminalMode: {
+        kind: "noncanonical",
+        minBytes: 2,
+        timeoutDeciseconds: 1,
+      },
+    }).createRunPort();
+
+    await port.execute({ request: { kind: "session_observe" } });
+
+    expect(ptyMock.spawned[0]?.writes[0]).toContain("stty -icanon min 2 time 1");
   });
 
   it("observes historical visual-line windows by cursor", async () => {

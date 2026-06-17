@@ -2,6 +2,7 @@ import { TerminalService } from "../application/terminal-service.js";
 import { createTerminalRunPort } from "../application/terminal-run-port.js";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
+import type { ManagedTerminalMode } from "../application/managed-shell.js";
 import type {
   TerminalRuntimeSnapshot,
   TerminalServicePorts,
@@ -29,6 +30,7 @@ export type ManagedTerminalRuntimeOptions = {
   postWriteReadDelayMs?: number;
   startupReadDelayMs?: number;
   foregroundInspector?: ForegroundInspector;
+  terminalMode?: ManagedTerminalMode;
 };
 
 type RuntimeSession = {
@@ -178,6 +180,7 @@ export class ManagedTerminalRuntime {
       rows: this.screenRows(),
       outputLogPath: this.sessionLogPath(session),
       foregroundInspector: this.options.foregroundInspector,
+      terminalMode: this.options.terminalMode,
     });
     pty.spawn();
 

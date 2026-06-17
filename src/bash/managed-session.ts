@@ -2,7 +2,11 @@ import * as nodePty from "node-pty";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { buildManagedShellInitSnippet } from "../application/managed-shell.js";
+import {
+  buildManagedShellInitSnippet,
+  DEFAULT_MANAGED_TERMINAL_MODE,
+  type ManagedTerminalMode,
+} from "../application/managed-shell.js";
 import { applyPtyChunkToSnapshot } from "../application/terminal-state-adapter.js";
 import type { TerminalRuntimeSnapshot } from "../application/terminal-ports.js";
 import { createTerminalState, markTerminalTerminated } from "../terminal/index.js";
@@ -53,6 +57,7 @@ export type ManagedPtySessionOptions = {
   outputLogPath?: string;
   foregroundInspector?: ForegroundInspector;
   screenBuffer?: TerminalScreenBuffer;
+  terminalMode?: ManagedTerminalMode;
 };
 
 /**
@@ -75,6 +80,7 @@ export class ManagedPtySession {
   private readonly screenBuffer: TerminalScreenBuffer;
   private readonly cols: number;
   private readonly rows: number;
+  private readonly terminalMode: ManagedTerminalMode;
 
   constructor(options: ManagedPtySessionOptions) {
     this.id = options.id;
@@ -89,6 +95,7 @@ export class ManagedPtySession {
     ];
     this.cols = positiveInteger(options.cols) ?? 80;
     this.rows = positiveInteger(options.rows) ?? 24;
+    this.terminalMode = options.terminalMode ?? DEFAULT_MANAGED_TERMINAL_MODE;
     this.outputLogPath = options.outputLogPath;
     this.outputBytes = initializeOutputLog(options.outputLogPath);
     const baseEnv = options.env ?? processEnv();
@@ -126,7 +133,21 @@ export class ManagedPtySession {
     this.pty.onData((chunk: string) => {
       this.applyChunk(chunk);
     });
-    this.pty.write(`${buildManagedShellInitSnippet({ nonce: this.promptNonce })}\n`);
+    this.pty.onExit((event) => {
+      this.currentSnapshot = {
+        ...this.currentSnapshot,
+        terminal: markTerminalTerminated(this.currentSnapshot.terminal, {
+          exitCode: event.exitCode,
+          reason: "pty_exit",
+        }),
+      };
+    });
+    this.pty.write(
+      `${buildManagedShellInitSnippet({
+        nonce: this.promptNonce,
+        terminalMode: this.terminalMode,
+      })}\n`,
+    );
   }
 
   write(input: string): void {

@@ -17,6 +17,99 @@ afterEach(async () => {
 });
 
 describe("ManagedTerminalRuntime real PTY pacing", () => {
+  it("keeps bash --noediting in noncanonical mode so long physical lines execute", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "tiny-agent-pty-"));
+    tempDirs.push(cwd);
+    const payload = "a".repeat(3000);
+    const runtime = new ManagedTerminalRuntime({
+      defaultSessionId: "default",
+      cwd,
+      promptNonce: `nonce-${Date.now()}`,
+      sessionsDir: join(cwd, "session-logs"),
+      screenRows: 24,
+      screenCols: 80,
+      postWriteReadDelayMs: 150,
+      startupReadDelayMs: 500,
+    });
+    const port = runtime.createRunPort();
+
+    try {
+      const initial = await port.execute({ request: { kind: "session_observe" } });
+      const command =
+        `PAYLOAD='${payload}'; printf '__LONG_LINE_LEN__%s\\n' "\${#PAYLOAD}"\n`;
+      let observation = await port.execute({
+        request: {
+          kind: "terminal_write",
+          expectedInputSeq: initial.terminal.inputSeq,
+          text: command,
+          waitForReturnMs: 2000,
+        },
+      });
+
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const raw = await readFile(observation.screen.logRef.path, "utf8");
+        if (raw.includes("__LONG_LINE_LEN__3000") && observation.returnedToPrompt) {
+          break;
+        }
+        await delay(100);
+        observation = await port.execute({ request: { kind: "session_observe" } });
+      }
+
+      const raw = await readFile(observation.screen.logRef.path, "utf8");
+      expect(raw).toContain("__LONG_LINE_LEN__3000");
+      expect(raw).not.toContain("\u0007");
+      expect(observation.terminal.lastShellPrompt?.lastReturnCode).toBe(0);
+    } finally {
+      await port.execute({ request: { kind: "session_terminate" } });
+    }
+  }, 15_000);
+
+  it("preserves Ctrl-C handling after noncanonical managed-shell init", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "tiny-agent-pty-"));
+    tempDirs.push(cwd);
+    const runtime = new ManagedTerminalRuntime({
+      defaultSessionId: "default",
+      cwd,
+      promptNonce: `nonce-${Date.now()}`,
+      screenRows: 16,
+      screenCols: 80,
+      postWriteReadDelayMs: 100,
+      startupReadDelayMs: 500,
+    });
+    const port = runtime.createRunPort();
+
+    try {
+      const initial = await port.execute({ request: { kind: "session_observe" } });
+      const running = await port.execute({
+        request: {
+          kind: "terminal_write",
+          expectedInputSeq: initial.terminal.inputSeq,
+          text: "sleep 10\n",
+          waitForReturnMs: 0,
+        },
+      });
+
+      await delay(100);
+      let interrupted = await port.execute({
+        request: {
+          kind: "session_interrupt",
+          expectedInputSeq: running.terminal.inputSeq,
+          waitForReturnMs: 2000,
+        },
+      });
+
+      for (let attempt = 0; attempt < 10 && !interrupted.returnedToPrompt; attempt += 1) {
+        await delay(100);
+        interrupted = await port.execute({ request: { kind: "session_observe" } });
+      }
+
+      expect(interrupted.returnedToPrompt).toBe(true);
+      expect(interrupted.terminal.lastShellPrompt?.lastReturnCode).not.toBe(0);
+    } finally {
+      await port.execute({ request: { kind: "session_terminate" } });
+    }
+  }, 15_000);
+
   it("strips managed continuation prompt chrome from semantic screen text", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "tiny-agent-pty-"));
     tempDirs.push(cwd);

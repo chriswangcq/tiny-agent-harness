@@ -62,8 +62,14 @@ describe("static tool catalog", () => {
     expect(TERMINAL_WRITE_TOOL_DEFINITION.description).toContain(
       "\"echo 'hello world'\\n\" submits it",
     );
+    expect(TERMINAL_WRITE_TOOL_DEFINITION.description).toContain(
+      "Use quoted heredoc/stdin forms for large JSON",
+    );
     expect(String(writeSchema.properties?.text?.description)).toContain(
       "no newline means no Enter and no command execution",
+    );
+    expect(String(writeSchema.properties?.text?.description)).toContain(
+      "instead of one huge shell argument",
     );
 
     expect(keySchema.required).toEqual(["expectedInputSeq", "key"]);

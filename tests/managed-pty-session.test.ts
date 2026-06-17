@@ -80,6 +80,8 @@ describe("ManagedPtySession", () => {
     );
     expect(ptyMock.spawned[0]?.writes[0]).toContain("__TAH_PROMPT__");
     expect(ptyMock.spawned[0]?.writes[0]).toContain("__TAH_CONT__");
+    expect(ptyMock.spawned[0]?.writes[0]).toContain("stty -icanon min 1 time 0");
+    expect(ptyMock.spawned[0]?.writes[0]).toContain("__TAH_TERMINAL_MODE_ERROR__");
     expect(ptyMock.spawned[0]?.writes[0]).not.toContain("__TAH_COMMAND_DONE__");
   });
 

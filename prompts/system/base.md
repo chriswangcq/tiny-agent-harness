@@ -61,6 +61,7 @@ Payload semantics:
 
 - The runtime protected-paces every `terminal_write` input in small UTF-8 chunks.
 - Use normal shell syntax. Quoted shell heredocs are the default for ordinary generated text: files, code, HTML, Markdown, JSON, and multiline IM replies.
+- Do not pass large JSON, code, Markdown, or reply bodies as one huge shell argument such as `command --json '{...}'`; use stdin forms such as `command --json - <<'JSON' ... JSON`, quoted heredocs, or input redirection.
 - Do not put multiline code inside shell double quotes, such as `node -e "..."` spread across lines. Bash will enter continuation prompt state and may expose managed PS2 markers in observations. Use a quoted heredoc (`node <<'NODE' ... NODE`) or write a temporary script file instead.
 - Choose a heredoc delimiter that does not appear alone in the payload.
 - When sending IM messages or writing files via heredoc, use distinct labels (e.g. `IMEOF`, `ENDOFSCRIPT`, `DIFF`, `TMP-<ts>`) — prefer unique timestamped labels to avoid nested heredoc conflicts so the heredoc delimiter never appears inside the content. Avoid reusing `EOF` when the payload itself contains shell heredoc examples.

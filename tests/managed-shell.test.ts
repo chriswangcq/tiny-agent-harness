@@ -57,6 +57,9 @@ describe("managed shell marker formatting", () => {
     const snippet = buildManagedShellInitSnippet({ nonce: "nonce ' space" });
 
     expect(snippet.split("\n")[0]).toBe("set +H");
+    expect(snippet.split("\n")[1]).toBe(
+      "stty -icanon min 1 time 0 || { rc=$?; printf '__TAH_TERMINAL_MODE_ERROR__ rc=%s\\n' \"$rc\"; exit \"$rc\"; }",
+    );
     expect(snippet).toContain("export TAH_PROMPT_NONCE='nonce%20%27%20space'");
     expect(snippet).toContain("export TAH_PROMPT_RC=0");
     expect(snippet).toContain(
